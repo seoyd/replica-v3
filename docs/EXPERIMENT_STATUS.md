@@ -12,9 +12,9 @@ BUDGET_REACHED로 종료했고, 신규 contrast R-A/R-B는 각각600/200 updates
 |---|---|---|---|---|---|---|---|
 | P0 | VERIFIED / PUBLISHED | examples/validate.rs 감사 명령; 한국어 조사/상태 문서; 선행 WIP 테스트의 import/최신 Rust lint 수정 | offline tree/metadata, release build, storage-audit/load-audit/measure; 직접 회귀38개+trainer unit7개; fmt/all-target clippy; git push/ls-remote | tensor 204개 및 합성 SQLite 실측; 회귀45개 통과; 원격 full SHA 일치 | ce48514ab5fc8e76a9552ce5fabe7ce1617ff4ac | 이전 S4 WIP를 새 성과로 계산하지 않음 | P1, P2 |
 | P1 | VERIFIED; 새64 전이 EXPERIMENT_FAILED | src/contrast.rs(training 전용), train_main/training/checkpoint/data | freeze/check/train/evaluate; 신규 unit2개+기존 trainer7개; checkpoint2개/resume1개; fmt/clippy | R-A600/R-B200에서 두 평가 및 fresh reload16/16·4/4; 새64 단1회0/64·0/16 | 아래 P1 source/fixture/binary/final/log hash | memorization만 통과; S4 품질 FAIL; 추가 학습 없음 | P2 |
-| P2 | NOT_STARTED | 없음 | NOT_RUN | 기존 reference 유지 | 해당 없음 | 새 연산 경계 미구현 | P0 |
+| P2 | VERIFIED | neural/transformer.rs, neural.rs, tests/native.rs, examples/validate.rs | native9개, fresh-process resume1개, contrast16 재생성, kernel-profile/compare | 기본 수식·학습 gradient 보존; 의미/커널/내용/cache 분리 | 아래 P2/P4 기록 | Candle Tensor 결합 유지; legacy wire ID는 명시 보존 | P3, P5 |
 | P3 | NOT_STARTED | 없음 | NOT_RUN | JSON+safetensors 현재 경로 | 해당 없음 | native binary 미구현 | P2 |
-| P4 | NOT_STARTED | 없음 | NOT_RUN | 후보 미측정 | 해당 없음 | 기본값 승격 없음 | P2 |
+| P4 | VERIFIED / CANDIDATE_REJECTED | P2의 실제 GEMV dispatch와 비교 명령 | 동일 SMALL, warmup3/n31, CPU F32 단일 thread | 수치/생성 동일 허용오차 통과; decode/전체 생성 악화 | 아래 P2/P4 기록 | 후보 한 개만 시험, 기본 reference 유지 | P6 |
 | P5 | NOT_STARTED | 없음 | NOT_RUN | 운영 SQLite 유지 | 해당 없음 | archive 미구현 | P2 |
 | P6 | NOT_STARTED | 없음 | NOT_RUN | 신규 계약 최종 대조 전 | 해당 없음 | 독립 검토 없음 | P1~P5 |
 
@@ -59,8 +59,8 @@ LEGACY_JSON_USAGE: 모델/tokenizer manifest, safetensors header, config hash, I
 INFERENCE_BYTES: model raw 38,420,736 B; 독립 inference artifact 아직 없음
 RESUME_BYTES: 기존 세 파일 115,316,831 B
 TOKENIZER_META_BYTES: 기존 tokenizer JSON 22,483 B
-KERNEL_REFERENCE: 기존 Candle/Accelerate F32
-KERNEL_CANDIDATE: NOT_IMPLEMENTED
+KERNEL_REFERENCE: candle-linear-v1, 실제 이번 측정 CPU/gemm F32 (Accelerate feature 미활성)
+KERNEL_CANDIDATE: rust-f32-decode-gemv-v1, inference-only
 KERNEL_ADOPTION: KEEP_REFERENCE
 DB_FREE_ARCHIVE_VERIFIED: NO
 LIVE_SQLITE_REPLACEMENT: NO
@@ -69,7 +69,7 @@ S4_QUALITY: FAIL
 S5_INTEGRATION: 미완료
 S6_QUANT: 미구현
 GOAL1_READY: NO
-COMMIT / REMOTE_SHA: P0 `ce48514ab5fc8e76a9552ce5fabe7ce1617ff4ac` / 동일 SHA 확인
+COMMIT / REMOTE_SHA: P0 `ce48514ab5fc8e76a9552ce5fabe7ce1617ff4ac`, P1 `8e0a264f3b0996d9a7ca632903e727aef2c5e773` / 각각 동일 원격 SHA 확인
 
 ## 원본 run별 manifest 대조
 
@@ -278,3 +278,94 @@ R-B의 단 한 번 `contrast evaluate ... --heldout`이다. 이 executable과 co
 
 DELIVERABLE_VERIFIED(P1)=YES. CONTRAST16_MEMORIZATION=PASS.
 MODEL_QUALITY_PASS=NO. S4_QUALITY=FAIL. GOAL1_READY=NO.
+
+## P2/P4 수식 경계와 단일 커널 실험
+
+SMALL의 RMSNorm, QK norm, RoPE, causal local/global GQA, SwiGLU, tied embedding을
+그대로 유지했다. `gqa_attention`은 기존 수식의 호출 경계이며 `Kernel`은 실제 linear
+실행을 선택한다. `OperatorSpec`에 수식/parameter/state/numeric 버전을 명시했다.
+Capabilities의 candidate training/backward/prefill은 false이며, 모델의 해당 경로는
+명시적으로 기존 미분 가능한 reference를 호출한다. inference 후보의 Vec 변환을
+학습 graph에 삽입하지 않는다. Candle Tensor와 autograd 전체는 여전히 의존한다.
+
+기존 `Config.id()`/tokenizer JSON hash/`weight_hash()`는 legacy 이력 비교를 위해
+보존했다. 별도 architecture semantic ID는 수식과 수치 config를 canonical bytes로
+해시하며 profile 이름·JSON 공백과 무관하다. weights content ID는 이름·shape·F32
+값을 해시한다. tokenizer semantic ID는 특수/ASCII segmentation 버전, byte mapping,
+ordered merge rank를 해시한다. 기존 tokenizer 학습이나 token ID 변경은 없다.
+BPE 구성은 direct builder로 옮겼으며 JSON 모델을 다시 구성하지 않는다.
+
+cache는 architecture/weights/tokenizer/state schema/scope에 결합하고 실제 입력
+u32 LE 이력을 해시한다. reset은 이력도 초기화한다. 동등 kernel ID는 cache 의미에
+넣지 않아 같은 상태로 reference/candidate를 비교할 수 있다. cache는 원래 디스크에
+직렬화하지 않았으며 프로세스 내 이전 cache를 새 구현에 이식하지 않는다.
+명시 experimental profile은 SMALL 상한 이내 숫자 검사를 통과해야 한다.
+SMALL/TINY의 이름으로 다른 config를 허용하지 않고, 이번 학습 구조도 바꾸지 않았다.
+
+호환성: (A) 같은 수식 kernel은 tolerance/cache parity를 만족하면 가중치 재사용 가능.
+학습 후보라면 gradient parity도 필요하다. 이번 후보는 inference-only이고 training
+fallback의 출력·gradient가 bitwise 동일함을 검사했다. (B) 같은 shape여도 다른 수식은
+새 equation ID, cache 무효화, 재평가/필요시 재학습이 필요하다. (C) SSM/recurrent
+state로 자동 weight/cache 변환하지 않는다. (D) evidence 원문/버전/관계는 모델 ID와
+독립이며 파생 embedding/index만 모델 버전별 재구성 대상이다.
+
+실측 source는 R-B final weights
+`f50a002154eb746eaea7eda2fd69addf9b03143aa213f0bd8ab55a7c01caf680`,
+169-token 고정 입력 digest는
+`2fa057cc01ce08261f7791771a7a1e9f2c8fa127bb8e305b14dffa35fc9c7724`.
+CPU/gemm F32, VECLIB_MAXIMUM_THREADS=1/RAYON_NUM_THREADS=1, M4에서 측정했다.
+profile warmup3/n15: prefill total 중앙값44.4315ms, linear33.5910ms;
+decode total2.1656ms, linear1.2093ms. timer/shape 관측 overhead는 total에 포함되고
+linear 구간에는 포함되지 않는다. 이후 성능 비교에는 관측기를 사용하지 않았다.
+
+실제 linear는 매 forward43회. B=1, prefill T=M=169, decode T=M=1이며
+(N,K,호출수)는 (1024,384,12), (384,1024,6), (384,384,12), (801,384,1),
+(96,384,12)이다. input stride는 [T*K,K,1], weight stride [K,1]. reference는
+flatten과 weight transpose view를 사용하며 backend 내부 scratch 할당량은 UNKNOWN이다.
+GQA의 repeat_kv는 물리적인 head 복사, local mask는 dense QK 계산, KV cat/evict는
+복사, RoPE sin/cos는 매 호출 생성임을 소스에서 확인했지만 추가 후보는 구현하지 않았다.
+
+후보는 Rust CPU F32 contiguous M=1 GEMV 하나다. weight cache 없이 매 linear마다
+weight N*K, input K를 Vec로 복사하고 output N을 할당한다. 명시 user-space buffer
+바이트는 (N*K+K+N)*4이며 backend/allocator의 숨은 비용까지 0이라고 주장하지 않는다.
+0 값, 독립 손계산, random/cancellation, 홀수/tail, 잘못된 dtype/shape/비연속 및
+빈 차원 거부를 검사했다. dot 오차는 f64 독립 기준과
+2*K*F32epsilon*sum(abs(products))+1e-6의 사전 상한을 사용했다.
+모델 logit 허용치는 사전 5e-4이며 실제 SMALL decode 최대차3.8146973e-6이었다.
+TINY local eviction cache와 reference 학습 gradient 비교도 통과했다.
+
+| warmup3/n31 중앙값 ms | reference | Rust GEMV |
+|---|---:|---:|
+| 단일 gate, M1/N1024/K384 | 0.0468 | 0.1540 |
+| 전체 decode | 2.1729 | 4.7344 |
+| 전체 prefill | 44.7017 | 44.8708 |
+| 실제 greedy 생성, chunk128 prefill 포함 | 50.0514 | 53.0012 |
+
+생성 token/EOS 결과는 동일했다. `KERNEL_ADOPTION=KEEP_REFERENCE_OR_REJECT`.
+마이크로 수치만으로 채택하지 않았으며 속도 악화로 기본값을 유지한다. 이 실험은
+품질 검증이나 S4 승격이 아니다. 로컬 원본 결과는 customize-20260917의
+p2-kernel-profile/compare, p2-native-tests, p2-resume, p2-contrast16-regression에 보존한다.
+
+P2/P4 파일 SHA-256:
+- neural.rs: `8b9ba9b472e55db3c342b7c1af4d11384cee247d452995e05e148c3f8a63c587`
+- transformer.rs: `6218161c869c442ee9003f3cb7e121e2053f1a6bf3ec18d2d378b487659e0395`
+- native tests: `251aaac8f620196ae8f80cd0fafacf35583240ab074de09904666e08d5f970af`
+- validate: `23b600d2eea572c5dc3c19aff186f21d0fea627fdf5fb10be36a7bf910d82397`
+- profile 결과: `8ca5179a331c72a29cfde4951c43ef792d4afeb04398f9b95f9819174e712fca`
+- candidate 결과: `aa7d7d1b711246c930bdafd32edaa455b28e5c9783fb36a95899548b4ae50e94`
+- 기본 contrast16 재생성: `149ecca544eb34afaa72ff87c25b1d52e8eff674d67bd2fc7a2b55b8908faaad`
+
+실행 명령은 `validate kernel-profile|kernel-compare CHECKPOINT FIXTURE`,
+`replica-train contrast evaluate --fixture FIXTURE --checkpoint CHECKPOINT`,
+`cargo test --offline --locked --test native`,
+`cargo test --offline --locked --test training native_training_resume_is_identical_in_fresh_processes`,
+`cargo fmt --check`, `cargo clippy --offline --locked --all-targets -- -D warnings`이다.
+직접 회귀10개, 기존 contrast16 16/16·그룹4/4 및 fmt/clippy가 통과했다.
+새64는 다시 실행하지 않았다. 최초 계측 example의 잘못된 필드명으로 발생한 compile
+실패는 수정했으며 최종 build는 통과했다. 이 실패 로그도 로컬에 보존한다.
+
+고정 P1 실행 파일과 새 실행 파일을 같은 단일 thread 설정으로 각각 별도 실행해
+contrast16을 대조했다. 생성 token IDs/문자열/EOS와 prompt 길이는 모두 같다.
+branch logit gap은 최대 5.7220459e-6 차이가 관측돼 사전 5e-4 이내이며, 재빌드 전후
+logit의 bitwise 동일성으로 보고하지 않는다. 같은 새 backend에서 uninterrupted/split
+resume는 기존 회귀의 weight file hash·sampler·token budget·loss exact 비교를 통과했다.

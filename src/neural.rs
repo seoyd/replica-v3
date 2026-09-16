@@ -121,6 +121,7 @@ pub struct ByteBpe {
     model: BPE,
     bytes: Vec<u8>,
     tokens: Vec<Vec<u8>>,
+    merges: Vec<(u32, u32)>,
     pub train_hash: String,
 }
 impl ByteBpe {
@@ -212,13 +213,21 @@ impl ByteBpe {
                 return Err(token_error("invalid merge"));
             }
         }
-        let model: BPE = serde_json::from_slice(&serde_json::to_vec(&serde_json::json!({
-            "type":"BPE", "vocab":file.vocab, "merges":file.merges
-        }))?)?;
+        let merges = file
+            .merges
+            .iter()
+            .map(|(a, b)| (file.vocab[a], file.vocab[b]))
+            .collect();
+        let vocab: tokenizers::models::bpe::Vocab = file.vocab.into_iter().collect();
+        let model = BPE::builder()
+            .vocab_and_merges(vocab, file.merges)
+            .build()
+            .map_err(token_error)?;
         Ok(Self {
             model,
             bytes: bytes.to_vec(),
             tokens,
+            merges,
             train_hash: file.train_hash,
         })
     }
@@ -233,6 +242,20 @@ impl ByteBpe {
     }
     pub fn id(&self) -> String {
         hash(&self.bytes)
+    }
+    /// Semantic byte mapping and ordered merge ranks, excluding JSON and training lineage.
+    pub fn semantic_id(&self) -> String {
+        let mut bytes = b"native-byte-bpe-special8-ascii-segments-v1".to_vec();
+        crate::codec::put_varint(&mut bytes, self.tokens.len() as u64);
+        for token in &self.tokens {
+            crate::codec::put_bytes(&mut bytes, token);
+        }
+        crate::codec::put_varint(&mut bytes, self.merges.len() as u64);
+        for &(a, b) in &self.merges {
+            crate::codec::put_varint(&mut bytes, u64::from(a));
+            crate::codec::put_varint(&mut bytes, u64::from(b));
+        }
+        hash(&bytes)
     }
     pub fn vocab_size(&self) -> usize {
         self.tokens.len()

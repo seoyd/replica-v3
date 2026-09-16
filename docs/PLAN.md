@@ -7,9 +7,9 @@
 |---|---|---|---|
 | P0 | VERIFIED / PUBLISHED | 실제 로컬 WIP 보존 | 의존175개·tensor204개·합성 SQLite 실측, 직접 회귀45개/fmt/clippy; ce48514ab5fc8e76a9552ce5fabe7ce1617ff4ac 원격 일치 |
 | P1 | VERIFIED; 새값 전이 FAIL | P0 | R-A600/R-B200에서 두 평가 및 fresh reload16/16·4/4; 선동결64 단1회0/64·0/16. R-C/추가 학습 없음 |
-| P2 | NOT_STARTED | P0 | 네 책임 경계, semantic/kernel/cache ID, 동등 reference/candidate, 제한 config |
+| P2 | VERIFIED | P0 | semantic/kernel/content/cache ID, 제한 config, 기본 출력/gradient/resume 보존; native9+resume1 통과 |
 | P3 | NOT_STARTED | P2 | native binary inference/resume, 무손실 export·JSON 없는 실제 생성·exact resume |
-| P4 | NOT_STARTED | P2 | 실측 hot path 한 후보의 정확성/성능에 따른 채택 또는 기각 |
+| P4 | VERIFIED / KEEP_REFERENCE | P2 | Rust GEMV 수치 통과, 실제 SMALL decode2.17→4.73ms/전체생성50.05→53.00ms 악화로 기각 |
 | P5 | NOT_STARTED | P2 | 동일 snapshot/원문/관계 DB-free archive와 실제 합성10,000사건 비교 |
 | P6 | NOT_STARTED | P1~P5 | 직접 회귀/실제 생성/최종 대조/기여 분리/원격 SHA |
 

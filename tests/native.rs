@@ -15,6 +15,200 @@ fn tokenizer() -> ByteBpe {
     ByteBpe::train(&docs, &hash(b"independent training fixture"), 512).unwrap()
 }
 #[test]
+fn semantic_identity_and_bounded_experimental_configuration() {
+    use transformer::{Config, MIXER, Transformer};
+    let tiny = Config::tiny(264);
+    let mut experimental = tiny.clone();
+    experimental.profile = "NATIVE_TRPP_EXPERIMENTAL_V1".into();
+    assert_eq!(
+        tiny.semantic_id().unwrap(),
+        experimental.semantic_id().unwrap()
+    );
+    assert_ne!(tiny.id().unwrap(), experimental.id().unwrap());
+    experimental.rope_theta = 20000.;
+    assert_ne!(
+        tiny.semantic_id().unwrap(),
+        experimental.semantic_id().unwrap()
+    );
+    experimental.context = 2049;
+    assert!(experimental.validate().is_err());
+    let a = Transformer::init(tiny.clone(), 7, candle_core::Device::Cpu).unwrap();
+    let mut changed = tiny.clone();
+    changed.profile = "NATIVE_TRPP_EXPERIMENTAL_V1".into();
+    changed.rope_theta = 20000.;
+    let b = Transformer::init(changed, 7, candle_core::Device::Cpu).unwrap();
+    assert_eq!(
+        a.weights_content_id().unwrap(),
+        b.weights_content_id().unwrap()
+    );
+    let ids = candle_core::Tensor::new(&[[8u32, 9]], &candle_core::Device::Cpu).unwrap();
+    let mut cache = a.cache("scope");
+    let _ = a.forward_cached(&ids, &mut cache, "scope").unwrap();
+    assert_eq!(
+        cache.history_id(),
+        hash(&[8u32.to_le_bytes(), 9u32.to_le_bytes()].concat())
+    );
+    assert!(b.forward_cached(&ids, &mut cache, "scope").is_err());
+    cache.reset("scope");
+    assert_eq!(cache.history_id(), hash(b""));
+    assert_eq!(MIXER.state_schema_id, "absolute-kv-history-v1");
+    let tok = tokenizer();
+    let mut json: serde_json::Value = serde_json::from_slice(tok.bytes()).unwrap();
+    json["train_hash"] = hash(b"different provenance").into();
+    let other = ByteBpe::from_bytes(&serde_json::to_vec_pretty(&json).unwrap()).unwrap();
+    assert_eq!(tok.semantic_id(), other.semantic_id());
+    assert_ne!(tok.id(), other.id());
+    assert_eq!(
+        tok.encode(b"0123 separate words").unwrap(),
+        other.encode(b"0123 separate words").unwrap()
+    );
+}
+#[test]
+fn rust_decode_gemv_independent_values_bounds_and_model_cache_parity() {
+    use candle_core::{Device, Tensor};
+    use transformer::{Config, Kernel, Rng, Transformer, decode_linear};
+    let cpu = Device::Cpu;
+    let x = Tensor::new(&[[[2f32, -3., 4.]]], &cpu).unwrap();
+    let w = Tensor::new(&[[1f32, 2., 3.], [-1., 0., 2.]], &cpu).unwrap();
+    assert_eq!(
+        decode_linear(&x, &w, Kernel::RustDecodeGemv)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap(),
+        [8., 6.]
+    );
+    let mut rng = Rng::new(19);
+    // Predeclared forward error bound uses f64 dot and sum of magnitudes, including cancellation.
+    for (n, k) in [(1, 1), (3, 7), (17, 33), (9, 384), (3, 1025)] {
+        let values: Vec<f32> = (0..k)
+            .map(|_| (rng.next_u64() % 2001) as f32 / 1000. - 1.)
+            .collect();
+        let weights: Vec<f32> = (0..n * k)
+            .map(|i| {
+                if i % 3 == 0 {
+                    0.
+                } else {
+                    (rng.next_u64() % 2001) as f32 - 1000.
+                }
+            })
+            .collect();
+        let input = Tensor::from_vec(values.clone(), (1, 1, k), &cpu).unwrap();
+        let weight = Tensor::from_vec(weights.clone(), (n, k), &cpu).unwrap();
+        for kernel in [Kernel::Reference, Kernel::RustDecodeGemv] {
+            let out = decode_linear(&input, &weight, kernel)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap();
+            for (row, actual) in weights.chunks_exact(k).zip(out) {
+                let exact: f64 = row
+                    .iter()
+                    .zip(&values)
+                    .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                    .sum();
+                let magnitude: f64 = row
+                    .iter()
+                    .zip(&values)
+                    .map(|(&a, &b)| (f64::from(a) * f64::from(b)).abs())
+                    .sum();
+                let bound = 2. * k as f64 * f64::from(f32::EPSILON) * magnitude + 1e-6;
+                assert!((f64::from(actual) - exact).abs() <= bound);
+            }
+        }
+    }
+    let zero = Tensor::zeros((1, 1, 3), candle_core::DType::F32, &cpu).unwrap();
+    assert_eq!(
+        decode_linear(&zero, &w, Kernel::RustDecodeGemv)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap(),
+        [0., 0.]
+    );
+    assert!(
+        decode_linear(
+            &x.to_dtype(candle_core::DType::F64).unwrap(),
+            &w,
+            Kernel::RustDecodeGemv
+        )
+        .is_err()
+    );
+    assert!(decode_linear(&x, &w.t().unwrap(), Kernel::RustDecodeGemv).is_err());
+    assert!(
+        decode_linear(
+            &Tensor::zeros((1, 1, 0), candle_core::DType::F32, &cpu).unwrap(),
+            &Tensor::zeros((2, 0), candle_core::DType::F32, &cpu).unwrap(),
+            Kernel::RustDecodeGemv
+        )
+        .is_err()
+    );
+    let mut model = Transformer::init(Config::tiny(264), 17, cpu.clone()).unwrap();
+    let prompt = Tensor::new(&[[8u32, 9, 10, 11, 12, 13, 14, 15, 16]], &cpu).unwrap();
+    let mut reference = model.cache("parity");
+    let _ = model
+        .forward_cached(&prompt, &mut reference, "parity")
+        .unwrap();
+    let mut candidate = reference.clone();
+    let input = Tensor::new(&[[17u32]], &cpu).unwrap();
+    let logits = model
+        .forward_cached(&input, &mut reference, "parity")
+        .unwrap();
+    let train_reference = model.forward(&prompt, None).unwrap();
+    let grads_reference = train_reference.sum_all().unwrap().backward().unwrap();
+    model.set_kernel(Kernel::RustDecodeGemv);
+    let actual = model
+        .forward_cached(&input, &mut candidate, "parity")
+        .unwrap();
+    let max = (logits - actual)
+        .unwrap()
+        .abs()
+        .unwrap()
+        .max_all()
+        .unwrap()
+        .to_scalar::<f32>()
+        .unwrap();
+    assert!(max <= 5e-4, "{max}");
+    assert_eq!(reference.history_id(), candidate.history_id());
+    assert_eq!(reference.retained_tokens(), candidate.retained_tokens());
+    let train_candidate = model.forward(&prompt, None).unwrap();
+    assert_eq!(
+        train_reference
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap(),
+        train_candidate
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap()
+    );
+    let grads_candidate = train_candidate.sum_all().unwrap().backward().unwrap();
+    for var in model.vars.values() {
+        assert_eq!(
+            grads_reference
+                .get(var)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap(),
+            grads_candidate
+                .get(var)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap()
+        );
+    }
+    assert!(!Kernel::RustDecodeGemv.capabilities(64).backward);
+}
+#[test]
 fn own_byte_bpe_roundtrip_no_control_promotion_or_truncation() {
     let tok = tokenizer();
     assert!(tok.vocab_size() >= 264 && tok.vocab_size() < 512);

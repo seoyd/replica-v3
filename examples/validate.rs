@@ -22,6 +22,203 @@ fn stats(label: &str, mut values: Vec<f64>) {
 fn elapsed(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0
 }
+fn kernel_profile(checkpoint_path: &std::path::Path, fixture: &std::path::Path) -> Result<()> {
+    use candle_core::{Device, Tensor};
+    use replica_v3::neural::{checkpoint, read_bounded, transformer::ForwardTimings};
+    let loaded = checkpoint::load(checkpoint_path, Device::Cpu, false)?;
+    let frozen: serde_json::Value =
+        serde_json::from_slice(&read_bounded(fixture, 2 * 1024 * 1024)?)?;
+    let request: model::ModelRequest =
+        serde_json::from_value(frozen["train"][0]["request"].clone())?;
+    let prompt = loaded.tokenizer.prepare(
+        &request,
+        loaded.model.config.context as u32,
+        &loaded.model.config.id()?,
+    )?;
+    let ids = Tensor::new(prompt.token_ids.as_slice(), &Device::Cpu)?.unsqueeze(0)?;
+    let mut cache = loaded.model.cache("kernel-profile");
+    let logits = loaded
+        .model
+        .forward_cached(&ids, &mut cache, "kernel-profile")?;
+    let next = logits
+        .narrow(1, ids.dim(1)? - 1, 1)?
+        .flatten_all()?
+        .argmax(0)?
+        .to_scalar::<u32>()?;
+    let token = Tensor::new(&[next], &Device::Cpu)?.unsqueeze(0)?;
+    println!(
+        "weights={} prompt={} tokens={} backend={} dtype=F32 warmup=3 n=15 threads=VECLIB:{:?}/RAYON:{:?}; profile observer overhead excluded from linear timer, included in total",
+        loaded.manifest.weights_sha256,
+        prompt.token_digest,
+        prompt.token_ids.len(),
+        replica_v3::neural::cpu_backend(),
+        std::env::var("VECLIB_MAXIMUM_THREADS"),
+        std::env::var("RAYON_NUM_THREADS")
+    );
+    for decode in [false, true] {
+        let mut totals = Vec::new();
+        let mut linears = Vec::new();
+        for i in 0..18 {
+            let mut state = if decode {
+                cache.clone()
+            } else {
+                loaded.model.cache("kernel-profile")
+            };
+            let mut profile = ForwardTimings::default();
+            let start = Instant::now();
+            let _ = loaded.model.forward_profiled(
+                if decode { &token } else { &ids },
+                &mut state,
+                "kernel-profile",
+                &mut profile,
+            )?;
+            if i >= 3 {
+                totals.push(elapsed(start));
+                linears.push(profile.linear_ns as f64 / 1e6);
+            }
+            if i == 17 {
+                println!(
+                    "decode={decode} linear_calls={} shapes={:?}",
+                    profile.linear_calls, profile.linear_shapes
+                );
+            }
+        }
+        stats(
+            if decode {
+                "decode-total"
+            } else {
+                "prefill-total"
+            },
+            totals,
+        );
+        stats(
+            if decode {
+                "decode-linear"
+            } else {
+                "prefill-linear"
+            },
+            linears,
+        );
+    }
+    Ok(())
+}
+fn kernel_compare(checkpoint_path: &std::path::Path, fixture: &std::path::Path) -> Result<()> {
+    use candle_core::{Device, Tensor};
+    use replica_v3::neural::{
+        checkpoint, read_bounded,
+        transformer::{Kernel, decode_linear},
+    };
+    let mut loaded = checkpoint::load(checkpoint_path, Device::Cpu, false)?;
+    let frozen: serde_json::Value =
+        serde_json::from_slice(&read_bounded(fixture, 2 * 1024 * 1024)?)?;
+    let request: model::ModelRequest =
+        serde_json::from_value(frozen["train"][0]["request"].clone())?;
+    let prompt = loaded.tokenizer.prepare(
+        &request,
+        loaded.model.config.context as u32,
+        &loaded.model.config.id()?,
+    )?;
+    let ids = Tensor::new(prompt.token_ids.as_slice(), &Device::Cpu)?.unsqueeze(0)?;
+    let mut cache = loaded.model.cache("kernel-compare");
+    let logits = loaded
+        .model
+        .forward_cached(&ids, &mut cache, "kernel-compare")?;
+    let next = logits
+        .narrow(1, ids.dim(1)? - 1, 1)?
+        .flatten_all()?
+        .argmax(0)?
+        .to_scalar::<u32>()?;
+    let token = Tensor::new(&[next], &Device::Cpu)?.unsqueeze(0)?;
+    let mut reference_logits = None;
+    let mut reference_generation = None;
+    println!(
+        "weights={} prompt={} backend={} CPU/F32 warmup=3 n=31 threads=VECLIB:{:?}/RAYON:{:?}; candidate copies per linear=(N*K+K+N)*4 bytes, no weight cache; cache clones share immutable tensors before append",
+        loaded.manifest.weights_sha256,
+        prompt.token_digest,
+        replica_v3::neural::cpu_backend(),
+        std::env::var("VECLIB_MAXIMUM_THREADS"),
+        std::env::var("RAYON_NUM_THREADS")
+    );
+    for kernel in [Kernel::Reference, Kernel::RustDecodeGemv] {
+        loaded.model.set_kernel(kernel);
+        let mut prefill = Vec::new();
+        let mut decode = Vec::new();
+        let mut generation = Vec::new();
+        let mut micro = Vec::new();
+        let x = Tensor::from_vec(
+            (0..384).map(|i| (i as f32).sin()).collect::<Vec<_>>(),
+            (1, 1, 384),
+            &Device::Cpu,
+        )?;
+        let weight = loaded.model.vars["layer.0.gate"].as_tensor();
+        for i in 0..34 {
+            let start = Instant::now();
+            let _ = decode_linear(&x, weight, kernel)?;
+            let micro_ms = elapsed(start);
+            let mut state = cache.clone();
+            let start = Instant::now();
+            let out = loaded
+                .model
+                .forward_cached(&token, &mut state, "kernel-compare")?;
+            let decode_ms = elapsed(start);
+            if i == 0 {
+                if let Some(reference) = &reference_logits {
+                    let diff = (&out - reference)?.abs()?.max_all()?.to_scalar::<f32>()?;
+                    println!(
+                        "kernel={} decode_max_abs_logit={diff} tolerance=0.0005 cache_history={}",
+                        kernel.id(),
+                        state.history_id()
+                    );
+                    if diff > 5e-4 {
+                        return Err(Error::Model("kernel logits differ".into()));
+                    }
+                } else {
+                    reference_logits = Some(out);
+                }
+            }
+            let mut state = loaded.model.cache("kernel-compare");
+            let start = Instant::now();
+            let _ = loaded
+                .model
+                .forward_cached(&ids, &mut state, "kernel-compare")?;
+            let prefill_ms = elapsed(start);
+            let start = Instant::now();
+            let generated = loaded.model.generate(
+                &prompt.token_ids,
+                16,
+                30000,
+                &AtomicBool::new(false),
+                "kernel-compare",
+            )?;
+            let generation_ms = elapsed(start);
+            let actual = (generated.tokens, generated.finish);
+            if let Some(reference) = &reference_generation {
+                if *reference != actual {
+                    return Err(Error::Model("kernel generation differs".into()));
+                }
+            } else {
+                reference_generation = Some(actual);
+            }
+            if i >= 3 {
+                micro.push(micro_ms);
+                decode.push(decode_ms);
+                prefill.push(prefill_ms);
+                generation.push(generation_ms);
+            }
+        }
+        stats(&format!("{} micro N=1024 K=384 M=1", kernel.id()), micro);
+        stats(&format!("{} decode", kernel.id()), decode);
+        stats(&format!("{} prefill", kernel.id()), prefill);
+        stats(
+            &format!("{} generation includes chunk128 prefill", kernel.id()),
+            generation,
+        );
+    }
+    println!(
+        "relative_generation_parity=PASS; quality_not_evaluated; adoption_requires_full_model_speedup"
+    );
+    Ok(())
+}
 // Explicit P0 audit of a frozen legacy artifact. Never opens a user database or
 // publishes a replacement checkpoint; save timing uses an owned temporary path.
 fn storage_audit(path: &std::path::Path) -> Result<()> {
@@ -733,6 +930,8 @@ fn smoke(checkpoint: &str, cli: &str, output: &str) -> Result<()> {
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("kernel-compare") if args.len() == 3 => kernel_compare(std::path::Path::new(&args[1]), std::path::Path::new(&args[2])),
+        Some("kernel-profile") if args.len() == 3 => kernel_profile(std::path::Path::new(&args[1]), std::path::Path::new(&args[2])),
         Some("lineage-audit") if args.len() > 1 => lineage_audit(&args[1..]),
         Some("storage-audit") if args.len() == 2 => storage_audit(std::path::Path::new(&args[1])),
         Some("checkpoint-load-audit") if args.len() == 3 => checkpoint_load_audit(std::path::Path::new(&args[1]), &args[2]),

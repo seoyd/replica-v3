@@ -90,7 +90,10 @@ impl Config {
                 "native architecture bounds/unsupported feature".into(),
             ));
         }
-        if *self != Self::small(self.vocab) && *self != Self::tiny(self.vocab) {
+        if *self != Self::small(self.vocab)
+            && *self != Self::tiny(self.vocab)
+            && self.profile != "NATIVE_TRPP_EXPERIMENTAL_V1"
+        {
             return Err(Error::Invalid(
                 "unsupported native profile/configuration".into(),
             ));
@@ -99,6 +102,38 @@ impl Config {
     }
     pub fn id(&self) -> Result<String> {
         Ok(hash(&serde_json::to_vec(self)?))
+    }
+    /// Formula identity, independent of the legacy JSON wire representation and profile label.
+    pub fn semantic_id(&self) -> Result<String> {
+        self.validate()?;
+        let mut bytes = Vec::new();
+        for text in [
+            MIXER.family_id,
+            MIXER.equation_version,
+            MIXER.parameter_schema_id,
+            MIXER.state_schema_id,
+            MIXER.numeric_policy,
+        ] {
+            crate::codec::put_varint(&mut bytes, text.len() as u64);
+            bytes.extend_from_slice(text.as_bytes());
+        }
+        for n in [
+            self.vocab,
+            self.layers,
+            self.hidden,
+            self.heads,
+            self.kv_heads,
+            self.head_dim,
+            self.ffn,
+            self.local_layers,
+            self.window,
+            self.context,
+        ] {
+            crate::codec::put_varint(&mut bytes, n as u64);
+        }
+        bytes.extend_from_slice(&self.eps.to_le_bytes());
+        bytes.extend_from_slice(&self.rope_theta.to_le_bytes());
+        Ok(hash(&bytes))
     }
     pub fn shapes(&self) -> BTreeMap<String, Vec<usize>> {
         let mut out = BTreeMap::new();
@@ -130,6 +165,121 @@ impl Config {
             .sum()
     }
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OperatorSpec {
+    pub family_id: &'static str,
+    pub equation_version: &'static str,
+    pub parameter_schema_id: &'static str,
+    pub state_schema_id: &'static str,
+    pub numeric_policy: &'static str,
+}
+pub const MIXER: OperatorSpec = OperatorSpec {
+    family_id: "native-trpp-gqa",
+    equation_version: "prerms-qknorm-rope-causal-local-global-swiglu-tied-v1",
+    parameter_schema_id: "native-trpp-parameters-v1",
+    state_schema_id: "absolute-kv-history-v1",
+    numeric_policy: "cpu-f32-reference",
+};
+#[derive(Clone, Debug)]
+pub struct Capabilities {
+    pub training: bool,
+    pub backward: bool,
+    pub prefill: bool,
+    pub decode: bool,
+    pub cache: bool,
+    pub dtype: DType,
+    pub device: &'static str,
+    pub context: usize,
+}
+/// Only the decode linear operation is experimental. Training and prefill explicitly
+/// dispatch to the differentiable reference; candidate tensors must not enter autograd.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Kernel {
+    #[default]
+    Reference,
+    RustDecodeGemv,
+}
+impl Kernel {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Reference => "candle-linear-v1",
+            Self::RustDecodeGemv => "rust-f32-decode-gemv-v1",
+        }
+    }
+    pub fn capabilities(self, context: usize) -> Capabilities {
+        Capabilities {
+            training: self == Self::Reference,
+            backward: self == Self::Reference,
+            prefill: self == Self::Reference,
+            decode: true,
+            cache: true,
+            dtype: DType::F32,
+            device: "CPU",
+            context,
+        }
+    }
+}
+/// Inference only. Includes input/weight copies in its measured cost; no stale weight cache.
+pub fn decode_linear(x: &Tensor, weight: &Tensor, kernel: Kernel) -> candle_core::Result<Tensor> {
+    if kernel == Kernel::Reference {
+        return linear(x, weight);
+    }
+    let (n, k) = weight.dims2()?;
+    if x.dtype() != DType::F32
+        || weight.dtype() != DType::F32
+        || !x.device().is_cpu()
+        || !weight.device().is_cpu()
+        || k == 0
+        || n == 0
+        || x.elem_count() != k
+        || x.dims().last() != Some(&k)
+        || !x.is_contiguous()
+        || !weight.is_contiguous()
+    {
+        candle_core::bail!("RustDecodeGemv requires contiguous CPU F32 M=1, nonzero N/K");
+    }
+    let input = x.flatten_all()?.to_vec1::<f32>()?;
+    let weights = weight.flatten_all()?.to_vec1::<f32>()?;
+    let output: Vec<f32> = weights
+        .chunks_exact(k)
+        .map(|row| row.iter().zip(&input).map(|(w, x)| w * x).sum())
+        .collect();
+    let mut shape = x.dims().to_vec();
+    *shape.last_mut().expect("nonempty input") = n;
+    Tensor::from_vec(output, shape, x.device())
+}
+#[derive(Default, Debug)]
+pub struct ForwardTimings {
+    pub linear_ns: u128,
+    pub linear_calls: usize,
+    pub linear_shapes: BTreeMap<String, usize>,
+}
+fn measured_linear(
+    x: &Tensor,
+    weight: &Tensor,
+    kernel: Kernel,
+    profile: &mut Option<&mut ForwardTimings>,
+) -> candle_core::Result<Tensor> {
+    let Some(profile) = profile else {
+        return decode_linear(x, weight, kernel);
+    };
+    let start = Instant::now();
+    let result = decode_linear(x, weight, kernel)?;
+    profile.linear_ns += start.elapsed().as_nanos();
+    profile.linear_calls += 1;
+    let input = weight.dim(1)?;
+    let description = format!(
+        "B/T={:?} M={} N={} K={} x_stride={:?} weight_stride={:?} F32 CPU",
+        &x.dims()[..x.rank() - 1],
+        x.elem_count() / input,
+        weight.dim(0)?,
+        input,
+        x.stride(),
+        weight.stride()
+    );
+    *profile.linear_shapes.entry(description).or_default() += 1;
+    Ok(result)
+}
 // Explicit deterministic initialization/sampler state, independent of backend RNG.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Rng {
@@ -158,6 +308,7 @@ pub struct Transformer {
     pub device: Device,
     identity: String,
     tokenizer_identity: String,
+    kernel: Kernel,
 }
 pub fn attention_mask(
     query: std::ops::Range<usize>,
@@ -241,20 +392,48 @@ pub fn repeat_kv(kv: &Tensor, heads: usize) -> candle_core::Result<Tensor> {
         .contiguous()?
         .reshape((b, heads, t, d))
 }
+/// Current mixer equation, kept separate from projections and artifact/state storage.
+/// Candle tensors/autograd remain the runtime boundary; this is not a tensor-runtime API.
+pub fn gqa_attention(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    allowed: &Tensor,
+) -> candle_core::Result<Tensor> {
+    let (_, heads, _, dim) = q.dims4()?;
+    let bias = ((allowed - 1.)? * 1e9)?;
+    let expanded_k = repeat_kv(k, heads)?;
+    let expanded_v = repeat_kv(v, heads)?;
+    let logits = (q
+        .contiguous()?
+        .matmul(&expanded_k.transpose(2, 3)?.contiguous()?)?
+        / (dim as f64).sqrt())?
+    .broadcast_add(&bias)?;
+    // All-masked rows produce zero attention, without NaNs or future leak.
+    candle_nn::ops::softmax(&logits, D::Minus1)?
+        .broadcast_mul(allowed)?
+        .matmul(&expanded_v)
+}
 #[derive(Clone)]
 struct LayerCache {
     k: Tensor,
     v: Tensor,
     start: usize,
 }
+#[derive(Clone)]
 pub struct Cache {
     layers: Vec<Option<LayerCache>>,
     pub position: usize,
     identity: String,
     scope: String,
+    history: sha2::Sha256,
     pub max_attention_bytes: usize,
 }
 impl Cache {
+    pub fn history_id(&self) -> String {
+        use sha2::Digest;
+        format!("{:x}", self.history.clone().finalize())
+    }
     pub fn bytes(&self) -> usize {
         self.layers
             .iter()
@@ -272,6 +451,7 @@ impl Cache {
         self.layers.fill(None);
         self.position = 0;
         self.scope = scope.into();
+        self.history = Default::default();
         self.max_attention_bytes = 0;
     }
 }
@@ -295,6 +475,7 @@ impl Transformer {
             device,
             identity: String::new(),
             tokenizer_identity: String::new(),
+            kernel: Kernel::Reference,
         };
         model.refresh_identity()?;
         Ok(model)
@@ -334,6 +515,7 @@ impl Transformer {
             device,
             identity: String::new(),
             tokenizer_identity: String::new(),
+            kernel: Kernel::Reference,
         };
         model.refresh_identity()?;
         Ok(model)
@@ -350,10 +532,41 @@ impl Transformer {
         }
         Ok(format!("{:x}", digest.finalize()))
     }
+    pub fn set_kernel(&mut self, kernel: Kernel) {
+        self.kernel = kernel;
+    }
+    pub fn kernel(&self) -> Kernel {
+        self.kernel
+    }
     pub fn refresh_identity(&mut self) -> Result<()> {
-        self.identity =
-            hash(format!("{}:{}", self.weight_hash()?, self.tokenizer_identity).as_bytes());
+        self.identity = hash(
+            format!(
+                "{}:{}:{}:{}",
+                self.config.semantic_id()?,
+                self.weights_content_id()?,
+                self.tokenizer_identity,
+                MIXER.state_schema_id
+            )
+            .as_bytes(),
+        );
         Ok(())
+    }
+    /// Content only; legacy weight_hash intentionally remains unchanged for imported lineage.
+    pub fn weights_content_id(&self) -> Result<String> {
+        use sha2::{Digest, Sha256};
+        let mut digest = Sha256::new();
+        for (name, var) in &self.vars {
+            digest.update((name.len() as u64).to_le_bytes());
+            digest.update(name.as_bytes());
+            digest.update((var.rank() as u64).to_le_bytes());
+            for &n in var.dims() {
+                digest.update((n as u64).to_le_bytes());
+            }
+            for x in var.flatten_all()?.to_vec1::<f32>()? {
+                digest.update(x.to_le_bytes());
+            }
+        }
+        Ok(format!("{:x}", digest.finalize()))
     }
     pub fn bind_tokenizer(&mut self, id: &str) -> Result<()> {
         self.tokenizer_identity = id.into();
@@ -365,14 +578,24 @@ impl Transformer {
             position: 0,
             identity: self.identity.clone(),
             scope: scope.into(),
+            history: Default::default(),
             max_attention_bytes: 0,
         }
     }
     pub fn forward(&self, ids: &Tensor, padding: Option<&[bool]>) -> Result<Tensor> {
-        self.forward_inner(ids, padding, None, "")
+        self.forward_inner(ids, padding, None, "", None)
     }
     pub fn forward_cached(&self, ids: &Tensor, cache: &mut Cache, scope: &str) -> Result<Tensor> {
-        self.forward_inner(ids, None, Some(cache), scope)
+        self.forward_inner(ids, None, Some(cache), scope, None)
+    }
+    pub fn forward_profiled(
+        &self,
+        ids: &Tensor,
+        cache: &mut Cache,
+        scope: &str,
+        timings: &mut ForwardTimings,
+    ) -> Result<Tensor> {
+        self.forward_inner(ids, None, Some(cache), scope, Some(timings))
     }
     fn forward_inner(
         &self,
@@ -380,8 +603,15 @@ impl Transformer {
         padding: Option<&[bool]>,
         mut cache: Option<&mut Cache>,
         scope: &str,
+        mut profile: Option<&mut ForwardTimings>,
     ) -> Result<Tensor> {
         let (batch, len) = ids.dims2()?;
+        // A forward used for training always retains the reference autograd graph.
+        let kernel = if cache.is_some() && len == 1 {
+            self.kernel
+        } else {
+            Kernel::Reference
+        };
         let c = &self.config;
         let position = cache.as_ref().map_or(0, |c| c.position);
         if ids.dtype() != DType::U32
@@ -414,13 +644,13 @@ impl Transformer {
         for i in 0..c.layers {
             let w = |name: &str| self.vars[&format!("layer.{i}.{name}")].as_tensor();
             let norm = rms_norm(&x, w("attn_norm"), c.eps)?;
-            let q = linear(&norm, w("q"))?
+            let q = measured_linear(&norm, w("q"), kernel, &mut profile)?
                 .reshape((batch, len, c.heads, c.head_dim))?
                 .transpose(1, 2)?;
-            let k = linear(&norm, w("k"))?
+            let k = measured_linear(&norm, w("k"), kernel, &mut profile)?
                 .reshape((batch, len, c.kv_heads, c.head_dim))?
                 .transpose(1, 2)?;
-            let v = linear(&norm, w("v"))?
+            let v = measured_linear(&norm, w("v"), kernel, &mut profile)?
                 .reshape((batch, len, c.kv_heads, c.head_dim))?
                 .transpose(1, 2)?;
             let q = rotary(&rms_norm(&q, w("q_norm"), c.eps)?, position, c.rope_theta)?;
@@ -442,26 +672,15 @@ impl Transformer {
                 batch,
                 &self.device,
             )?;
-            let bias = ((&allowed - 1.)? * 1e9)?;
-            let expanded_k = repeat_kv(&k, c.heads)?;
-            let expanded_v = repeat_kv(&v, c.heads)?;
-            let logits = (q
-                .contiguous()?
-                .matmul(&expanded_k.transpose(2, 3)?.contiguous()?)?
-                / (c.head_dim as f64).sqrt())?
-            .broadcast_add(&bias)?;
-            // All-masked rows produce zero attention, without NaNs or future leak.
-            let probabilities =
-                candle_nn::ops::softmax(&logits, D::Minus1)?.broadcast_mul(&allowed)?;
-            let attention = probabilities
-                .matmul(&expanded_v)?
+            let attention = gqa_attention(&q, &k, &v, &allowed)?
                 .transpose(1, 2)?
                 .contiguous()?
                 .reshape((batch, len, c.hidden))?;
-            x = (x + linear(&attention, w("o"))?)?;
+            x = (x + measured_linear(&attention, w("o"), kernel, &mut profile)?)?;
             let norm = rms_norm(&x, w("ffn_norm"), c.eps)?;
-            let hidden = (linear(&norm, w("gate"))?.silu()? * linear(&norm, w("up"))?)?;
-            x = (x + linear(&hidden, w("down"))?)?;
+            let hidden = (measured_linear(&norm, w("gate"), kernel, &mut profile)?.silu()?
+                * measured_linear(&norm, w("up"), kernel, &mut profile)?)?;
+            x = (x + measured_linear(&hidden, w("down"), kernel, &mut profile)?)?;
             if let Some(cache) = cache.as_mut() {
                 // Evict only after the entire chunk has attended to its history.
                 let keep = if local { keys.min(c.window) } else { keys };
@@ -477,11 +696,17 @@ impl Transformer {
             }
         }
         if let Some(cache) = cache {
+            use sha2::Digest;
+            for id in ids.flatten_all()?.to_vec1::<u32>()? {
+                cache.history.update(id.to_le_bytes());
+            }
             cache.position += len;
         }
-        Ok(linear(
+        Ok(measured_linear(
             &rms_norm(&x, self.vars["final_norm"].as_tensor(), c.eps)?,
             embed,
+            kernel,
+            &mut profile,
         )?)
     }
     pub fn generate(
