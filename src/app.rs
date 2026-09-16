@@ -12,10 +12,20 @@ use std::{
 
 pub fn ask(
     store: &mut Store,
+    input: Event,
+    limits: GenerationLimits,
+    model: &mut impl Model,
+    cancel: &AtomicBool,
+) -> Result<Event> {
+    ask_with_history(store, input, limits, model, cancel, false)
+}
+pub fn ask_with_history(
+    store: &mut Store,
     mut input: Event,
     limits: GenerationLimits,
     model: &mut impl Model,
     cancel: &AtomicBool,
+    history: bool,
 ) -> Result<Event> {
     limits.validate()?;
     input.kind = Kind::Observation {
@@ -36,6 +46,8 @@ pub fn ask(
         let terms: Vec<_> = prefix.split_whitespace().take(33).collect();
         let query = terms.iter().take(32).copied().collect::<Vec<_>>().join(" ");
         let mut search = Search::new(&input.scope, &query);
+        search.history = history;
+        search.memory_only = true;
         search.snapshot_id = Some(input.id - 1);
         let mut evidence = store.search(&search)?;
         evidence.truncated |= byte_truncated || terms.len() > 32;
@@ -145,7 +157,7 @@ pub fn citations(text: &str) -> Result<Vec<i64>> {
     }
     Ok(ids.into_iter().collect())
 }
-fn validate_response(request: &ModelRequest, response: &ModelResponse) -> Result<Vec<i64>> {
+pub fn validate_response(request: &ModelRequest, response: &ModelResponse) -> Result<Vec<i64>> {
     if response.request_id != request.request_id
         || response.text.is_empty()
         || response.text.len() > MAX_PAYLOAD

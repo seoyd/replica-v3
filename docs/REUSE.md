@@ -15,8 +15,8 @@ No BrainCore, super::* imports, authority seal, MIR audits or atomic snapshot
 replacement copied. CRC crate uses the standard polynomial; no copied CRC table.
 
 
-The single model backend calls the installed Cargo-locked Rust Candle library
-API (`candle-transformers 0.11.0`, `quantized_qwen2::ModelWeights::from_gguf/forward`);
-it does not copy a Python or C++ worker. Native tokenizer and chat-template formats
-remain local inputs. The original MLX option was superseded by the user's Rust-only
-instruction before any bridge file was created.
+The native model owns its Transformer blocks, training loop and generation loop.
+Only generic Candle tensor/autograd/activation operations are reused. The former
+external model adapter and its dependency have been removed. Own byte BPE learns
+from the declared training corpus; its artifact is bundled with our checkpoint.
+No Python or C++ worker or bridge was created.

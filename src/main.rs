@@ -3,12 +3,12 @@ use clap::{Args, Parser, Subcommand};
 use replica_v3::{
     Error, Result, app,
     event::*,
-    model::{self, LocalModel, ModelConfig},
+    model::{self, LocalModel, Model, ModelConfig},
     retrieval::Search,
     store::Store,
 };
 use std::{
-    io::{Read, Write},
+    io::{BufRead, Read, Write},
     path::PathBuf,
     sync::{
         Arc,
@@ -184,12 +184,28 @@ enum Commands {
         input: Input,
         #[command(flatten)]
         model: ModelConfig,
-        #[arg(long, default_value_t = 512)]
-        max_tokens: u32,
-        #[arg(long, default_value_t = 8192)]
-        context_tokens: u32,
-        #[arg(long, default_value_t = 120000)]
-        timeout_ms: u64,
+        #[command(flatten)]
+        limits: GenerationLimits,
+        #[arg(long)]
+        history: bool,
+    },
+    Generate {
+        #[command(flatten)]
+        input: Input,
+        #[command(flatten)]
+        model: ModelConfig,
+        #[command(flatten)]
+        limits: GenerationLimits,
+    },
+    Chat {
+        #[command(flatten)]
+        identity: Identity,
+        #[command(flatten)]
+        model: ModelConfig,
+        #[command(flatten)]
+        limits: GenerationLimits,
+        #[arg(long)]
+        history: bool,
     },
     Doctor {
         #[arg(long)]
@@ -271,6 +287,30 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     if let Commands::ModelWorker { config } = cli.command {
         return model::worker(config);
+    }
+    if let Commands::Generate {
+        input,
+        model,
+        limits,
+    } = cli.command
+    {
+        let cancel = cancellation()?;
+        let request = model::ModelRequest {
+            request_id: "direct-native-generation".into(),
+            system: model::SYSTEM.into(),
+            input: String::from_utf8(input_bytes(input)?)
+                .map_err(|_| Error::Invalid("input UTF-8".into()))?,
+            evidence: Default::default(),
+            limits,
+        };
+        let response = LocalModel { config: model }.generate(&request, &cancel)?;
+        app::validate_response(&request, &response)?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(Error::Cancelled);
+        }
+        println!("{}", response.text);
+        eprintln!("{}", serde_json::to_string(&response.generation)?);
+        return Ok(());
     }
     let path = cli.db.map(Ok).unwrap_or_else(default_db)?;
     match cli.command {
@@ -390,31 +430,103 @@ fn run() -> Result<()> {
             identity,
             input,
             model,
-            max_tokens,
-            context_tokens,
-            timeout_ms,
+            limits,
+            history,
         } => {
-            let cancel = Arc::new(AtomicBool::new(false));
-            let signal = cancel.clone();
-            ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed))
-                .map_err(|e| Error::Model(e.to_string()))?;
-            let event = app::ask(
+            let cancel = cancellation()?;
+            let event = app::ask_with_history(
                 &mut store,
                 observation(identity, input_bytes(input)?)?,
-                GenerationLimits {
-                    max_tokens,
-                    context_tokens,
-                    timeout_ms,
-                },
+                limits,
                 &mut LocalModel { config: model },
                 &cancel,
+                history,
             )?;
-            if let Kind::AssistantAnswer { evidence, .. } = &event.kind
-                && evidence.is_empty()
-            {
-                println!("[확인된 사건 인용 없음 — 답변의 사실성은 검증되지 않았습니다]");
+            display_answer(&event);
+        }
+        Commands::Chat {
+            identity,
+            model,
+            limits,
+            history,
+        } => {
+            if identity.request_key.is_some() {
+                return Err(Error::Invalid(
+                    "chat assigns a fresh request key per input; explicit keys use ask".into(),
+                ));
             }
-            display(&event);
+            let cancel = cancellation()?;
+            let mut model = LocalModel { config: model };
+            limits.validate()?;
+            let (send, receive) = std::sync::mpsc::sync_channel(1);
+            // One bounded reader lets the foreground observe cancellation even
+            // while a terminal has supplied no newline. It ends with this CLI process.
+            std::thread::spawn(move || {
+                let mut input = std::io::stdin().lock();
+                loop {
+                    let mut line = Vec::new();
+                    match input
+                        .by_ref()
+                        .take((MAX_PAYLOAD + 1) as u64)
+                        .read_until(b'\n', &mut line)
+                    {
+                        Ok(0) => break,
+                        Err(e) => {
+                            let _ = send.send(Err(Error::from(e)));
+                            break;
+                        }
+                        Ok(_) if line.len() > MAX_PAYLOAD => {
+                            let _ = send.send(Err(Error::Invalid("chat input byte limit".into())));
+                            break;
+                        }
+                        Ok(_) => {
+                            if send.send(Ok(line)).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+            'session: loop {
+                eprint!("> ");
+                std::io::stderr().flush()?;
+                let mut line = loop {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Err(Error::Cancelled);
+                    }
+                    match receive.recv_timeout(std::time::Duration::from_millis(10)) {
+                        Ok(line) => break line?,
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break 'session,
+                    }
+                };
+                if line.last() == Some(&b'\n') {
+                    line.pop();
+                    if line.last() == Some(&b'\r') {
+                        line.pop();
+                    }
+                }
+                if line == b"/quit" {
+                    break;
+                }
+                if line.is_empty() {
+                    continue;
+                }
+                let mut event =
+                    Event::observation(&identity.scope, &identity.session, &identity.source, line);
+                event.observed_at = identity.observed_at;
+                let mut key = [0u8; 16];
+                std::fs::File::open("/dev/urandom")?.read_exact(&mut key)?;
+                event.request_key = Some(key);
+                display_answer(&app::ask_with_history(
+                    &mut store,
+                    event,
+                    limits.clone(),
+                    &mut model,
+                    &cancel,
+                    history,
+                )?);
+            }
         }
         Commands::Doctor { full } => {
             println!("{:#?}", store.doctor(full)?);
@@ -428,9 +540,27 @@ fn run() -> Result<()> {
             store.backup(&destination)?;
             println!("backed up {}", destination.display());
         }
-        Commands::Init | Commands::Restore { .. } | Commands::ModelWorker { .. } => unreachable!(),
+        Commands::Init
+        | Commands::Restore { .. }
+        | Commands::ModelWorker { .. }
+        | Commands::Generate { .. } => unreachable!(),
     }
     Ok(())
+}
+fn cancellation() -> Result<Arc<AtomicBool>> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let signal = cancel.clone();
+    ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed))
+        .map_err(|e| Error::Model(e.to_string()))?;
+    Ok(cancel)
+}
+fn display_answer(event: &Event) {
+    if let Kind::AssistantAnswer { evidence, .. } = &event.kind
+        && evidence.is_empty()
+    {
+        println!("[확인된 사건 인용 없음 — 답변의 사실성은 검증되지 않았습니다]");
+    }
+    display(event);
 }
 fn main() {
     if let Err(error) = run() {

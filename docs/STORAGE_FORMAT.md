@@ -20,7 +20,9 @@ uses zigzag. Bytes/text = varint length then exact bytes; text must be UTF-8.
 Option = u8 0 absent / 1 present then value. Booleans = u8 0/1 only.
 Lists = varint count then entries, max 8 IDs unless stated otherwise. Strings
 source/scope/session/slot components <=1024 bytes; payload <=262144 bytes.
-Request key = optional exactly 16 caller-supplied bytes, CLI 32 hex digits.
+Request key = optional exactly 16 bytes, explicit CLI keys use32 hex digits.
+Chat generates a fresh OS-random key for each submitted line. Its LF/CRLF delimiter
+is framing; body bytes, including a final CR without LF at EOF, are preserved.
 No UUID version is implied; keys are unique within scope. Same key requires
 identical typed content excluding assigned ID/recorded_at, otherwise Conflict.
 
@@ -100,7 +102,7 @@ canonical DB path is resolved before choosing that lock. An active generation
 fails another generation attempt explicitly; the input remains committed.
 Question inputs retain full bytes while retrieval derives a bounded prefix and
 marks truncation. Source/model metadata is text inside explicit binary fields.
-Model revisions include hashes of actual weights/tokenizer/chat-template bytes.
+Native model revisions include hashes of actual weights, own tokenizer and architecture configuration; historical revision strings remain readable.
 FTS is deliberately the outer SQL loop (CROSS JOIN) and seed rank uses SQLite's
 FTS rank order; do not add a metadata-driven join or secondary sort that forces
 an unbounded pre-LIMIT sort. Scope and snapshot checks still precede admission.

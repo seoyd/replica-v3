@@ -1,7 +1,40 @@
 # Native model implementation
 
-Contract: GOAL1-NATIVE-TRPP-1.0. Current completed phase: S2 (data/tokenizer).
-No neural training or task-quality result is implied by tokenizer completion.
+Contract: GOAL1-NATIVE-TRPP-1.0. Verified through S3; S4 learning remains under
+investigation after task-quality failures. No final acceptance has been declared.
+The following observations are scoped to their named phase, not overall task success.
+
+Current continuation record (all artifacts remain local; no new final test result):
+
+| Run | Actual bounded training | Validation-only generation | Acceptance |
+|---|---|---|---|
+| first SMALL |5000 updates, own vocab648|independent final automatic1/200; semantic0/200|FAILED, exposed fixture is regression-only|
+| curriculum v2 |5000 updates, own train-only vocab801|selected4500:229/400|insufficient; no new final test|
+| balanced v3 |5000 additional updates from v2 step4500|selected9250:250/400|insufficient; no new final test|
+| grounding v4 |5000 additional updates from9250; budget ended at14250|selected10500:188/400|insufficient; no new final test|
+| counterfactual v5 |2925 additional updates; agent stopped after validation deterioration|selected12500:221/400|insufficient; no new final test|
+| evidence-first v6 |4053 additional updates; predeclared validation stop at16553|selected14500:228/400, QA macro0.591544; terminal215/400|insufficient; no new final test|
+| record-copy v8 |user-directed stop19271; terminal selected under original rule|terminal126/400, QA macro0.361029; zero generation failures|not qualified; checkpoint preserved|
+| entity-cue v9 |100-update auxiliary diagnostic, then bounded500-update mixed QA|auxiliary64/64; mixed selected19750:219/400, QA macro0.467096; terminal211/400|not qualified; remaining number/context/value binding errors|
+| field-cue v10 |500-update auxiliary cap reached20250|terminal name0/16, number0/16, context0/16, value9/16|field gate FAILED; no mixed-QA continuation|
+| field-pairs v11 |500-update revised auxiliary cap reached20750|original-question42/64: name14, number7, context12, value9 of16 each; training59/64, oracle-question55/64|field gate FAILED; no automatic continuation|
+| query-pairs v12 |STOPPED: 1,000-update 예산 종료21,750; 현재 NOT_RUNNING|기존 원본 검증45/400: 보조45/64, 일반 QA0/336; 신규 재평가 아님|QUALITY_FAIL; 전체 목표 기준 유지|
+| SMALL32-QA memorization |random initialization; stopped508 after stable exact memorization|400/500 updates32/32 each; fresh terminal reload32/32 train and0/32 validation|memorization PASS only; original task gate still unmet|
+
+The801-token model has9,605,184 parameters and retains the required SMALL architecture.
+All these runs use our random initialization lineage and CPU/Accelerate FP32; none uses
+an external weight, tokenizer artifact, teacher or inference API. Corpus versions are
+separate declared splits with retained history; v3–v6 freeze the v2 training tokenizer.
+Validation losses from different corpora or answer distributions are not directly
+comparable quality scores. Full manifests, measured resource use, raw outputs and
+failed attempts are recorded in IMPLEMENTATION_REPORT.md and its referenced logs.
+
+Native generate/ask/chat and fresh-process replay are connected to the trained logits
+path. Intermediate CLI quality was4/14, while committed same-key replay was14/14.
+These observations establish neither the required memory-answer quality nor S5 exit.
+The next independent final fixture constructor is ready and its two direct regressions
+passed; actual fixture creation/evaluation remains pending a frozen validation-selected
+candidate. Overall task quality and S6 packed quantization are still unverified.
 
 The training executable is `replica-train`; its private `data` module owns synthetic
 answer rendering. The inference library/worker does not import it. Product prompts
@@ -29,7 +62,8 @@ as ID. No recursive collection/automatic personal-memory training. Per-split has
 serialized bytes/document counts, generator revision and seed are in manifest.json.
 Counts requiring tokenization are added to the tokenizer's adjacent manifest, retaining
 all original corpus metadata. No final test was used for tokenizer/model selection.
-The independent final evaluation renderer remains to be implemented in S4.
+The independent S4 evaluation renderer lives only in examples/validate.rs, outside
+the training generator and product inference library.
 
 Observed S2 artifact (synthetic only, seed 41): 2000 train / 200 validation episodes;
 train/validation serialized bytes 2,830,265 / 343,636; actual vocab 648. Text supplied
@@ -38,7 +72,8 @@ answers/EOS: 650,955 train / 96,548 validation tokens, before training batching.
 These are corpus counts, not consumed training tokens. Exact hashes/logs are in
 logs/goal1-s2-tokenizer.txt and logs/goal1-s2-tokenizer-manifest.txt.
 
-Actual checkpoint/training/heldout/KV/quant/offline-device measurements: NOT_RUN.
+At the S2 exit, checkpoint/training/heldout/KV/quant/offline measurements were NOT_RUN;
+later observations follow below. Heldout quality is not inferred from numeric tests.
 MLA, MTP, FP4, latent thought, low-bit KV: NOT_IMPLEMENTED. No broad intelligence claim.
 
 ## S3 native decoder and training state
@@ -91,3 +126,114 @@ and GPU/shared allocations NOT_MEASURED. This is a probe, not a quality pass.
 
 S3 direct exit: 11 actual tests (7 native, 3 process-training, 1 trainer unit) passed.
 No heldout task quality, real memory integration or quantization acceptance yet.
+
+## S4 operating record (executed, quality failed)
+
+CPU tiny overfit used the same real Transformer/backward/AdamW/checkpoint path. The
+network-disabled 500-step run consumed 5,498 input/target tokens on two repeated toy
+sequences: initial validation loss 6.48106397, final 0.07490649. It is intentionally
+overfit, not independent accuracy. Its final artifact is
+`artifacts/goal1-tiny-overfit-offline/final`; raw results are in
+logs/goal1-s4-tiny-offline.txt. An earlier sandbox run failed with EPERM because it
+attempted to execute ps; its log and incomplete output directory are retained.
+
+Explicit --no-rss handles that observed platform restriction: sampled RSS is None,
+not zero. External /usr/bin/time -l measures resident high water and memory footprint
+separately. An architecture/batch tensor planning guard is an estimate, not an observed
+peak. The ordinary RSS sampling/stop path remains enabled without the option.
+
+The fixed SMALL run uses the existing 2000/200 episode corpus and own 648-token BPE,
+random initialization seed17, CPU F32, length512, 5000-step/20M-input-token bounds,
+microbatch1/accumulation1, LR0.001/warmup100 and validation every250. Configuration was
+recorded before the run/final test in logs/goal1-s4-operating-config.txt. Checkpoints
+are selected only by validation loss. The launch source manifest is
+logs/goal1-s4-training-source-digest.txt. Apply goal1-s4-training-source.patch to
+commit 23cc5b0178048eb7b23775fefb3d9282c1f91152 to reproduce those source bytes;
+both reconstructed changed files matched the pre-launch SHA-256 entries exactly.
+Subsequent evaluator-only additions do not change the running training executable.
+
+The separate validation generation diagnostic at step750 had 0/25 exact matches;
+outputs often had an incorrect value or an unprovided event ID. This is evidence of
+failed task learning/generalization, not a final heldout result. Numeric cached/full
+forward parity on that trained checkpoint still passed all six lengths through2048
+(maximum observed logits difference 4.053116e-6). Evidence: logs/goal1-s4-validation-750.*
+and goal1-s4-trained-cache-parity.txt. No quality waiver or scripted answer is applied.
+The same checkpoint's first25 train episodes had3 exact matches, all empty-evidence
+uncertainty responses (logs/goal1-s4-train-diagnostic-750.*). Failures therefore already
+occur on training-format questions, before introducing heldout wording or DB retrieval.
+This diagnostic does not prove a single cause; it identifies evidence/value/ID learning
+as unresolved despite the passing numerical pipeline checks.
+
+The final evaluation renderer has five categories of40 cases. Its question/value/time
+expectations are independent of the training generator and remain outside the product
+library. Scoring checks required values, temporal citation IDs, contradictory values,
+blanket uncertainty, missing/invalid citations and causal overclaims. Actual Korean
+outputs still require separate semantic inspection; these checks are not a language
+understanding proof. Comparisons use the random artifact, removed evidence, swapped
+values with identical questions, and actual Store::search without gold-ID seeds.
+The last comparison measures top-1 retrieved value, explicitly not answer accuracy.
+
+The run ended normally at its fixed5000-step budget after1686.704 s, consuming1,622,873
+input tokens and56,407 supervised targets. Last train loss was0.57465279; final validation
+loss1.76776054. There were5000 sampled episodes with replacement from2000 distinct
+corpus episodes (average2.5 draws per episode, not2.5 complete deterministic epochs).
+Minimum validation loss1.25634503 selected step750 before final fixture creation;
+that selected artifact consumed243,473 inputs/8,425 targets. Final and selected artifacts
+are different: final tensor SHA4204371e1672571987192029d08772651fee67884c730261041d0d7d2a240369,
+selected SHA73689b0104c750f3aec94079f5eed81fbadfacca523f860169da0aa756f44487.
+Selection evidence is logs/goal1-s4-selected-candidate.txt. All later checkpoints and
+failures remain local; none was substituted based on final-test results.
+
+Heldout seed872341 was rendered only after training/selection. Its SHA-256 is
+1a0a41758064ebc01d13cd4f983f26a167e2af992bb5a956c546994bf8dcda8c. Each category has40
+cases. The trained automatic counts were[0,0,0,0,1], total1/200 (0.5%), versus required
+190/200 and36/40 each. Of200 outputs,199 had unprovided event citations and were rejected.
+The one automatic hit (case198) was also semantically invalid: it asserted an unrelated
+direction, repeated broken fragments and ended in a stray number/bracket. Implementer
+inspection accepts0/200; independent review remains pending. The raw automatic1 is
+preserved rather than silently relabeled. This exposes a false positive in the simple
+uncertainty-keyword rubric; the rubric is not a semantic validator or production guard.
+
+| Input/model comparison | Automatic correct /200 | Provided-citation rejections | Interpretation |
+|---|---:|---:|---|
+| Selected trained | 1 | 199 | sole automatic hit fails semantic inspection |
+| Random initialization | 0 | 0 |150 invalid UTF-8 outputs; other outputs unrelated/repetitive |
+| Evidence removed | 1 | 117 |same invalid automatic hit; no demonstrated evidence benefit |
+| Correct evidence value swapped | 1 | 199 |147/160 known-value pairs unchanged; both-correct pairs0 |
+
+These are four variants of200 cases, not800 independent test questions. Complete
+actual tokens/text/provided/excluded/citations/digests/timings and failures are in
+logs/goal1-s4-heldout-{trained,random,no-evidence,value-swap}.jsonl and accompanying
+text logs. Source/evaluation fingerprint: logs/goal1-s4-final-source-digest.txt.
+Actual Store::search top-1 value hits were133/160 known-value cases, with no gold-ID
+query seeds. This baseline stores raw observations, not canonical version chains;
+it does not certify version-aware answer accuracy. It did not generate an answer.
+
+Trained evaluation ran in one new process with CPU/F32 and fresh KV per question,
+network denied. Model load380.750 ms;200 generations totaling2363 tokens including EOS,
+27.001 s including prefill (87.52 aggregate tokens/s). TTFT min/median/max34/103/149 ms;
+generation58/136/184 ms. All200 stopped at EOS. These throughput numbers describe failed
+answers, not useful-answer performance. Filesystem caches were not flushed; no true
+OS-cold claim. Random/no-evidence runs overlapped briefly and their raw timings are
+not a controlled latency comparison. Trained and value-swap runs were separate.
+
+External time measured training maximum RSS1,676,378,112 bytes and peak memory
+footprint1,504,954,072 bytes; trained inference RSS449,429,504 bytes and footprint
+446,841,600 bytes. Do not add these metrics. GPU/shared allocations were not measured.
+Selected safetensors are114,575,488 bytes including master weights, two Adam moments
+and headers; tokenizer16,636 bytes; manifest12,943 bytes. Raw model F32 weights alone
+are38,185,728 bytes. There is no native-memory DB measurement yet.
+
+S4=FAILED; TRAIN_PIPELINE_VERIFIED=YES; GOAL1_TASK_PASS=NO. This bounded run is preserved,
+not published as a completed phase. Validation diagnostics identify failed value/ID
+learning even on train questions; cached/full parity passed, and final evaluation fed
+evidence directly, so these failures occur without DB retrieval. Data/optimization
+improvement remains necessary; no single cause is claimed proven. The final fixture
+is now exposed and must become a regression set if a later change uses these observations.
+Any later candidate requires fresh independent final evaluation.
+
+At the first experiment's closure, native memory integration and quantization were
+unimplemented. The continuation has replaced the former external adapter with the
+own-model worker and added native generate/chat/history interfaces. S5 acceptance
+still requires the final qualified model and actual memory/restart trials. S6 is
+not implemented. There is no accepted product model or Goal1 pass.

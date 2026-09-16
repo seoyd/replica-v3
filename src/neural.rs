@@ -3,6 +3,7 @@ use crate::{
     Error, Result,
     event::{MAX_PAYLOAD, check_refs},
     model::{MAX_REQUEST, ModelRequest, PreparedPrompt},
+    retrieval::Evidence,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -28,6 +29,28 @@ pub const SPECIALS: usize = 8;
 pub const MAX_VOCAB: usize = 4096;
 pub const MAX_TOKENIZER_BYTES: usize = 2 * 1024 * 1024;
 pub const PROMPT_FORMAT: &str = "native-role-bytes-v1";
+
+pub fn cpu_backend() -> &'static str {
+    if cfg!(feature = "accelerate") {
+        "CPU/Accelerate"
+    } else {
+        "CPU/gemm"
+    }
+}
+
+/// Shared byte framing: tokenizer training may learn only the train split's headers.
+pub fn evidence_text(e: &Evidence) -> String {
+    format!(
+        "[event:{}] source={} recorded={} observed={:?} status={} excerpt_truncated={}\n{}",
+        e.event_id,
+        e.source,
+        e.recorded_at,
+        e.observed_at,
+        e.version_status,
+        e.excerpt_truncated,
+        e.original_excerpt
+    )
+}
 
 pub fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -294,21 +317,12 @@ impl ByteBpe {
             let mut rendered_bytes = request.system.len() + request.input.len();
             for e in &evidence {
                 ids.push(EVIDENCE_ROLE);
-                let header = format!(
-                    "[event:{}] source={} recorded={} observed={:?} status={} excerpt_truncated={}\n",
-                    e.event_id,
-                    e.source,
-                    e.recorded_at,
-                    e.observed_at,
-                    e.version_status,
-                    e.excerpt_truncated
-                );
-                rendered_bytes += header.len() + e.original_excerpt.len();
+                let text = evidence_text(e);
+                rendered_bytes += text.len();
                 if rendered_bytes > MAX_REQUEST {
                     break;
                 }
-                ids.extend(self.encode(header.as_bytes())?);
-                ids.extend(self.encode(e.original_excerpt.as_bytes())?);
+                ids.extend(self.encode(text.as_bytes())?);
                 ids.push(END_ROLE);
             }
             ids.push(ASSISTANT_ROLE);

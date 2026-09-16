@@ -12,6 +12,39 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Commands {
+    /// Replay recorded sampler state to distinguish corpus membership from actual exposure.
+    SamplingExposure {
+        #[arg(long)]
+        start: PathBuf,
+        #[arg(long)]
+        end: PathBuf,
+        #[arg(long)]
+        corpus: PathBuf,
+        #[arg(long, default_value_t = 400)]
+        limit: usize,
+    },
+    /// Corpus generation diagnostic; never a final heldout score.
+    Evaluate {
+        #[arg(long)]
+        checkpoint: PathBuf,
+        #[arg(long)]
+        corpus: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+        #[arg(long, default_value = "validation", value_parser = ["train", "validation"])]
+        split: String,
+        /// Diagnostic only: paraphrase QA0/QA2 with known training wording, never a task score.
+        #[arg(long)]
+        known_question_form: bool,
+        /// Oracle field-task paraphrase diagnostic only; never a candidate score.
+        #[arg(long, conflicts_with = "known_question_form")]
+        known_field_question_form: bool,
+        /// Oracle value-task evidence selection diagnostic, never a task score.
+        #[arg(long, conflicts_with = "known_question_form")]
+        single_current_record: bool,
+    },
     Model {
         #[command(subcommand)]
         command: Models,
@@ -27,6 +60,9 @@ enum Commands {
         output: PathBuf,
         #[arg(long)]
         numeric_probe: bool,
+        /// For restricted environments denying ps; report None and measure externally.
+        #[arg(long)]
+        no_rss: bool,
         #[arg(long)]
         stop_after: Option<usize>,
         #[arg(long, default_value_t = 5000)]
@@ -41,12 +77,38 @@ enum Commands {
         warmup: usize,
         #[arg(long, default_value_t = 1)]
         microbatch: usize,
+        /// Draw complete consecutive blocks from the eligible sample pool.
+        #[arg(long, default_value_t = 1)]
+        sample_group_size: usize,
         #[arg(long, default_value_t = 4)]
         accumulation: usize,
         #[arg(long, default_value_t = 100)]
         validate_every: usize,
         #[arg(long, default_value_t = 17)]
         seed: u64,
+        #[arg(long, default_value_t = 0)]
+        curriculum_steps: usize,
+        /// Optimize the first supervised token more strongly; reported CE stays unweighted.
+        #[arg(long, default_value_t = 1.0)]
+        first_target_weight: f64,
+        /// Explicit new bounded run; retains optimizer/RNG and restarts the saved LR schedule.
+        #[arg(long, requires_all=["resume", "source_id"])]
+        extend_steps: Option<usize>,
+        /// Change microbatch only at an explicitly declared continuation boundary.
+        #[arg(long, requires = "extend_steps")]
+        extend_microbatch: Option<usize>,
+        #[arg(long, requires = "extend_steps", value_parser = clap::value_parser!(u8).range(1..=8))]
+        extend_sample_group_size: Option<u8>,
+        /// Number of initial copy-training steps in the explicitly extended run.
+        #[arg(long, requires = "extend_steps")]
+        extend_curriculum_steps: Option<usize>,
+        #[arg(long, requires = "extend_steps")]
+        extend_first_target_weight: Option<f64>,
+        #[arg(long, requires = "extend_steps")]
+        source_id: Option<String>,
+        /// Explicit continued training on a new declared split; preserves tokenizer/data lineage.
+        #[arg(long, requires_all=["resume", "extend_steps", "corpus"], conflicts_with="numeric_probe")]
+        replace_corpus: bool,
     },
     Corpus {
         #[command(subcommand)]
@@ -78,6 +140,15 @@ enum Models {
 }
 #[derive(Subcommand)]
 enum Corpus {
+    /// Preserve a small existing QA set for a learning-path memorization diagnostic.
+    Subset {
+        #[arg(long)]
+        source: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value_t = 32)]
+        count: usize,
+    },
     Prepare {
         #[arg(long)]
         output: PathBuf,
@@ -87,6 +158,8 @@ enum Corpus {
         documents: usize,
         #[arg(long)]
         local: Vec<PathBuf>,
+        #[arg(long, default_value="v1", value_parser=["v1", "curriculum", "balanced", "grounding", "counterfactual", "evidence-first", "record-copy", "entity-cue", "field-cue", "field-pairs", "query-pairs"])]
+        profile: String,
     },
 }
 #[derive(Subcommand)]
@@ -108,6 +181,43 @@ enum Tokenizer {
 }
 fn run() -> Result<()> {
     match Cli::parse().command {
+        Commands::SamplingExposure {
+            start,
+            end,
+            corpus,
+            limit,
+        } => training::sampling_exposure(&start, &end, &corpus, limit),
+        Commands::Corpus {
+            command:
+                Corpus::Subset {
+                    source,
+                    output,
+                    count,
+                },
+        } => data::qa_subset(&source, &output, count),
+        Commands::Evaluate {
+            checkpoint,
+            corpus,
+            output,
+            limit,
+            split,
+            known_question_form,
+            known_field_question_form,
+            single_current_record,
+        } => training::evaluate_corpus(
+            &checkpoint,
+            &corpus,
+            &output,
+            limit,
+            &split,
+            known_question_form,
+            match (known_field_question_form, single_current_record) {
+                (false, false) => training::FieldAblation::None,
+                (true, false) => training::FieldAblation::Question,
+                (false, true) => training::FieldAblation::Record,
+                (true, true) => training::FieldAblation::QuestionAndRecord,
+            },
+        ),
         Commands::Model {
             command:
                 Models::Init {
@@ -153,6 +263,7 @@ fn run() -> Result<()> {
             corpus,
             output,
             numeric_probe,
+            no_rss,
             stop_after,
             steps,
             max_tokens,
@@ -160,9 +271,19 @@ fn run() -> Result<()> {
             lr,
             warmup,
             microbatch,
+            sample_group_size,
             accumulation,
             validate_every,
             seed,
+            curriculum_steps,
+            first_target_weight,
+            extend_steps,
+            extend_microbatch,
+            extend_sample_group_size,
+            extend_curriculum_steps,
+            extend_first_target_weight,
+            source_id,
+            replace_corpus,
         } => {
             use std::sync::{
                 Arc,
@@ -187,13 +308,24 @@ fn run() -> Result<()> {
                         max_steps: steps,
                         max_tokens,
                         microbatch,
+                        sample_group_size,
                         accumulation,
                         seq_len,
                         validate_every,
                         seed,
+                        curriculum_steps,
+                        first_target_weight,
                         ..Default::default()
                     },
                     stop_after,
+                    measure_rss: !no_rss,
+                    extend_steps,
+                    extend_microbatch,
+                    extend_sample_group_size: extend_sample_group_size.map(usize::from),
+                    extend_curriculum_steps,
+                    extend_first_target_weight,
+                    source_id,
+                    replace_corpus,
                 },
                 &cancel,
             )
@@ -222,8 +354,9 @@ fn run() -> Result<()> {
                     seed,
                     documents,
                     local,
+                    profile,
                 },
-        } => data::prepare(&output, seed, documents, &local),
+        } => data::prepare(&output, seed, documents, &local, &profile),
         Commands::Tokenizer {
             command:
                 Tokenizer::Train {

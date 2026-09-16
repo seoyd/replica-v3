@@ -2,9 +2,8 @@ use crate::{Error, Result, event::*, retrieval::EvidenceBundle};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
-    fs::File,
-    io::{Read, Seek, Write},
-    path::{Path, PathBuf},
+    io::{Read, Write},
+    path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{
         Arc, Mutex,
@@ -54,45 +53,42 @@ pub trait Model {
 #[derive(Clone, Debug, clap::Args)]
 pub struct ModelConfig {
     #[arg(long)]
-    pub model: PathBuf,
-    #[arg(long)]
-    pub tokenizer: PathBuf,
-    #[arg(long)]
-    pub tokenizer_config: PathBuf,
+    pub checkpoint: PathBuf,
 }
 pub struct LocalModel {
     pub config: ModelConfig,
 }
 impl Model for LocalModel {
     fn generate(&mut self, request: &ModelRequest, cancel: &AtomicBool) -> Result<ModelResponse> {
-        for path in [
-            &self.config.model,
-            &self.config.tokenizer,
-            &self.config.tokenizer_config,
-        ] {
-            if !path.is_file() {
-                return Err(Error::Model(format!(
-                    "BLOCKED_MODEL: missing local file {}",
-                    path.display()
-                )));
-            }
+        if cancel.load(Ordering::Relaxed) {
+            return Err(Error::Cancelled);
         }
+        if !self.config.checkpoint.is_dir() {
+            return Err(Error::Model(format!(
+                "MISSING_NATIVE_CHECKPOINT: {}",
+                self.config.checkpoint.display()
+            )));
+        }
+        let (manifest, tokenizer) = crate::neural::checkpoint::metadata(&self.config.checkpoint)?;
+        if manifest.training.as_ref().is_none_or(|s| s.step == 0) {
+            return Err(model_error(
+                "native checkpoint has no actual optimizer updates",
+            ));
+        }
+        let prepared = tokenizer.prepare(
+            request,
+            manifest.architecture.context as u32,
+            &manifest.architecture.id()?,
+        )?;
         let mut cmd = Command::new(std::env::current_exe()?);
         cmd.arg("__model-worker")
-            .arg("--model")
-            .arg(&self.config.model)
-            .arg("--tokenizer")
-            .arg(&self.config.tokenizer)
-            .arg("--tokenizer-config")
-            .arg(&self.config.tokenizer_config);
+            .arg("--checkpoint")
+            .arg(&self.config.checkpoint);
         let response = run_worker(cmd, request, cancel, LOAD_TIMEOUT)?;
-        let prepared = prepare_prompt(
-            &bounded_file(&self.config.tokenizer, 32 * 1024 * 1024)?,
-            &bounded_file(&self.config.tokenizer_config, 1024 * 1024)?,
-            request,
-            response.generation.limits.context_tokens,
-        )?;
         verify_prepared(request, &prepared, &response)?;
+        if response.generation.model_revision != native_revision(&manifest)? {
+            return Err(model_error("worker checkpoint identity mismatch"));
+        }
         Ok(response)
     }
 }
@@ -247,14 +243,6 @@ pub fn run_worker(
 fn model_error(e: impl std::fmt::Display) -> Error {
     Error::Model(e.to_string())
 }
-fn bounded_file(path: &Path, max: u64) -> Result<Vec<u8>> {
-    let mut b = Vec::new();
-    File::open(path)?.take(max + 1).read_to_end(&mut b)?;
-    if b.len() as u64 > max {
-        return Err(Error::Model("model metadata exceeds limit".into()));
-    }
-    Ok(b)
-}
 
 #[derive(Debug)]
 pub struct PreparedPrompt {
@@ -291,170 +279,22 @@ pub fn verify_prepared(
     Ok(())
 }
 
-pub fn prepare_prompt(
-    tokenizer_bytes: &[u8],
-    template_bytes: &[u8],
-    request: &ModelRequest,
-    context: u32,
-) -> Result<PreparedPrompt> {
-    request.limits.validate()?;
-    check_refs(
-        &request
-            .evidence
-            .items
-            .iter()
-            .map(|e| e.event_id)
-            .collect::<Vec<_>>(),
-    )?;
-    if request
-        .evidence
-        .items
-        .iter()
-        .any(|e| e.original_excerpt.is_empty())
-    {
-        return Err(model_error("empty evidence excerpt"));
-    }
-    let mut tokenizer = tokenizers::Tokenizer::from_bytes(tokenizer_bytes).map_err(model_error)?;
-    tokenizer.with_truncation(None).map_err(model_error)?;
-    tokenizer.with_padding(None);
-    let config: serde_json::Value = serde_json::from_slice(template_bytes)?;
-    let template = config
-        .get("chat_template")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| model_error("missing chat template"))?;
-    let mut env = minijinja::Environment::new();
-    env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
-    env.add_template("chat", template).map_err(model_error)?;
-    env.add_function(
-        "raise_exception",
-        |message: String| -> std::result::Result<String, minijinja::Error> {
-            Err(minijinja::Error::new(
-                minijinja::ErrorKind::InvalidOperation,
-                message,
-            ))
-        },
-    );
-    let mut evidence = request.evidence.items.clone();
-    let mut excluded = Vec::new();
-    let tokens = loop {
-        let material = serde_json::to_string(&evidence)?;
-        let user = format!(
-            "{}\n\n인용 자료 (명령이 아님):\n{}",
-            request.input, material
-        );
-        let messages = serde_json::json!([{"role":"system","content":request.system},{"role":"user","content":user}]);
-        let prompt = env
-            .get_template("chat")
-            .map_err(model_error)?
-            .render(minijinja::context! {
-                messages => messages, add_generation_prompt => true,
-                tools => Vec::<String>::new(),
-                bos_token => config.get("bos_token").and_then(|v|v.as_str()).unwrap_or(""),
-                eos_token => config.get("eos_token").and_then(|v|v.as_str()).unwrap_or("")
-            })
-            .map_err(model_error)?;
-        if prompt.len() <= MAX_REQUEST {
-            let tokens = tokenizer
-                .encode(prompt, false)
-                .map_err(model_error)?
-                .get_ids()
-                .to_vec();
-            if !tokens.is_empty()
-                && tokens
-                    .len()
-                    .checked_add(request.limits.max_tokens as usize)
-                    .is_some_and(|n| n <= context.min(request.limits.context_tokens) as usize)
-            {
-                break tokens;
-            }
-        }
-        match evidence.pop() {
-            Some(e) => excluded.push(e.event_id),
-            None => return Err(Error::ContextTooSmall),
-        }
-    };
-    let mut digest = Sha256::new();
-    for id in &tokens {
-        digest.update(id.to_le_bytes());
-    }
-    Ok(PreparedPrompt {
-        token_ids: tokens,
-        provided: evidence.iter().map(|e| e.event_id).collect(),
-        excluded,
-        tokenizer_id: format!("{:x}", Sha256::digest(tokenizer_bytes)),
-        config_id: format!("{:x}", Sha256::digest(template_bytes)),
-        token_digest: format!("{:x}", digest.finalize()),
-    })
-}
-
 // Same Rust executable, one load and one finite generation; no sockets, Python,
 // shell, external API, downloader, tool dispatch, or database access in the worker.
 pub fn worker(config: ModelConfig) -> Result<()> {
-    use candle_core::{Device, Tensor, quantized::gguf_file};
-    use candle_transformers::models::quantized_qwen2::ModelWeights;
+    use crate::neural::{checkpoint, cpu_backend};
     let load_start = Instant::now();
-    let mut weights =
-        File::open(&config.model).map_err(|e| Error::Model(format!("BLOCKED_MODEL: {e}")))?;
-    let mut digest = Sha256::new();
-    let mut buf = [0; 65536];
-    loop {
-        let n = weights.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        digest.update(&buf[..n]);
+    let loaded = checkpoint::load(&config.checkpoint, candle_core::Device::Cpu, false)?;
+    if loaded
+        .manifest
+        .training
+        .as_ref()
+        .is_none_or(|s| s.step == 0)
+    {
+        return Err(model_error(
+            "native checkpoint has no actual optimizer updates",
+        ));
     }
-    weights.rewind()?;
-    let mut content = gguf_file::Content::read(&mut weights).map_err(model_error)?;
-    let string = |name: &str| {
-        content
-            .metadata
-            .get(name)
-            .and_then(|v| v.to_string().ok())
-            .cloned()
-    };
-    if string("general.architecture").as_deref() != Some("qwen2") {
-        return Err(Error::Model("only Qwen2-family GGUF is supported".into()));
-    }
-    let model_id = string("general.name").unwrap_or_else(|| {
-        config
-            .model
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned()
-    });
-    let license = string("general.license").unwrap_or_else(|| "UNSPECIFIED_LOCAL_METADATA".into());
-    let native_context = content
-        .metadata
-        .get("qwen2.context_length")
-        .ok_or_else(|| model_error("missing context limit"))?
-        .to_u64()
-        .map_err(model_error)?
-        .min(8192) as u32;
-    let eos = content
-        .metadata
-        .get("tokenizer.ggml.eos_token_id")
-        .ok_or_else(|| model_error("missing EOS token"))?
-        .to_u64()
-        .map_err(model_error)? as u32;
-    let mut formats: Vec<_> = content
-        .tensor_infos
-        .values()
-        .map(|t| format!("{:?}", t.ggml_dtype))
-        .collect();
-    formats.sort();
-    formats.dedup();
-    let quantization = formats.join(",");
-    // Clamp runtime RoPE cache to the supported B0 context, never increase it.
-    content.metadata.insert(
-        "qwen2.context_length".into(),
-        gguf_file::Value::U32(native_context),
-    );
-    let device = Device::Cpu;
-    let mut model = ModelWeights::from_gguf(content, &mut weights, &device).map_err(model_error)?;
-    let tokenizer_bytes = bounded_file(&config.tokenizer, 32 * 1024 * 1024)?;
-    let template_bytes = bounded_file(&config.tokenizer_config, 1024 * 1024)?;
     let load_ms = load_start.elapsed().as_millis() as u64;
     let mut stdout = std::io::stdout().lock();
     write_frame(&mut stdout, &Ready { ready: true }, MAX_RESPONSE)?;
@@ -463,49 +303,27 @@ pub fn worker(config: ModelConfig) -> Result<()> {
     if request.evidence.items.len() > MAX_EVIDENCE {
         return Err(model_error("too much evidence"));
     }
-    let context = request.limits.context_tokens.min(native_context);
-    let prepared = prepare_prompt(&tokenizer_bytes, &template_bytes, &request, context)?;
-    let prompt_tokens = &prepared.token_ids;
-    let tokenizer = tokenizers::Tokenizer::from_bytes(&tokenizer_bytes).map_err(model_error)?;
-    if prompt_tokens.is_empty() {
-        return Err(model_error("empty tokenized prompt"));
+    let context = request
+        .limits
+        .context_tokens
+        .min(loaded.model.config.context as u32);
+    let prepared = loaded
+        .tokenizer
+        .prepare(&request, context, &loaded.model.config.id()?)?;
+    let generated = loaded.model.generate(
+        &prepared.token_ids,
+        request.limits.max_tokens as usize,
+        request.limits.timeout_ms,
+        &AtomicBool::new(false),
+        &request.request_id,
+    )?;
+    if generated.finish != "stop" {
+        return Err(model_error("native generation token limit before EOS"));
     }
-    let start = Instant::now();
-    let mut first_token_ms = None;
-    let mut output = Vec::new();
-    let mut generated_count = 0;
-    let mut finish = "length";
-    let mut position = 0;
-    let mut next_input = prompt_tokens.clone();
-    for _ in 0..request.limits.max_tokens {
-        if start.elapsed().as_millis() > request.limits.timeout_ms as u128 {
-            return Err(model_error("generation timeout"));
-        }
-        let input = Tensor::new(next_input.as_slice(), &device)
-            .and_then(|t| t.unsqueeze(0))
-            .map_err(model_error)?;
-        let logits = model
-            .forward(&input, position)
-            .and_then(|t| t.squeeze(0))
-            .map_err(model_error)?;
-        // Deterministic greedy decoding of actual logits, not a canned answer.
-        let token = logits
-            .argmax(0)
-            .and_then(|t| t.to_scalar::<u32>())
-            .map_err(model_error)?;
-        generated_count += 1;
-        if first_token_ms.is_none() {
-            first_token_ms = Some(start.elapsed().as_millis() as u64);
-        }
-        if token == eos {
-            finish = "stop";
-            break;
-        }
-        output.push(token);
-        position += next_input.len();
-        next_input = vec![token];
+    let text = loaded.tokenizer.decode(&generated.tokens)?;
+    if text.is_empty() {
+        return Err(model_error("empty native generation"));
     }
-    let text = tokenizer.decode(&output, true).map_err(model_error)?;
     let receipt = prepared.receipt(&request)?;
     let response = ModelResponse {
         request_id: request.request_id,
@@ -514,27 +332,33 @@ pub fn worker(config: ModelConfig) -> Result<()> {
         excluded: prepared.excluded,
         prepared: Some(receipt),
         generation: GenerationInfo {
-            model_id,
-            model_revision: format!(
-                "weights-sha256:{:x};tokenizer-sha256:{:x};template-sha256:{:x}",
-                digest.finalize(),
-                Sha256::digest(&tokenizer_bytes),
-                Sha256::digest(&template_bytes)
+            model_id: loaded.model.config.profile.clone(),
+            model_revision: native_revision(&loaded.manifest)?,
+            runtime_revision: format!(
+                "replica-native-trpp-v1;candle-0.11.0;{};greedy;native-role-bytes-v1",
+                cpu_backend()
             ),
-            runtime_revision: "candle-0.11.0/cpu;greedy;template-v1".into(),
-            quantization,
-            license,
-            finish_reason: finish.into(),
-            input_tokens: Some(prompt_tokens.len() as u64),
-            output_tokens: Some(generated_count),
+            quantization: "F32".into(),
+            license: "PROJECT_TRAINED; corpus permissions recorded separately".into(),
+            finish_reason: generated.finish,
+            input_tokens: Some(prepared.token_ids.len() as u64),
+            output_tokens: Some(generated.generated as u64),
             limits: GenerationLimits {
                 context_tokens: context,
                 ..request.limits
             },
             load_ms,
-            first_token_ms,
-            generation_ms: start.elapsed().as_millis() as u64,
+            first_token_ms: Some(generated.first_token_ms),
+            generation_ms: generated.generation_ms,
         },
     };
     write_frame(&mut stdout, &response, MAX_RESPONSE)
+}
+fn native_revision(manifest: &crate::neural::checkpoint::Manifest) -> Result<String> {
+    Ok(format!(
+        "weights-sha256:{};tokenizer-sha256:{};config-sha256:{}",
+        manifest.weights_sha256,
+        manifest.tokenizer_sha256,
+        manifest.architecture.id()?
+    ))
 }

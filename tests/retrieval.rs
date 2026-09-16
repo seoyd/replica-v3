@@ -1,5 +1,60 @@
 use replica_v3::{Error, event::*, retrieval::Search, store::Store};
 #[test]
+fn memory_history_filters_terminal_questions_before_candidate_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::init(dir.path().join("db")).unwrap();
+    let mut fact = Event::observation("s", "session", "user", b"direction old".to_vec());
+    fact.kind = Kind::Fact {
+        slot: Slot {
+            entity: "unit".into(),
+            predicate: "direction".into(),
+            context: "hall".into(),
+        },
+        previous: None,
+        restored_from: None,
+        valid_from: None,
+        valid_until: None,
+    };
+    let old = store.append(fact).unwrap();
+    let mut corrected = old.clone();
+    corrected.id = 0;
+    corrected.payload = b"direction new".to_vec();
+    if let Kind::Fact { previous, .. } = &mut corrected.kind {
+        *previous = Some(old.id);
+    }
+    let new = store.append(corrected).unwrap();
+    for n in 0u128..70 {
+        let mut question = Event::observation("s", "session", "user", b"direction".to_vec());
+        question.request_key = Some(n.to_le_bytes());
+        question.kind = Kind::Observation {
+            question: Some(GenerationLimits::default()),
+        };
+        store.append(question).unwrap();
+    }
+    let mut query = Search::new("s", "direction");
+    query.history = true;
+    query.graph = false;
+    let general = store.search(&query).unwrap();
+    assert!(general.truncated);
+    query.memory_only = true;
+    let memory = store.search(&query).unwrap();
+    assert!(!memory.truncated);
+    assert_eq!(memory.candidates_fetched, 2);
+    assert_eq!(memory.items.len(), 2);
+    assert!(
+        memory
+            .items
+            .iter()
+            .any(|e| e.event_id == old.id && e.version_status == "superseded")
+    );
+    assert!(
+        memory
+            .items
+            .iter()
+            .any(|e| e.event_id == new.id && e.version_status == "current")
+    );
+}
+#[test]
 fn independent_ten_thousand_event_fixture_and_graph_comparison() {
     let d = tempfile::tempdir().unwrap();
     let mut s = Store::init(d.path().join("db")).unwrap();

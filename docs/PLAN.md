@@ -1,5 +1,24 @@
 # Native Goal 1 work graph
 
+현재 실행 범위: **R3-CUSTOMIZE-AND-DIAGNOSE-1.0**. 기존 S0~S6 기록은 아래에 보존한다.
+현재 S4는 STOPPED/QUALITY_FAIL이며 큰 QA 학습을 재개하지 않는다.
+
+| 현재 node | 상태 | 선행 조건 | 완료 판정 |
+|---|---|---|---|
+| P0 | VERIFIED(로컬), 전송 확인 전 | 실제 로컬 WIP 보존 | 의존175개·tensor204개·합성 SQLite 실측, run별 상태/hash, 직접 회귀45개 및 fmt/clippy 통과 |
+| P1 | NOT_STARTED | P0 | 고정 contrast16/선동결64, bounded R-A/R-B, 새 프로세스 확인; 품질 실패도 별도 결과 |
+| P2 | NOT_STARTED | P0 | 네 책임 경계, semantic/kernel/cache ID, 동등 reference/candidate, 제한 config |
+| P3 | NOT_STARTED | P2 | native binary inference/resume, 무손실 export·JSON 없는 실제 생성·exact resume |
+| P4 | NOT_STARTED | P2 | 실측 hot path 한 후보의 정확성/성능에 따른 채택 또는 기각 |
+| P5 | NOT_STARTED | P2 | 동일 snapshot/원문/관계 DB-free archive와 실제 합성10,000사건 비교 |
+| P6 | NOT_STARTED | P1~P5 | 직접 회귀/실제 생성/최종 대조/기여 분리/원격 SHA |
+
+`P0 → {P1,P2}; P2 → {P3,P4,P5}; {P1,P2,P3,P4,P5} → P6`.
+heavy 작업은 한 번에 하나이고 P1 실행 중 source 편집은 금지한다.
+[실험 상태](EXPERIMENT_STATUS.md)에 EXECUTED_COMMANDS/OBSERVED_RESULTS/FILE_HASHES/
+LIMITATIONS/NEXT_DEPENDENCY를 기록한다. DELIVERABLE_VERIFIED와 MODEL_QUALITY_PASS,
+GOAL1_READY는 별개이며 독립 승인은 INDEPENDENT_PENDING이다.
+
 Contract: [GOAL1-NATIVE-TRPP-1.0](GOAL1_CONTRACT.md).
 Baseline: `436ed1d1cdc9efa18c3728bc75fe972b8a5fab14` on `main`.
 Historical B0 execution is recorded in IMPLEMENTATION_REPORT.md; it is not current
@@ -10,12 +29,12 @@ verification. Source inspection and execution are separate evidence levels.
 | Node | State | Paths / checks / evidence | Remaining exit condition |
 |---|---|---|---|
 | S0 | VERIFIED | GOAL1_CONTRACT.md, logs/goal1-environment.txt; local instruction bytes unchanged by index-only removal | published 7d831d0; remote matched |
-| S1 | VERIFIED | src/{store,app,retrieval,model}.rs; tests/{store,runtime,retrieval,cli}.rs; logs/goal1-s1-tests.txt; logs/goal1-s1-source-digest.txt | phase commit/push |
-| S2 | VERIFIED | src/{data,neural,train_main}.rs; tests/{native,training}.rs; logs/goal1-s2-final-tests.txt, goal1-s2-tokenizer.txt; goal1-s2-source-digest.txt | phase commit/push |
-| S3 | VERIFIED | src/neural/{transformer,checkpoint}.rs, src/training.rs; logs/goal1-s3-exit-tests.txt, goal1-s3-small-boundaries.txt; goal1-s3-source-digest.txt | phase commit/push |
-| S4 | NOT_STARTED | actual training and independent evaluation | T-N07, fixed quality thresholds |
-| S5 | NOT_STARTED | src/{model,app,main}.rs and CLI | T-I01–03, actual restart |
-| S6 | NOT_STARTED | own quantization, measurement and docs | T-N08, T-I04, T-D02 |
+| S1 | VERIFIED | src/{store,app,retrieval,model}.rs; tests/{store,runtime,retrieval,cli}.rs; logs/goal1-s1-tests.txt; logs/goal1-s1-source-digest.txt | published 4edd62c; remote matched |
+| S2 | VERIFIED | src/{data,neural,train_main}.rs; tests/{native,training}.rs; logs/goal1-s2-final-tests.txt, goal1-s2-tokenizer.txt; goal1-s2-source-digest.txt | published 6ded741; remote matched |
+| S3 | VERIFIED | src/neural/{transformer,checkpoint}.rs, src/training.rs; logs/goal1-s3-exit-tests.txt, goal1-s3-small-boundaries.txt; goal1-s3-source-digest.txt | published 23cc5b0; remote matched |
+| S4 | STOPPED / QUALITY_FAIL | v12는 21,750 step에서 BUDGET_REACHED 종료. 기존 validation 기록: 보조45/64, 일반 QA0/336. 신규 학습 NOT_RUNNING. | 기존 전체 품질 기준 미달; 대규모 학습 재개 없음 |
+| S5 | IMPLEMENTING | src/{model,main,app,retrieval}.rs native-only ask/generate/chat; examples/validate.rs actual CLI smoke; intermediate diagnostic4/14 correct,14/14 same-key no-model replays | prerequisite S4 pending; required five categories and fresh-process quality still FAIL |
+| S6 | BLOCKED | quantization not implemented | S4/S5 prerequisites unmet; T-N08 and complete T-I04/T-D02 pending |
 
 | Trace | Required observation | State |
 |---|---|---|
@@ -29,12 +48,36 @@ verification. Source inspection and execution are separate evidence levels.
 | T-N03 | bounded prefill/decode cache and reference parity | VERIFIED (CPU numerical/state boundary) |
 | T-N04 | actual gradient, weight update, masked loss | VERIFIED (CPU numerical/state boundary) |
 | T-N05 | strict checkpoint load and fresh-process resume | VERIFIED (CPU numerical/state boundary) |
-| T-N06 | corpus/split/random-init/training lineage | VERIFIED (own corpus/init/probe lineage; final training pending) |
-| T-N07 | >=200 heldout generations and category quality | NOT_STARTED |
+| T-N06 | corpus/split/random-init/training lineage | VERIFIED (own corpus/init and actual5000-step run) |
+| T-N07 | >=200 heldout generations and category quality | FAILED (200 executed; automatic1/200; no semantic acceptance) |
 | T-N08 | packed inference, quality and memory comparison | NOT_STARTED |
-| T-I01 | five own-model memory queries and fresh restart | NOT_STARTED |
-| T-I02 | timeout/cancel/citations/COMMIT failure | VERIFIED |
-| T-I03 | raw bytes/history/restore/as_of/reindex/backup | VERIFIED |
-| T-I04 | offline runtime and measured M4 backend | NOT_STARTED |
+| T-I01 | five own-model memory queries and fresh restart | FAILED (intermediate actual CLI diagnostic4/14; no quality waiver) |
+| T-I02 | timeout/cancel/citations/COMMIT failure | VERIFIED (S1 transport/application plus actual native artifact/timeout/cancel/COMMIT diagnostics; final candidate repeat pending) |
+| T-I03 | raw bytes/history/restore/as_of/reindex/backup | VERIFIED (S1 persistence; native responses pending S5) |
+| T-I04 | offline runtime and measured M4 backend | IMPLEMENTING (CPU training and actual CLI under deny-network; final model/quant closure pending) |
 | T-D01 | temporary instructions decoupled, originals preserved | VERIFIED |
-| T-D02 | phase code identity equals remote branch | VERIFIED (S0; later phases pending) |
+| T-D02 | phase code identity equals remote branch | VERIFIED (S0–S3; S4 workspace unpublished) |
+
+Executed symbol/test trace (phase source manifests above identify the code):
+
+| ID | Source symbol → independent test / execution | Raw evidence |
+|---|---|---|
+| T-R01 | store::result/append_in, app::terminal → runtime::rv01_results_bind_canonical_question_and_reindex_repairs; cli::rv01_corrupt_result_has_no_success_stdout_or_write | logs/goal1-s1-tests.txt |
+| T-R02 | model::verify_prepared; ByteBpe::prepare → runtime::rv02_real_tokenizer_never_silently_truncates, rv02_whole_evidence_packing_and_receipt_binding; native::native_prompt_boundaries_and_exact_evidence_tail | logs/goal1-s1-tests.txt; goal1-s3-exit-tests.txt |
+| T-R03 | retrieval Store::search → retrieval::rv03_origin_filter_before_limit, rv03_hops_output_cycles_and_duplicate_fetch_caps, rv03_distinct_neighbor_budget_and_snapshot | logs/goal1-s1-tests.txt |
+| T-R04 | Store::startup/head → store::rv04_atomic_startup_and_head_with_writer_and_corrupt_control | logs/goal1-s1-tests.txt |
+| T-R05 | Store::backup → store::rv05_pinned_backup_before_copy_and_after_done, rv05_failed_artifact_is_explicit_and_existing_destination_preserved | logs/goal1-s1-tests.txt |
+| T-N01 | ByteBpe::train/encode/decode → native::own_byte_bpe_roundtrip_no_control_promotion_or_truncation; training::corpus_and_tokenizer_use_train_only_and_reject_split_leakage | logs/goal1-s3-exit-tests.txt |
+| T-N02 | Transformer::forward, rms_norm/rotary/repeat_kv/attention_mask → native::native_numeric_references_and_causal_padding_gradients, native_local_global_mask_and_greedy_generation_boundaries | logs/goal1-s3-exit-tests.txt |
+| T-N03 | Transformer::forward_cached/Cache → native::native_kv_chunk_rollover_parity_reset_and_identity; validate native-boundaries on actual SMALL trained artifact | logs/goal1-s3-exit-tests.txt; goal1-s4-trained-cache-parity.txt |
+| T-N04 | training::Adam::step/batch, masked_loss → training::tests::adam_matches_independent_reference_and_teacher_forcing_masks; actual train command | logs/goal1-s4-rss-regression.txt; goal1-s4-small-train.txt |
+| T-N05 | checkpoint::save/load → native checkpoint corruption/roundtrip tests; training::native_training_resume_is_identical_in_fresh_processes, native_training_cancel_keeps_optimizer_boundary_checkpoint | logs/goal1-s3-exit-tests.txt |
+| T-N06 | data::prepare/check_split, model init/train commands → actual manifest/init/training lineage plus split regression | logs/goal1-s2-tokenizer-manifest.txt; goal1-s4-small-init.txt; goal1-s4-small-train.txt |
+| T-N07 | validate::heldout/evaluate_native/compare_pairs → heldout_rubric_rejects_blank_wrong_time_citation_and_blanket_unknown;200 actual cases/four variants; semantic rejection of the sole automatic hit | logs/goal1-s4-pair-regression.txt; goal1-s4-heldout-*.jsonl; goal1-s4-pair-comparison.txt |
+| T-N08 | no quantization source/test yet | NOT_RUN |
+| T-I01 | model::worker/app::ask_with_history/main ask → validate smoke; new OS-seeded facts after selected intermediate checkpoint, seven questions twice in separate CLI processes and same-key replay with absent checkpoint | logs/goal1-native-cli-smoke-diagnostic-5000-fixed.txt; quality4/14, original19 events unchanged |
+| T-I02 | app::ask/model::run_worker → runtime protocol tests plus validate native-failures with actual trained step5000, random/corrupt artifacts, generation timeout, synchronized SIGINT and deferred FK failure on answer COMMIT | logs/goal1-s1-tests.txt; goal1-native-failures-5000.txt (five scenarios pass) |
+| T-I03 | Store lifecycle/history/restore/reindex/backup → store and cli lifecycle/restart tests; native response path pending | logs/goal1-s1-tests.txt |
+| T-I04 | native train/evaluate and fourteen actual CLI answers under sandbox deny-network; CPU/Accelerate explicit, no Metal claim | logs/goal1-s4-small-v3-probe.txt; goal1-native-cli-smoke-diagnostic-5000-fixed.txt |
+| T-D01 | index-only removal, unchanged local bytes and source/docs reference scan | logs/goal1-environment.txt; permanent contract |
+| T-D02 | normal phase pushes and actual ls-remote matches; S4 remains unpublished | IMPLEMENTATION_REPORT.md native closure |

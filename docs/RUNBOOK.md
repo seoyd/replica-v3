@@ -94,25 +94,20 @@ or prove causality. A 100 ms budget can return fewer/no results with truncated=t
 FTS rank controls seed order; ties use SQLite FTS ordering, not a promised semantic
 ranking. 64 candidates, 8 final evidence, 4 hops, 256 visited nodes are hard bounds.
 
-## Local Rust model adapter (installation deferred)
+## Native Rust model worker
 
-One adapter: Candle 0.11.0, Qwen2-family GGUF, CPU. No GPU performance claim.
-Use one existing compatible local GGUF plus its original tokenizer.json and string
-chat_template in tokenizer_config.json. Files must be explicitly supplied. No model
-is bundled, downloaded or inferred from a public name. Missing files return
-BLOCKED_MODEL after the input is committed. Unsupported architecture/template or
-missing required GGUF metadata is an explicit error, not a fallback answer.
-Weights/config/tokenizer are read-only. Metadata identifies model name, tensor
-quantization types and license (UNSPECIFIED_LOCAL_METADATA if absent); SHA-256
-fingerprints of weights, tokenizer and template identify the exact local revision.
-The declared upstream model license must be checked when a model is later supplied.
+The worker loads this project's checkpoint directory: manifest.json,
+weights.safetensors and its own trained tokenizer.json. It uses the same native
+Transformer and prompt framing as training. No completed external model module,
+external tokenizer configuration or chat template is a product dependency.
+Missing directories return MISSING_NATIVE_CHECKPOINT after the input is committed.
+Artifacts remain read-only; exact weight/tokenizer hashes identify each response.
+This interface is implemented; S4 task quality and S5 acceptance remain pending.
 
 ```sh
 "$replica_bin" --db "$replica_db" ask --scope demo --session day2 \
   --request-key 00000000000000000000000000000002 \
-  --model /existing/local/model.gguf \
-  --tokenizer /existing/local/tokenizer.json \
-  --tokenizer-config /existing/local/tokenizer_config.json \
+  --checkpoint /path/to/our/trained/checkpoint \
   --text '오른쪽으로 가라는 기록은 무엇인가?'
 ```
 
@@ -122,12 +117,13 @@ command dispatch or tool execution is exposed to generated text. The worker rece
 bounded prompt data, never a Store or DB path. This is an application capability
 boundary, not a same-UID OS sandbox against malicious model/runtime code.
 
-Defaults/maxima: 512 generated tokens, 8192 context or lower actual GGUF limit,
+Defaults: 256 generated tokens, 2048 native context,
 180 s startup/load, 120 s generation; CLI can lower generation limits. Context is
-counted with the local tokenizer after rendering the original chat template. Lowest
+counted with the own byte BPE after trusted role/evidence framing. Lowest
 rank evidence is removed first if needed; provided/excluded IDs are persisted.
 A too-large user/system prompt fails before inference. Greedy decoding runs once,
-uses actual model logits, and stops at the model EOS or output limit. No hidden CoT
+uses actual model logits, and stops at the model EOS; reaching the token limit
+before EOS is an explicit failure. No hidden CoT
 extraction or reflection loop. No automatic continuation or retry.
 
 IPC is u32-LE length + transient JSON: request <=524288 bytes, response <=262144
@@ -146,24 +142,34 @@ if a failure event also cannot commit, stderr says `NOT persisted`.
 ```sh
 cargo build --release --locked --example validate
 target/release/examples/validate measure
-# Execute only after the user resumes model work and supplies installed files:
-target/release/examples/validate smoke /existing/model.gguf /existing/tokenizer.json /existing/tokenizer_config.json
+# Execute with an actually trained native checkpoint:
+target/release/examples/validate smoke /path/to/our/trained/checkpoint target/release/replica-v3 artifacts/new-native-smoke
+target/release/examples/validate native-failures /path/to/our/trained/checkpoint target/release/replica-v3 artifacts/new-native-failures
 ```
 
 `measure` creates temporary synthetic DBs and separately reports raw/auto-zstd,
 10000-event batch imports, 20 durable single commits, 128 reads, 100 warm lexical
 queries, reindex, DB/WAL/SHM/FTS pages, reopen-read and RSS. Reopen is not OS-cold.
 Min/median/max with sample counts are observations; no P99 confidence claims.
-The real smoke contains five fixed Korean questions, reopens between turns, checks
-actual source citations and prints unmodified model text/provenance for human
-inspection. It does not replace answers with expected strings. Not run in this task
-because the user deferred model installation. Power-loss, physical disk-full,
+The real smoke creates OS-seeded facts after loading checkpoint metadata and uses
+the actual CLI for writes, corrections, restores, relations and answers. Seven
+questions cover five required categories, then repeat in fresh processes with new
+request keys. Same-key retries use an absent checkpoint to verify zero model loads.
+It preserves every command/output, fixture, expected value, actual text/provenance
+and grading result under a new output directory. Failed quality exits nonzero;
+separate semantic review is still required. It never edits generated answers. The historical B0
+model smoke was NOT_RUN; current native acceptance is tracked separately. Power-loss, physical disk-full,
 true cold-cache and GPU/shared-memory measurements were not performed.
+
+`native-failures` checks fresh random-model rejection, corrupt artifact rejection,
+generation timeout, synchronized CLI cancellation and an actual deferred SQLite
+COMMIT failure after native generation. Every failed request must preserve its input,
+emit no success stdout, and replay its Failure without loading a model. Its artifacts
+are disposable synthetic DBs; it never installs triggers in an existing user DB.
 
 ## Current native Goal 1 work
 
-The preceding model installation instructions are historical B0 only and are
-superseded by [GOAL1-NATIVE-TRPP-1.0](GOAL1_CONTRACT.md). Do not obtain external weights
+The current model contract is [GOAL1-NATIVE-TRPP-1.0](GOAL1_CONTRACT.md). Do not obtain external weights
 or tokenizer artifacts. Native training/tooling progress is tracked in PLAN.md.
 S1 result/provenance/search/snapshot regressions are verified; neural model work is
 not yet complete. Failed backups report an untrusted retained destination path; inspect
@@ -185,7 +191,8 @@ ignored and never staged. `corpus prepare --local /explicit/file` additionally r
 only the specified authorized UTF-8 document, without normalizing its bytes. Omit it
 for SYNTHETIC_ONLY. Corpus serialization is training data, not a personal memory DB.
 Tokenizer's adjacent `.manifest.json` records actual sequence/token statistics.
-No external weights/tokenizer/model API is used. Neural training is not yet verified.
+No external weights/tokenizer/model API is used. Actual training evidence is recorded
+in NATIVE_MODEL.md; it is distinct from final task-quality acceptance.
 
 ### Native initialization / training / resume (S3)
 
@@ -208,3 +215,214 @@ not a memory QA dataset. Only training tooling can reach its toy samples. A fina
 must never select the checkpoint. Ctrl-C publishes a boundary checkpoint and exits
 with cancellation; process death retains the last published checkpoint. Training RSS
 is sampled after steps with a 16 GiB stop guard, not a precise transient-peak profiler.
+
+### Native training and evaluation in a restricted process (S4)
+
+The actual SMALL run is in `artifacts/goal1-small-train`. Its immutable initialization
+is `artifacts/goal1-small-init`. Model/optimizer/corpus artifacts remain local and ignored.
+Use fresh output paths when reproducing; existing directories are never overwritten.
+
+```sh
+# macOS deny-network execution; time runs outside the restricted child.
+/usr/bin/time -l /usr/bin/sandbox-exec -p '(version 1)(allow default)(deny network*)' \
+  target/release/replica-train train --checkpoint artifacts/goal1-small-init \
+  --corpus artifacts/goal1-corpus --output artifacts/another-small-run \
+  --steps 5000 --lr 0.001 --warmup 100 --accumulation 1 --validate-every 250 --no-rss
+# Validation-only diagnostic: this command is never the final heldout score.
+target/release/replica-train evaluate --checkpoint artifacts/goal1-small-train/step-000750 \
+  --corpus artifacts/goal1-corpus --output artifacts/validation-generation.jsonl --limit 25
+```
+
+The optional `--split train` explicitly labels a training-set diagnostic. It cannot be
+reported as validation or final heldout accuracy; `validation` remains the default.
+
+`--no-rss` is explicit because this sandbox denies spawning ps. Logs report None for
+sampled RSS. External time's maximum resident set size and memory footprint are distinct
+observations; neither is a measured GPU allocation. The tensor planning guard is retained.
+Native generation diagnostics run one greedy logits loop with a fresh bounded cache per
+question, never the answer renderer. Validation expected text is used only after generation.
+
+After training stops, select and record the minimum-validation-loss checkpoint before
+creating or executing the final fixture. The example is the separate final test tool:
+
+```sh
+cargo build --release --locked --offline --features accelerate --example validate
+target/release/examples/validate holdout-prepare artifacts/goal1-independent-final-v2.json
+# Replace SELECTED with the previously fixed candidate; do not select it from test results.
+target/release/examples/validate evaluate SELECTED artifacts/goal1-independent-final-v2.json trained artifacts/heldout-v2-trained.jsonl
+# RANDOM_INIT must be the candidate's own initialization, with the same tokenizer/config.
+target/release/examples/validate evaluate RANDOM_INIT artifacts/goal1-independent-final-v2.json random artifacts/heldout-v2-random.jsonl
+target/release/examples/validate evaluate SELECTED artifacts/goal1-independent-final-v2.json no-evidence artifacts/heldout-v2-no-evidence.jsonl
+target/release/examples/validate evaluate SELECTED artifacts/goal1-independent-final-v2.json value-swap artifacts/heldout-v2-value-swap.jsonl
+target/release/examples/validate retrieval-baseline artifacts/goal1-independent-final-v2.json artifacts/heldout-v2-retrieval.jsonl
+```
+
+Trained-mode evaluation preserves all results and exits nonzero when the quality gate
+fails. Baseline modes may finish successfully with poor scores; inspect
+`task_target_pass` and actual counts. Failed generations stay in the200-case denominator.
+The current fixture writer creates version2 using a recorded OS-random seed, independent
+of the training generator and the exposed version1 regression fixture. It covers four
+version questions, matched context distractors, new bindings, insufficient evidence and
+confirmed chronology with causal uncertainty. Counterfactual pairs change only the cited
+value; they do not mutate the canonical memory store. Semantic review of actual Korean
+outputs remains required, including citation-to-event attribution in sequence answers.
+No final-test result may train/select a candidate; if it informs a later change, use a
+new independent final test for that model. Version1 artifacts remain readable.
+
+Recorded attempt: the5000-step run completed, but selected step750 scored only1/200
+automatically; its sole automatic hit failed semantic inspection. The full comparison
+is in NATIVE_MODEL.md and raw goal1-s4 logs. This is **not an accepted memory model**.
+That S4 experiment failed and remains unpublished. A continuation is now in progress;
+native ask/generate/chat are implemented, while S5 actual quality/restart acceptance
+and S6 quantization/integrated closure remain outstanding.
+Do not resume the historical external-model installation path to bypass this failure.
+
+### Current continuation interfaces
+
+The preceding S4 failure describes the first experiment. The next bounded run uses
+`artifacts/goal1-corpus-v2`, `goal1-tokenizer-v2.json` and `goal1-small-v2-train`.
+Its fixed parameters and actual ten-step probe are recorded in
+logs/goal1-s4-v2-operating-config.txt. `--features accelerate` selects the verified
+CPU SGEMM backend; it is not Metal and does not load a completed external model.
+
+The external model/template loaders have been removed. Current native commands:
+
+```sh
+cargo build --release --locked --offline --features accelerate --bin replica-v3 --bin replica-train --example validate
+target/release/replica-v3 generate --checkpoint /path/to/our/trained/checkpoint --text '질문'
+target/release/replica-v3 --db /path/to/memory.db ask --scope demo \
+  --request-key 00000000000000000000000000000003 \
+  --checkpoint /path/to/our/trained/checkpoint --history --text '정정 전 방향은?'
+target/release/replica-v3 --db /path/to/memory.db chat --scope demo --session conversation \
+  --checkpoint /path/to/our/trained/checkpoint --history
+```
+
+`generate` opens no memory DB. `ask` and each submitted chat line use the same
+persist/search/model/validate/commit path. Chat assigns a fresh OS-random request key,
+ends on EOF or `/quit`, and observes Ctrl-C even while waiting for input. It does not
+implicitly include previous generated answers as evidence. `--history` supplies fact
+versions while excluding previous questions/terminal results before retrieval limits.
+General `search --history` retains its existing all-history behavior. All three native
+interfaces default to256 new tokens/context2048 and require an actually updated own
+checkpoint. An unqualified checkpoint is not made task-correct by these interfaces.
+
+Ordinary `train --resume` keeps the saved budget/schedule/data exactly. A separate
+bounded run may be requested explicitly with `--resume CHECKPOINT --extend-steps N
+--source-id SOURCE_MANIFEST_SHA256`:1..5000 additional steps and20M additional input
+tokens, optimizer/RNG retained, saved base LR/warmup restarted for the new horizon.
+Global update/token counters never reset. Its manifest records the budget origin.
+It requires a fresh output directory. Use `--stop-after` with an absolute global step
+for a short probe, then ordinary resume of that probe's final checkpoint. This option
+does not trigger automatic repetition or change the corpus, quality bar or final test.
+
+`--replace-corpus --corpus NEW_CORPUS` is allowed only with that explicit extension.
+It retains the own tokenizer and prior corpus hashes, and updates the declared current
+training/validation hashes. Ordinary resume rejects an undeclared data change.
+`--extend-microbatch N` (1..8) and `--extend-curriculum-steps N` may be specified only
+at this new run boundary; the latter counts additional initial copy-training steps.
+All changes are checkpointed and a subsequent ordinary resume uses them exactly.
+`--first-target-weight W` defaults to1 for fresh training. An explicit new run may
+set `--extend-first-target-weight W` (finite1..16). This optional objective gives
+each sequence's first supervised token weightW and all other supervised tokens
+weight1, divided by the actual target-token count. Prompt/PAD positions stay masked.
+`loss` and checkpoint/validation CE remain unweighted; `objective` is reported
+separately and supplies the actual backward pass. Old artifacts default to weight1.
+This changes optimization only; model architecture, logits decoding and answer
+validation are unchanged. Rebuild the CLI/evaluator when using newly written artifacts.
+The `grounding` corpus profile adds multi-record selection exercises and supported
+sequence/uncertainty answers. It is a training-only generator, not an inference path.
+The `counterfactual` profile makes up to four evidence variants of each grounding
+scene. Values, citation IDs, record metadata and evidence order vary while ordinary
+QA questions stay fixed. Complete three-event causal records always teach the known
+sequence plus uncertainty. A12000/400-episode split has3000/100 base scenes, not12000/400
+independent questions. The manifest records the generator revision; the command also
+prints base-scene counts. The final evaluation constructor is separate from this code.
+The `evidence-first` profile retains those questions/records and supported values,
+but teaches single-fact QA answers to generate the supporting event citation before
+the direction value. Copy and sequence/uncertainty tasks retain their original targets.
+This is a training-only change in response order, not an inference formatter or
+post-generation citation repair. It needs a declared new corpus/run and actual
+quality evaluation; preparing it alone does not improve or qualify a checkpoint.
+The `record-copy` profile teaches the supporting record's complete original sentence
+followed by its citation for single-fact QA and copy-family auxiliary exercises.
+Entity, context and value therefore appear together in the supervised target. Some
+training-only questions about the earliest restored history
+use another wording; their answers and requested version stay unchanged. Validation
+QA wording and source records are preserved. This profile also reports base scenes
+separately from its four counterfactual variants; it does not run in the product.
+The `entity-cue` profile preserves every ordinary `record-copy` QA episode at the
+same seed/size. It changes only copy-family auxiliary exercises: four evidence
+variants use four different subject-type names, and the neutral question asks for
+that name alone. The question contains none of the labels. It supplies short first-
+token supervision through the existing copy curriculum; it is not a runtime classifier
+or answer table. Record IDs, times, statuses and remaining original bytes are retained.
+
+`replica-train evaluate --known-question-form --split validation --limit N ...`
+is an oracle paraphrase diagnostic, limited to the eligible QA0/QA2 episodes.
+It uses corpus metadata only for the entity/context already explicit in the original
+question and substitutes known training wording. It does not supply an expected value
+or citation ID, and leaves evidence unchanged. Logs retain both questions and mark
+`oracle_question_ablation=true`. Its score is neither final-task quality nor an eligible
+v6 candidate-selection measurement. The product worker never runs this helper.
+
+For a learning-path memorization diagnostic, `replica-train corpus subset --source
+<existing-corpus> --output <new-directory> --count 32` preserves the first32 ordinary
+QA in each existing split (allowed count16..32). It keeps the original episode bytes,
+excludes copy auxiliaries, records parent hashes, and never overwrites an existing
+corpus. Use the existing SMALL trainer/checkpoint/evaluate commands on the subset;
+record any tokenizer/corpus continuation explicitly. `evaluate --split train --limit 32`
+checks actual autoregressive entire-answer/EOS accuracy on the trained examples.
+Its teacher-forced diagnostic is computed afterward and is not a generation score.
+A memorization pass cannot satisfy the independent heldout quality gate. The current
+bounded random-init recipe and probe are in logs/goal1-s4-qa32-config.txt and
+logs/goal1-s4-qa32-operating-config.txt; broad-corpus training is paused during diagnosis.
+
+`replica-train sampling-exposure --start <checkpoint> --end <checkpoint> --corpus
+<unchanged-corpus> --limit 400` reconstructs sampler exposure within a single recorded
+QA training run. It checks the final RNG state, supports the recorded copy curriculum,
+and reports exposure histograms and prefix IDs/counts. LM chunked documents and changed
+run configs/corpora are rejected. This is deterministic replay, not a per-draw log or
+a claim that every member of the training pool has actually been trained on.
+
+The training-only `field-cue` corpus profile extends `entity-cue` auxiliary examples
+with identifying digits, context, and evidence-value extraction. It preserves all
+ordinary QA and balances fields across existing record layouts. These auxiliary
+scores diagnose learning of individual fields; they cannot replace full QA or final
+independent heldout scoring. Values must be read from evidence; number/context targets
+may already be explicit in the requested identifier and serve as copying exercises.
+
+`evaluate --known-field-question-form --split validation --limit 64` is an oracle
+auxiliary-task ablation. It keeps evidence and targets unchanged but supplies the
+known field-task identity and training-style question wording; original questions
+remain in the log. Its scores cannot select a candidate or satisfy auxiliary/final
+gates. It is mutually exclusive with `--known-question-form` and never affects the
+product worker, default evaluation, or independent final test.
+
+The training-only `field-pairs` profile preserves `field-cue` validation bytes and
+ordinary training QA, diversifies auxiliary training wording, and makes each value
+quartet differ only in the selected current record's direction. It keeps background
+records, ordering, IDs, times and status fixed inside that quartet.
+`train --sample-group-size N` samples whole consecutive blocks of N from the eligible
+pool. N must divide the microbatch and pool size; default1 preserves the prior RNG
+sequence. Corpus producers are responsible for arranging semantically related blocks.
+Changing a resumed run requires `--extend-sample-group-size N` with explicit extension
+budget and source identity. The saved setting is used by training, restart and sampler
+exposure replay. Grouping changes batch sampling only; attention remains independent
+between batch rows, and no expected answer reaches generation.
+
+`evaluate --single-current-record --split validation --limit 16` is an oracle
+evidence-selection diagnostic limited to auxiliary value tasks. It selects exactly
+one current record using numeric entity/context identifiers already explicit in the
+question. Gold values are not read by selection. It may be combined with
+`--known-field-question-form` to separate question transfer from distractor selection.
+Original and generated evidence are both logged and the run is marked
+`oracle_record_selection`; its score cannot satisfy any quality gate or select a
+candidate. Product retrieval, generation and default evaluation are unchanged.
+
+The training-only `query-pairs` profile changes only `field-pairs` value auxiliary
+quartets. Two questions request different records from identical evidence; a second
+pair swaps only the records' direction values. IDs, source, times, order and statuses
+stay fixed. Superseded/current layouts explicitly request past/current respectively.
+Thus neither ignoring the question nor ignoring evidence can answer all four cases.
+Validation and all other training tasks are preserved. Group size4 keeps each complete
+two-by-two contrast in the actual minibatch; no oracle selector is used in training.

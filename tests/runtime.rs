@@ -1,5 +1,5 @@
 use replica_v3::{Error, Result, app, event::*, model::*, retrieval::EvidenceBundle, store::Store};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 struct FakeModel {
     calls: usize,
     bad_citation: bool,
@@ -145,9 +145,7 @@ fn missing_model_and_commit_failure_keep_input_without_success() {
     let cancel = AtomicBool::new(false);
     let mut missing = LocalModel {
         config: ModelConfig {
-            model: d.path().join("absent.gguf"),
-            tokenizer: d.path().join("absent.json"),
-            tokenizer_config: d.path().join("absent_config.json"),
+            checkpoint: d.path().join("absent-native-checkpoint"),
         },
     };
     assert!(
@@ -160,7 +158,7 @@ fn missing_model_and_commit_failure_keep_input_without_success() {
         )
         .unwrap_err()
         .to_string()
-        .contains("BLOCKED_MODEL")
+        .contains("MISSING_NATIVE_CHECKPOINT")
     );
     assert!(s.request("s", [1; 16]).unwrap().is_some());
     let mut model = FakeModel {
@@ -223,7 +221,7 @@ fn rust_child_protocol_failures_timeouts_stderr_and_cancellation() {
     let c = cancel.clone();
     let signal = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(50));
-        c.store(true, Ordering::Relaxed);
+        c.store(true, std::sync::atomic::Ordering::Relaxed);
     });
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_replica-test-worker"));
     cmd.arg("timeout");
@@ -386,6 +384,7 @@ fn rv01_results_bind_canonical_question_and_reindex_repairs() {
 
 #[test]
 fn rv02_real_tokenizer_never_silently_truncates() {
+    use replica_v3::neural::{ByteBpe, SPECIALS, hash};
     use tokenizers::{
         PaddingParams, PaddingStrategy, Tokenizer, TruncationDirection, TruncationParams,
         models::wordlevel::WordLevel, pre_tokenizers::whitespace::Whitespace,
@@ -405,11 +404,16 @@ fn rv02_real_tokenizer_never_silently_truncates() {
             .unwrap(),
     );
     tokenizer.with_pre_tokenizer(Some(Whitespace));
-    let template = br#"{"chat_template":"{{ messages[0].content }} {{ messages[1].content }}"}"#;
+    let native = ByteBpe::train(
+        &["head tail ".repeat(20).into_bytes()],
+        &hash(b"native truncation fixture"),
+        300,
+    )
+    .unwrap();
     let request = ModelRequest {
         request_id: "fixture".into(),
         system: "head".into(),
-        input: format!("{} tail", "head ".repeat(1100)),
+        input: format!("{}tail", "head".repeat(1100)),
         evidence: EvidenceBundle::default(),
         limits: GenerationLimits {
             max_tokens: 16,
@@ -417,7 +421,24 @@ fn rv02_real_tokenizer_never_silently_truncates() {
             timeout_ms: 1000,
         },
     };
-    let mut baseline = None;
+    let prepared = native.prepare(&request, 2048, "fixture").unwrap();
+    assert!(prepared.token_ids.len() > 1100);
+    let unframed: Vec<_> = prepared
+        .token_ids
+        .iter()
+        .copied()
+        .filter(|&id| id >= SPECIALS as u32)
+        .collect();
+    assert_eq!(
+        native.decode(&unframed).unwrap(),
+        format!("{}{}", request.system, request.input)
+    );
+    let exact = prepared.token_ids.len() as u32 + 16;
+    assert!(native.prepare(&request, exact, "fixture").is_ok());
+    assert!(matches!(
+        native.prepare(&request, exact - 1, "fixture"),
+        Err(Error::ContextTooSmall)
+    ));
     for direction in [
         None,
         Some(TruncationDirection::Left),
@@ -439,39 +460,34 @@ fn rv02_real_tokenizer_never_silently_truncates() {
         ] {
             tokenizer.with_padding(padding);
             let bytes = tokenizer.to_string(false).unwrap().into_bytes();
-            let prepared = prepare_prompt(&bytes, template, &request, 2048).unwrap();
-            assert!(prepared.token_ids.len() > 1100);
-            assert_eq!(&prepared.token_ids[..1101], vec![1; 1101]);
-            assert_eq!(prepared.token_ids[1101], 2);
-            if let Some(ref expected) = baseline {
-                assert_eq!(&prepared.token_ids, expected);
-            } else {
-                baseline = Some(prepared.token_ids.clone());
-            }
-            let exact = prepared.token_ids.len() as u32 + 16;
-            assert!(prepare_prompt(&bytes, template, &request, exact).is_ok());
-            assert!(prepare_prompt(&bytes, template, &request, exact - 1).is_err());
+            // The native product explicitly rejects this serialized tokenizer,
+            // including left/right truncation and fixed padding, before generation.
+            assert!(ByteBpe::from_bytes(&bytes).is_err());
+            let mut tampered: serde_json::Value = serde_json::from_slice(native.bytes()).unwrap();
+            let foreign: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            tampered["truncation"] = foreign["truncation"].clone();
+            tampered["padding"] = foreign["padding"].clone();
+            assert!(ByteBpe::from_bytes(&serde_json::to_vec(&tampered).unwrap()).is_err());
             assert_eq!(tokenizer.to_string(false).unwrap().as_bytes(), bytes);
+            assert_eq!(
+                native.prepare(&request, 2048, "fixture").unwrap().token_ids,
+                prepared.token_ids
+            );
         }
     }
 }
 
 #[test]
 fn rv02_whole_evidence_packing_and_receipt_binding() {
+    use replica_v3::neural::{ByteBpe, hash};
     use replica_v3::retrieval::Evidence;
-    use tokenizers::{
-        Tokenizer, models::wordlevel::WordLevel, pre_tokenizers::whitespace::Whitespace,
-    };
-    let mut tok = Tokenizer::new(
-        WordLevel::builder()
-            .vocab([("[UNK]".into(), 0)].into_iter().collect())
-            .unk_token("[UNK]".into())
-            .build()
-            .unwrap(),
-    );
-    tok.with_pre_tokenizer(Some(Whitespace));
-    let bytes = tok.to_string(false).unwrap().into_bytes();
-    let template=br#"{"chat_template":"{% if tools %}tools{% endif %}{{ messages[0].content }} {{ messages[1].content }}"}"#;
+    let tok = ByteBpe::train(
+        &[b"system excerpt tail".to_vec()],
+        &hash(b"packing fixture"),
+        300,
+    )
+    .unwrap();
+    let prepare = |request: &ModelRequest, context| tok.prepare(request, context, "fixture");
     let mut req = ModelRequest {
         request_id: "fixture".into(),
         system: "system".into(),
@@ -483,7 +499,7 @@ fn rv02_whole_evidence_packing_and_receipt_binding() {
             timeout_ms: 1000,
         },
     };
-    let base = prepare_prompt(&bytes, template, &req, 2048).unwrap();
+    let base = prepare(&req, 2048).unwrap();
     for id in [7, 9] {
         req.evidence.items.push(Evidence {
             event_id: id,
@@ -497,13 +513,13 @@ fn rv02_whole_evidence_packing_and_receipt_binding() {
             relation_path: vec![],
         });
     }
-    let full = prepare_prompt(&bytes, template, &req, 2048).unwrap();
+    let full = prepare(&req, 2048).unwrap();
     assert_eq!(full.provided, [7, 9]);
     assert!(full.excluded.is_empty());
-    let dropped = prepare_prompt(&bytes, template, &req, full.token_ids.len() as u32 + 15).unwrap();
+    let dropped = prepare(&req, full.token_ids.len() as u32 + 15).unwrap();
     assert_eq!(dropped.provided, [7]);
     assert_eq!(dropped.excluded, [9]);
-    let empty = prepare_prompt(&bytes, template, &req, base.token_ids.len() as u32 + 16).unwrap();
+    let empty = prepare(&req, base.token_ids.len() as u32 + 16).unwrap();
     assert!(empty.provided.is_empty());
     assert_eq!(empty.excluded, [9, 7]);
     let mut model = FakeModel {
@@ -520,9 +536,9 @@ fn rv02_whole_evidence_packing_and_receipt_binding() {
     response.prepared.as_mut().unwrap().token_digest.push('0');
     assert!(verify_prepared(&req, &full, &response).is_err());
     req.evidence.items[0].original_excerpt = "large ".repeat(MAX_REQUEST / 4);
-    let bounded = prepare_prompt(&bytes, template, &req, 2048).unwrap();
+    let bounded = prepare(&req, 2048).unwrap();
     assert!(bounded.provided.is_empty());
     assert_eq!(bounded.excluded, [9, 7]);
     req.evidence.items[0].original_excerpt.clear();
-    assert!(prepare_prompt(&bytes, template, &req, 2048).is_err());
+    assert!(prepare(&req, 2048).is_err());
 }

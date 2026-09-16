@@ -22,6 +22,8 @@ pub struct Search {
     pub before: Option<i64>,
     pub snapshot_id: Option<i64>,
     pub history: bool,
+    /// Memory questions retain fact versions without retrieving old answers/questions.
+    pub memory_only: bool,
     pub graph: bool,
     pub valid_at: i64,
 }
@@ -36,6 +38,7 @@ impl Search {
             before: None,
             snapshot_id: None,
             history: false,
+            memory_only: false,
             graph: true,
             valid_at: now_ms(),
         }
@@ -101,15 +104,20 @@ impl Store {
             let snapshot = q.snapshot_id.unwrap_or(i64::MAX);
             let after = q.after.unwrap_or(i64::MIN);
             let before = q.before.unwrap_or(i64::MAX);
+            let filter = if q.memory_only {
+                format!("{FILTER} AND m.kind IN (0,1,2) AND m.question=0")
+            } else {
+                FILTER.to_string()
+            };
             let mut bundle = EvidenceBundle::default();
             let mut seeds = Vec::new();
             let sql = if long.is_empty() {
-                format!("SELECT m.id FROM record_meta m WHERE {FILTER} ORDER BY m.id DESC LIMIT 65")
+                format!("SELECT m.id FROM record_meta m WHERE {filter} ORDER BY m.id DESC LIMIT 65")
             } else {
                 // Keep FTS as the outer loop: metadata-first plans repeat MATCH
                 // for every row and sort the entire result before LIMIT applies.
                 format!(
-                    "SELECT m.id FROM record_fts CROSS JOIN record_meta m ON m.id=record_fts.rowid WHERE {FILTER} AND record_fts MATCH ?9 ORDER BY rank LIMIT 65"
+                    "SELECT m.id FROM record_fts CROSS JOIN record_meta m ON m.id=record_fts.rowid WHERE {filter} AND record_fts MATCH ?9 ORDER BY rank LIMIT 65"
                 )
             };
             let mut stmt = tx.prepare(&sql)?;
@@ -169,7 +177,7 @@ impl Store {
                     continue;
                 }
                 let eligible_sql =
-                    format!("SELECT m.id FROM record_meta m WHERE {FILTER} AND m.id=?9");
+                    format!("SELECT m.id FROM record_meta m WHERE {filter} AND m.id=?9");
                 let eligible = tx
                     .query_row(
                         &eligible_sql,

@@ -15,17 +15,20 @@ pub fn now_ms() -> i64 {
         .min(i64::MAX as u128) as i64
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, clap::Args)]
 pub struct GenerationLimits {
+    #[arg(long, default_value_t = 256)]
     pub max_tokens: u32,
+    #[arg(long, default_value_t = 2048)]
     pub context_tokens: u32,
+    #[arg(long, default_value_t = 120_000)]
     pub timeout_ms: u64,
 }
 impl Default for GenerationLimits {
     fn default() -> Self {
         Self {
-            max_tokens: 512,
-            context_tokens: 8192,
+            max_tokens: 256,
+            context_tokens: 2048,
             timeout_ms: 120_000,
         }
     }

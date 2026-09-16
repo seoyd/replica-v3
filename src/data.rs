@@ -305,14 +305,1185 @@ fn save_split(root: &Path, name: &str, docs: &[Episode]) -> Result<Split> {
         tokens: None,
     })
 }
-pub fn prepare(root: &Path, seed: u64, documents: usize, local: &[PathBuf]) -> Result<()> {
+// Curriculum and QA data remain training-tool code. Neither final-test expectations
+// nor a renderer can be invoked by a native inference worker.
+fn curriculum(count: usize, seed: u64, validation: bool, balanced: bool) -> Vec<Episode> {
+    use replica_v3::neural::transformer::Rng;
+    let mut rng = Rng::new(seed ^ if validation { 0x9173 } else { 0x4137 });
+    let pool = if validation { "validation" } else { "train" };
+    let values = [
+        "오른쪽",
+        "왼쪽",
+        "직진",
+        "대기",
+        "북쪽",
+        "남쪽",
+        "동쪽",
+        "서쪽",
+    ];
+    let mut out = Vec::new();
+    for i in 0..count {
+        let copy = i % 6 == 5;
+        let category = if copy { 3 } else { i % 6 };
+        let variant = (rng.next_u64() % 3) as usize;
+        let style = if balanced {
+            (rng.next_u64() % 6) as usize
+        } else {
+            variant
+        };
+        let digit = rng.next_u64() % 4;
+        let start = [1, 10, 100, 1000][digit as usize];
+        let id = start + (rng.next_u64() % (start * 9) as u64) as i64;
+        let other_id = if balanced {
+            let base = [1, 10, 100, 1000][(rng.next_u64() % 4) as usize];
+            let candidate = base + (rng.next_u64() % (base * 9) as u64) as i64;
+            if candidate == id {
+                candidate + 1
+            } else {
+                candidate
+            }
+        } else {
+            id + 1
+        };
+        let value_index = (rng.next_u64() % values.len() as u64) as usize;
+        let value = values[value_index];
+        let other = values[(value_index + 1 + (rng.next_u64() % 7) as usize) % values.len()];
+        let prefix = ["장치", "설비", "센서", "장비"][(rng.next_u64() % 4) as usize];
+        // Disjoint entity sets with the same range/length distribution. Both the
+        // target and distractor share split parity, so parity cannot select an answer.
+        let parity = if validation { 2 } else { 1 };
+        let number = if balanced {
+            500_000 + 2 * ((i * 7919 + seed as usize) % 100_000) + parity
+        } else if validation {
+            80000 + i
+        } else {
+            1000 + i
+        };
+        let entity = format!("{prefix}{number}");
+        let distractor_number = if balanced {
+            let candidate = 500_000 + 2 * (rng.next_u64() as usize % 100_000) + parity;
+            if candidate == number {
+                500_000 + (candidate + 2 - 500_000 - parity) % 200_000 + parity
+            } else {
+                candidate
+            }
+        } else {
+            number + 30000
+        };
+        let distractor = format!("{prefix}{distractor_number}");
+        let (context, other_context) = if balanced {
+            let first = (rng.next_u64() % 39) as usize;
+            let second = (first + 1 + (rng.next_u64() % 38) as usize) % 39;
+            let render = |n: usize| format!("{}{}", ["구역", "통로", "현장"][n / 13], n % 13);
+            (render(first), render(second))
+        } else {
+            (
+                format!(
+                    "{}{}",
+                    ["구역", "통로", "현장"][(rng.next_u64() % 3) as usize],
+                    rng.next_u64() % 13
+                ),
+                format!("별관{}", rng.next_u64() % 9),
+            )
+        };
+        let full_system = !copy || if balanced { variant == 2 } else { i % 18 == 17 };
+        let mut items = vec![evidence(
+            id,
+            format!("{entity}의 {context} 이동 지시는 {value}이다."),
+            "current",
+        )];
+        let (mut question, answer, mut family) = if copy {
+            let q = match (validation, variant) {
+                (false, 0) => "제공된 사건 번호만 숫자로 그대로 적어줘.",
+                (false, 1) => "기록의 이동 값만 그대로 적어줘.",
+                (false, _) => "이 기록의 이동 지시는 무엇인가? 사건을 인용해줘.",
+                (true, 0) => "자료의 사건 ID 숫자를 복사해줘.",
+                (true, 1) => "자료 속 방향 값만 복사해줘.",
+                (true, _) => "자료에 명시된 지시와 근거를 답해줘.",
+            };
+            let a = match variant {
+                0 => id.to_string(),
+                1 => value.to_string(),
+                _ => format!("{value}입니다. [event:{id}]"),
+            };
+            (q.to_string(), a, format!("copy/{pool}/{variant}"))
+        } else {
+            let (q, a) = match category {
+                0 | 3 => {
+                    if category == 0 {
+                        items.push(evidence(
+                            other_id,
+                            format!("{distractor}의 {context} 이동 지시는 {other}이다."),
+                            "current",
+                        ));
+                    }
+                    let q = if validation {
+                        format!(
+                            "제공 자료에 따르면 {context}에서 {entity}가 따라야 할 방향은 어느 쪽이지?"
+                        )
+                    } else {
+                        match variant {
+                            0 => format!("{entity} {context} 현재 이동 지시는 무엇인가?"),
+                            1 => format!(
+                                "지금 유효한 {entity}의 {context} 방향을 근거와 함께 알려줘."
+                            ),
+                            _ => format!("{context} 기록에서 {entity}에게 지정된 이동 값은?"),
+                        }
+                    };
+                    (q, format!("{value}입니다. [event:{id}]"))
+                }
+                1 => {
+                    items[0].event_id = id + 1;
+                    items.insert(
+                        0,
+                        evidence(
+                            id,
+                            if balanced {
+                                format!("{entity}의 {context} 이동 지시는 {other}이다.")
+                            } else {
+                                format!("{entity}의 {context} 이전 지시는 {other}였다.")
+                            },
+                            "superseded",
+                        ),
+                    );
+                    let (query, expected, cited) = match variant {
+                        0 => {
+                            items[1].version_status = "superseded".into();
+                            items.push(evidence(
+                                id + 2,
+                                if balanced {
+                                    format!("{entity}의 {context} 이동 지시는 {other}이다.")
+                                } else {
+                                    format!("{entity}의 {context} 지시를 {other}으로 복원했다.")
+                                },
+                                "current",
+                            ));
+                            (
+                                if validation {
+                                    "복구까지 반영한 현재 방향을 답해줘."
+                                } else {
+                                    "복원 후 현재 이동 지시는?"
+                                },
+                                other,
+                                id + 2,
+                            )
+                        }
+                        1 => (
+                            if validation {
+                                "변경이 있기 이전의 방향을 답해줘."
+                            } else {
+                                "정정 전 과거 이동 지시는?"
+                            },
+                            other,
+                            id,
+                        ),
+                        _ => (
+                            if validation {
+                                "정정 내용을 반영한 지금의 방향을 답해줘."
+                            } else {
+                                "정정 후 최신 이동 지시는?"
+                            },
+                            value,
+                            id + 1,
+                        ),
+                    };
+                    (
+                        format!("{entity} {context} {query}"),
+                        format!("{expected}입니다. [event:{cited}]"),
+                    )
+                }
+                2 => {
+                    items.push(evidence(
+                        other_id,
+                        format!("{entity}의 {other_context} 이동 지시는 {other}이다."),
+                        "current",
+                    ));
+                    let q = if validation {
+                        format!(
+                            "{entity}에 대해 {other_context}가 아닌 {context}의 지시를 구분해 답해줘."
+                        )
+                    } else {
+                        match variant {
+                            0 => format!("{entity}는 {context}에서 어느 방향으로 가야 하나?"),
+                            1 => format!(
+                                "다른 현장과 구분하여 {entity}의 {context} 이동 값을 알려줘."
+                            ),
+                            _ => {
+                                format!("{other_context} 말고 {context}의 {entity} 지시만 답해줘.")
+                            }
+                        }
+                    };
+                    (q, format!("{value}입니다. [event:{id}]"))
+                }
+                _ => {
+                    if variant == 0 {
+                        items.clear();
+                        if (i / 6).is_multiple_of(2) {
+                            items.push(evidence(
+                                id + 7,
+                                format!("{distractor}의 점검은 끝났지만 사고 자료는 없다."),
+                                "observation_or_interpretation",
+                            ));
+                        }
+                        (
+                            if validation {
+                                format!("{entity}에 일어난 사고의 원인이 자료로 확인되는가?")
+                            } else {
+                                format!("{entity}의 사고 원인은 무엇인가?")
+                            },
+                            "근거가 없어 알 수 없습니다.".into(),
+                        )
+                    } else {
+                        items.push(evidence(
+                            id + 1,
+                            format!("{entity}는 {value} 지시를 실행했다."),
+                            "observation_or_interpretation",
+                        ));
+                        items.push(evidence(
+                            id + 2,
+                            format!("이후 {entity}의 사고가 기록되었다. 원인은 확인되지 않았다."),
+                            "observation_or_interpretation",
+                        ));
+                        (
+                            if validation {
+                                format!(
+                                    "{entity} 지시와 실행, 사고가 순서대로 기록되면 인과관계도 확정된 것인가?"
+                                )
+                            } else if variant == 1 {
+                                format!("{entity}의 앞선 이동 지시가 사고의 원인으로 확정됐나?")
+                            } else {
+                                format!("{entity}의 시간 순서만으로 사고 원인을 알 수 있나?")
+                            },
+                            format!("원인은 확정되지 않았습니다. [event:{}]", id + 2),
+                        )
+                    }
+                }
+            };
+            (q, a, format!("qa/{pool}/{category}/{variant}"))
+        };
+        if balanced {
+            question = if copy {
+                match (validation, variant, style % 2) {
+                    (true, 0, _) => "제시된 근거의 event 번호만 적어줘.",
+                    (true, 1, _) => "여기서 이동 방향 값 하나만 적어줘.",
+                    (true, _, _) => "이동 지시를 문장으로 답하고 해당 사건을 인용해줘.",
+                    (false, 0, 0) => "자료의 사건 ID만 숫자로 복사해줘.",
+                    (false, 0, _) => "제공된 사건 번호만 그대로 적어줘.",
+                    (false, 1, 0) => "기록의 이동 값만 그대로 적어줘.",
+                    (false, 1, _) => "자료 속 방향 값 하나만 복사해줘.",
+                    (false, _, 0) => "이 기록의 이동 지시는 무엇인가? 사건을 인용해줘.",
+                    (false, _, _) => "명시된 이동 방향과 사건 인용을 문장으로 답해줘.",
+                }
+                .into()
+            } else {
+                match category {
+                    0 | 3 => {
+                        if validation {
+                            format!("알려진 기록으로 {entity}의 {context} 방향을 확인해줘.")
+                        } else {
+                            match style {
+                                0 => format!("{entity} {context} 현재 이동 지시는 무엇인가?"),
+                                1 => format!(
+                                    "지금 유효한 {entity}의 {context} 방향을 근거와 함께 알려줘."
+                                ),
+                                2 => format!("{context} 기록에서 {entity}에게 지정된 이동 값은?"),
+                                3 => format!(
+                                    "{entity}가 {context}에서 따라야 할 방향은 어느 쪽이지?"
+                                ),
+                                4 => format!(
+                                    "제공된 자료에서 {context}의 {entity} 이동 방향을 찾아줘."
+                                ),
+                                _ => format!(
+                                    "다른 장비 말고 {entity}의 {context} 현재 지시를 답해줘."
+                                ),
+                            }
+                        }
+                    }
+                    1 => {
+                        let temporal = match (validation, variant, style % 3) {
+                            (true, 0, _) => "되돌린 기록까지 포함해 현재 적용될 방향은?",
+                            (true, 1, _) => "현재값 대신 정정 이전 기록의 방향만 답하라.",
+                            (true, _, _) => "변경된 기록을 적용한 현재 방향을 답하라.",
+                            (false, 0, 0) => "복원 후 현재 이동 지시는?",
+                            (false, 0, 1) => "다시 복구한 뒤 유효한 방향은?",
+                            (false, 0, _) => "되돌린 다음 지금의 이동 값을 알려줘.",
+                            (false, 1, 0) => "정정 전 과거 이동 지시는?",
+                            (false, 1, 1) => "변경 이전에는 어느 방향이었지?",
+                            (false, 1, _) => "현재 말고 처음 기록했던 방향을 알려줘.",
+                            (false, _, 0) => "정정 후 최신 이동 지시는?",
+                            (false, _, 1) => "변경을 반영한 지금의 방향은?",
+                            (false, _, _) => "과거 기록 말고 현재 유효한 지시를 알려줘.",
+                        };
+                        format!("{entity} {context} {temporal}")
+                    }
+                    2 => {
+                        if validation {
+                            format!(
+                                "자료에 {other_context}도 나오지만 {context}에 해당하는 {entity}의 방향을 읽어줘."
+                            )
+                        } else {
+                            match style % 3 {
+                                0 => format!("{entity}는 {context}에서 어느 방향으로 가야 하나?"),
+                                1 => format!(
+                                    "다른 현장과 구분하여 {entity}의 {context} 이동 값을 알려줘."
+                                ),
+                                _ => format!(
+                                    "{other_context} 말고 {context}의 {entity} 지시만 답해줘."
+                                ),
+                            }
+                        }
+                    }
+                    _ if variant == 0 => {
+                        if validation {
+                            format!("현재 근거로 {entity}의 사고 원인을 알 수 있는지 답해줘.")
+                        } else {
+                            match style % 3 {
+                                0 => format!("{entity}의 사고 원인은 무엇인가?"),
+                                1 => format!("{entity}의 원인으로 확정한 기록이 있어?"),
+                                _ => format!("자료로 {entity}의 사고 원인을 확인할 수 있어?"),
+                            }
+                        }
+                    }
+                    _ => {
+                        if validation {
+                            format!("{entity}에 일어난 순서와 확정 원인을 구분하여 말해줘.")
+                        } else {
+                            match style % 3 {
+                                0 => {
+                                    format!("{entity}의 앞선 이동 지시가 사고의 원인으로 확정됐나?")
+                                }
+                                1 => format!("{entity}의 시간 순서만으로 사고 원인을 알 수 있나?"),
+                                _ => format!(
+                                    "{entity}의 지시와 실행 다음 사고가 기록되면 원인도 확인되는가?"
+                                ),
+                            }
+                        }
+                    }
+                }
+            };
+            family = format!(
+                "{}{pool}/{category}/{variant}/{style}",
+                if copy {
+                    "copy/balanced/"
+                } else {
+                    "qa/balanced/"
+                }
+            );
+        }
+        // Timestamp is independent of citation ID, as in the real memory store.
+        let recorded = 1_780_000_000_000i64 + (rng.next_u64() % 1_000_000) as i64;
+        for (n, e) in items.iter_mut().enumerate() {
+            e.recorded_at = recorded
+                + if balanced && (category == 0 || category == 2) {
+                    (rng.next_u64() % 10_000) as i64
+                } else {
+                    n as i64
+                };
+            e.observed_at = (i % 3 == 0).then_some(recorded - 1000);
+            e.source = ["user", "sensor", "manual"][(rng.next_u64() % 3) as usize].into();
+        }
+        for n in (1..items.len()).rev() {
+            items.swap(n, (rng.next_u64() % (n + 1) as u64) as usize);
+        }
+        out.push(Episode {
+            id: format!(
+                "{}-{pool}-{seed}-{i}",
+                if balanced { "balanced" } else { "curriculum" }
+            ),
+            category,
+            family,
+            binding: if balanced {
+                format!("{entity}/{context}/{value}")
+            } else {
+                format!("{pool}/{entity}/{context}/{value}")
+            },
+            sequence: if balanced {
+                hash(
+                    &serde_json::to_vec(&(&question, &items))
+                        .expect("serializable synthetic episode"),
+                )
+            } else {
+                format!("{pool}/{category}/{variant}/{}", items.len())
+            },
+            request: ModelRequest {
+                request_id: format!("corpus-{pool}-{i}"),
+                system: if full_system {
+                    SYSTEM.into()
+                } else {
+                    String::new()
+                },
+                input: question,
+                evidence: EvidenceBundle {
+                    items,
+                    ..Default::default()
+                },
+                limits: GenerationLimits {
+                    max_tokens: 128,
+                    context_tokens: 2048,
+                    timeout_ms: 120000,
+                },
+            },
+            answer,
+        });
+    }
+    out
+}
+// Targeted training exercises for the observed multi-record binding error. This
+// code is training-only, and does not run before/after product generation.
+fn grounding(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
+    use replica_v3::neural::transformer::Rng;
+    let mut rng = Rng::new(seed ^ if validation { 0x1459 } else { 0x2567 });
+    let mut episodes = curriculum(count, seed, validation, true);
+    let directions = [
+        "오른쪽",
+        "왼쪽",
+        "직진",
+        "대기",
+        "북쪽",
+        "남쪽",
+        "동쪽",
+        "서쪽",
+    ];
+    for (index, episode) in episodes.iter_mut().enumerate() {
+        let fields: Vec<_> = episode.binding.split('/').collect();
+        let (entity, context, value) = (fields[0], fields[1], fields[2]);
+        let items = &mut episode.request.evidence.items;
+        if episode.family.starts_with("copy/") {
+            let mode = index / 6 % 4;
+            let first = items[0].clone();
+            let mut other = first.clone();
+            let id = 1 + (rng.next_u64() % 9999) as i64;
+            other.event_id = if id == first.event_id { id + 1 } else { id };
+            other.recorded_at -= 100 + (rng.next_u64() % 5000) as i64;
+            let alternate = directions
+                .iter()
+                .position(|v| *v == value)
+                .expect("own corpus value");
+            let alternate =
+                directions[(alternate + 1 + (rng.next_u64() % 7) as usize) % directions.len()];
+            let digits = entity
+                .chars()
+                .position(|c| c.is_ascii_digit())
+                .expect("own entity number");
+            let prefix: String = entity.chars().take(digits).collect();
+            let number: usize = entity
+                .chars()
+                .skip(digits)
+                .collect::<String>()
+                .parse()
+                .expect("own entity number");
+            let distractor = format!(
+                "{prefix}{}",
+                500_000 + (number - 500_000 + 40_000) % 200_000
+            );
+            let context_prefix: String = context
+                .chars()
+                .take_while(|c| !c.is_ascii_digit())
+                .collect();
+            let context_number: usize = context[context_prefix.len()..]
+                .parse()
+                .expect("own context number");
+            let different_context = format!(
+                "{context_prefix}{}",
+                (context_number + 1 + (rng.next_u64() % 12) as usize) % 13
+            );
+            other.original_excerpt =
+                format!("{distractor}의 {context} 이동 지시는 {alternate}이다.");
+            match mode {
+                0 => {
+                    episode.request.input = if validation {
+                        format!("{entity} {context}에 해당하는 사건 ID 숫자만 답하라.")
+                    } else {
+                        format!("다른 장비와 구분하여 {entity}의 {context} 사건 번호만 복사해줘.")
+                    };
+                    episode.answer = first.event_id.to_string();
+                }
+                1 => {
+                    episode.request.input = if validation {
+                        format!("이동 값이 {value}인 자료의 event 번호는?")
+                    } else {
+                        format!("{value} 지시가 적힌 사건의 번호만 숫자로 적어줘.")
+                    };
+                    episode.answer = first.event_id.to_string();
+                }
+                2 => {
+                    other.original_excerpt =
+                        format!("{entity}의 {different_context} 이동 지시는 {alternate}이다.");
+                    episode.request.input = if validation {
+                        format!("{entity}의 {context} 자료에 적힌 방향 값만 복사하라.")
+                    } else {
+                        format!(
+                            "{different_context}가 아닌 {context}에서 {entity}의 이동 값만 적어줘."
+                        )
+                    };
+                    episode.answer = value.into();
+                }
+                _ => {
+                    other.original_excerpt =
+                        format!("{entity}의 {context} 이동 지시는 {alternate}이다.");
+                    other.version_status = "superseded".into();
+                    other.event_id = first.event_id;
+                    items[0].event_id += 1;
+                    episode.request.input = if validation {
+                        "현재 적용되는 자료의 사건 ID만 답하라.".into()
+                    } else {
+                        "superseded된 과거 자료 말고 current인 사건 번호만 복사해줘.".into()
+                    };
+                    episode.answer = items[0].event_id.to_string();
+                }
+            }
+            items.push(other);
+            if rng.next_u64().is_multiple_of(2) {
+                items.reverse();
+            }
+            episode.request.system.clear();
+            episode.family = format!(
+                "copy/grounding/{}/{mode}",
+                if validation { "validation" } else { "train" }
+            );
+        } else if episode.category == 4 && items.len() == 3 && rng.next_u64().is_multiple_of(2) {
+            let mut chronology: Vec<_> = items.iter().collect();
+            chronology.sort_by_key(|item| item.recorded_at);
+            episode.request.input = if validation {
+                format!(
+                    "{entity}에 대해 자료로 확인할 수 있는 사건 순서와 원인 판단의 한계를 함께 답해줘."
+                )
+            } else {
+                format!(
+                    "{entity}의 지시부터 실행과 사고까지 확인된 일과 원인의 불확실성을 설명해줘."
+                )
+            };
+            episode.answer = format!(
+                "지시 [event:{}] 뒤 실행 [event:{}], 이후 사고 [event:{}]가 기록되었습니다. 원인은 확정되지 않았습니다.",
+                chronology[0].event_id, chronology[1].event_id, chronology[2].event_id
+            );
+            episode.family = format!(
+                "qa/grounding/{}/causal-sequence",
+                if validation { "validation" } else { "train" }
+            );
+        } else if episode.category == 1 && items.len() == 3 && rng.next_u64().is_multiple_of(2) {
+            let first = items
+                .iter()
+                .min_by_key(|item| item.recorded_at)
+                .expect("three records");
+            // Restoration copies immutable original bytes; asking about the first
+            // version must still cite the first event, not the restored event.
+            episode.request.input = if validation {
+                format!("{entity} {context}의 복원본 대신 최초 버전에 적힌 방향을 말하라.")
+            } else {
+                format!("{entity} {context}의 현재 복구된 기록 말고 처음 사건의 지시와 근거는?")
+            };
+            let value = first
+                .original_excerpt
+                .split("이동 지시는 ")
+                .nth(1)
+                .expect("own sentence")
+                .strip_suffix("이다.")
+                .expect("own sentence");
+            episode.answer = format!("{value}입니다. [event:{}]", first.event_id);
+            episode.family = format!(
+                "qa/grounding/{}/initial-before-restore",
+                if validation { "validation" } else { "train" }
+            );
+        }
+        episode.id = format!(
+            "grounding-{}-{seed}-{index}",
+            if validation { "validation" } else { "train" }
+        );
+        episode.sequence =
+            hash(&serde_json::to_vec(&(&episode.request.input, items)).expect("synthetic episode"));
+    }
+    episodes
+}
+// One-pass replacement avoids cascading label/ID substitutions. Training-only;
+// neither the inference library nor the independent final renderer calls this.
+fn replace_training_literals(text: &str, replacements: &[(String, String)]) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut remaining = text;
+    while !remaining.is_empty() {
+        if let Some((old, new)) = replacements
+            .iter()
+            .find(|(old, _)| remaining.starts_with(old))
+        {
+            result.push_str(new);
+            remaining = &remaining[old.len()..];
+        } else {
+            let next = remaining.chars().next().expect("nonempty text");
+            result.push(next);
+            remaining = &remaining[next.len_utf8()..];
+        }
+    }
+    result
+}
+// Four different evidence bindings per base scene discourage question-only
+// memorization. Every variant is still a real, explicitly stored training episode.
+fn counterfactual(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
+    use replica_v3::neural::transformer::Rng;
+    let values = [
+        "오른쪽",
+        "왼쪽",
+        "직진",
+        "대기",
+        "북쪽",
+        "남쪽",
+        "동쪽",
+        "서쪽",
+    ];
+    let mut rng = Rng::new(seed ^ if validation { 0x4812 } else { 0x8193 });
+    let mut out = Vec::with_capacity(count);
+    for mut base in grounding(count.div_ceil(4), seed, validation) {
+        // Reporting known chronology and its uncertainty is valid even when the
+        // question asks only about the cause. It must cite all three actual events.
+        if base.category == 4 && base.request.evidence.items.len() == 3 {
+            let mut rows: Vec<_> = base.request.evidence.items.iter().collect();
+            rows.sort_by_key(|e| e.recorded_at);
+            base.answer = format!(
+                "지시 [event:{}] 뒤 실행 [event:{}], 이후 사고 [event:{}]가 기록되었습니다. 원인은 확정되지 않았습니다.",
+                rows[0].event_id, rows[1].event_id, rows[2].event_id
+            );
+        }
+        let mut permutation = values;
+        for index in (1..permutation.len()).rev() {
+            permutation.swap(index, (rng.next_u64() % (index + 1) as u64) as usize);
+        }
+        let mut used_ids = BTreeSet::new();
+        for variant in 0..4 {
+            if out.len() == count {
+                break;
+            }
+            let mut episode = base.clone();
+            let mut replacements: Vec<_> = values
+                .iter()
+                .enumerate()
+                .map(|(i, old)| {
+                    (
+                        old.to_string(),
+                        permutation[(i + variant) % values.len()].to_string(),
+                    )
+                })
+                .collect();
+            let old_ids: Vec<_> = episode
+                .request
+                .evidence
+                .items
+                .iter()
+                .map(|e| e.event_id)
+                .collect();
+            let mut ids = std::collections::BTreeMap::new();
+            for old in old_ids {
+                let mut new = 1 + (rng.next_u64() % 9999) as i64;
+                while !used_ids.insert(new) {
+                    new = new % 9999 + 1;
+                }
+                ids.insert(old, new);
+                replacements.push((format!("[event:{old}]"), format!("[event:{new}]")));
+            }
+            let offset = (rng.next_u64() % 100_000_000) as i64;
+            for item in &mut episode.request.evidence.items {
+                item.original_excerpt =
+                    replace_training_literals(&item.original_excerpt, &replacements);
+                item.event_id = ids[&item.event_id];
+                item.recorded_at += offset;
+                item.observed_at = item.observed_at.map(|t| t + offset);
+                item.source = ["sensor", "manual", "user"][(rng.next_u64() % 3) as usize].into();
+            }
+            episode.answer = if let Ok(id) = episode.answer.parse::<i64>() {
+                ids[&id].to_string()
+            } else {
+                replace_training_literals(&episode.answer, &replacements)
+            };
+            episode.request.input =
+                replace_training_literals(&episode.request.input, &replacements);
+            episode.binding = replace_training_literals(&episode.binding, &replacements);
+            let items = &mut episode.request.evidence.items;
+            for index in (1..items.len()).rev() {
+                items.swap(index, (rng.next_u64() % (index + 1) as u64) as usize);
+            }
+            episode.id = format!("counterfactual/{}/{variant}", base.id);
+            episode.family = format!("{}/counterfactual/{variant}", base.family);
+            episode.request.request_id = episode.id.clone();
+            episode.sequence = hash(
+                &serde_json::to_vec(&(&episode.request.input, items)).expect("synthetic variant"),
+            );
+            out.push(episode);
+        }
+    }
+    out
+}
+// Training-only factorization: generate the supporting event before its value.
+// The product decoder still predicts every token; there is no output formatter.
+fn evidence_first(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
+    let mut episodes = counterfactual(count, seed, validation);
+    for episode in &mut episodes {
+        if episode.category < 4 && !episode.family.starts_with("copy/") {
+            let (value, citation) = episode
+                .answer
+                .split_once("입니다. ")
+                .expect("own single-fact training answer");
+            episode.answer = format!("기록 {citation}의 방향은 {value}입니다.");
+        }
+    }
+    episodes
+}
+// Whole-record targets keep entity, context and value together before the citation.
+// These are supervised training targets, never a product answer formatter.
+fn record_copy(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
+    let mut episodes = evidence_first(count, seed, validation);
+    for (index, episode) in episodes.iter_mut().enumerate() {
+        let mut fields = episode.binding.split('/');
+        let entity = fields.next().expect("own entity binding");
+        let context = fields.next().expect("own context binding");
+        if episode.family.starts_with("copy/") {
+            let prefix = format!("{entity}의 {context} 이동 지시는 ");
+            let record = episode
+                .request
+                .evidence
+                .items
+                .iter()
+                .find(|item| {
+                    item.version_status == "current" && item.original_excerpt.starts_with(&prefix)
+                })
+                .expect("own auxiliary record");
+            episode.request.input = if validation {
+                format!(
+                    "제시된 자료 중 {entity} {context}에 지금 적용되는 문장을 그대로 적은 뒤 근거를 달아줘."
+                )
+            } else {
+                format!(
+                    "{entity}의 {context}에서 현재 유효한 사건의 원문을 빠짐없이 쓰고 그 사건을 인용해줘."
+                )
+            };
+            episode.answer = format!("{} [event:{}]", record.original_excerpt, record.event_id);
+        } else if !validation
+            && episode.family.contains("/initial-before-restore/")
+            && (index / 24).is_multiple_of(2)
+        {
+            episode.request.input = format!(
+                "{entity}의 {context} 자료에서 최초로 작성된 이동 지시를 근거와 함께 답해줘."
+            );
+        }
+        if episode.category < 4 && !episode.family.starts_with("copy/") {
+            let cited = replica_v3::app::citations(&episode.answer)
+                .expect("own single-fact training citation");
+            let record = episode
+                .request
+                .evidence
+                .items
+                .iter()
+                .find(|item| item.event_id == cited[0])
+                .expect("own supported training answer");
+            episode.answer = format!("{} [event:{}]", record.original_excerpt, record.event_id);
+        }
+        episode.sequence = hash(
+            &serde_json::to_vec(&(&episode.request.input, &episode.request.evidence.items))
+                .expect("synthetic record-copy episode"),
+        );
+    }
+    episodes
+}
+// Short auxiliary supervision for the first context-dependent token. Ordinary QA
+// is unchanged, and the product decoder cannot call this training-only renderer.
+fn entity_cue(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
+    use replica_v3::neural::transformer::Rng;
+    let mut episodes = record_copy(count, seed, validation);
+    let names = ["장치", "설비", "센서", "장비"];
+    let mut rng = Rng::new(seed ^ if validation { 0x42c14be7 } else { 0x7160d351 });
+    let mut offset = 0;
+    for (index, episode) in episodes.iter_mut().enumerate() {
+        if index.is_multiple_of(4) {
+            offset = (rng.next_u64() % names.len() as u64) as usize;
+        }
+        if !episode.family.starts_with("copy/") {
+            continue;
+        }
+        let old_name: String = episode
+            .binding
+            .chars()
+            .take_while(|c| !c.is_ascii_digit())
+            .collect();
+        let name = names[(offset + index % 4) % names.len()];
+        let replacements = [(old_name, name.to_owned())];
+        for item in &mut episode.request.evidence.items {
+            item.original_excerpt =
+                replace_training_literals(&item.original_excerpt, &replacements);
+        }
+        episode.binding = replace_training_literals(&episode.binding, &replacements);
+        episode.request.input = if validation {
+            "이 자료가 부르는 대상의 종류 이름만 적어줘."
+        } else {
+            "제공된 원문에서 숫자 앞에 적힌 대상의 분류명만 그대로 복사해줘."
+        }
+        .into();
+        episode.answer = name.into();
+        episode.family.push_str("/entity-cue");
+        episode.sequence = hash(
+            &serde_json::to_vec(&(&episode.request.input, &episode.request.evidence.items))
+                .expect("synthetic entity-cue episode"),
+        );
+    }
+    episodes
+}
+// Direct supervision of source fields; ordinary QA and product inference stay unchanged.
+fn field_cue(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
+    let mut episodes = entity_cue(count, seed, validation);
+    let mut auxiliary = 0;
+    for episode in &mut episodes {
+        if !episode.family.starts_with("copy/") {
+            continue;
+        }
+        let group = auxiliary / 4;
+        // Rotate across the four underlying record layouts as well as target fields.
+        let mode = (group + group / 4) % 4;
+        auxiliary += 1;
+        if mode == 0 {
+            continue; // Preserve the already verified name-copy task and its wording.
+        }
+        let mut fields = episode.binding.split('/');
+        let entity = fields.next().expect("own entity");
+        let context = fields.next().expect("own context");
+        let number = entity.trim_start_matches(|c: char| !c.is_ascii_digit());
+        let prefix = format!("{entity}의 {context} 이동 지시는 ");
+        let record = episode
+            .request
+            .evidence
+            .items
+            .iter()
+            .find(|e| e.version_status == "current" && e.original_excerpt.starts_with(&prefix))
+            .expect("own supported auxiliary record");
+        let (question, answer, field) = match mode {
+            1 => (
+                if validation {
+                    format!("{entity}({context})의 식별 숫자 부분만 보여줘.")
+                } else {
+                    format!("{context} 자료의 대상 {entity}에서 분류명 뒤 숫자만 원문대로 적어줘.")
+                },
+                number.to_owned(),
+                "number",
+            ),
+            2 => (
+                if validation {
+                    format!("이 자료 중 {entity}에 대해 지정한 {context} 장소 문자열만 답하라.")
+                } else {
+                    let other = episode
+                        .request
+                        .evidence
+                        .items
+                        .iter()
+                        .filter_map(|e| {
+                            e.original_excerpt
+                                .split_once("의 ")?
+                                .1
+                                .split_once(" 이동 지시는 ")
+                                .map(|(c, _)| c)
+                        })
+                        .find(|c| *c != context);
+                    if let Some(other) = other {
+                        format!(
+                            "{other}도 함께 적혀 있지만, {entity}의 {context} 위치 이름만 복사하라."
+                        )
+                    } else {
+                        format!("제공 기록에서 {entity}의 {context} 위치 이름 전체만 복사하라.")
+                    }
+                },
+                context.to_owned(),
+                "context",
+            ),
+            _ => (
+                if validation {
+                    format!(
+                        "번호 {number}인 대상의 {context}에 현재 적용되는 방향 값 한 단어만 답하라."
+                    )
+                } else {
+                    format!(
+                        "식별 숫자가 {number}인 대상의 {context} current 원문에서 '이동 지시는' 다음 방향 단어만 복사해줘."
+                    )
+                },
+                record
+                    .original_excerpt
+                    .strip_prefix(&prefix)
+                    .expect("own prefix")
+                    .strip_suffix("이다.")
+                    .expect("own suffix")
+                    .to_owned(),
+                "value",
+            ),
+        };
+        episode.request.input = question;
+        episode.answer = answer;
+        episode.family.push_str(&format!("/{field}"));
+        episode.sequence = hash(
+            &serde_json::to_vec(&(&episode.request.input, &episode.request.evidence.items))
+                .expect("synthetic field-cue episode"),
+        );
+    }
+    episodes
+}
+// Training-only wording diversity and controlled value changes. A value quartet
+// shares the complete background and changes only its current supporting value.
+fn field_pairs(count: usize, seed: u64) -> Vec<Episode> {
+    use replica_v3::neural::transformer::Rng;
+    let mut episodes = field_cue(count, seed, false);
+    let mut rng = Rng::new(seed ^ 0x312bc745);
+    for group in episodes.chunks_mut(4) {
+        if !group[0].family.starts_with("copy/") {
+            continue;
+        }
+        let base = group[0].clone();
+        let form = rng.next_u64() % 8;
+        let field = base.family.rsplit('/').next().expect("own field");
+        if field == "value" {
+            let mut parts = base.binding.split('/');
+            let entity = parts.next().expect("own entity");
+            let context = parts.next().expect("own context");
+            let prefix = format!("{entity}의 {context} 이동 지시는 ");
+            let target = base
+                .request
+                .evidence
+                .items
+                .iter()
+                .position(|e| {
+                    e.version_status == "current" && e.original_excerpt.starts_with(&prefix)
+                })
+                .expect("own supported value");
+            for episode in group.iter_mut() {
+                episode.request.evidence = base.request.evidence.clone();
+                episode.request.evidence.items[target].original_excerpt =
+                    format!("{prefix}{}이다.", episode.answer);
+                episode.binding = format!("{entity}/{context}/{}", episode.answer);
+            }
+        }
+        for episode in group {
+            let mut parts = episode.binding.split('/');
+            let entity = parts.next().expect("own entity");
+            let context = parts.next().expect("own context");
+            let number = entity.trim_start_matches(|c: char| !c.is_ascii_digit());
+            episode.request.input = match field {
+                "entity-cue" => match form {
+                    0 => episode.request.input.clone(),
+                    1 => "자료에 등장한 대상의 분류 이름만 알려줘.".into(),
+                    2 => "기록 속 대상이 어떤 종류인지 이름만 복사하라.".into(),
+                    3 => "원문의 숫자 바로 앞 명칭만 답해줘.".into(),
+                    4 => "대상의 종류를 나타내는 단어 하나만 적어줘.".into(),
+                    5 => "여기 나온 대상은 무슨 분류명으로 불리는가? 분류명만 답하라.".into(),
+                    6 => "자료가 사용하는 대상의 종류 명칭만 보여줘.".into(),
+                    _ => "제공된 원문에 적힌 대상 이름 중 숫자를 제외한 이름만 답하라.".into(),
+                },
+                "number" => match form {
+                    0 => episode.request.input.clone(),
+                    1 => format!("{entity}의 {context} 자료에서 식별 번호만 복사해줘."),
+                    2 => format!("{context}의 {entity}에서 숫자 부분만 적어줘."),
+                    3 => format!("대상 {entity}({context})의 번호 숫자만 답하라."),
+                    4 => format!(
+                        "{entity}의 이름 뒤 식별 숫자는? {context} 기록을 보고 숫자만 답해줘."
+                    ),
+                    5 => format!("{context} 자료에 나오는 {entity}의 식별 숫자만 보여줘."),
+                    6 => format!("{entity}({context})를 식별하는 번호만 원문대로 적어줘."),
+                    _ => format!(
+                        "{context} 기록의 대상 {entity}에서 종류 이름을 빼고 숫자만 답하라."
+                    ),
+                },
+                "context" => match form {
+                    0 => episode.request.input.clone(),
+                    1 => format!("{entity}의 {context} 자료에서 지정한 장소 이름만 적어줘."),
+                    2 => format!("대상 {entity}에 대해 요청한 {context} 위치 문자열만 보여줘."),
+                    3 => format!("{entity}({context})의 장소 명칭만 복사해줘."),
+                    4 => format!("이 기록에서 {entity}의 {context}라는 위치 이름 전체를 답하라."),
+                    5 => format!("{entity}의 자료 중 {context} 장소 이름만 원문대로 답해줘."),
+                    6 => {
+                        format!("{context}에 관한 {entity} 기록이다. 지정된 장소 문자열만 적어줘.")
+                    }
+                    _ => format!("여러 기록 중 {entity}의 {context} 위치 이름만 답하라."),
+                },
+                "value" => match form {
+                    0 => base.request.input.clone(),
+                    1 => format!("번호 {number}인 대상의 {context}에서 현재 방향 단어만 적어줘."),
+                    2 => format!("{context} 자료 중 번호 {number}의 current 이동 방향만 답하라."),
+                    3 => format!(
+                        "식별 번호 {number}, 장소 {context}: 현재 적용되는 이동 지시의 값만 복사해줘."
+                    ),
+                    4 => {
+                        format!("{context}의 번호 {number}에 지금 적용되는 방향 한 단어만 보여줘.")
+                    }
+                    5 => format!(
+                        "이 자료에서 식별 숫자 {number}에 대해 {context}의 현재 방향 값만 적어줘."
+                    ),
+                    6 => format!(
+                        "번호 {number}의 {context} 이동 지시는 현재 어느 방향인가? 방향만 답하라."
+                    ),
+                    _ => format!(
+                        "{context}에서 대상 번호 {number}의 current 기록이 지정한 방향 단어만 복사하라."
+                    ),
+                },
+                _ => unreachable!("own auxiliary field"),
+            };
+            episode.sequence = hash(
+                &serde_json::to_vec(&(&episode.request.input, &episode.request.evidence.items))
+                    .expect("synthetic paired field episode"),
+            );
+        }
+    }
+    episodes
+}
+// A two-by-two counterfactual: same evidence, two requested targets; then swap
+// only the two source values. Correct generation must use both question and evidence.
+fn query_pairs(count: usize, seed: u64) -> Vec<Episode> {
+    let mut episodes = field_pairs(count, seed);
+    for group in episodes.chunks_mut(4) {
+        if !group[0].family.starts_with("copy/") || !group[0].family.ends_with("/value") {
+            continue;
+        }
+        let base = group[0].clone();
+        let parts: Vec<_> = base.binding.split('/').collect();
+        let target_prefix = format!("{}의 {} 이동 지시는 ", parts[0], parts[1]);
+        let records = &base.request.evidence.items;
+        assert_eq!(records.len(), 2, "own two-record auxiliary layout");
+        let target = records
+            .iter()
+            .position(|e| {
+                e.version_status == "current" && e.original_excerpt.starts_with(&target_prefix)
+            })
+            .expect("own supported value");
+        let other = 1 - target;
+        let parsed: Vec<_> = records
+            .iter()
+            .map(|record| {
+                let (entity, rest) = record
+                    .original_excerpt
+                    .split_once("의 ")
+                    .expect("own record entity");
+                let (context, value) = rest
+                    .split_once(" 이동 지시는 ")
+                    .expect("own record context");
+                (
+                    entity,
+                    context,
+                    value.strip_suffix("이다.").expect("own record value"),
+                )
+            })
+            .collect();
+        assert_ne!(parsed[target].2, parsed[other].2, "own distinct directions");
+        let number = |s: &str| {
+            s.trim_start_matches(|c: char| !c.is_ascii_digit())
+                .to_owned()
+        };
+        let mut replacements = vec![
+            (number(parsed[target].0), number(parsed[other].0)),
+            (parsed[target].1.to_owned(), parsed[other].1.to_owned()),
+        ];
+        if records[other].version_status == "superseded" {
+            replacements.extend([
+                ("current".into(), "superseded".into()),
+                ("현재".into(), "과거".into()),
+                ("지금".into(), "예전에".into()),
+            ]);
+        }
+        let other_question = replace_training_literals(&base.request.input, &replacements);
+        assert_ne!(
+            other_question, base.request.input,
+            "own distinct requested targets"
+        );
+        for (variant, episode) in group.iter_mut().enumerate() {
+            let selected = if variant % 2 == 0 { target } else { other };
+            let swapped = variant >= 2;
+            episode.request.evidence = base.request.evidence.clone();
+            if swapped {
+                for (i, record) in episode.request.evidence.items.iter_mut().enumerate() {
+                    record.original_excerpt = format!(
+                        "{}의 {} 이동 지시는 {}이다.",
+                        parsed[i].0,
+                        parsed[i].1,
+                        parsed[1 - i].2
+                    );
+                }
+            }
+            episode.request.input = if selected == target {
+                base.request.input.clone()
+            } else {
+                other_question.clone()
+            };
+            episode.answer = parsed[if swapped { 1 - selected } else { selected }]
+                .2
+                .to_owned();
+            episode.binding = format!(
+                "{}/{}/{}",
+                parsed[selected].0, parsed[selected].1, episode.answer
+            );
+            episode.sequence = hash(
+                &serde_json::to_vec(&(&episode.request.input, &episode.request.evidence.items))
+                    .expect("synthetic query-value pair"),
+            );
+        }
+    }
+    episodes
+}
+pub fn prepare(
+    root: &Path,
+    seed: u64,
+    documents: usize,
+    local: &[PathBuf],
+    profile: &str,
+) -> Result<()> {
     if !(50..=20_000).contains(&documents) {
         return Err(Error::Invalid("documents 50..20000".into()));
     }
-    let (mut train, validation) = (
-        synthetic(documents, seed, false),
-        synthetic((documents / 10).max(50), seed, true),
-    );
+    let (mut train, validation, revision) = match profile {
+        "v1" => (
+            synthetic(documents, seed, false),
+            synthetic((documents / 10).max(50), seed, true),
+            GENERATOR_REVISION,
+        ),
+        "curriculum" => (
+            curriculum(documents, seed, false, false),
+            curriculum((documents / 10).clamp(50, 400), seed, true, false),
+            "educational-korean-curriculum-v2",
+        ),
+        "balanced" => (
+            curriculum(documents, seed, false, true),
+            curriculum((documents / 10).clamp(50, 400), seed, true, true),
+            "educational-korean-balanced-v3",
+        ),
+        "grounding" => (
+            grounding(documents, seed, false),
+            grounding((documents / 10).clamp(50, 400), seed, true),
+            "educational-korean-grounding-v4",
+        ),
+        "counterfactual" => (
+            counterfactual(documents, seed, false),
+            counterfactual((documents / 10).clamp(50, 400), seed, true),
+            "educational-korean-counterfactual-v5",
+        ),
+        "evidence-first" => (
+            evidence_first(documents, seed, false),
+            evidence_first((documents / 10).clamp(50, 400), seed, true),
+            "educational-korean-evidence-first-v6",
+        ),
+        "record-copy" => (
+            record_copy(documents, seed, false),
+            record_copy((documents / 10).clamp(50, 400), seed, true),
+            "educational-korean-record-copy-v8",
+        ),
+        "entity-cue" => (
+            entity_cue(documents, seed, false),
+            entity_cue((documents / 10).clamp(50, 400), seed, true),
+            "educational-korean-entity-cue-v9",
+        ),
+        "field-cue" => (
+            field_cue(documents, seed, false),
+            field_cue((documents / 10).clamp(50, 400), seed, true),
+            "educational-korean-field-cue-v10",
+        ),
+        "field-pairs" => (
+            field_pairs(documents, seed),
+            field_cue((documents / 10).clamp(50, 400), seed, true),
+            "educational-korean-field-pairs-v11",
+        ),
+        "query-pairs" => (
+            query_pairs(documents, seed),
+            field_cue((documents / 10).clamp(50, 400), seed, true),
+            "educational-korean-query-pairs-v12",
+        ),
+        _ => return Err(Error::Invalid("corpus profile".into())),
+    };
     // Only explicitly supplied files. Each entire document belongs to one split;
     // no private DB discovery, recursive directory walk or automatic ingestion.
     for (i, p) in local.iter().enumerate() {
@@ -341,9 +1512,55 @@ pub fn prepare(root: &Path, seed: u64, documents: usize, local: &[PathBuf]) -> R
     }
     check_split(&train, &validation)?;
     std::fs::create_dir(root)?;
-    let manifest=CorpusManifest{version:1,scope:if local.is_empty(){"SYNTHETIC_ONLY"}else{"SYNTHETIC_AND_EXPLICIT_LOCAL"}.into(),permission:"project-generated; supplied paths explicitly authorized for training".into(),generator:GENERATOR_REVISION.into(),seed,split_rule:"episode first; disjoint entity binding, template family and sequence; final test created independently".into(),train:save_split(root,"train",&train)?,validation:save_split(root,"validation",&validation)?};
+    let manifest=CorpusManifest{version:1,scope:if local.is_empty(){"SYNTHETIC_ONLY"}else{"SYNTHETIC_AND_EXPLICIT_LOCAL"}.into(),permission:"project-generated; supplied paths explicitly authorized for training".into(),generator:revision.into(),seed,split_rule:"episode first; disjoint entity binding, template family and sequence; final test created independently".into(),train:save_split(root,"train",&train)?,validation:save_split(root,"validation",&validation)?};
     write_new(
         &root.join("manifest.json"),
+        &serde_json::to_vec_pretty(&manifest)?,
+    )?;
+    println!("{}", serde_json::to_string_pretty(&manifest)?);
+    if matches!(
+        profile,
+        "counterfactual" | "evidence-first" | "record-copy" | "entity-cue" | "field-cue"
+    ) {
+        println!(
+            "synthetic_base_scenes_train={} synthetic_base_scenes_validation={} variants_per_base_max=4; variants are not independent questions",
+            documents.div_ceil(4),
+            validation.len().div_ceil(4)
+        );
+    }
+    Ok(())
+}
+/// A diagnostic subset of existing QA bytes, never a new heldout benchmark.
+pub fn qa_subset(source: &Path, output: &Path, count: usize) -> Result<()> {
+    if !(16..=32).contains(&count) {
+        return Err(Error::Invalid(
+            "memorization subset requires 16..32 QA".into(),
+        ));
+    }
+    let (mut manifest, train, validation) = load(source)?;
+    let select = |episodes: Vec<Episode>| -> Result<Vec<Episode>> {
+        let selected: Vec<_> = episodes
+            .into_iter()
+            .filter(|e| !e.answer.is_empty() && !e.family.starts_with("copy/"))
+            .take(count)
+            .collect();
+        if selected.len() != count {
+            return Err(Error::Invalid("insufficient ordinary QA for subset".into()));
+        }
+        Ok(selected)
+    };
+    let train = select(train)?;
+    let validation = select(validation)?;
+    check_split(&train, &validation)?;
+    manifest.split_rule = format!(
+        "MEMORIZATION_DIAGNOSTIC_ONLY; first {count} nonempty non-copy QA from each existing split; episodes unchanged; parent train={} validation={}; {}",
+        manifest.train.sha256, manifest.validation.sha256, manifest.split_rule
+    );
+    std::fs::create_dir(output)?;
+    manifest.train = save_split(output, "train", &train)?;
+    manifest.validation = save_split(output, "validation", &validation)?;
+    write_new(
+        &output.join("manifest.json"),
         &serde_json::to_vec_pretty(&manifest)?,
     )?;
     println!("{}", serde_json::to_string_pretty(&manifest)?);
@@ -357,7 +1574,7 @@ pub fn tokenizer(root: &Path, output: &Path, vocab: usize) -> Result<()> {
             let mut s = e.request.system.clone();
             s.push_str(&e.request.input);
             for v in &e.request.evidence.items {
-                s.push_str(&v.original_excerpt);
+                s.push_str(&replica_v3::neural::evidence_text(v));
             }
             s.push_str(&e.answer);
             s.into_bytes()

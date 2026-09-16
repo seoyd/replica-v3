@@ -18,6 +18,93 @@ fn cli(path: &Path, args: &[&str], stdin: &[u8]) -> std::process::Output {
     child.wait_with_output().unwrap()
 }
 #[test]
+fn native_generate_and_chat_eof_quit_cancel_have_bounded_side_effects() {
+    use replica_v3::store::Store;
+    use std::io::Read;
+    let dir = tempfile::tempdir().unwrap();
+    let absent_db = dir.path().join("unused-db");
+    let out = cli(
+        &absent_db,
+        &[
+            "generate",
+            "--checkpoint",
+            "absent-native",
+            "--text",
+            "question",
+        ],
+        b"",
+    );
+    assert!(!out.status.success());
+    assert!(out.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("MISSING_NATIVE_CHECKPOINT"));
+    assert!(!absent_db.exists());
+    let path = dir.path().join("memory");
+    Store::init(&path).unwrap();
+    let args = ["chat", "--scope", "s", "--checkpoint", "absent-native"];
+    for input in [b"".as_slice(), b"/quit\n"] {
+        let out = cli(&path, &args, input);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.stdout.is_empty());
+        assert_eq!(Store::open(&path).unwrap().count().unwrap(), 0);
+    }
+    let mut child = Command::new(env!("CARGO_BIN_EXE_replica-v3"))
+        .arg("--db")
+        .arg(&path)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut prompt = [0u8; 2];
+    child
+        .stderr
+        .as_mut()
+        .unwrap()
+        .read_exact(&mut prompt)
+        .unwrap();
+    assert_eq!(&prompt, b"> "); // Handler is installed and foreground awaits input.
+    assert!(
+        Command::new("kill")
+            .args(["-INT", &child.id().to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while child.try_wait().unwrap().is_none() {
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("chat cancellation blocked on stdin");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let out = child.wait_with_output().unwrap();
+    assert!(!out.status.success());
+    assert!(out.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cancelled"));
+    assert_eq!(Store::open(&path).unwrap().count().unwrap(), 0);
+    let original = "  새 질문 😀\r".as_bytes();
+    for _ in 0..2 {
+        let out = cli(&path, &args, original);
+        assert!(!out.status.success());
+        assert!(out.stdout.is_empty());
+    }
+    let store = Store::open(path).unwrap();
+    assert_eq!(store.count().unwrap(), 4); // Each fresh input plus its recorded setup failure.
+    let first = store.get(1).unwrap();
+    let second = store.get(3).unwrap();
+    assert_eq!(first.payload, original);
+    assert_eq!(second.payload, original);
+    assert!(first.request_key.is_some());
+    assert_ne!(first.request_key, second.request_key);
+}
+#[test]
 fn independent_process_restart_bytes_ids_and_request_replay() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("db");
@@ -137,11 +224,7 @@ fn rv01_corrupt_result_has_no_success_stdout_or_write() {
             "s",
             "--request-key",
             "01010101010101010101010101010101",
-            "--model",
-            "absent",
-            "--tokenizer",
-            "absent",
-            "--tokenizer-config",
+            "--checkpoint",
             "absent",
             "--text",
             "question",

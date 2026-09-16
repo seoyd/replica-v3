@@ -24,10 +24,26 @@ pub struct TrainConfig {
     pub max_steps: usize,
     pub max_tokens: u64,
     pub microbatch: usize,
+    #[serde(default = "unit_group")]
+    pub sample_group_size: usize,
     pub accumulation: usize,
     pub seq_len: usize,
     pub validate_every: usize,
     pub seed: u64,
+    #[serde(default = "unit_weight")]
+    pub first_target_weight: f64,
+    #[serde(default)]
+    pub curriculum_steps: usize,
+    #[serde(default)]
+    pub budget_start_step: usize,
+    #[serde(default)]
+    pub budget_start_tokens: u64,
+}
+fn unit_weight() -> f64 {
+    1.
+}
+fn unit_group() -> usize {
+    1
 }
 impl Default for TrainConfig {
     fn default() -> Self {
@@ -42,10 +58,15 @@ impl Default for TrainConfig {
             max_steps: 5000,
             max_tokens: 20_000_000,
             microbatch: 1,
+            sample_group_size: 1,
             accumulation: 4,
             seq_len: 512,
             validate_every: 100,
             seed: 17,
+            first_target_weight: 1.,
+            curriculum_steps: 0,
+            budget_start_step: 0,
+            budget_start_tokens: 0,
         }
     }
 }
@@ -62,29 +83,40 @@ impl TrainConfig {
             || !(0.0..=1.0).contains(&self.weight_decay)
             || !self.clip.is_finite()
             || self.clip <= 0.
-            || self.max_steps == 0
-            || self.max_steps > 5000
-            || self.max_tokens == 0
-            || self.max_tokens > 20_000_000
-            || self.warmup > self.max_steps
+            || self.max_steps > i32::MAX as usize
+            || self
+                .max_steps
+                .checked_sub(self.budget_start_step)
+                .is_none_or(|n| n == 0 || n > 5000 || self.warmup > n)
+            || self
+                .max_tokens
+                .checked_sub(self.budget_start_tokens)
+                .is_none_or(|n| n == 0 || n > 20_000_000)
+            || self.curriculum_steps > self.max_steps
             || self.microbatch == 0
             || self.microbatch > 8
+            || self.sample_group_size == 0
+            || self.sample_group_size > self.microbatch
+            || !self.microbatch.is_multiple_of(self.sample_group_size)
             || self.accumulation == 0
             || self.accumulation > 32
             || self.seq_len < 2
             || self.seq_len > context
             || self.validate_every == 0
+            || !self.first_target_weight.is_finite()
+            || !(1.0..=16.0).contains(&self.first_target_weight)
         {
             return Err(Error::Invalid("training configuration budget".into()));
         }
         Ok(())
     }
     pub fn learning_rate(&self, step: usize) -> f64 {
+        let step = step.saturating_sub(self.budget_start_step);
         if self.warmup > 0 && step <= self.warmup {
             self.lr * step as f64 / self.warmup as f64
         } else {
             let progress = (step.saturating_sub(self.warmup) as f64
-                / (self.max_steps - self.warmup).max(1) as f64)
+                / (self.max_steps - self.budget_start_step - self.warmup).max(1) as f64)
                 .min(1.);
             self.lr * (0.1 + 0.9 * 0.5 * (1. + (std::f64::consts::PI * progress).cos()))
         }
@@ -100,6 +132,8 @@ pub struct TrainingState {
     pub sampler_state: u64,
     pub corpus_hash: String,
     pub validation_hash: String,
+    #[serde(default)]
+    pub previous_corpora: Vec<String>,
     pub initial_weight_hash: String,
     pub train_loss: Option<f64>,
     pub validation_loss: Option<f64>,
@@ -171,9 +205,15 @@ fn validate<'a>(
     if let Some(s) = &m.training {
         s.config.validate(m.architecture.context)?;
         if s.step > s.config.max_steps
+            || s.step < s.config.budget_start_step
+            || s.consumed_tokens < s.config.budget_start_tokens
             || s.consumed_tokens > s.config.max_tokens
             || s.target_tokens > s.consumed_tokens
-            || s.corpus_hash != tok.train_hash
+            || (s.corpus_hash != tok.train_hash && !s.previous_corpora.contains(&tok.train_hash))
+            || s.previous_corpora.len() > 32
+            || s.previous_corpora
+                .iter()
+                .any(|h| h.len() != 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()))
             || s.initial_weight_hash != m.initial_weight_hash
             || s.train_loss.is_some_and(|v| !v.is_finite())
             || s.validation_loss.is_some_and(|v| !v.is_finite())
@@ -203,11 +243,24 @@ fn validate<'a>(
     }
     Ok(tensors)
 }
-pub fn load(path: &Path, device: Device, resume: bool) -> Result<Loaded> {
+pub fn metadata(path: &Path) -> Result<(Manifest, ByteBpe)> {
     let manifest: Manifest =
         serde_json::from_slice(&read_bounded(&path.join("manifest.json"), 1024 * 1024)?)?;
     manifest.architecture.validate()?;
     let tok = ByteBpe::load(&path.join("tokenizer.json"))?;
+    if manifest.version != 1
+        || manifest.dtype != "F32"
+        || manifest.tokenizer_sha256 != tok.id()
+        || manifest.architecture.vocab != tok.vocab_size()
+    {
+        return Err(Error::Corrupt(
+            "checkpoint metadata/tokenizer binding".into(),
+        ));
+    }
+    Ok((manifest, tok))
+}
+pub fn load(path: &Path, device: Device, resume: bool) -> Result<Loaded> {
+    let (manifest, tok) = metadata(path)?;
     let cap =
         manifest.architecture.parameters() * 4 * if manifest.training.is_some() { 3 } else { 1 }
             + 1024 * 1024;
