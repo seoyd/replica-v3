@@ -1,0 +1,19 @@
+   Compiling replica-v3 v0.1.0 (/Users/seo/Projects/Replica-v3)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.97s
+     Running tests/retrieval.rs (target/debug/deps/retrieval-15b6eda7bf9aa391)
+
+running 2 tests
+test short_query_scope_sql_syntax_and_cyclic_budget ... ok
+test independent_ten_thousand_event_fixture_and_graph_comparison ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+     Running tests/runtime.rs (target/debug/deps/runtime-364b86b6945b97bc)
+
+running 3 tests
+test missing_model_and_commit_failure_keep_input_without_success ... ok
+test app_commit_restart_citations_and_no_self_evidence ... ok
+test rust_child_protocol_failures_timeouts_stderr_and_cancellation ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+

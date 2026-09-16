@@ -1,0 +1,5 @@
+release=true model=EXCLUDED warm=OS_CACHE_NOT_FLUSHED temp_db_only=true
+raw batch_import_10000_ms=272.4848
+raw single_FULL_commit: n=20 min_ms=3.8394 median_ms=3.9983 max_ms=16.1507
+raw warm_read: n=128 min_ms=0.0057 median_ms=0.0060 max_ms=0.0150
+NarrowScope: short query exceeds 64 candidates; specify time or slot

@@ -1,0 +1,117 @@
+initialized /tmp/replica-v3-cli.i8qlQi/source.db
+Doctor { sqlite: "3.50.2", compile_options: ["ATOMIC_INTRINSICS=1", "COMPILER=clang-21.0.0", "DEFAULT_AUTOVACUUM", "DEFAULT_CACHE_SIZE=-2000", "DEFAULT_FILE_FORMAT=4", "DEFAULT_FOREIGN_KEYS", "DEFAULT_JOURNAL_SIZE_LIMIT=-1", "DEFAULT_MMAP_SIZE=0", "DEFAULT_PAGE_SIZE=4096", "DEFAULT_PCACHE_INITSZ=20", "DEFAULT_RECURSIVE_TRIGGERS", "DEFAULT_SECTOR_SIZE=4096", "DEFAULT_SYNCHRONOUS=2", "DEFAULT_WAL_AUTOCHECKPOINT=1000", "DEFAULT_WAL_SYNCHRONOUS=2", "DEFAULT_WORKER_THREADS=0", "DIRECT_OVERFLOW_READ", "ENABLE_API_ARMOR", "ENABLE_COLUMN_METADATA", "ENABLE_DBSTAT_VTAB", "ENABLE_FTS3", "ENABLE_FTS3_PARENTHESIS", "ENABLE_FTS5", "ENABLE_LOAD_EXTENSION", "ENABLE_MEMORY_MANAGEMENT", "ENABLE_RTREE", "ENABLE_STAT4", "HAVE_ISNAN", "MALLOC_SOFT_LIMIT=1024", "MAX_ATTACHED=10", "MAX_COLUMN=2000", "MAX_COMPOUND_SELECT=500", "MAX_DEFAULT_PAGE_SIZE=8192", "MAX_EXPR_DEPTH=1000", "MAX_FUNCTION_ARG=1000", "MAX_LENGTH=1000000000", "MAX_LIKE_PATTERN_LENGTH=50000", "MAX_MMAP_SIZE=0x7fff0000", "MAX_PAGE_COUNT=0xfffffffe", "MAX_PAGE_SIZE=65536", "MAX_SQL_LENGTH=1000000000", "MAX_TRIGGER_DEPTH=1000", "MAX_VARIABLE_NUMBER=32766", "MAX_VDBE_OP=250000000", "MAX_WORKER_THREADS=8", "MUTEX_PTHREADS", "SOUNDEX", "SYSTEM_MALLOC", "TEMP_STORE=1", "THREADSAFE=1", "USE_URI"], pragmas: [("journal_mode", "wal"), ("foreign_keys", "1"), ("synchronous", "2"), ("busy_timeout", "5000"), ("fullfsync", "1"), ("application_id", "1380996659"), ("user_version", "1")], records: 0, full: false }
+1
+event=2 recorded_at=1789518120607 observed_at=None source="user" kind=Fact { slot: Slot { entity: "robot", predicate: "direction", context: "hall" }, previous: None, restored_from: None, valid_from: None, valid_until: None }
+RIGHT
+event=3 recorded_at=1789518120627 observed_at=None source="user" kind=Fact { slot: Slot { entity: "robot", predicate: "direction", context: "hall" }, previous: Some(2), restored_from: None, valid_from: None, valid_until: None }
+LEFT
+event=4 recorded_at=1789518120646 observed_at=None source="user" kind=Fact { slot: Slot { entity: "robot", predicate: "direction", context: "hall" }, previous: Some(3), restored_from: Some(2), valid_from: None, valid_until: None }
+RIGHT
+event=4 recorded_at=1789518120646 observed_at=None source="user" kind=Fact { slot: Slot { entity: "robot", predicate: "direction", context: "hall" }, previous: Some(3), restored_from: Some(2), valid_from: None, valid_until: None }
+RIGHT
+event=2 recorded_at=1789518120607 observed_at=None source="user" kind=Fact { slot: Slot { entity: "robot", predicate: "direction", context: "hall" }, previous: None, restored_from: None, valid_from: None, valid_until: None }
+RIGHT
+event=3 recorded_at=1789518120627 observed_at=None source="user" kind=Fact { slot: Slot { entity: "robot", predicate: "direction", context: "hall" }, previous: Some(2), restored_from: None, valid_from: None, valid_until: None }
+LEFT
+event=4 recorded_at=1789518120646 observed_at=None source="user" kind=Fact { slot: Slot { entity: "robot", predicate: "direction", context: "hall" }, previous: Some(3), restored_from: Some(2), valid_from: None, valid_until: None }
+RIGHT
+event=5 recorded_at=1789518120674 observed_at=None source="user" kind=Relation { relation: Precedes, from: 2, to: 3, evidence: [2, 3] }
+기록 순서이며 원인은 아님
+truncated=false visited=3
+Evidence { event_id: 4, original_excerpt: "RIGHT", excerpt_truncated: false, source: "user", recorded_at: 1789518120646, observed_at: None, version_status: "current", retrieval_reason: "lexical", relation_path: [] }
+event=1 recorded_at=1789518120588 observed_at=None source="user" kind=Observation { question: None }
+원본 명령: 오른쪽으로 가
+reindexed
+backed up /tmp/replica-v3-cli.i8qlQi/backup.db
+restored /tmp/replica-v3-cli.i8qlQi/restored.db
+Doctor {
+    sqlite: "3.50.2",
+    compile_options: [
+        "ATOMIC_INTRINSICS=1",
+        "COMPILER=clang-21.0.0",
+        "DEFAULT_AUTOVACUUM",
+        "DEFAULT_CACHE_SIZE=-2000",
+        "DEFAULT_FILE_FORMAT=4",
+        "DEFAULT_FOREIGN_KEYS",
+        "DEFAULT_JOURNAL_SIZE_LIMIT=-1",
+        "DEFAULT_MMAP_SIZE=0",
+        "DEFAULT_PAGE_SIZE=4096",
+        "DEFAULT_PCACHE_INITSZ=20",
+        "DEFAULT_RECURSIVE_TRIGGERS",
+        "DEFAULT_SECTOR_SIZE=4096",
+        "DEFAULT_SYNCHRONOUS=2",
+        "DEFAULT_WAL_AUTOCHECKPOINT=1000",
+        "DEFAULT_WAL_SYNCHRONOUS=2",
+        "DEFAULT_WORKER_THREADS=0",
+        "DIRECT_OVERFLOW_READ",
+        "ENABLE_API_ARMOR",
+        "ENABLE_COLUMN_METADATA",
+        "ENABLE_DBSTAT_VTAB",
+        "ENABLE_FTS3",
+        "ENABLE_FTS3_PARENTHESIS",
+        "ENABLE_FTS5",
+        "ENABLE_LOAD_EXTENSION",
+        "ENABLE_MEMORY_MANAGEMENT",
+        "ENABLE_RTREE",
+        "ENABLE_STAT4",
+        "HAVE_ISNAN",
+        "MALLOC_SOFT_LIMIT=1024",
+        "MAX_ATTACHED=10",
+        "MAX_COLUMN=2000",
+        "MAX_COMPOUND_SELECT=500",
+        "MAX_DEFAULT_PAGE_SIZE=8192",
+        "MAX_EXPR_DEPTH=1000",
+        "MAX_FUNCTION_ARG=1000",
+        "MAX_LENGTH=1000000000",
+        "MAX_LIKE_PATTERN_LENGTH=50000",
+        "MAX_MMAP_SIZE=0x7fff0000",
+        "MAX_PAGE_COUNT=0xfffffffe",
+        "MAX_PAGE_SIZE=65536",
+        "MAX_SQL_LENGTH=1000000000",
+        "MAX_TRIGGER_DEPTH=1000",
+        "MAX_VARIABLE_NUMBER=32766",
+        "MAX_VDBE_OP=250000000",
+        "MAX_WORKER_THREADS=8",
+        "MUTEX_PTHREADS",
+        "SOUNDEX",
+        "SYSTEM_MALLOC",
+        "TEMP_STORE=1",
+        "THREADSAFE=1",
+        "USE_URI",
+    ],
+    pragmas: [
+        (
+            "journal_mode",
+            "wal",
+        ),
+        (
+            "foreign_keys",
+            "1",
+        ),
+        (
+            "synchronous",
+            "2",
+        ),
+        (
+            "busy_timeout",
+            "5000",
+        ),
+        (
+            "fullfsync",
+            "1",
+        ),
+        (
+            "application_id",
+            "1380996659",
+        ),
+        (
+            "user_version",
+            "1",
+        ),
+    ],
+    records: 5,
+    full: true,
+}
+storage_bytes=[("db", 86016), ("db-wal", 0), ("db-shm", 32768), ("current_heads", 4096), ("edges_from", 4096), ("edges_to", 4096), ("meta_scope_time", 4096), ("meta_slot", 4096), ("projection_state", 4096), ("record_fts_config", 4096), ("record_fts_content", 4096), ("record_fts_data", 4096), ("record_fts_docsize", 4096), ("record_fts_idx", 4096), ("record_meta", 4096), ("records", 4096), ("relations", 4096), ("request_state", 4096), ("results", 4096), ("sqlite_autoindex_current_heads_1", 4096), ("sqlite_autoindex_relations_1", 4096), ("sqlite_autoindex_request_state_1", 4096), ("sqlite_autoindex_results_1", 4096), ("sqlite_schema", 4096)]
+drwx------ /tmp/replica-v3-cli.i8qlQi
+-rw------- /tmp/replica-v3-cli.i8qlQi/restored.db

@@ -1,0 +1,199 @@
+release=true model=EXCLUDED warm=OS_CACHE_NOT_FLUSHED temp_db_only=true
+raw batch_import_10000_ms=264.6677
+raw single_FULL_commit: n=20 min_ms=3.0936 median_ms=4.0092 max_ms=15.1275
+raw warm_read: n=128 min_ms=0.0065 median_ms=0.0067 max_ms=0.0200
+raw warm_lexical: n=100 min_ms=100.0257 median_ms=100.4098 max_ms=102.2092
+raw query_truncated_count=100/100
+raw reindex_ms=253.7063
+raw records=10020 original_payload_bytes=4839200 sizes_before_close=[("db", 20746240), ("db-wal", 16558312), ("db-shm", 32768), ("current_heads", 4096), ("edges_from", 4096), ("edges_to", 4096), ("meta_scope_time", 311296), ("meta_slot", 131072), ("projection_state", 4096), ("record_fts_config", 4096), ("record_fts_content", 5140480), ("record_fts_data", 7356416), ("record_fts_docsize", 106496), ("record_fts_idx", 4096), ("record_meta", 512000), ("records", 5869568), ("relations", 4096), ("request_state", 4096), ("results", 4096), ("sqlite_autoindex_current_heads_1", 4096), ("sqlite_autoindex_relations_1", 4096), ("sqlite_autoindex_request_state_1", 4096), ("sqlite_autoindex_results_1", 4096), ("sqlite_schema", 4096)]
+raw physical_db_wal_shm_total_bytes=37337320 fts_pages_bytes=12611584
+raw reopen_first_read_ms=78.6105 (not_OS_cold)
+raw checkpointed_sizes=[("db", 20746240), ("db-wal", 0), ("db-shm", 32768), ("current_heads", 4096), ("edges_from", 4096), ("edges_to", 4096), ("meta_scope_time", 311296), ("meta_slot", 131072), ("projection_state", 4096), ("record_fts_config", 4096), ("record_fts_content", 5140480), ("record_fts_data", 7356416), ("record_fts_docsize", 106496), ("record_fts_idx", 4096), ("record_meta", 512000), ("records", 5869568), ("relations", 4096), ("request_state", 4096), ("results", 4096), ("sqlite_autoindex_current_heads_1", 4096), ("sqlite_autoindex_relations_1", 4096), ("sqlite_autoindex_request_state_1", 4096), ("sqlite_autoindex_results_1", 4096), ("sqlite_schema", 4096)]
+raw sqlite_doctor=Doctor {
+    sqlite: "3.50.2",
+    compile_options: [
+        "ATOMIC_INTRINSICS=1",
+        "COMPILER=clang-21.0.0",
+        "DEFAULT_AUTOVACUUM",
+        "DEFAULT_CACHE_SIZE=-2000",
+        "DEFAULT_FILE_FORMAT=4",
+        "DEFAULT_FOREIGN_KEYS",
+        "DEFAULT_JOURNAL_SIZE_LIMIT=-1",
+        "DEFAULT_MMAP_SIZE=0",
+        "DEFAULT_PAGE_SIZE=4096",
+        "DEFAULT_PCACHE_INITSZ=20",
+        "DEFAULT_RECURSIVE_TRIGGERS",
+        "DEFAULT_SECTOR_SIZE=4096",
+        "DEFAULT_SYNCHRONOUS=2",
+        "DEFAULT_WAL_AUTOCHECKPOINT=1000",
+        "DEFAULT_WAL_SYNCHRONOUS=2",
+        "DEFAULT_WORKER_THREADS=0",
+        "DIRECT_OVERFLOW_READ",
+        "ENABLE_API_ARMOR",
+        "ENABLE_COLUMN_METADATA",
+        "ENABLE_DBSTAT_VTAB",
+        "ENABLE_FTS3",
+        "ENABLE_FTS3_PARENTHESIS",
+        "ENABLE_FTS5",
+        "ENABLE_LOAD_EXTENSION",
+        "ENABLE_MEMORY_MANAGEMENT",
+        "ENABLE_RTREE",
+        "ENABLE_STAT4",
+        "HAVE_ISNAN",
+        "MALLOC_SOFT_LIMIT=1024",
+        "MAX_ATTACHED=10",
+        "MAX_COLUMN=2000",
+        "MAX_COMPOUND_SELECT=500",
+        "MAX_DEFAULT_PAGE_SIZE=8192",
+        "MAX_EXPR_DEPTH=1000",
+        "MAX_FUNCTION_ARG=1000",
+        "MAX_LENGTH=1000000000",
+        "MAX_LIKE_PATTERN_LENGTH=50000",
+        "MAX_MMAP_SIZE=0x7fff0000",
+        "MAX_PAGE_COUNT=0xfffffffe",
+        "MAX_PAGE_SIZE=65536",
+        "MAX_SQL_LENGTH=1000000000",
+        "MAX_TRIGGER_DEPTH=1000",
+        "MAX_VARIABLE_NUMBER=32766",
+        "MAX_VDBE_OP=250000000",
+        "MAX_WORKER_THREADS=8",
+        "MUTEX_PTHREADS",
+        "SOUNDEX",
+        "SYSTEM_MALLOC",
+        "TEMP_STORE=1",
+        "THREADSAFE=1",
+        "USE_URI",
+    ],
+    pragmas: [
+        (
+            "journal_mode",
+            "wal",
+        ),
+        (
+            "foreign_keys",
+            "1",
+        ),
+        (
+            "synchronous",
+            "2",
+        ),
+        (
+            "busy_timeout",
+            "5000",
+        ),
+        (
+            "fullfsync",
+            "1",
+        ),
+        (
+            "application_id",
+            "1380996659",
+        ),
+        (
+            "user_version",
+            "1",
+        ),
+    ],
+    records: 10020,
+    full: false,
+}
+auto_zstd batch_import_10000_ms=285.2395
+auto_zstd single_FULL_commit: n=20 min_ms=3.8315 median_ms=4.0009 max_ms=15.8694
+auto_zstd warm_read: n=128 min_ms=0.0057 median_ms=0.0060 max_ms=0.0223
+auto_zstd warm_lexical: n=100 min_ms=100.0105 median_ms=100.3778 max_ms=102.1975
+auto_zstd query_truncated_count=100/100
+auto_zstd reindex_ms=267.9270
+auto_zstd records=10020 original_payload_bytes=4839200 sizes_before_close=[("db", 16515072), ("db-wal", 15223432), ("db-shm", 32768), ("current_heads", 4096), ("edges_from", 4096), ("edges_to", 4096), ("meta_scope_time", 311296), ("meta_slot", 131072), ("projection_state", 4096), ("record_fts_config", 4096), ("record_fts_content", 5140480), ("record_fts_data", 7356416), ("record_fts_docsize", 106496), ("record_fts_idx", 4096), ("record_meta", 512000), ("records", 1638400), ("relations", 4096), ("request_state", 4096), ("results", 4096), ("sqlite_autoindex_current_heads_1", 4096), ("sqlite_autoindex_relations_1", 4096), ("sqlite_autoindex_request_state_1", 4096), ("sqlite_autoindex_results_1", 4096), ("sqlite_schema", 4096)]
+auto_zstd physical_db_wal_shm_total_bytes=31771272 fts_pages_bytes=12611584
+auto_zstd reopen_first_read_ms=77.0705 (not_OS_cold)
+auto_zstd checkpointed_sizes=[("db", 16515072), ("db-wal", 0), ("db-shm", 32768), ("current_heads", 4096), ("edges_from", 4096), ("edges_to", 4096), ("meta_scope_time", 311296), ("meta_slot", 131072), ("projection_state", 4096), ("record_fts_config", 4096), ("record_fts_content", 5140480), ("record_fts_data", 7356416), ("record_fts_docsize", 106496), ("record_fts_idx", 4096), ("record_meta", 512000), ("records", 1638400), ("relations", 4096), ("request_state", 4096), ("results", 4096), ("sqlite_autoindex_current_heads_1", 4096), ("sqlite_autoindex_relations_1", 4096), ("sqlite_autoindex_request_state_1", 4096), ("sqlite_autoindex_results_1", 4096), ("sqlite_schema", 4096)]
+auto_zstd sqlite_doctor=Doctor {
+    sqlite: "3.50.2",
+    compile_options: [
+        "ATOMIC_INTRINSICS=1",
+        "COMPILER=clang-21.0.0",
+        "DEFAULT_AUTOVACUUM",
+        "DEFAULT_CACHE_SIZE=-2000",
+        "DEFAULT_FILE_FORMAT=4",
+        "DEFAULT_FOREIGN_KEYS",
+        "DEFAULT_JOURNAL_SIZE_LIMIT=-1",
+        "DEFAULT_MMAP_SIZE=0",
+        "DEFAULT_PAGE_SIZE=4096",
+        "DEFAULT_PCACHE_INITSZ=20",
+        "DEFAULT_RECURSIVE_TRIGGERS",
+        "DEFAULT_SECTOR_SIZE=4096",
+        "DEFAULT_SYNCHRONOUS=2",
+        "DEFAULT_WAL_AUTOCHECKPOINT=1000",
+        "DEFAULT_WAL_SYNCHRONOUS=2",
+        "DEFAULT_WORKER_THREADS=0",
+        "DIRECT_OVERFLOW_READ",
+        "ENABLE_API_ARMOR",
+        "ENABLE_COLUMN_METADATA",
+        "ENABLE_DBSTAT_VTAB",
+        "ENABLE_FTS3",
+        "ENABLE_FTS3_PARENTHESIS",
+        "ENABLE_FTS5",
+        "ENABLE_LOAD_EXTENSION",
+        "ENABLE_MEMORY_MANAGEMENT",
+        "ENABLE_RTREE",
+        "ENABLE_STAT4",
+        "HAVE_ISNAN",
+        "MALLOC_SOFT_LIMIT=1024",
+        "MAX_ATTACHED=10",
+        "MAX_COLUMN=2000",
+        "MAX_COMPOUND_SELECT=500",
+        "MAX_DEFAULT_PAGE_SIZE=8192",
+        "MAX_EXPR_DEPTH=1000",
+        "MAX_FUNCTION_ARG=1000",
+        "MAX_LENGTH=1000000000",
+        "MAX_LIKE_PATTERN_LENGTH=50000",
+        "MAX_MMAP_SIZE=0x7fff0000",
+        "MAX_PAGE_COUNT=0xfffffffe",
+        "MAX_PAGE_SIZE=65536",
+        "MAX_SQL_LENGTH=1000000000",
+        "MAX_TRIGGER_DEPTH=1000",
+        "MAX_VARIABLE_NUMBER=32766",
+        "MAX_VDBE_OP=250000000",
+        "MAX_WORKER_THREADS=8",
+        "MUTEX_PTHREADS",
+        "SOUNDEX",
+        "SYSTEM_MALLOC",
+        "TEMP_STORE=1",
+        "THREADSAFE=1",
+        "USE_URI",
+    ],
+    pragmas: [
+        (
+            "journal_mode",
+            "wal",
+        ),
+        (
+            "foreign_keys",
+            "1",
+        ),
+        (
+            "synchronous",
+            "2",
+        ),
+        (
+            "busy_timeout",
+            "5000",
+        ),
+        (
+            "fullfsync",
+            "1",
+        ),
+        (
+            "application_id",
+            "1380996659",
+        ),
+        (
+            "user_version",
+            "1",
+        ),
+    ],
+    records: 10020,
+    full: false,
+}
+process_current_rss_KiB=27440 GPU_shared_memory=NOT_MEASURED
+model_load_first_token_generation=NOT_RUN; true_OS_cold=NOT_RUN; power_loss_disk_full=NOT_RUN

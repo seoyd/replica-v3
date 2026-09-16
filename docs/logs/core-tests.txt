@@ -1,0 +1,169 @@
+   Compiling cfg-if v1.0.4
+   Compiling bitflags v2.13.2
+   Compiling libc v0.2.189
+   Compiling once_cell v1.21.4
+   Compiling libm v0.2.16
+   Compiling zerocopy v0.8.57
+   Compiling crossbeam-utils v0.8.23
+   Compiling serde_core v1.0.229
+   Compiling bytemuck v1.25.2
+   Compiling memchr v2.8.3
+   Compiling either v1.18.0
+   Compiling strsim v0.11.1
+   Compiling thiserror v1.0.69
+   Compiling reborrow v0.5.5
+   Compiling byteorder v1.5.0
+   Compiling crossbeam-epoch v0.9.21
+   Compiling pulp-wasm-simd-flag v0.1.1
+   Compiling dyn-stack v0.13.2
+   Compiling raw-cpuid v11.6.0
+   Compiling darling_core v0.20.11
+   Compiling aho-corasick v1.1.5
+   Compiling crossbeam-deque v0.8.8
+   Compiling regex-syntax v0.8.11
+   Compiling getrandom v0.3.4
+   Compiling num-traits v0.2.19
+   Compiling rand_core v0.9.5
+   Compiling rayon-core v1.13.0
+   Compiling sysctl v0.6.0
+   Compiling itoa v1.0.18
+   Compiling rayon v1.12.0
+   Compiling num-complex v0.4.6
+   Compiling zmij v1.0.23
+   Compiling bit-vec v0.8.0
+   Compiling pulp v0.22.3
+   Compiling equivalent v1.0.2
+   Compiling bit-set v0.8.0
+   Compiling errno v0.3.14
+   Compiling smallvec v1.16.1
+   Compiling minimal-lexical v0.2.1
+   Compiling serde v1.0.229
+   Compiling serde_json v1.0.151
+   Compiling regex-automata v0.4.18
+   Compiling nom v7.1.3
+   Compiling rustix v1.1.4
+   Compiling castaway v0.2.4
+   Compiling onig_sys v69.9.3
+   Compiling darling_macro v0.20.11
+   Compiling getrandom v0.4.3
+   Compiling itertools v0.14.0
+   Compiling allocator-api2 v0.2.21
+   Compiling ppv-lite86 v0.2.21
+   Compiling darling v0.20.11
+   Compiling stable_deref_trait v1.2.1
+   Compiling base64 v0.13.1
+   Compiling typenum v1.20.1
+   Compiling rand_chacha v0.9.0
+   Compiling fastrand v2.5.0
+   Compiling rand v0.9.5
+   Compiling ryu v1.0.23
+   Compiling static_assertions v1.1.0
+   Compiling foldhash v0.2.0
+   Compiling derive_builder_core v0.20.2
+   Compiling hashbrown v0.17.1
+   Compiling unicode-segmentation v1.13.3
+   Compiling hashbrown v0.16.1
+   Compiling generic-array v0.14.7
+   Compiling compact_str v0.9.1
+   Compiling rand_distr v0.5.1
+   Compiling rayon-cond v0.4.0
+   Compiling spm_precompiled v0.1.4
+   Compiling macro_rules_attribute v0.2.3
+   Compiling indexmap v2.14.2
+   Compiling tempfile v3.27.0
+   Compiling ahash v0.8.12
+   Compiling monostate v0.1.18
+   Compiling thiserror v2.0.20
+   Compiling half v2.7.1
+   Compiling zerofrom v0.1.8
+   Compiling onig v6.5.3
+   Compiling esaxx-rs v0.1.10
+   Compiling fancy-regex v0.14.0
+   Compiling derive_builder_macro v0.20.2
+   Compiling regex v1.13.1
+   Compiling crc32fast v1.5.2
+   Compiling dary_heap v0.3.9
+   Compiling unicode-normalization-alignments v0.1.12
+   Compiling log v0.4.34
+   Compiling objc2-encode v4.1.0
+   Compiling derive_builder v0.20.2
+   Compiling utf8parse v0.2.2
+   Compiling unicode_categories v0.1.1
+   Compiling typed-path v0.12.3
+   Compiling objc2 v0.6.4
+   Compiling anstyle-parse v1.0.0
+   Compiling yoke v0.8.3
+   Compiling float8 v0.7.0
+   Compiling tokenizers v0.22.2
+   Compiling safetensors v0.8.0
+   Compiling memmap2 v0.9.11
+   Compiling num_cpus v1.17.0
+   Compiling anstyle v1.0.14
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling foldhash v0.1.5
+   Compiling anstyle-query v1.1.5
+   Compiling colorchoice v1.0.5
+   Compiling hashbrown v0.15.5
+   Compiling zstd-sys v2.1.0+zstd.1.5.7
+   Compiling gemm-common v0.19.0
+   Compiling anstream v1.0.0
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling tracing-core v0.1.36
+   Compiling zip v8.6.0
+   Compiling clap_lex v1.1.1
+   Compiling gemm-f32 v0.19.0
+   Compiling gemm-f64 v0.19.0
+   Compiling gemm-c32 v0.19.0
+   Compiling gemm-c64 v0.19.0
+   Compiling block2 v0.6.2
+   Compiling pin-project-lite v0.2.17
+   Compiling clap_builder v4.6.7
+   Compiling tracing v0.1.44
+   Compiling dispatch2 v0.3.1
+   Compiling hashlink v0.10.0
+   Compiling gemm-f16 v0.19.0
+   Compiling digest v0.10.7
+   Compiling zstd-safe v7.3.0
+   Compiling libsqlite3-sys v0.35.0
+   Compiling nix v0.31.3
+   Compiling gemm v0.19.0
+   Compiling fancy-regex v0.18.0
+   Compiling serde_plain v1.0.2
+   Compiling cpufeatures v0.2.17
+   Compiling fallible-iterator v0.3.0
+   Compiling memo-map v0.3.4
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling minijinja v2.24.0
+   Compiling rusqlite v0.37.0
+   Compiling clap v4.6.7
+   Compiling sha2 v0.10.9
+   Compiling ctrlc v3.5.2
+   Compiling crc32c v0.6.8
+   Compiling zstd v0.13.3
+   Compiling candle-core v0.11.0
+   Compiling candle-nn v0.11.0
+   Compiling candle-transformers v0.11.0
+   Compiling replica-v3 v0.1.0 (/Users/seo/Projects/Replica-v3)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.97s
+     Running tests/codec.rs (target/debug/deps/codec-e7ec6d47b2d5484d)
+
+running 2 tests
+test literal_golden_and_exact_bytes ... FAILED
+test rejects_corruption_lengths_tags_and_varints ... ok
+
+failures:
+
+---- literal_golden_and_exact_bytes stdout ----
+
+thread 'literal_golden_and_exact_bytes' (1592882) panicked at tests/codec.rs:34:30:
+called `Result::unwrap()` on an `Err` value: Corrupt("zstd decode")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    literal_golden_and_exact_bytes
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test codec`
