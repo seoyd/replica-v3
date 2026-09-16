@@ -1,0 +1,2 @@
+    Checking replica-v3 v0.1.0 (/Users/seo/Projects/Replica-v3)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.86s

@@ -1,0 +1,1 @@
+tokenizer_sha256=c4af60f51bdd980d6a82b7de35edf3ed15cee9824a5338311fc0bfdd41730dad train_sha256=b805265d15ea224d4eb159f165bc0482deed6b0ac66c19aaa654403fe7449c1c documents=2000 bytes=1416629 actual_tokens=341878 actual_vocab=648

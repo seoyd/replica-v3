@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "scope": "SYNTHETIC_ONLY",
+  "permission": "project-generated; supplied paths explicitly authorized for training",
+  "generator": "educational-korean-v1",
+  "seed": 41,
+  "split_rule": "episode first; disjoint entity binding, template family and sequence; final test created independently",
+  "train": {
+    "file": "train.json",
+    "sha256": "b805265d15ea224d4eb159f165bc0482deed6b0ac66c19aaa654403fe7449c1c",
+    "bytes": 2830265,
+    "documents": 2000,
+    "tokens": null
+  },
+  "validation": {
+    "file": "validation.json",
+    "sha256": "3820a95a172e43e5b764a999d96fc8d24544b6ef75fd788dcbfdeef00869a162",
+    "bytes": 343636,
+    "documents": 200,
+    "tokens": null
+  }
+}

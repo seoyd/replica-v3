@@ -1,0 +1,24 @@
+   Compiling replica-v3 v0.1.0 (/Users/seo/Projects/Replica-v3)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.10s
+     Running tests/native.rs (target/debug/deps/native-e9f8f27ff2914c08)
+
+running 2 tests
+
+thread 'own_byte_bpe_roundtrip_no_control_promotion_or_truncation' (1770486) panicked at tests/native.rs:15:72:
+called `Result::unwrap()` on an `Err` value: Json(Error("invalid type: string \"BPE\", expected a borrowed string", line: 0, column: 0))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'native_prompt_boundaries_and_exact_evidence_tail' (1770485) panicked at tests/native.rs:15:72:
+called `Result::unwrap()` on an `Err` value: Json(Error("invalid type: string \"BPE\", expected a borrowed string", line: 0, column: 0))
+test own_byte_bpe_roundtrip_no_control_promotion_or_truncation ... FAILED
+test native_prompt_boundaries_and_exact_evidence_tail ... FAILED
+
+failures:
+
+failures:
+    native_prompt_boundaries_and_exact_evidence_tail
+    own_byte_bpe_roundtrip_no_control_promotion_or_truncation
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `--test native`

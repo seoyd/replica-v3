@@ -293,3 +293,25 @@ S1=VERIFIED within these boundaries; native-tokenizer boundary extensions remain
 Native training/quality/restart/quantization: NOT_RUN. No external model executed.
 GOAL1_READY_FOR_REVIEW=NO; GOAL1_ACCEPTED=NO; INDEPENDENT_REVIEW=PENDING.
 S0 published commit: 7d831d08bd42410f9a38836c5ef2b1671f023b4d, origin/main matched.
+
+### S2 — implemented and executed
+
+New responsibilities: src/data.rs and src/train_main.rs are training-only corpus/CLI;
+src/neural.rs is shared reversible byte BPE and trusted role framing. Cargo.toml adds
+one Rust training binary, with no new dependency. src/lib.rs exposes the own tokenizer.
+Tests: tests/native.rs (2) and tests/training.rs (1), **3 actual tests passed** in
+logs/goal1-s2-final-tests.txt. Tests cover byte/UTF-8 strictness, reserved markers, full
+length, exact/+1 limits, complete evidence drops, malformed metadata, create-new files,
+fresh-process identical IDs/roundtrip and corpus split leakage rejection. Clippy all
+targets/features and default release trainer build passed. Initial crate API/serde
+compile/test failures are retained in the earlier S2 logs; final passing run is distinct.
+
+Actual release commands generated 2000 train/200 validation synthetic episodes and
+trained the own BPE to 648 tokens (requested cap 4096, no artificial merges). Counts,
+hashes, exact commands and local ignored artifact locations are in NATIVE_MODEL.md,
+RUNBOOK.md and logs/goal1-s2-{corpus,tokenizer,tokenizer-manifest}.txt. No local user
+corpus was provided or collected. DATA_SCOPE=SYNTHETIC_ONLY. OWN_TOKENIZER_TRAINED=YES;
+OWN_MODEL_TRAINED=NO; TRAIN_PIPELINE_VERIFIED=NO; GOAL1_TASK_PASS=NOT_RUN.
+T-N06 corpus/tokenizer lineage is implemented; model initialization/training lineage
+remains pending S3/S4. S1 published 4edd62cafb92d077667155105f233ce1e88c4e3d and
+origin/main matched. No S3–S6 success or independent acceptance is claimed.

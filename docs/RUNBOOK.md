@@ -168,3 +168,21 @@ or tokenizer artifacts. Native training/tooling progress is tracked in PLAN.md.
 S1 result/provenance/search/snapshot regressions are verified; neural model work is
 not yet complete. Failed backups report an untrusted retained destination path; inspect
 that artifact separately and choose a fresh path for a new backup attempt.
+
+### Own corpus and byte tokenizer (S2)
+
+```sh
+cargo build --release --locked --bin replica-train
+mkdir -p artifacts
+target/release/replica-train corpus prepare --output artifacts/goal1-corpus --documents 2000 --seed 41
+target/release/replica-train tokenizer train --corpus artifacts/goal1-corpus --output artifacts/goal1-tokenizer.json
+# Inspect a supplied local byte fixture in a new process:
+target/release/replica-train tokenizer inspect --tokenizer artifacts/goal1-tokenizer.json --file /explicit/fixture
+```
+
+Outputs are create-new; use a fresh output path when repeating. `artifacts/` is
+ignored and never staged. `corpus prepare --local /explicit/file` additionally reads
+only the specified authorized UTF-8 document, without normalizing its bytes. Omit it
+for SYNTHETIC_ONLY. Corpus serialization is training data, not a personal memory DB.
+Tokenizer's adjacent `.manifest.json` records actual sequence/token statistics.
+No external weights/tokenizer/model API is used. Neural training is not yet verified.

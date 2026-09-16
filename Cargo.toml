@@ -31,3 +31,7 @@ test-support = []
 name = "replica-test-worker"
 path = "tests/support/worker.rs"
 required-features = ["test-support"]
+
+[[bin]]
+name = "replica-train"
+path = "src/train_main.rs"
