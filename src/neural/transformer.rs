@@ -717,6 +717,20 @@ impl Transformer {
         cancel: &AtomicBool,
         scope: &str,
     ) -> Result<Generated> {
+        self.generate_observed(prompt, max_new, timeout_ms, cancel, scope, |_| {})
+    }
+    /// Observe actual argmax IDs, including EOS/control, before any error is returned.
+    /// Uses the identical product generation loop; the observer cannot change logits.
+    #[allow(clippy::too_many_arguments)]
+    pub fn generate_observed(
+        &self,
+        prompt: &[u32],
+        max_new: usize,
+        timeout_ms: u64,
+        cancel: &AtomicBool,
+        scope: &str,
+        mut observe: impl FnMut(u32),
+    ) -> Result<Generated> {
         if prompt.is_empty()
             || max_new == 0
             || max_new > 512
@@ -757,6 +771,7 @@ impl Transformer {
                 return Err(Error::Model("nonfinite logits".into()));
             }
             let id = row.argmax(0)?.to_scalar::<u32>()?;
+            observe(id);
             generated += 1;
             first_token_ms.get_or_insert(start.elapsed().as_millis() as u64);
             if id == EOS {

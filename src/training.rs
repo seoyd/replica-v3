@@ -1,6 +1,8 @@
 //! Explicit offline training tool; never imported by the product inference library.
 #[path = "contrast.rs"]
 pub mod contrast;
+#[path = "quality_recovery.rs"]
+pub mod recovery;
 use crate::data::{self, Episode};
 use candle_core::{DType, Device, Tensor, Var};
 use replica_v3::{
@@ -44,6 +46,16 @@ impl Adam {
         config: &TrainConfig,
         step: usize,
     ) -> Result<(f64, f64)> {
+        self.step_observed(vars, grads, config, step, |_, _, _, _| Ok(()))
+    }
+    pub fn step_observed(
+        &mut self,
+        vars: &BTreeMap<String, Var>,
+        grads: &BTreeMap<String, Tensor>,
+        config: &TrainConfig,
+        step: usize,
+        mut observe: impl FnMut(&str, &Tensor, &Tensor, &Tensor) -> Result<()>,
+    ) -> Result<(f64, f64)> {
         let mut norm2 = 0f64;
         for name in vars.keys() {
             let grad = grads
@@ -76,6 +88,7 @@ impl Adam {
                 return Err(Error::Model("nonfinite optimizer update".into()));
             }
             delta2 += delta;
+            observe(name, &grads[name], &old, &next)?;
             updates.push((name.clone(), next.detach(), m.detach(), v.detach()));
         }
         // Validate/allocate the complete step before touching any master weight.
@@ -436,85 +449,9 @@ pub fn evaluate_corpus(
                 fields.next().unwrap_or_default(),
             )?;
         }
-        let prompt = loaded.tokenizer.prepare(
-            &request,
-            loaded.model.config.context as u32,
-            &loaded.model.config.id()?,
-        )?;
-        let result = loaded
-            .model
-            .generate(
-                &prompt.token_ids,
-                episode.request.limits.max_tokens as usize,
-                episode.request.limits.timeout_ms,
-                &AtomicBool::new(false),
-                &episode.id,
-            )
-            .and_then(|actual| Ok((loaded.tokenizer.decode(&actual.tokens)?, actual)));
-        let (text, generated, error) = match result {
-            Ok((text, generated)) => (Some(text), Some(generated), None),
-            Err(e) => {
-                failed += 1;
-                (None, None, Some(e.to_string()))
-            }
-        };
-        let matched = text.as_deref() == Some(episode.answer.as_str())
-            && generated.as_ref().is_some_and(|g| g.finish == "stop");
-        // Gold tokens enter only this teacher-forced diagnostic AFTER the actual
-        // autoregressive result above. They never reach the generation request.
-        let teacher_forced = (|| -> Result<serde_json::Value> {
-            let mut sequence = prompt.token_ids.clone();
-            sequence.extend(loaded.tokenizer.encode(episode.answer.as_bytes())?);
-            sequence.push(EOS);
-            if sequence.len() > loaded.model.config.context {
-                return Err(Error::ContextTooSmall);
-            }
-            let start = prompt.token_ids.len();
-            let targets = sequence.len() - start;
-            let logits = loaded
-                .model
-                .forward(
-                    &Tensor::new(&sequence[..sequence.len() - 1], &Device::Cpu)?.unsqueeze(0)?,
-                    None,
-                )?
-                .narrow(1, start - 1, targets)?
-                .squeeze(0)?;
-            let ids = Tensor::new(&sequence[start..], &Device::Cpu)?.unsqueeze(1)?;
-            let nll = candle_nn::ops::log_softmax(&logits, 1)?
-                .gather(&ids, 1)?
-                .neg()?
-                .flatten_all()?
-                .to_vec1::<f32>()?;
-            if nll.iter().any(|n| !n.is_finite()) {
-                return Err(Error::Model("nonfinite diagnostic NLL".into()));
-            }
-            let predicted = logits.argmax(1)?.to_vec1::<u32>()?;
-            let correct = predicted
-                .iter()
-                .zip(&sequence[start..])
-                .filter(|(a, b)| a == b)
-                .count();
-            let training_prompt_matches_generation = loaded
-                .manifest
-                .training
-                .as_ref()
-                .map(|state| {
-                    let framed = samples(
-                        std::slice::from_ref(*episode),
-                        &loaded.tokenizer,
-                        state.config.seq_len,
-                    )?;
-                    Ok::<_, Error>(framed[0].tokens[..framed[0].response_start] == prompt.token_ids)
-                })
-                .transpose()?;
-            Ok(
-                serde_json::json!({"first_target_nll":nll[0],"remaining_mean_nll":nll.iter().skip(1).map(|&v|f64::from(v)).sum::<f64>()/(targets-1).max(1) as f64,"target_tokens_including_eos":targets,"mean_nll":nll.iter().map(|&v|f64::from(v)).sum::<f64>()/targets as f64,"teacher_forced_correct_tokens":correct,"first_target_correct":predicted[0] == sequence[start],"training_prompt_matches_generation":training_prompt_matches_generation,"answer_tokenizer_roundtrip":loaded.tokenizer.decode(&sequence[start..sequence.len()-1])? == episode.answer}),
-            )
-        })();
-        let teacher_forced = match teacher_forced {
-            Ok(value) => value,
-            Err(error) => serde_json::json!({"error":error.to_string()}),
-        };
+        let row = recovery::evaluate_one(&loaded, episode, &request);
+        let matched = row["exact_match"] == true;
+        failed += usize::from(!row["error"].is_null());
         exact += usize::from(matched);
         let group = if episode.family.starts_with("copy/") {
             "copy".to_string()
@@ -524,15 +461,11 @@ pub fn evaluate_corpus(
         let count = groups.entry(group).or_default();
         count[0] += usize::from(matched);
         count[1] += 1;
-        writeln!(
-            log,
-            "{}",
-            serde_json::json!({"id":episode.id,"category":episode.category,"family":episode.family,"question":episode.request.input,"generated_question":request.input,"evidence":episode.request.evidence,"generated_evidence":request.evidence,"expected":episode.answer,"actual":text,"generation":generated,"error":error,"provided":prompt.provided,"excluded":prompt.excluded,"exact_match":matched,"teacher_forced_diagnostic_after_generation":teacher_forced})
-        )?;
+        writeln!(log, "{row}")?;
         log.flush()?;
         println!(
-            "{split} id={} exact={matched} actual={text:?} expected={:?} error={error:?}",
-            episode.id, episode.answer
+            "{split} id={} exact={matched} error={}",
+            episode.id, row["error"]
         );
     }
     let summary = serde_json::json!({"summary":true,"split":split,"exact_matches":exact,"denominator":limit,"generation_failures":failed,"groups_correct_total":groups,"final_heldout":false,"oracle_question_ablation":rephrase || rephrase_field,"oracle_field_task_label":rephrase_field || single_record,"oracle_record_selection":single_record});
@@ -540,6 +473,22 @@ pub fn evaluate_corpus(
     log.sync_all()?;
     println!("{summary}");
     Ok(())
+}
+fn decode_generated(
+    tok: &ByteBpe,
+    result: Result<neural::transformer::Generated>,
+) -> (
+    Option<String>,
+    Option<neural::transformer::Generated>,
+    Option<String>,
+) {
+    match result {
+        Ok(g) => match tok.decode(&g.tokens) {
+            Ok(text) => (Some(text), Some(g), None),
+            Err(error) => (None, Some(g), Some(error.to_string())),
+        },
+        Err(error) => (None, None, Some(error.to_string())),
+    }
 }
 // Group size 1 preserves the original sampler exactly. Larger groups draw complete
 // consecutive blocks from the eligible pool; they do not mix samples inside attention.
@@ -1118,6 +1067,28 @@ pub fn train(run: Run<'_>, cancel: &AtomicBool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn decode_failure_preserves_generated_tokens_and_eos_receipt() {
+        let tok =
+            ByteBpe::train(&["가".as_bytes().to_vec()], &neural::hash(b"fixture"), 264).unwrap();
+        let ids = tok.encode(&[0xea, 0xb0]).unwrap();
+        let generated = neural::transformer::Generated {
+            tokens: ids.clone(),
+            generated: ids.len() + 1,
+            finish: "stop".into(),
+            first_token_ms: 0,
+            generation_ms: 0,
+            cache_bytes: 0,
+            retained: vec![],
+            attention_workspace_bytes: 0,
+        };
+        let (text, raw, error) = decode_generated(&tok, Ok(generated));
+        assert!(text.is_none() && error.is_some());
+        let raw = raw.expect("strict decode failure must not erase actual generation");
+        assert_eq!(raw.tokens, ids);
+        assert_eq!(raw.finish, "stop");
+        assert_eq!(raw.generated, raw.tokens.len() + 1);
+    }
     #[test]
     fn masked_first_response_learns_context_and_generates_without_future_labels() {
         let device = Device::Cpu;

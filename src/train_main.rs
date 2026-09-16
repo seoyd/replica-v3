@@ -12,6 +12,11 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Commands {
+    /// Frozen, bounded quality recovery diagnostics; never a product answer path.
+    Recovery {
+        #[command(subcommand)]
+        command: training::recovery::Command,
+    },
     /// Bounded sixteen-case diagnostic; never part of the product response path.
     Contrast {
         #[command(subcommand)]
@@ -260,6 +265,7 @@ enum Tokenizer {
 }
 fn run() -> Result<()> {
     match Cli::parse().command {
+        Commands::Recovery { command } => training::recovery::run(command),
         Commands::Contrast { command } => {
             use training::contrast;
             match command {

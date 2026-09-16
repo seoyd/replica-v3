@@ -1,9 +1,218 @@
 # 진단 및 구현 상태
 
-계약: GOAL1-NATIVE-TRPP-1.0 및 R3-CUSTOMIZE-AND-DIAGNOSE-1.0. 2026-09-17.
+현재 계약: R3-S4-QUALITY-RECOVERY-1.0. 기존 GOAL1-NATIVE-TRPP-1.0의 품질 기준 유지.
+2026-09-17. 이전 R3-CUSTOMIZE-AND-DIAGNOSE-1.0 실행 이력은 아래 보존한다.
 모든 성공 표시는 구현자 확인이며 INDEPENDENT_PENDING이다.
 
-## 현재 중단 시점 보고 — 2026-09-17
+## 제한 품질 회복 진단 종료 — 2026-09-17
+
+**원래 U2+250의 성능 하락은 재현됐지만 학습 원인은 미확정이다.** 평가 시 UTF-8
+decode 실패로 생성 ID와 종료 정보를 잃던 결함을 수정했다. 이것은 관측 결함이며
+가중치나 답변 품질을 회복시키는 수정은 아니다. 같은 일반 QA parent에서 첫 target
+가중치만 대조한 C50/W50은 모두 watch17/32로 종료했다. 추가 학습은 실행하지 않는다.
+
+| 판정 키 | 결과 |
+|---|---|
+| RESULT | COMPLETE_DIAGNOSIS — 정해진 범위의 음성 결과로 종료; 품질 목표 기준 PARTIAL |
+| EXECUTION | Q4 CLOSED_NEGATIVE / NOT_RUNNING |
+| CODE_VERDICT | CHECKED_BOUNDARIES_PASS; 생성 receipt 보존 결함 수정 |
+| ARTIFACT_REPLAY | 원본 parent/+20/+250 정확히 식별; 고정 panel의 기존 출력 차이0 |
+| REGRESSION_REPRODUCED | 원래+250 저장 모델 YES; 새 C50에서는 REGRESSION_NOT_REPRODUCED_WITHIN_BUDGET |
+| ROOT_CAUSE_EVIDENCE | 관측 결함 CONFIRMED_IMPLEMENTATION_DEFECT; H-FIRST NOT_SUPPORTED_WITHIN_BUDGET; 학습 하락 UNRESOLVED |
+| REGRESSION_RECOVERED | NO — 후보 없음; parent로의 rollback도 실행하지 않음 |
+| TRANSFER_IMPROVED | NOT_ESTABLISHED; 새 전이 시험 미실행 |
+| S4_QUALITY_PASS | NO; final200 NOT_RUN_NOT_ELIGIBLE |
+| S5_OFFICIAL_PASS / S6_INT4_PASS | NO / NO |
+| GOAL1_READY / INDEPENDENT_REVIEW | NO / PENDING |
+| TOTAL_OPTIMIZER_UPDATES_THIS_ROUND | SMALL100; 별도 exact-resume TINY12 및 scalar Adam15; 전체127 |
+| DATA_EXPOSURE_AND_SPLIT | U2 train2048 중 각 arm384개 view 실제 노출; watch32/실패16은 DEVELOPMENT, 새 final 아님 |
+
+### 실제 비교점 및 재현 범위
+
+시작 source HEAD는 `9fb5059696553b41d9a3190856888a929d0931be`이며 tracked dirty는
+없었다. Rust/Cargo1.98.0, macOS27 arm64 Apple M4/24GiB, CPU/Accelerate F32,
+VECLIB_MAXIMUM_THREADS=1/RAYON_NUM_THREADS=1로 실행했다. 모델은 기존
+9,605,184-parameter SMALL/자체801 byte BPE다. 외부 모델·teacher·모델 API를 사용하지 않았다.
+
+| artifact | 로컬 명시 경로 | 누적 model/optimizer step | schedule step |
+|---|---|---:|---:|
+| GENERAL_QA_PARENT | artifacts/goal1-resume-20260917/u2-parent-resume.r3m | 19750/19750 | 379 |
+| U2_POLICY_START | artifacts/goal1-resume-20260917/u2-probe/start | 19750/19750 | 0 |
+| U2_AFTER_20 | artifacts/goal1-resume-20260917/u2-probe/final | 19770/19770 | 20 |
+| U2_AFTER_250 | artifacts/goal1-resume-20260917/u2-to-20000/final | 20000/20000 | 250 |
+
+아래는 기존400개 raw outputs를 새 ledger로 **재집계**한 수치다. 전체400을 새로 생성한
+결과가 아니다. 실제 checkpoint/validation hash, 질문·근거·target을 검산하고, 새 프로세스의
+watch32와 실패선정16 자유 생성은 과거 출력과 모두 일치했다. 오류를 분모에서 빼지 않았다.
+현재400은 QA336+보조64이며, 과거 다른 보조64를 포함한219/400과 비교하지 않는다.
+
+| 같은 DEVELOPMENT400 | Parent | U2+250 실패 | 회복 후보 |
+|---|---:|---:|---|
+| 일반 QA | 155/336 | 56/336 | 선정 없음 / NOT_RUN |
+| 보조 | 16/64 | 0/64 | NOT_RUN |
+| 전체 full-answer EM+EOS | 171/400 | 56/400 | NOT_RUN |
+| teacher-forced micro token CE | 0.270056009 | 0.331130866 | NOT_RUN |
+| teacher-forced case macro CE | 1.070589435 | 1.266940633 | NOT_RUN |
+| teacher-forced token accuracy | 95.2622% | 92.3495% | NOT_RUN |
+| invalid UTF-8 / 빈 응답 | 0 / 0 | 30 / 12 | NOT_RUN |
+| 기록된 first-EOS / control / timeout | 0 / 0 / 0 | 12 / 0 / 0 | NOT_RUN |
+| 전체400 record/value/citation 분리 점수 | 과거 로그에 없음; 아래 panel 참조 | 과거 로그에 없음; 아래 panel 참조 | NOT_RUN |
+| 새 전이 점수 | 이번 미실행 | 이번 미실행 | NOT_RUN |
+
+과거 decode 오류30건은 generation receipt가 없으므로 전체30건의 종료 원인을
+추정해서 채우지 않았다. 새 실패선정 panel의 UTF-8 오류4건은 모두 중간 invalid_sequence,
+error_len=1, valid_up_to=75/22/253/78이었다. length 종료2건과 EOS 종료2건이다.
+incomplete_tail과 invalid_sequence 구분 자체는 별도 독립 byte fixture로 검증했다.
+
+| 새 자유 생성: 고정 watch32 | Parent | U2+250 | C50 | W50 |
+|---|---:|---:|---:|---:|
+| full-answer EM+EOS | 18/32 | 5/32 | 17/32 | 17/32 |
+| token CE (micro) | 0.093050201 | 0.180677370 | 0.074909880 | 0.074871167 |
+| teacher-forced token accuracy | 97.3399% | 93.8916% | 97.3399% | 97.3399% |
+| entity | 21/26 | 10/26 | 21/26 | 21/26 |
+| context | 23/26 | 18/26 | 23/26 | 23/26 |
+| value | 16/26 | 19/26 | 19/26 | 19/26 |
+| gold citation IDs exact | 28/32 | 17/32 | 25/32 | 25/32 |
+| citation IDs가 제공 근거 안에 있음 | 31/32 | 21/28 decoded | 29/32 | 29/32 |
+| invalid UTF-8 / empty / first-EOS | 0/0/0 | 4/1/1 | 0/0/0 | 0/0/0 |
+
+26은 구조화된 entity/context/value 필드가 있는 답변 수다. 실패의 인용 포함 여부는
+decode 실패4건을 UNKNOWN으로 따로 남기며, 전체 EM 분모는 계속32다. 제공된 ID를
+인용하는 것만으로 올바른 support 선택은 아니다. 빈 인용도 포함 검사에서 참일 수 있다.
+위 분리 점수는 full-answer 실패를 대체하지 않는다. 별도 실패선정16은 parent12/16,
+실패0/16이며, 실패를 골라 만든 표본이라 전체 품질 추정에 사용하지 않는다.
+
+### 확인한 경계와 최소 수정
+
+`src/neural/transformer.rs`는 기존 generate loop에서 선택한 token을 관측하는 callback만
+추가했다. 제품 generate는 같은 loop를 no-op observer로 호출한다. topology, 연산,
+greedy/EOS 정책은 그대로다. `src/training.rs`의 기존 평가가 공유 receipt 함수를 호출해
+decode 실패에도 IDs/bytes/finish를 보존한다. Adam도 같은 수식에서 update를 관측한다.
+`src/train_main.rs`에 recovery CLI를 연결했다. 새 `src/quality_recovery.rs`는 훈련 전용으로
+registry/ledger/audit/제한 실행을 묶으며 제품 library는 이 모듈이나 gold에 의존하지 않는다.
+
+U2전2048과 parent앞2048의 실제 prepared token prefix를 대조했다. parent의 일반 QA1708은
+질문/원문/status/time만 사용하는 독립 support 검사도 수행했고, 보조340은 의미 검사
+범위 밖으로 명시했다. 동일 token prompt/다른 target, prefix 불일치, 검산 대상 의미 모순,
+전체 train/validation의 구조화 entity 교집합은0이었다. final 자료는 만들거나 읽지 않았다.
+초기 validator가 사고 단일 인용과 근거 있는 chronology 인용을 혼동해 U2 64/parent120건을
+표시했다. 실제 원문과 시각을 확인하고 독립 회귀로 validator 경계만 고쳤다. 자료를
+제외하거나 정답/원문을 수정하지 않았으며 초기 실패 로그도 보존했다.
+
+| 자료 고유 수 | U2전2048 | Parent앞2048 |
+|---|---:|---:|
+| base scene | 256 | 512 |
+| 원문 질문 / 숫자 run을 #로 접은 질문형 | 384 / 142 | 428 / 189 |
+| 구조화 값 / 근거 값 multiset(빈 목록 포함) | 8 / 58 | 8 / 82 |
+| 근거 ID 순서 / 최종 token prompt | 1121 / 1894 | 1970 / 1997 |
+
+숫자 정규화는 분포 집계만을 위한 정의다. 제품 입력을 바꾸지 않는다. U2의1776 prompt가
+window256보다 길었고 최대371이었다. 따라서 모든 입력이 짧아 window를 넘지 않는다고
+설명할 수 없다. 다만 parent/실패 각각34개 actual full/cache/chunk127·128·129,
+alone/batch, causal255·256·257 검사에서 사전 abs1e-4+rel1e-3 위반은0이었다.
+최대 absolute 차이는 parent2.38419e-5/실패1.52588e-5였다.
+
+실제8행 batch의224 target에 shift/mask/EOS를 검산하고68개 gradient가 finite임을 확인했다.
+embedding/final norm 선택2좌표 central difference는 사전 step0.002/abs0.002+rel0.05 내였다.
+독립 f64 Adam3step은 m/v, bias correction, decay, epsilon, global clipping을 검사했다.
+서로 다른 target 길이 accumulation도 통과했다. clip은 target 수로 가중 평균한 gradient에
+한 번 적용한다. 첫1/5/20 update의 attention/QK norm/tied embedding/FFN별 gradient/update/
+weight 비율을 저장했다. 이 제한 검사로 모든 학습 결함을 배제했다고 주장하지 않는다.
+
+LR는 artifact 계산값 DERIVED_CONFIG와 기존 실제 trace를 구분해 대조했다. parent 마지막
+0.0000865092201은 실제 출력0.00008651과 맞았다. U2는 moments와 optimizer19750을
+유지하며 schedule0부터 재시작했다. +1/+5/+20/+50/+100의 계산값은 각각
+0.000003/0.000015/0.000060/0.000150/0.000300이며 실제 trace와 일치했다.
+schedule0은 실행 update가 아니다. 이 사실만으로 LR가 하락 원인이라고 결론내리지 않는다.
+
+### 한 요인 실험과 재시작 검증
+
+사전 선택한 C와 W만 실행했다. W는 first-target weight8→1 하나를 바꿨다. 같은 parent의
+weights/tokenizer/Adam, group8/micro8/acc1, RNG/tape, LR/clock을 유지했다.
+C20의 model hash는 보존된 원래 U2+20과 **정확히 일치**했다. 종료 검산에서도50개
+실제 trace의 사례 순서/토큰 수/RNG/LR/세 clock이 C/W에서 일치했다.
+
+| 관측 | C | W |
+|---|---:|---:|
+| 신규 updates / 최종 누적 step | 50 / 19800 | 50 / 19800 |
+| watch0→10→25→50 | 18→17→16→17 /32 | 18→17→16→17 /32 |
+| 사전 고정 train16의 EM0→10→25→50 | 9→11→11→10 /16 | 9→11→11→10 /16 |
+| input / supervised target tokens | 122380 / 11300 | 122380 / 11300 |
+| 실제 추출 / 고유 view | 400 / 384 | 400 / 384 |
+| 프로세스 wall time / OS max RSS | 74.63s / 5778407424 bytes | 75.50s / 6104776704 bytes |
+| watch 새 generation 오류/empty | 0 / 0 | 0 / 0 |
+
+train16은 tape 첫 고유16개를 실행 전에 고정했다. 평가0에서는 이번 segment 노출0,
+10/25/50에서는 각각1회였고 과거 parent 노출은 이 숫자에 합치지 않는다. 전체train 정확도로
+확대하지 않는다. 최초 C 시도는0update에서 native status 검증 오류로 끝났고 복구 가능한
+원본/실패 로그를 보존했다. 상세 이유를 sidecar에 두고 기존 native status를 사용하도록
+고친 뒤 위 C50을 실행했다. 저장 포맷 변경은 없었다.
+
+두50update 실행은 각각 parent19750에서 분기했다. 신규 총100을19750→19850 연속 실행으로
+표시하지 않는다. 고정 panel에서4개 이상 악화/새 오류2개 이상이 연속 두 평가라는 중단
+조건은 발생하지 않았다. 50update에서250update 붕괴가 재현되지 않았으므로 예산을 늘리지
+않았다. W 효과도 확인되지 않아 confirmation 두 회, 후보 전체400, 새 전이, final200은
+실행하지 않았다. 새 heldout를 소모하거나 기준을 낮추지 않았다.
+
+C/W native checkpoint를 새 프로세스에서 각각32개 다시 생성해 raw IDs/text/error/prompt
+digest가 step50 기록과 같았다. A→B→A도 같았다. 기존 제품 worker로 C/W 성공 응답2건과
+실패 artifact의 length+UTF8/first-EOS 빈 응답2건을 대조했다. 제품은 원래대로 길이 초과를
+decode보다 먼저 거부했고 빈 응답도 거부했다. legacy/native tokenizer의 semantic ID와
+이64+2건 generated ID→byte mapping은 일치했다. 제품 DB나 기본 checkpoint 포인터는
+교체하지 않았다. JSON/JSONL은 로컬 진단 로그이며 모델은 기존 native binary다.
+
+### 실행 근거, 검증 및 남은 한계
+
+모든 새 원시 증거는 로컬 `artifacts/quality-recovery-20260917/`에 보존한다. 공개되는
+이 문서는 익명 집계이며 corpus/원시 prompt·출력/모델/Adam/운영DB는 게시하지 않는다.
+주요 CLI는 `replica-train recovery freeze`, `replay`, `audit`, `numeric`, `arm`, `close`다.
+각 path와 source digest는 고정 fixture/policy/header에 기록됐으며 새 출력은 create_new다.
+
+| 실행/증거 | 결과 |
+|---|---|
+| frozen.json, parent/failed-watch.jsonl, parent/failed-failures.jsonl | 원본 registry/400집계/48개씩 replay, 이전 출력 차이0 |
+| data-audit-delivery.json | 최종 분포 포함 U2전2048/parent앞2048 검사 PASS |
+| parent-numeric.json / failed-numeric.json | 각34개 수치 대조 및 실제 batch gradient/finite difference PASS |
+| arm-c-fixed, arm-w의 policy/trace/eval/result 및 native final | C50/W50 실학습, 저장/종료, 표본·clock 대조 PASS |
+| closure-final/summary.json 및 C-fresh/W-fresh.jsonl | 동일64개 fresh생성, 제품worker4개, tokenizer mapping PASS |
+| recovery_* 직접 unit9개 | ledger, UTF8, control, 독립 support/chronology, Adam, accumulation, 한 요인, gold 비유입 PASS |
+| decode_failure_preserves_generated_tokens_and_eos_receipt | 수정 전 실제 FAIL, 수정 후 PASS |
+| first_target_objective_matches_scalar_ce_and_gradients_without_mask_leakage | 독립 목적함수/gradient PASS |
+| native_local_global_mask_and_greedy_generation_boundaries | 해당 generation 경계 PASS |
+| native_training_resume_is_identical_in_fresh_processes | TINY6 대 3+3, weights/moments/RNG/loss/logits 일치 PASS |
+| cargo fmt --all -- --check; check/clippy --all-targets; build --release --bins | offline/locked/features accelerate, clippy -D warnings, 모두 PASS |
+
+직접 테스트는 서로 다른13개다. 전체 suite/DB/backup 성능 검사를 반복하지 않았다.
+테스트의TINY12updates와 scalar Adam3step×5회=15는 실제SMALL100과 구분한다.
+데이터 집계 보완 후 read-only audit만 다시 실행했으며 학습을 다시 하지 않았다.
+
+기준 physical parent hash는
+`1bcae73d7f2f7f501acc43e3958d66781b22d139533b12d6e369624171356849`,
+실패 hash는 `34c2ef0630b6afe1df1b4b901a8679d4461edb041e4885b812fe91935eb1ad2c`다.
+순수 tensor content digest는 parent
+`1533f7fa235837810e883e92412e1fdf4e4ef81b78dd80391c86d95717a276c8`, 실패
+`c3b56a58da8ee44d31124db92903b97879af07e53e1e97ecc9651c654a96f9d2`다.
+기존 호환 필드 model_content_hash는 architecture를 함께 묶는 weight_hash이며,
+순수 tensor digest인 manifest.model_content_digest와 같은 값으로 취급하지 않는다.
+tokenizer semantic hash는 `652718e4864c2f06af3a2c67dac0a5174d5e2feb1387667173902da9a8a295d4`다.
+
+학습 당시 source manifest digest는
+`6737851fceaed2b61b0e0fe8a06f094edea3fc56aa9f6d61d51f632a6d4c681e`, 실행 binary는
+`9c707fae42e97d9158dbfb88ed13fce0ec9bd445835daae4734c083a11a293f8`다.
+종료 재생의 source는 `b326397506d80177f7544288cf4e7ed61d49ff1a703b84e522b653f536b969e5`,
+binary는 `37a7d1b98e8f71201d0d09a0d792b699f02885c0a88e190df526260a83761b55`다.
+최종 gold 비유입 회귀와 분포 집계를 더한 게시 source digest는
+`fe87a7de13b457b888ffc7f68d810767dedcd99a7e2e0ba5325403d080d26a34`, binary는
+`4901d4e14969798c4bef801eaea143e5f8cadff44246ad962cdec05a3729ab26`다.
+학습 도중 소스를 바꾸지 않았고, 게시 소스로 학습했다고 과거 run을 재표기하지 않는다.
+
+다음에 필요한 단일 실험은 같은 parent/moments/tape에서 LR만 고정 continuation으로
+대조하는 C/L이다. warmup100을 지나는 별도 한정 범위를 먼저 정해야 하며 이번에는
+실행하지 않는다. 현재의 결과만으로 LR, 데이터 부족, 용량 부족, tokenizer, forgetting
+중 하나를 근본 원인으로 단정할 수 없다. [진단 계획과 최종 대조](QUALITY_RECOVERY_PLAN.md)에
+검사 범위와 조건부 미실행을 기록했다. 이전 수준 복구·새 전이·S4·Goal1은 모두 남아 있다.
+
+## 이전 중단 시점 보고 — 2026-09-17, 아래는 재개 전 이력
 
 RESULT: PARTIAL. EXECUTION: PAUSED_BY_USER / NOT_RUNNING.
 MODEL_QUALITY_PASS: NO. S4_QUALITY: FAIL. GOAL1_READY: NO.

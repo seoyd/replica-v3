@@ -1,16 +1,14 @@
 # Native Goal 1 work graph
 
-현재 상태: **PAUSED_BY_USER / NOT_RUNNING**, GOAL1-NATIVE-TRPP-1.0 미완.
-사용자 요청으로 구현·학습을 중단하고 현재 코드와 실제 결과를 GitHub에 보존한다.
-R3-CUSTOMIZE-AND-DIAGNOSE-1.0은 아래 검증 기록으로 보존한다. 그 계약 완료를 Goal1
-완료로 바꾸지 않는다. 먼저 학습16의 요소별 전이 진단으로 실패를 분리한다. 확인한 원인에
-대해서만 작은 수정과 제한 학습을 진행하며 기존5,000updates/2,000만input/run 상한과
-독립 heldout 전체95%/각분류90%/잘못된 인용 승인0 기준을 유지한다. U1 고정32개
-순서 반전 진단은300updates에서 정상 종료하고 재로딩을 검증했다. U2는 기존 장면으로만
-구성한 일반QA 대조2,048개/기존개발검증400개와1,000update 예산을 고정했다.
-20update probe를 포함해총250updates 후step20,000에서 정상 저장·종료했다.
-일반 QA 개발검증은155/336→56/336, train 표본은55/128→31/128로 악화됐다.
-남은750updates와 다음 진단은 실행하지 않았다. 상세 중단 보고는 EXPERIMENT_STATUS.md.
+현재 상태: **Q4 CLOSED_NEGATIVE / NOT_RUNNING**, GOAL1-NATIVE-TRPP-1.0 미완.
+R3-S4-QUALITY-RECOVERY-1.0의 제한 진단을 종료했다. 일반 QA parent와 U2+250의
+실패를 같은 입력으로 재현했고, decode 오류 시 생성 기록이 사라지는 평가 결함을 고쳤다.
+학습 원인은 미확정이다. 같은 parent에서 C50/W50을 실행해 둘 다watch17/32로 종료했다.
+50update 안에 원래 붕괴가 재현되지 않아 자동 연장하지 않았다. 기존U2의 남은750updates,
+QA32/contrast16 재암기, 자료 확대, S5/S6 확대 작업은 실행하지 않았다.
+[제한 진단 계획과 최종 대조](QUALITY_RECOVERY_PLAN.md),
+[실제 결과와 판정](EXPERIMENT_STATUS.md)을 참조한다. 아래 P0~P6는 이전 검증 이력이다.
+독립 heldout 전체95%/각분류90%/잘못된 인용 승인0 기준은 그대로이며 Goal1 완료가 아니다.
 
 | 현재 node | 상태 | 선행 조건 | 완료 판정 |
 |---|---|---|---|
@@ -41,7 +39,7 @@ verification. Source inspection and execution are separate evidence levels.
 | S1 | VERIFIED | src/{store,app,retrieval,model}.rs; tests/{store,runtime,retrieval,cli}.rs; logs/goal1-s1-tests.txt; logs/goal1-s1-source-digest.txt | published 4edd62c; remote matched |
 | S2 | VERIFIED | src/{data,neural,train_main}.rs; tests/{native,training}.rs; logs/goal1-s2-final-tests.txt, goal1-s2-tokenizer.txt; goal1-s2-source-digest.txt | published 6ded741; remote matched |
 | S3 | VERIFIED | src/neural/{transformer,checkpoint}.rs, src/training.rs; logs/goal1-s3-exit-tests.txt, goal1-s3-small-boundaries.txt; goal1-s3-source-digest.txt | published 23cc5b0; remote matched |
-| S4 | PAUSED_BY_USER / QUALITY_FAIL | U1은200/300update32/32 및 fresh reload 통과, 새값0/16. U2총250update 후 일반QA56/336, 전체개발56/400; checkpoints 보존. | 현재 QA 학습 경로 진단 및 별도 독립 품질 기준 검증 미완; 재개 계획 미정 |
+| S4 | QUALITY_FAIL; Q4 CLOSED_NEGATIVE | U2총250update 후 일반QA56/336, 전체개발56/400을 raw log로 검산. 이번 C/W각50update watch17/32, native fresh reload 일치; 원본 checkpoints 보존. | 학습 하락 원인/복구·새 전이 미확정; final200 NOT_RUN_NOT_ELIGIBLE |
 | S5 | IMPLEMENTING | src/{model,main,app,retrieval}.rs native-only ask/generate/chat; examples/validate.rs actual CLI smoke; intermediate diagnostic4/14 correct,14/14 same-key no-model replays | prerequisite S4 pending; required five categories and fresh-process quality still FAIL |
 | S6 | BLOCKED | quantization not implemented | S4/S5 prerequisites unmet; T-N08 and complete T-I04/T-D02 pending |
 
