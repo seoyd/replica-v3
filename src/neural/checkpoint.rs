@@ -125,6 +125,11 @@ impl TrainConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrainingState {
+    /// Full sixteen-case passes, not the ordinary with-replacement sampler.
+    #[serde(default)]
+    pub contrast16: bool,
+    #[serde(default)]
+    pub parent_checkpoint_hash: Option<String>,
     pub config: TrainConfig,
     pub step: usize,
     pub consumed_tokens: u64,
@@ -195,6 +200,8 @@ fn validate<'a>(
             "CANCELLED",
             "RESOURCE_LIMIT",
             "VERIFIED_CANDIDATE",
+            "DIAGNOSTIC_COMPLETE",
+            "BUDGET_EXHAUSTED",
         ]
         .contains(&m.status.as_str())
     {
@@ -205,6 +212,17 @@ fn validate<'a>(
     if let Some(s) = &m.training {
         s.config.validate(m.architecture.context)?;
         if s.step > s.config.max_steps
+            || s.parent_checkpoint_hash
+                .as_ref()
+                .is_some_and(|h| h.len() != 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()))
+            || (s.contrast16
+                && (s.config.max_steps > 1000
+                    || s.config.max_tokens > 3_200_000
+                    || s.config.microbatch * s.config.accumulation != 16
+                    || s.config.sample_group_size != 4
+                    || s.config.budget_start_step != 0
+                    || s.config.budget_start_tokens != 0
+                    || s.config.first_target_weight != 1.))
             || s.step < s.config.budget_start_step
             || s.consumed_tokens < s.config.budget_start_tokens
             || s.consumed_tokens > s.config.max_tokens

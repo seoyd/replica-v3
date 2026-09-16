@@ -897,7 +897,7 @@ fn grounding(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
 }
 // One-pass replacement avoids cascading label/ID substitutions. Training-only;
 // neither the inference library nor the independent final renderer calls this.
-fn replace_training_literals(text: &str, replacements: &[(String, String)]) -> String {
+pub(crate) fn replace_training_literals(text: &str, replacements: &[(String, String)]) -> String {
     let mut result = String::with_capacity(text.len());
     let mut remaining = text;
     while !remaining.is_empty() {

@@ -426,3 +426,24 @@ stay fixed. Superseded/current layouts explicitly request past/current respectiv
 Thus neither ignoring the question nor ignoring evidence can answer all four cases.
 Validation and all other training tasks are preserved. Group size4 keeps each complete
 two-by-two contrast in the actual minibatch; no oracle selector is used in training.
+
+## 제한 contrast16 진단
+
+`replica-train contrast freeze --corpus <기존 query-pairs corpus> --log <원본 train
+generation JSONL> --tokenizer <기존 자체 tokenizer> --output <새 freeze 파일>`은
+원본 앞400개에서 실패16을 추출·대조하고 새로운64를 학습 전에 함께 동결한다.
+기존 파일은 덮지 않는다. `contrast check --fixture <freeze> --checkpoint <원본>`은
+실제 model의 prompt/gradient/batch/cache 경로를 검사한다.
+
+`contrast train --fixture <freeze> --checkpoint <원본> --output <새 directory>
+--source-id <실제 소스 SHA-256> --start random|qa`는 고정 SMALL, 새 Adam,
+micro4×accumulation4, update마다16개 전체, 최대1,000 updates/320만input/45분이다.
+random은 seed17 재초기화 hash를 대조하고 qa는 auxiliary-only checkpoint를 거부한다.
+두 번 연속16/16·4/4 후 종료하며, `contrast evaluate --fixture <freeze> --checkpoint
+<final>`의 새 프로세스 복원이 별도로 필요하다. 모든 평가/노출/counter는 실제 값이다.
+훈련 checkpoint는 `contrast16` sampler 표시를 가지므로 보통의 랜덤 trainer 재개와
+혼용할 수 없다. source 품질은 DIAGNOSTIC_ONLY이며 서비스 합격 모델이 아니다.
+
+새64의 `contrast evaluate ... --heldout`은 암기 통과 뒤 사전 선택한 한 후보에 한 번만
+실행한다. 이 결과를 보고 추가 학습하지 않는다. 현재 실행 결과는16개 암기 통과,
+새64는0/64이며 Goal1은 미완이다. 세부 계보와 hash는 EXPERIMENT_STATUS.md에 있다.

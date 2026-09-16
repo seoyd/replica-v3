@@ -1,4 +1,6 @@
 //! Explicit offline training tool; never imported by the product inference library.
+#[path = "contrast.rs"]
+pub mod contrast;
 use crate::data::{self, Episode};
 use candle_core::{DType, Device, Tensor, Var};
 use replica_v3::{
@@ -825,9 +827,17 @@ pub fn train(run: Run<'_>, cancel: &AtomicBool) -> Result<()> {
         ));
     }
     let mut state = if run.resume {
-        loaded.manifest.training.clone().expect("checked")
+        let state = loaded.manifest.training.clone().expect("checked");
+        if state.contrast16 {
+            return Err(Error::Invalid(
+                "contrast16 requires its fixed full-pass diagnostic trainer".into(),
+            ));
+        }
+        state
     } else {
         TrainingState {
+            contrast16: false,
+            parent_checkpoint_hash: Some(loaded.manifest.weights_sha256.clone()),
             config: config.clone(),
             step: 0,
             consumed_tokens: 0,

@@ -12,6 +12,11 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Commands {
+    /// Bounded sixteen-case diagnostic; never part of the product response path.
+    Contrast {
+        #[command(subcommand)]
+        command: Contrast,
+    },
     /// Replay recorded sampler state to distinguish corpus membership from actual exposure.
     SamplingExposure {
         #[arg(long)]
@@ -120,6 +125,45 @@ enum Commands {
     },
 }
 #[derive(Subcommand)]
+enum Contrast {
+    Freeze {
+        #[arg(long)]
+        corpus: PathBuf,
+        #[arg(long)]
+        log: PathBuf,
+        #[arg(long)]
+        tokenizer: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    Check {
+        #[arg(long)]
+        fixture: PathBuf,
+        #[arg(long)]
+        checkpoint: PathBuf,
+    },
+    Train {
+        #[arg(long)]
+        fixture: PathBuf,
+        #[arg(long)]
+        checkpoint: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        source_id: String,
+        #[arg(long, value_parser=["random", "qa"])]
+        start: String,
+    },
+    Evaluate {
+        #[arg(long)]
+        fixture: PathBuf,
+        #[arg(long)]
+        checkpoint: PathBuf,
+        #[arg(long)]
+        heldout: bool,
+    },
+}
+#[derive(Subcommand)]
 enum Models {
     Init {
         #[arg(long)]
@@ -181,6 +225,41 @@ enum Tokenizer {
 }
 fn run() -> Result<()> {
     match Cli::parse().command {
+        Commands::Contrast { command } => {
+            use training::contrast;
+            match command {
+                Contrast::Freeze {
+                    corpus,
+                    log,
+                    tokenizer,
+                    output,
+                } => contrast::freeze(&corpus, &log, &tokenizer, &output),
+                Contrast::Check {
+                    fixture,
+                    checkpoint,
+                } => contrast::check(&fixture, &checkpoint),
+                Contrast::Evaluate {
+                    fixture,
+                    checkpoint,
+                    heldout,
+                } => contrast::evaluate(&fixture, &checkpoint, heldout),
+                Contrast::Train {
+                    fixture,
+                    checkpoint,
+                    output,
+                    source_id,
+                    start,
+                } => {
+                    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    let signal = cancel.clone();
+                    ctrlc::set_handler(move || {
+                        signal.store(true, std::sync::atomic::Ordering::Relaxed)
+                    })
+                    .map_err(|e| replica_v3::Error::Invalid(e.to_string()))?;
+                    contrast::train(&fixture, &checkpoint, &output, &source_id, &start, &cancel)
+                }
+            }
+        }
         Commands::SamplingExposure {
             start,
             end,

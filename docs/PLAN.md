@@ -5,8 +5,8 @@
 
 | 현재 node | 상태 | 선행 조건 | 완료 판정 |
 |---|---|---|---|
-| P0 | VERIFIED(로컬), 전송 확인 전 | 실제 로컬 WIP 보존 | 의존175개·tensor204개·합성 SQLite 실측, run별 상태/hash, 직접 회귀45개 및 fmt/clippy 통과 |
-| P1 | NOT_STARTED | P0 | 고정 contrast16/선동결64, bounded R-A/R-B, 새 프로세스 확인; 품질 실패도 별도 결과 |
+| P0 | VERIFIED / PUBLISHED | 실제 로컬 WIP 보존 | 의존175개·tensor204개·합성 SQLite 실측, 직접 회귀45개/fmt/clippy; ce48514ab5fc8e76a9552ce5fabe7ce1617ff4ac 원격 일치 |
+| P1 | VERIFIED; 새값 전이 FAIL | P0 | R-A600/R-B200에서 두 평가 및 fresh reload16/16·4/4; 선동결64 단1회0/64·0/16. R-C/추가 학습 없음 |
 | P2 | NOT_STARTED | P0 | 네 책임 경계, semantic/kernel/cache ID, 동등 reference/candidate, 제한 config |
 | P3 | NOT_STARTED | P2 | native binary inference/resume, 무손실 export·JSON 없는 실제 생성·exact resume |
 | P4 | NOT_STARTED | P2 | 실측 hot path 한 후보의 정확성/성능에 따른 채택 또는 기각 |

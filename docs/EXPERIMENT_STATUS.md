@@ -3,14 +3,15 @@
 계약: R3-CUSTOMIZE-AND-DIAGNOSE-1.0. 2026-09-17.
 모든 성공 표시는 구현자 확인이며 INDEPENDENT_PENDING이다.
 
-현재 신경망 학습 프로세스는 NOT_RUNNING이다. v12는 step 21,750에서
-BUDGET_REACHED로 종료했다. 이번 작업에서 기존 대규모 QA 학습을 재개하지 않는다.
+현재 신경망 학습 프로세스는 NOT_RUNNING이다. 기존 v12는 step 21,750에서
+BUDGET_REACHED로 종료했고, 신규 contrast R-A/R-B는 각각600/200 updates에서
+두 번 연속 memorization 통과 후 정상 종료했다. 대규모 QA 학습은 재개하지 않았다.
 이전 문서의 실행 중 표현은 종료 로그/manifest보다 오래된 상태였다.
 
 | NODE | STATUS | SOURCE_CHANGED | EXECUTED_COMMANDS | OBSERVED_RESULTS | FILE_HASHES | LIMITATIONS | NEXT_DEPENDENCY |
 |---|---|---|---|---|---|---|---|
-| P0 | VERIFIED (로컬), 전송 확인 전 | examples/validate.rs 감사 명령; 한국어 조사/상태 문서; 선행 WIP 테스트의 import/최신 Rust lint 수정 | offline tree/metadata, release build, storage-audit/load-audit/measure; 직접 회귀38개+trainer unit7개; fmt/all-target clippy | tensor 204개 및 합성 SQLite 실측; 회귀45개 통과; lint 수정 후 통과 | 아래 기준 hash 및 의존성 보고서 | 이전 S4 WIP를 새 성과로 계산하지 않음; 원격 SHA 확인 전 | P1, P2 |
-| P1 | NOT_STARTED | 없음 | NOT_RUN | contrast16 신규 학습 없음 | 해당 없음 | 기존 v12 FAIL 유지 | P0 |
+| P0 | VERIFIED / PUBLISHED | examples/validate.rs 감사 명령; 한국어 조사/상태 문서; 선행 WIP 테스트의 import/최신 Rust lint 수정 | offline tree/metadata, release build, storage-audit/load-audit/measure; 직접 회귀38개+trainer unit7개; fmt/all-target clippy; git push/ls-remote | tensor 204개 및 합성 SQLite 실측; 회귀45개 통과; 원격 full SHA 일치 | ce48514ab5fc8e76a9552ce5fabe7ce1617ff4ac | 이전 S4 WIP를 새 성과로 계산하지 않음 | P1, P2 |
+| P1 | VERIFIED; 새64 전이 EXPERIMENT_FAILED | src/contrast.rs(training 전용), train_main/training/checkpoint/data | freeze/check/train/evaluate; 신규 unit2개+기존 trainer7개; checkpoint2개/resume1개; fmt/clippy | R-A600/R-B200에서 두 평가 및 fresh reload16/16·4/4; 새64 단1회0/64·0/16 | 아래 P1 source/fixture/binary/final/log hash | memorization만 통과; S4 품질 FAIL; 추가 학습 없음 | P2 |
 | P2 | NOT_STARTED | 없음 | NOT_RUN | 기존 reference 유지 | 해당 없음 | 새 연산 경계 미구현 | P0 |
 | P3 | NOT_STARTED | 없음 | NOT_RUN | JSON+safetensors 현재 경로 | 해당 없음 | native binary 미구현 | P2 |
 | P4 | NOT_STARTED | 없음 | NOT_RUN | 후보 미측정 | 해당 없음 | 기본값 승격 없음 | P2 |
@@ -47,9 +48,9 @@ EXTERNAL_WEIGHTS_USED: NO
 EXTERNAL_MODEL_API_USED: NO
 PROJECT_SOURCE_LANGUAGE: RUST
 NATIVE_TRANSITIVE_DEPENDENCIES: SQLite C, zstd C, onig C, Accelerate/OS
-CONTRAST16_TRAIN_EM: NOT_RUN
-CONTRAST16_GROUP_ALL_CORRECT: NOT_RUN
-CONTRAST64_HELDOUT_EM: NOT_RUN
+CONTRAST16_TRAIN_EM: R-A16/16, R-B16/16; 두 평가 및 fresh reload 확인
+CONTRAST16_GROUP_ALL_CORRECT: R-A4/4, R-B4/4
+CONTRAST64_HELDOUT_EM: R-B0/64, 그룹0/16; 단1회 실행, FAIL
 QA_GENERAL_DEVELOPMENT: 기존 v12 기록 0/336
 NATIVE_BINARY_INFERENCE: NOT_IMPLEMENTED
 EXACT_RESUME_BINARY: NOT_IMPLEMENTED
@@ -68,7 +69,7 @@ S4_QUALITY: FAIL
 S5_INTEGRATION: 미완료
 S6_QUANT: 미구현
 GOAL1_READY: NO
-COMMIT / REMOTE_SHA: 신규 단계 전송 전
+COMMIT / REMOTE_SHA: P0 `ce48514ab5fc8e76a9552ce5fabe7ce1617ff4ac` / 동일 SHA 확인
 
 ## 원본 run별 manifest 대조
 
@@ -157,3 +158,123 @@ P0 raw 증거 SHA-256:
 | tensor inventory와 read/hash/load/save 측정 | 7817f1d885a5c53a0d875eb290438ba1ee68f097bfa1004156615f218ee19978 |
 | synthetic SQLite 측정 | f77d453e23ec852bf99463ccd061aacc5dee73431134dc7d1fa8b003913d2cd5 |
 | 감사 harness examples/validate.rs | 0b8440ebea89cf86544c9d96facfd56eea72b7075a76c24c5cc858116b4cfbbf |
+
+## P1 실행 전 동결
+
+새 파일 src/contrast.rs는 training-only 진단 책임을 기존 1,400행 trainer에서 분리한다.
+제품 library/worker는 이 모듈이나 gold validator를 import하지 않는다. 기존 Sample,
+batch, target loss, Adam, Transformer, tokenizer, checkpoint를 재사용한다.
+
+원본16은 v12 train 앞400개 중 copy/value인 4개 quartet이다. base ID는23/41/59/77이다.
+원본 generation log와 question/evidence/answer를 대조했고 별도 serialized-input
+validator가 target을 유일하게 재구성했다. source/binding/gold를 runtime 모델에 추가하지 않는다.
+기존 원문, 질문, 순서, ID, 시간/status와 token IDs/role span을 로컬 freeze 로그에 보존했다.
+
+새64는 학습 전에 seed917031로 만든 별도16그룹이다. 전체 원본 corpus의 ID 상한 밖
+새 사건 ID, 새로운 대상 번호/장소/값과 그룹별 고정 순서 반전을 사용했다. 새 값은
+`경로<정수>` 형식으로 기존 방향 단어에 비해 복사와 새 token 조합 부담도 달라진다.
+따라서 성공하더라도 Goal1 heldout가 아니며 별도 전이 조건으로 보고한다. 아직 평가하지 않았다.
+
+| 동결 대상 | SHA-256 |
+|---|---|
+| train16 직렬화 | 25247ee85541def3b5efedb391fcf922cbade6574a538f2f8b7bc885f7c69d3d |
+| heldout64 직렬화 | 9bfd298901814b2491721225da803c2e98597b58b6247062448a90b8a02c9a0e |
+| 전체 freeze 파일 | ad0e51190eb976ed1766008a808b33159dc6a0ead6f099f748f7576facfa4ba8 |
+| 기존 원본 generation log | fa9a43c7da60ebc6aa6061c75b5f6337fc0555d95bcb1ae90dec770301ad5071 |
+| P1 Rust/Cargo source 목록 | 07ed0ef5290c6201bd28c6f12a477748daf173dd963ce9f64351f0190da94578 |
+| P1 실행 binary | 73c2a44ce4e89836816196c5a2853876ba87836478dcacabb37851f017a2e9b6 |
+
+사전 허용 logit 절대 오차는 5e-4다. 실제 SMALL seed17와 일반 QA19750에서 train/generate
+prompt ID, 독립 role/shift/mask/분모, 단건/4행 batch, 127/128/257 chunk cache와 uncached
+전체 greedy, 255/256/257의 독립 causal/local mask 및 cache parity, 모든68 parameter
+gradient의 finite/nonzero를 확인했다. 출력 projection gradient는 tied embedding에 합쳐진다.
+random preflight 9.30s/최대 RSS955,383,808 B, QA preflight2.68s/1,010,466,816 B.
+이는 학습 성공이나 단일 오류 원인 확정을 뜻하지 않는다.
+
+R-A는 seed17 SMALL을 실제 재초기화하고 기존 random artifact의 model digest와 대조한다.
+R-B는 마지막 일반 QA 선택 checkpoint19750이며 v12 auxiliary-only는 제외한다.
+두 run 모두 Adam m/v를 새로0으로 초기화한다. step/input/target도 새 run 기준0이며
+부모 checkpoint SHA를 TrainingState에 별도로 저장한다. 일반 랜덤 sampler로 이 진단
+checkpoint를 재개하려 하면 명시 거부한다.
+
+동일 설정: F32 CPU/Accelerate, LR.001, warmup20, W1, seq512, microbatch4×accumulation4,
+group4, seed17. 각 update에 모든16개를 정확히1회씩 노출하고 그룹 순서만 shuffle한다.
+각 microbatch mean gradient에 target 수를 곱해 합산한 뒤 전체 target 수로 나눈다.
+종전 v12의 micro8×1, with-replacement group sampler, LR.0003/warm100/W8과 다르다.
+run별 최대1,000 updates/3,200,000 input/45분이며 더 이른 상한에서 정상 final을 저장한다.
+평가는0,100,... 전체16개, 마지막 두 평가16/16·4/4와 fresh reload를 통과해야 진단 합격이다.
+답변/value/EOS와 값으로 추정한 record ID를 분리한다. 원본은 citation을 요구하지 않아
+citation 점수는 NOT_REQUESTED이며 추정 record를 실제 출력 citation으로 바꾸어 보고하지 않는다.
+source는 실제 실행 동안 편집하지 않고 모델/자료/로그는 로컬에만 보존한다.
+
+## P1 실제 실행 결과
+
+두 run 모두 `VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1`로 실행했다.
+학습 전후 Rust/Cargo source 목록은 byte-identical이었다. 원본 initial/QA/v12 checkpoint
+hash도 보존했다. heavy 작업을 병렬 실행하지 않았고 새로운 학습 source를 중간 교체하지 않았다.
+각 update의 실제 input은2,690, target은EOS 포함32다. prompt는162~172 tokens였다.
+따라서 이 자료에서 짧은 답변 길이만 보고 context를 추론하지 않았으며 실제 prompt도 계상했다.
+
+| optimizer update | R-A 전체 EM / 그룹 | R-B 전체 EM / 그룹 |
+|---:|---|---|
+| 0 | 0/16, 0/4 | 0/16, 0/4 |
+| 100 | 10/16, 1/4 | 16/16, 4/4 |
+| 200 | 10/16, 1/4 | 16/16, 4/4 |
+| 300 | 12/16, 2/4 | 정상 종료 후 미실행 |
+| 400 | 13/16, 3/4 | 미실행 |
+| 500 | 16/16, 4/4 | 미실행 |
+| 600 | 16/16, 4/4 | 미실행 |
+| 별도 새 프로세스 final 복원 | 16/16, 4/4 | 16/16, 4/4 |
+
+| run_id | parent checkpoint SHA | updates | input / target | 최종 sampler u64 | 종료 이유 |
+|---|---|---:|---|---|---|
+| R-A | d4e75cd8cbd8f3ff76a2c9fdc300561a3c65319e6c0210d4215275159fda2cc3 | 600 | 1,614,000 / 19,200 | 8507264816735876025 | TWO_EVALUATIONS_PASS_PENDING_FRESH_RELOAD; 이후 복원 통과 |
+| R-B | 0d60afec7dd18a8a68c77e6da43b3c46076d6720609f00d6e2656a5ccf9ae2b9 | 200 | 538,000 / 6,400 | 15133584321384993097 | TWO_EVALUATIONS_PASS_PENDING_FRESH_RELOAD; 이후 복원 통과 |
+
+각 사례 노출은 R-A600회/R-B200회로 정확히 동일하다. optimizer moment를 부모에서
+가져오지 않았다. 실제 wall time은449.85s/150.29s, 최대 RSS는1,135,984,640 B /
+1,112,670,208 B였다. 모두 예산 안에 종료했고 checkpoint의 DIAGNOSTIC_COMPLETE는
+일반 모델 품질 합격을 뜻하지 않는다.
+
+최종 두 평가와 fresh reload에서 전체답/value/값으로 추정한 record는 각각16/16,
+EOS도16/16이다. 정답 형식 자체가 값 하나이므로 value exact와 전체 string exact는
+같고 전체 정합에는 EOS를 추가 요구한다. citation 요구는 없으며 출력 citation 점수를
+임의로 만들지 않았다. teacher-forced와 실제 greedy prefix의 첫 분기 logit/probability는
+각 raw 평가 row에 별도로 보존했다. argmax만으로 입력을 무시한다고 판정하지 않는다.
+
+사전 동결64는 R-B final에서 한 번만 실행했다. 전체답/value/추정 record0/64,
+완전한 그룹0/16, EOS64/64였다. 실제 wall3.30s, 최대 RSS538,689,536 B.
+새 문자열 값을 복사하지 못하고 훈련된 방향 단어를 출력했다. 새 값·대상·장소·순서를
+함께 바꾼 전이 조건이므로 단일 실패 원인을 확정하지 않는다. 이 결과로 추가 tuning,
+자료 확장, LR sweep, R-C를 실행하지 않았다.
+
+이전 실패 v12 가중치에도 추가 no-training check를 실행했고 통과했다(2.69s,
+RSS1,002,979,328 B; 257-token cache 오차1.1444092e-5). 이는 기존 FAIL을 지우지 않는다.
+검사한 범위에서 shifting/masking/cache/gradient의 특정 구현 오류는 관측하지 않았다.
+16개 암기 가능성과 새로운 사실에 대한 일반화는 별개이며, 큰 QA 실패의 원인 전체가
+해결됐다는 결론은 내리지 않는다.
+
+최종 snapshot SHA-256:
+
+| 경로 | weights SHA-256 |
+|---|---|
+| artifacts/customize-20260917/r-a/final | 0cfcbcdd0740411fc55a150837be8b75147428d12460edcef968da73bed0bec6 |
+| artifacts/customize-20260917/r-b/final | f50a002154eb746eaea7eda2fd69addf9b03143aa213f0bd8ab55a7c01caf680 |
+
+검증 명령은 동결 executable `artifacts/customize-20260917/contrast-trainer`의
+`contrast train --fixture .../contrast-frozen.json --checkpoint <원본> --output <신규>
+--source-id 07ed0ef5290c6201bd28c6f12a477748daf173dd963ce9f64351f0190da94578
+--start random|qa`, 별도 `contrast evaluate --fixture ... --checkpoint <각 final>` 및
+R-B의 단 한 번 `contrast evaluate ... --heldout`이다. 이 executable과 corpus/로그는
+로컬 증거이며 원격에는 Rust 구현과 익명 통계만 올린다.
+
+| 로컬 raw 증거 | SHA-256 |
+|---|---|
+| r-a-train.txt | 9d63af70a55ee2b355bd06a9b56f51914f3397a9232c1bbc6770855e7fce4ded |
+| r-a-reload.txt | c48bc43dd3c17976fa44f24774a14b9c362f975d0dc35bd189a04052e55150b6 |
+| r-b-train.txt | f439a9c8e05f6e91e884d63b904849ffbf0e252c3db1e93932c8f215ba23cc80 |
+| r-b-reload.txt | b040616826503fdee4799123082e94e2aed81feacc1ca7210630749397af3839 |
+| r-b-heldout-once.txt | b42b975648d4d661c9fbd567bdff09b33c122abe92f6d2bf17bb8b2efe3fb272 |
+
+DELIVERABLE_VERIFIED(P1)=YES. CONTRAST16_MEMORIZATION=PASS.
+MODEL_QUALITY_PASS=NO. S4_QUALITY=FAIL. GOAL1_READY=NO.
