@@ -126,6 +126,13 @@ enum Commands {
 }
 #[derive(Subcommand)]
 enum Contrast {
+    /// One-factor changes of the frozen training inputs; no heldout evaluation or learning.
+    Transfer {
+        #[arg(long)]
+        fixture: PathBuf,
+        #[arg(long)]
+        checkpoint: PathBuf,
+    },
     Freeze {
         #[arg(long)]
         corpus: PathBuf,
@@ -151,8 +158,11 @@ enum Contrast {
         output: PathBuf,
         #[arg(long)]
         source_id: String,
-        #[arg(long, value_parser=["random", "qa"])]
+        #[arg(long, value_parser=["random", "qa", "diagnostic"])]
         start: String,
+        /// Explicit 32-case continuation: each original quartet and its reversed evidence order.
+        #[arg(long)]
+        both_orders: bool,
     },
     Evaluate {
         #[arg(long)]
@@ -244,6 +254,10 @@ fn run() -> Result<()> {
         Commands::Contrast { command } => {
             use training::contrast;
             match command {
+                Contrast::Transfer {
+                    fixture,
+                    checkpoint,
+                } => contrast::transfer(&fixture, &checkpoint),
                 Contrast::Freeze {
                     corpus,
                     log,
@@ -265,6 +279,7 @@ fn run() -> Result<()> {
                     output,
                     source_id,
                     start,
+                    both_orders,
                 } => {
                     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                     let signal = cancel.clone();
@@ -272,7 +287,15 @@ fn run() -> Result<()> {
                         signal.store(true, std::sync::atomic::Ordering::Relaxed)
                     })
                     .map_err(|e| replica_v3::Error::Invalid(e.to_string()))?;
-                    contrast::train(&fixture, &checkpoint, &output, &source_id, &start, &cancel)
+                    contrast::train(
+                        &fixture,
+                        &checkpoint,
+                        &output,
+                        &source_id,
+                        &start,
+                        both_orders,
+                        &cancel,
+                    )
                 }
             }
         }

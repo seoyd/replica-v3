@@ -448,6 +448,19 @@ random은 seed17 재초기화 hash를 대조하고 qa는 auxiliary-only checkpoi
 실행한다. 이 결과를 보고 추가 학습하지 않는다. 현재 실행 결과는16개 암기 통과,
 새64는0/64이며 Goal1은 미완이다. 세부 계보와 hash는 EXPERIMENT_STATUS.md에 있다.
 
+`contrast transfer --fixture <freeze> --checkpoint <native>`는 학습16에서 원본,
+ID/순서/entity 길이/context/값을 한 요소씩 바꿔 생성하는 DEVELOPMENT 진단이다.
+새64를 다시 평가하지 않는다. `contrast train ... --start diagnostic --both-orders`는
+명시한 학습된 contrast checkpoint에서 새 Adam으로 원본16+순서반전16을 학습한다.
+32개 전체1회/update, micro4×accumulation8, 기존1,000updates/320만input/45분 한도를
+유지한다. 두 번 연속32/32·8/8묶음 뒤 종료하며, export한 inference 파일의 transfer에서
+원본/순서반전 각각16/16·4/4를 새 process로 확인한다.4개 base scene의 변형을
+독립32개 scene으로 부르지 않는다. 일반 QA/인용/새 사실 품질은 별도 조건이다.
+
+평가 도구는 Adam/state 유무가 아닌 native artifact의 `trained_steps`로 초기/학습
+가중치를 구별한다. inference-only 파일도 `evaluate ... trained ...`에 사용할 수 있고,
+학습된 파일을 random baseline으로 평가하면 거부한다. 품질 gate는 그대로 적용한다.
+
 ## Native binary 기본 artifact (현재)
 
 기존 학습 디렉터리는 원본으로 보존한다. 아래 명령은 새 목적지 파일을 만들며

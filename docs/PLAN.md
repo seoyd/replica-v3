@@ -1,7 +1,11 @@
 # Native Goal 1 work graph
 
-현재 실행 범위: **R3-CUSTOMIZE-AND-DIAGNOSE-1.0**. 기존 S0~S6 기록은 아래에 보존한다.
-현재 S4는 STOPPED/QUALITY_FAIL이며 큰 QA 학습을 재개하지 않는다.
+현재 실행 범위: 사용자 재개 요청에 따른 **GOAL1-NATIVE-TRPP-1.0의 S4→S5→S6**.
+R3-CUSTOMIZE-AND-DIAGNOSE-1.0은 아래 검증 기록으로 보존한다. 그 계약 완료를 Goal1
+완료로 바꾸지 않는다. 먼저 학습16의 요소별 전이 진단으로 실패를 분리한다. 확인한 원인에
+대해서만 작은 수정과 제한 학습을 진행하며 기존5,000updates/2,000만input/run 상한과
+독립 heldout 전체95%/각분류90%/잘못된 인용 승인0 기준을 유지한다. U1 고정32개
+순서 반전 진단은300updates에서 정상 종료하고 재로딩을 검증했다. 현재 학습은 NOT_RUNNING.
 
 | 현재 node | 상태 | 선행 조건 | 완료 판정 |
 |---|---|---|---|
@@ -32,7 +36,7 @@ verification. Source inspection and execution are separate evidence levels.
 | S1 | VERIFIED | src/{store,app,retrieval,model}.rs; tests/{store,runtime,retrieval,cli}.rs; logs/goal1-s1-tests.txt; logs/goal1-s1-source-digest.txt | published 4edd62c; remote matched |
 | S2 | VERIFIED | src/{data,neural,train_main}.rs; tests/{native,training}.rs; logs/goal1-s2-final-tests.txt, goal1-s2-tokenizer.txt; goal1-s2-source-digest.txt | published 6ded741; remote matched |
 | S3 | VERIFIED | src/neural/{transformer,checkpoint}.rs, src/training.rs; logs/goal1-s3-exit-tests.txt, goal1-s3-small-boundaries.txt; goal1-s3-source-digest.txt | published 23cc5b0; remote matched |
-| S4 | STOPPED / QUALITY_FAIL | v12는 21,750 step에서 BUDGET_REACHED 종료. 기존 validation 기록: 보조45/64, 일반 QA0/336. 신규 학습 NOT_RUNNING. | 기존 전체 품질 기준 미달; 대규모 학습 재개 없음 |
+| S4 | IN_PROGRESS / QUALITY_FAIL | U1은200/300update에서32/32·8/8 및 inference fresh reload 통과. 요소별 전이는ID9/16·새값0/16로 미달. 이전 실패 기록은 유지. | 전체 답변의 근거 값/ID 일관성 개선과 별도 독립 품질 기준 검증 |
 | S5 | IMPLEMENTING | src/{model,main,app,retrieval}.rs native-only ask/generate/chat; examples/validate.rs actual CLI smoke; intermediate diagnostic4/14 correct,14/14 same-key no-model replays | prerequisite S4 pending; required five categories and fresh-process quality still FAIL |
 | S6 | BLOCKED | quantization not implemented | S4/S5 prerequisites unmet; T-N08 and complete T-I04/T-D02 pending |
 

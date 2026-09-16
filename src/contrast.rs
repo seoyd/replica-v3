@@ -626,12 +626,125 @@ pub fn evaluate(fixture: &Path, path: &Path, heldout: bool) -> Result<()> {
     );
     Ok(())
 }
+
+// Training-derived development ablations. These never read or score heldout cases,
+// change model parameters, or select evidence in the product inference path.
+fn transfer_cases(train: &[Episode], factor: &str) -> Result<Vec<Episode>> {
+    let mut cases = train.to_vec();
+    for (group, quartet) in cases.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        let mut replacements = BTreeMap::new();
+        for record in &quartet[0].request.evidence.items {
+            let (entity, context, value) = fields(&record.original_excerpt)?;
+            let number = entity.trim_start_matches(|c: char| !c.is_ascii_digit());
+            let index = replacements.len();
+            let pair = match factor {
+                "entity" => Some((number, (800_001 + group * 14 + index * 2).to_string())),
+                "entity_long" => Some((number, (80_000_001 + group * 14 + index * 2).to_string())),
+                "context" => Some((context, format!("통로{}", 40 + group * 2 + index))),
+                "known_values" => {
+                    let values = [
+                        "오른쪽",
+                        "왼쪽",
+                        "직진",
+                        "대기",
+                        "북쪽",
+                        "남쪽",
+                        "동쪽",
+                        "서쪽",
+                    ];
+                    let i = values
+                        .iter()
+                        .position(|v| *v == value)
+                        .ok_or_else(ambiguity)?;
+                    Some((value, values[(i + 1) % values.len()].to_string()))
+                }
+                "new_values" => {
+                    Some((value, format!("경로{}", 100_003 + (group * 2 + index) * 79)))
+                }
+                "identity" | "record_ids" | "order" => None,
+                _ => return Err(Error::Invalid("unknown transfer factor".into())),
+            };
+            if let Some((old, new)) = pair {
+                replacements.entry(old.to_string()).or_insert(new);
+            }
+        }
+        let mut replacements: Vec<_> = replacements.into_iter().collect();
+        replacements.sort_by_key(|(old, _)| std::cmp::Reverse(old.len()));
+        for e in quartet {
+            e.request.input = data::replace_training_literals(&e.request.input, &replacements);
+            e.answer = data::replace_training_literals(&e.answer, &replacements);
+            for record in &mut e.request.evidence.items {
+                record.original_excerpt =
+                    data::replace_training_literals(&record.original_excerpt, &replacements);
+                if factor == "record_ids" {
+                    record.event_id = record
+                        .event_id
+                        .checked_add(1_000_000)
+                        .ok_or_else(ambiguity)?;
+                }
+            }
+            if factor == "order" {
+                e.request.evidence.items.reverse();
+            }
+        }
+    }
+    validate_cases(&cases, train.len())?;
+    Ok(cases)
+}
+
+pub fn transfer(fixture: &Path, path: &Path) -> Result<()> {
+    let loaded = checkpoint::load(path, Device::Cpu, false)?;
+    let frozen = load_fixture(fixture, &loaded.tokenizer)?;
+    let mut trained_targets = BTreeSet::new();
+    for e in &frozen.train {
+        trained_targets.extend(loaded.tokenizer.encode(e.answer.as_bytes())?);
+    }
+    let step = loaded.manifest.trained_steps;
+    println!(
+        "transfer_development=true source_train={} weights_content={} backend={} heldout=NOT_RUN training=NOT_RUN",
+        frozen.train_hash,
+        loaded.model.weights_content_id()?,
+        neural::cpu_backend()
+    );
+    for factor in [
+        "identity",
+        "record_ids",
+        "order",
+        "entity",
+        "entity_long",
+        "context",
+        "known_values",
+        "new_values",
+    ] {
+        let cases = transfer_cases(&frozen.train, factor)?;
+        let mut new_tokens = BTreeSet::new();
+        for e in &cases {
+            new_tokens.extend(
+                loaded
+                    .tokenizer
+                    .encode(e.answer.as_bytes())?
+                    .into_iter()
+                    .filter(|id| !trained_targets.contains(id)),
+            );
+        }
+        println!(
+            "factor={factor} inputs_sha256={} target_ids_absent_from_frozen16_answers={new_tokens:?}",
+            hash(&serde_json::to_vec(&cases)?)
+        );
+        let (exact, groups) = score(&loaded.model, &loaded.tokenizer, &cases, step)?;
+        println!(
+            "transfer_summary factor={factor} exact={exact}/16 groups={groups}/4 final_heldout=false"
+        );
+    }
+    Ok(())
+}
 pub fn train(
     fixture: &Path,
     path: &Path,
     output: &Path,
     source: &str,
     start_kind: &str,
+    both_orders: bool,
     cancel: &AtomicBool,
 ) -> Result<()> {
     if source.len() != 64 || !source.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -654,6 +767,13 @@ pub fn train(
             .as_ref()
             .is_some_and(|s| s.step > 0 && s.config.curriculum_steps < s.step && !s.contrast16) => {
         }
+        "diagnostic"
+            if both_orders
+                && loaded
+                    .manifest
+                    .training
+                    .as_ref()
+                    .is_some_and(|s| s.step > 0 && s.contrast16) => {}
         _ => {
             return Err(Error::Invalid(
                 "contrast initialization/provenance; QA excludes auxiliary-only checkpoint".into(),
@@ -671,14 +791,24 @@ pub fn train(
         loaded.model = fresh;
     }
     let f = load_fixture(fixture, &loaded.tokenizer)?;
-    let framed = samples(&f.train, &loaded.tokenizer, 512)?;
+    let mut train = f.train.clone();
+    if both_orders {
+        let mut reversed = transfer_cases(&f.train, "order")?;
+        for e in &mut reversed {
+            e.id = format!("reversed/{}", e.id);
+        }
+        train.extend(reversed);
+    }
+    validate_cases(&train, if both_orders { 32 } else { 16 })?;
+    let train_hash = hash(&serde_json::to_vec(&train)?);
+    let framed = samples(&train, &loaded.tokenizer, 512)?;
     let config = TrainConfig {
         warmup: 20,
         max_steps: MAX_UPDATES,
         max_tokens: MAX_INPUT,
         microbatch: 4,
         sample_group_size: 4,
-        accumulation: 4,
+        accumulation: train.len() / 4,
         ..TrainConfig::default()
     };
     config.validate(loaded.model.config.context)?;
@@ -702,7 +832,7 @@ pub fn train(
         consumed_tokens: 0,
         target_tokens: 0,
         sampler_state: 17,
-        corpus_hash: f.train_hash.clone(),
+        corpus_hash: train_hash.clone(),
         validation_hash: f.heldout_hash.clone(),
         previous_corpora: previous,
         initial_weight_hash: loaded.manifest.initial_weight_hash.clone(),
@@ -720,8 +850,8 @@ pub fn train(
     println!(
         "{}",
         serde_json::json!({"run_start":true,"kind":start_kind,"parent_checkpoint_hash":parent,"parent_model_hash":parent_model,
-        "config":config,"fresh_adam":true,"sampler_state":rng.state,"per_update_input":step_input,"train_hash":f.train_hash,"heldout_hash":f.heldout_hash,
-        "max_seconds":MAX_SECONDS,"backend":neural::cpu_backend(),"source_id":source,"sampling":"four groups shuffled, each of sixteen exactly once per update","quality":"DIAGNOSTIC_ONLY"})
+        "config":config,"fresh_adam":true,"sampler_state":rng.state,"per_update_input":step_input,"train_hash":train_hash,"original_train_hash":f.train_hash,"heldout_hash":f.heldout_hash,
+        "both_evidence_orders":both_orders,"cases":train.len(),"max_seconds":MAX_SECONDS,"backend":neural::cpu_backend(),"source_id":source,"sampling":"quartets shuffled within each view, each declared case exactly once per update","quality":"DIAGNOSTIC_ONLY"})
     );
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -755,8 +885,12 @@ pub fn train(
                 frozen.display(),
                 saved.weights_sha256
             );
-            let (n, g) = score(&loaded.model, &loaded.tokenizer, &f.train, state.step)?;
-            streak = if n == 16 && g == 4 { streak + 1 } else { 0 };
+            let (n, g) = score(&loaded.model, &loaded.tokenizer, &train, state.step)?;
+            streak = if n == train.len() && g == train.len() / 4 {
+                streak + 1
+            } else {
+                0
+            };
             if streak >= 2 {
                 reason = "TWO_EVALUATIONS_PASS_PENDING_FRESH_RELOAD";
                 break;
@@ -772,7 +906,10 @@ pub fn train(
         {
             break;
         }
-        let order = group_order(&mut rng);
+        let mut order = Vec::new();
+        for view in 0..train.len() / 16 {
+            order.extend(group_order(&mut rng).map(|group| view * 4 + group));
+        }
         let mut gradients = BTreeMap::new();
         let mut targets = 0;
         let mut total_loss = 0.;
@@ -854,6 +991,113 @@ pub fn train(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn transfer_changes_only_declared_factor_and_retains_unique_input_answer() {
+        let mut train = Vec::new();
+        for group in 0..4 {
+            for variant in 0..4 {
+                let values = if variant < 2 {
+                    ["북쪽", "동쪽"]
+                } else {
+                    ["동쪽", "북쪽"]
+                };
+                let current = variant % 2 == 0;
+                train.push(Episode {
+                    id: format!("literal/{group}/{variant}"),
+                    category: 1,
+                    family: "fixture".into(),
+                    binding: "fixture".into(),
+                    sequence: "fixture".into(),
+                    request: ModelRequest {
+                        request_id: "fixture".into(),
+                        system: String::new(),
+                        input: format!(
+                            "번호 123456의 통로2 {} 방향",
+                            if current { "현재" } else { "과거" }
+                        ),
+                        limits: Default::default(),
+                        evidence: replica_v3::retrieval::EvidenceBundle {
+                            items: values
+                                .iter()
+                                .enumerate()
+                                .map(|(i, value)| replica_v3::retrieval::Evidence {
+                                    event_id: 7 + i as i64,
+                                    source: "literal".into(),
+                                    recorded_at: 10 + i as i64,
+                                    observed_at: Some(9),
+                                    version_status: if i == 0 { "current" } else { "superseded" }
+                                        .into(),
+                                    original_excerpt: format!(
+                                        "대상123456의 통로2 이동 지시는 {value}이다."
+                                    ),
+                                    excerpt_truncated: false,
+                                    relation_path: Vec::new(),
+                                    retrieval_reason: "fixture".into(),
+                                })
+                                .collect(),
+                            ..Default::default()
+                        },
+                    },
+                    answer: values[usize::from(!current)].into(),
+                });
+            }
+        }
+        validate_cases(&train, 16).unwrap();
+        let before = serde_json::to_vec(&train).unwrap();
+        assert_eq!(
+            serde_json::to_vec(&transfer_cases(&train, "identity").unwrap()).unwrap(),
+            before
+        );
+        for factor in [
+            "record_ids",
+            "order",
+            "entity",
+            "entity_long",
+            "context",
+            "known_values",
+            "new_values",
+        ] {
+            let changed = transfer_cases(&train, factor).unwrap();
+            for (old, new) in train.iter().zip(&changed) {
+                assert_eq!(new.request.evidence.items.len(), 2);
+                assert_eq!(supported(&new.request).unwrap().1, new.answer);
+                if matches!(factor, "entity" | "entity_long" | "context") {
+                    assert_ne!(old.request.input, new.request.input);
+                    assert_eq!(old.answer, new.answer);
+                } else {
+                    assert_eq!(old.request.input, new.request.input);
+                }
+                if factor == "record_ids" {
+                    for (a, b) in old
+                        .request
+                        .evidence
+                        .items
+                        .iter()
+                        .zip(&new.request.evidence.items)
+                    {
+                        let mut expected = a.clone();
+                        expected.event_id += 1_000_000;
+                        assert_eq!(
+                            serde_json::to_vec(b).unwrap(),
+                            serde_json::to_vec(&expected).unwrap()
+                        );
+                    }
+                } else if factor == "order" {
+                    assert_eq!(
+                        new.request.evidence.items[0].event_id,
+                        old.request.evidence.items[1].event_id
+                    );
+                } else {
+                    assert_eq!(
+                        new.request.evidence.items[0].event_id,
+                        old.request.evidence.items[0].event_id
+                    );
+                }
+            }
+        }
+        assert_eq!(serde_json::to_vec(&train).unwrap(), before);
+        assert!(transfer_cases(&train, "unknown").is_err());
+    }
     #[test]
     fn full_pass_exposure_and_sampler_restart_are_exact() {
         let mut rng = Rng::new(17);

@@ -1092,6 +1092,34 @@ mod tests {
             full.model.weights_content_id().unwrap()
         );
         assert!(load(&inference, Device::Cpu, true).is_err());
+        // Fixed-pass diagnostics admit only the original16 or explicitly doubled32 cases.
+        // The existing state schema already stores microbatch/accumulation and the corpus digest.
+        for accumulation in [3, 4, 6, 8, 9] {
+            let mut manifest = full.manifest.clone();
+            let state = manifest.training.as_mut().unwrap();
+            state.contrast16 = true;
+            state.config.max_tokens = 3200;
+            state.config.microbatch = 4;
+            state.config.sample_group_size = 4;
+            state.config.accumulation = accumulation;
+            let path = d.path().join(format!("contrast-{accumulation}"));
+            let result = save(
+                &path,
+                &full.model,
+                &full.tokenizer,
+                manifest.clone(),
+                &full.optimizer,
+            );
+            if matches!(accumulation, 4 | 8) {
+                result.unwrap();
+                let restored = load(&path, Device::Cpu, true).unwrap();
+                assert_eq!(restored.manifest.training, manifest.training);
+                assert!(restored.manifest.diagnostic_only);
+            } else {
+                assert!(matches!(result, Err(Error::Corrupt(_))));
+                assert!(!path.exists());
+            }
+        }
         let original = std::fs::read(&inference).unwrap();
         assert!(export_inference(&inference, &full).is_err());
         assert_eq!(std::fs::read(&inference).unwrap(), original);

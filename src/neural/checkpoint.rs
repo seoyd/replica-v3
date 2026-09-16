@@ -125,7 +125,8 @@ impl TrainConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TrainingState {
-    /// Full sixteen-case passes, not the ordinary with-replacement sampler.
+    /// Full passes over base sixteen cases, optionally both evidence orders (32).
+    /// Historical field name is retained; never the ordinary with-replacement sampler.
     #[serde(default)]
     pub contrast16: bool,
     #[serde(default)]
@@ -258,7 +259,7 @@ pub(super) fn validate_metadata(m: &Manifest, tok: &ByteBpe) -> Result<()> {
             || (s.contrast16
                 && (s.config.max_steps > 1000
                     || s.config.max_tokens > 3_200_000
-                    || s.config.microbatch * s.config.accumulation != 16
+                    || ![16, 32].contains(&(s.config.microbatch * s.config.accumulation))
                     || s.config.sample_group_size != 4
                     || s.config.budget_start_step != 0
                     || s.config.budget_start_tokens != 0

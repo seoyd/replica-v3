@@ -666,3 +666,99 @@ F16/INT4/packed runtime, live SQLite 대체, 완전한 자체 tensor/autograd는
 아니다. CPU RSS와 실제 read bytes는 측정했지만 allocator 내부 모든 임시 allocation을
 추적하거나 GPU 메모리/성능·진짜 cold disk·전원 장애 내구성을 검증하지 않았다.
 NEXT_DEPENDENCY: 없음. 별도 방향 결정 없이 대규모 학습/새 architecture 실험을 시작하지 않는다.
+
+## Goal1 재개: 학습16의 요소별 전이 진단
+
+사용자가 Goal1까지 계속 진행하도록 요청했다. 위 P0~P6의 종료 결과/실패는 그 시점 기록으로
+유지하고 S4→S5→S6를 다시 진행한다. 전체95%/분류90%/잘못된 인용 승인0 기준은 그대로다.
+현재 base는122101c7c19efce94e0660538f0930889937934d이며 기존 사용자 문서 WIP3개를 보존한다.
+Rust1.98, 외부 모델/API/답변 하드코딩 금지, native binary 및 기존 SMALL 수식 유지다.
+
+신규 transfer 도구는 frozen train16에 한 요소만 바꾸는 DEVELOPMENT 진단이다.
+원래 새64는 평가하지 않았고 새로운 blind test로도 부르지 않는다. input-only validator로
+정답 유일성을 다시 확인하며 원본 freeze/가중치를 변경하지 않는다. 체크포인트는 P6 R-B
+native resume, 실제 CPU/gemm F32 단일thread이다.128개 생성17.92s, 추가학습0updates.
+
+| 변경 요소 (각16) | exact | quartet all-correct |
+|---|---:|---:|
+| 원본 | 16/16 | 4/4 |
+| 사건 ID만 변경 | 14/16 | 2/4 |
+| 근거 순서만 반전 | 0/16 | 0/4 |
+| 같은 길이 entity 숫자 변경 | 12/16 | 2/4 |
+| entity 숫자를8자리로 변경 | 11/16 | 1/4 |
+| context 이름만 변경 | 14/16 | 2/4 |
+| 방향 값 순환 치환 | 4/16 | 0/4 |
+| 새 숫자 경로 값 | 0/16 | 0/4 |
+
+순서만 바꿔도 전부 실패하므로 상태/질문 의미에 대한 순서 불변성이 확보되지 않았다.
+모든 실패의 유일한 원인이라고 단정하지 않는다. 숫자 경로 값은 학습16 정답에 없던13개
+token ID를 포함한다. 방향 순환에서도2개가 그 정답 집합에 없었다. source/ID/context/value
+동시 변경 결과만으로 일반화를 하나의 지표로 설명하지 않는다.
+
+다음 U1은 이 순서 의존만 교정하는32-case 진단으로 사전 고정한다. 원본16+순서반전16,
+R-B parent·tokenizer·SMALL·F32 불변, 새 Adam/LR.001/warmup20, micro4×accumulation8,
+update마다32개 전체1회, 최대1,000updates/320만input/45분(먼저 도달)이다. 32개두평가
+연속완전정합 뒤 fresh process 원본/반전 재검증이 조건이며 Goal1 pass는 아니다.
+한 번에heavy작업 하나, 학습 중 source를 고정한다. 원본16 및 새64를 덮어쓰지 않는다.
+NODE=S4/U1, STATUS=VERIFIED_DIAGNOSTIC; SOURCE_CHANGED=contrast.rs/train_main.rs 및
+neural/checkpoint.rs/artifact.rs. 관련 contrast unit3개와 artifact 회귀1개 통과,
+check/clippy/release build 완료. 학습 중에는 코드 및 source hash를 고정한다.
+
+첫 실행은0update에서 저장 state의16개 고정 guard에 의해 거부됐다. 기존16개와 명시적
+32개만 허용하도록 검사하고12/24/36개는 거부하는 binary roundtrip 회귀를 추가했다.
+실패 출력은 보존하고 다른 출력 경로로 실행했다. 현재 source 목록 SHA는
+176560efbb50aec08b06500fb409d9cb2dfa188583dd087829fd65c8c467f3e6이며,
+32개 학습 사례 SHA는3643f50b9716726f7542b284466ec327f0e5d18ae58ed2d6661be246c84de94c다.
+
+실행: `replica-train contrast train --fixture <frozen> --checkpoint <R-B-native-resume>
+--output <new-output> --source-id <source-sha> --start diagnostic --both-orders`.
+실제 backend는CPU/gemm F32, VECLIB1/RAYON1이다. 과거P1의 R-A/R-B 학습은
+CPU/Accelerate였다. 이번 순서 변경 전후 추론은 모두CPU/gemm으로 측정했지만
+이전 run과 학습 속도/최적화 경로까지 동일한 비교라고 부르지 않는다.
+
+0update는16/32·4/8묶음,100update는29/32·6/8묶음·EOS32/32다.
+100update 입력538,000/target6,400토큰, loss0.069477400이다. 원본16과 순서반전16은
+독립32개 scene이 아니라 동일4개 scene의8개 변형이다. 인용 생성은 요청하지 않았다.
+
+U1 종료:200/300update 모두32/32·8/8·EOS32/32.300updates, input1,614,000,
+target19,200, sampler8507264816735876025, 마지막loss0.000048603,
+종료이유TWO_EVALUATIONS_PASS_PENDING_FRESH_RELOAD. 실제학습1,367.92s,
+최대RSS1,015,283,712B. 원본R-B 파일SHA 불변을 재확인했다.
+RESUME115,285,184B를 INFERENCE38,432,768B로 export했고, 새로운process에서
+원본16/16·4/4 및 순서반전16/16·4/4를 통과했다. source quality는DIAGNOSTIC_ONLY다.
+
+| U1 inference 재로딩의 개발 조건 | exact | quartet all-correct |
+|---|---:|---:|
+| 원본 | 16/16 | 4/4 |
+| 사건 ID만 변경 | 9/16 | 0/4 |
+| 근거 순서만 반전 | 16/16 | 4/4 |
+| 같은 길이 entity 숫자 변경 | 11/16 | 1/4 |
+| entity 숫자8자리 | 8/16 | 0/4 |
+| context 이름 변경 | 14/16 | 2/4 |
+| 방향 값 순환 | 6/16 | 0/4 |
+| 새 숫자 경로 값 | 0/16 | 0/4 |
+
+재로딩128개 생성17.82s/최대RSS205,783,040B. 순서 학습은 통과했지만 다른 요소의
+전이가 악화된 항목도 있다. 일반화 해결·일반 QA 성공·Goal1 완료가 아니다.
+새64/최종heldout를 추가 실행하거나 후보 선택에 사용하지 않았다.
+
+평가 도구의 오류도 수정했다: Adam 없는 native inference를 미학습으로 오인하던 검사를
+보존된trained_steps 기준으로 바꿨다. 직접 회귀1개는 TINY의 실제1회 gradient update→
+optimizer 없는binary→평가의품질실패 도달 및 random/trained 역분류 거부를 확인한다.
+의도적으로 긴 입력을 거부하는 이 unit의200개는 모델 품질 평가 실적으로 세지 않는다.
+이번 직접회귀는 contrast3+artifact1+평가기1=5개이고 fmt/check/clippy/release 통과다.
+처음 test명 filter가0개를 선택한 로그는 보존했으며, 완전한 test경로로 실행한1개만 센다.
+
+| U1 파일 | SHA-256 |
+|---|---|
+| resume | e1933e202b13aed509fca9aef4f4fc661fb355aa5c666e404334b6cf215c89ae |
+| inference | 06760d59145b862ef51367e2ee9620923c7f231bb80578293a5cf293a109985b |
+| 학습 raw 결과 | 46f097878d33013cf7754c43151adfff0cac3698509a4bc1356e1e9585fd9644 |
+| inference 요소별 raw 결과 | a6554d621f70a8141f1ad1c7f1c8b4fcf046e5d4c2655b48bba052ffe17af132 |
+| 평가기 수정 포함 최종 source 목록 | 357f0c827aa383b00ae38e521be19c30b4af01a0e1bcc8263dccb3d1c62ee08d |
+
+DELIVERABLE_VERIFIED=U1; MODEL_QUALITY_PASS=NO; GOAL1_READY=NO;
+S4_QUALITY=FAIL; S5/S6의 선행 품질 조건 미충족; INDEPENDENT_PENDING.
+다음은 이32개를 더 오래 학습하는 작업이 아니라, 근거값과 사건번호를 함께 생성하는
+일반 QA의 대조자료/실제 생성 오류를 교정하는 제한된 단계다. 기존 수식/저장과 checkpoint를
+보존하며 새 변경·실행 예산·개발검증을 먼저 명시한다.

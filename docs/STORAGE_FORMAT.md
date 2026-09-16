@@ -168,6 +168,9 @@ INFERENCE에는 model weights/config/exact tokenizer와 필요한 출처·실제
 각 parameter의 Adam m/v, TrainConfig 전 필드, step, input/target budget, u64 sampler,
 corpus/validation/previous-corpora hashes, initial/parent weight lineage, loss,
 contrast16 여부와 중단 상태가 있다. F64/u64는 JSON 숫자로 우회하지 않는다.
+contrast16은 고정16개 전체 통과 sampler의 기존 필드명이다. 명시적인 순서 반전 진단은
+같은16개의 두 view인32개를 허용하며 microbatch×accumulation과 corpus hash로 구별한다.
+16/32 외 크기는 거부한다. wire 배치는 그대로이며 구형 reader는32개 state를 거부한다.
 optimizer step 경계에서만 trainer가 저장하고 accumulation 중간 gradient는 저장하지
 않는다. SIGKILL 후 최신 미공개 gradient까지 복구된다는 의미가 아니다.
 

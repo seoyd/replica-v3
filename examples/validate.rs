@@ -1164,11 +1164,7 @@ fn native_failures(checkpoint: &str, cli: &str, output: &str) -> Result<()> {
     use replica_v3::neural::{checkpoint as artifact, write_new};
     use std::{path::Path, process::Stdio, time::Duration};
     let (manifest, tok) = artifact::metadata(Path::new(checkpoint))?;
-    if manifest
-        .training
-        .as_ref()
-        .is_none_or(|state| state.step == 0)
-    {
+    if manifest.trained_steps == 0 {
         return Err(Error::Invalid(
             "failure diagnostic requires actual trained weights".into(),
         ));
@@ -2017,7 +2013,9 @@ fn evaluate_native(
     let load_start = Instant::now();
     let loaded = artifacts::load(checkpoint, candle_core::Device::Cpu, false)?;
     let load_ms = elapsed(load_start);
-    if (mode == "random") != loaded.manifest.training.is_none() {
+    // Inference artifacts intentionally omit Adam/state; their retained training
+    // lineage distinguishes learned weights from random initialization.
+    if (mode == "random") != (loaded.manifest.trained_steps == 0) {
         return Err(Error::Invalid("evaluation checkpoint status/mode".into()));
     }
     let config_id = loaded.model.config.id()?;
@@ -2028,7 +2026,7 @@ fn evaluate_native(
     writeln!(
         log,
         "{}",
-        serde_json::json!({"header":true,"mode":mode,"fixture_sha256":neural::hash(&raw),"checkpoint_sha256":loaded.manifest.weights_sha256,"tokenizer_sha256":loaded.tokenizer.id(),"architecture":loaded.model.config,"training":loaded.manifest.training,"load_ms":load_ms,"backend":neural::cpu_backend(),"dtype":"F32","rubric":"independent_core_value_time_citations_v2","semantic_review":"separate"})
+        serde_json::json!({"header":true,"mode":mode,"fixture_sha256":neural::hash(&raw),"checkpoint_sha256":loaded.manifest.weights_sha256,"tokenizer_sha256":loaded.tokenizer.id(),"architecture":loaded.model.config,"training":loaded.manifest.training,"trained_steps":loaded.manifest.trained_steps,"diagnostic_only":loaded.manifest.diagnostic_only,"load_ms":load_ms,"backend":neural::cpu_backend(),"dtype":"F32","rubric":"independent_core_value_time_citations_v2","semantic_review":"separate"})
     )?;
     let cases = if mode == "value-swap" {
         fixture.value_pairs
@@ -2258,6 +2256,68 @@ fn compare_pairs(original: &std::path::Path, swapped: &std::path::Path) -> Resul
 #[cfg(test)]
 mod evaluation_tests {
     use super::*;
+    #[test]
+    fn trained_inference_reaches_quality_gate_and_cannot_be_random_baseline() {
+        use candle_core::{DType, Device, Tensor};
+        use replica_v3::neural::{
+            BOS, ByteBpe, EOS, checkpoint, hash,
+            transformer::{Config, Transformer, masked_loss},
+        };
+        let d = tempfile::tempdir().unwrap();
+        let tok = ByteBpe::train(&[b"abc".to_vec()], &hash(b"unit corpus"), 264).unwrap();
+        let model = Transformer::init(Config::tiny(tok.vocab_size()), 7, Device::Cpu).unwrap();
+        let mut manifest = checkpoint::initialized(&model, &tok, 7, hash(b"unit source")).unwrap();
+        let random = d.path().join("random");
+        checkpoint::save(&random, &model, &tok, manifest.clone(), &Default::default()).unwrap();
+        // One real numeric gradient update, solely to exercise lineage admission.
+        // TINY cannot fit these long prompts; zero quality must remain a failure.
+        let input = Tensor::new(&[[BOS, 8u32]], &Device::Cpu).unwrap();
+        let targets = Tensor::new(&[[8u32, EOS]], &Device::Cpu).unwrap();
+        let mask = Tensor::ones((1, 2), DType::F32, &Device::Cpu).unwrap();
+        let (loss, _) =
+            masked_loss(&model.forward(&input, None).unwrap(), &targets, &mask).unwrap();
+        let grads = loss.backward().unwrap();
+        for var in model.vars.values() {
+            let delta = (grads.get(var).unwrap() * 0.01).unwrap();
+            var.set(&(var.as_detached_tensor() - delta).unwrap())
+                .unwrap();
+        }
+        assert_ne!(model.weight_hash().unwrap(), manifest.initial_weight_hash);
+        manifest.trained_steps = 1;
+        manifest.status = "DIAGNOSTIC_COMPLETE".into();
+        manifest.diagnostic_only = true;
+        let trained = d.path().join("inference");
+        checkpoint::save(&trained, &model, &tok, manifest, &Default::default()).unwrap();
+        assert!(checkpoint::metadata(&trained).unwrap().0.training.is_none());
+        let fixture = d.path().join("fixture");
+        std::fs::write(
+            &fixture,
+            serde_json::to_vec(&Holdout {
+                version: 1,
+                seed: 7,
+                cases: heldout(7, false),
+                value_pairs: heldout(7, true),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let scored = d.path().join("scored");
+        let error = evaluate_native(&trained, &fixture, "trained", &scored).unwrap_err();
+        assert!(matches!(error, Error::Model(ref s) if s.contains("quality gate failed")));
+        let log = std::fs::read_to_string(&scored).unwrap();
+        let header: serde_json::Value = serde_json::from_str(log.lines().next().unwrap()).unwrap();
+        let summary: serde_json::Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+        assert_eq!(header["trained_steps"], 1);
+        assert!(header["training"].is_null());
+        assert_eq!(summary["denominator"], 200);
+        assert_eq!(summary["task_target_pass"], false);
+        for (path, mode) in [(&trained, "random"), (&random, "trained")] {
+            let rejected = d.path().join(format!("rejected-{mode}"));
+            assert!(matches!(evaluate_native(path, &fixture, mode, &rejected),
+                Err(Error::Invalid(s)) if s.contains("status/mode")));
+            assert!(!rejected.exists());
+        }
+    }
     #[test]
     fn fresh_holdout_keeps_versions_pairs_and_confirmed_sequence_independent() {
         let cases = heldout_memory_v2(439_187, false);
