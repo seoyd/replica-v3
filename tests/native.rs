@@ -129,3 +129,422 @@ fn native_prompt_boundaries_and_exact_evidence_tail() {
     assert_eq!(none.excluded, [17, 3]);
     assert_eq!(tok.bytes(), tokenizer().bytes());
 }
+
+#[test]
+fn native_numeric_references_and_causal_padding_gradients() {
+    use candle_core::{DType, Device, Tensor};
+    use replica_v3::neural::transformer::*;
+    let device = Device::Cpu;
+    let x = Tensor::new(&[1f32, 2., 3., 4.], &device).unwrap();
+    let w = Tensor::ones(4, DType::F32, &device).unwrap();
+    let actual = rms_norm(&x, &w, 1e-6).unwrap().to_vec1::<f32>().unwrap();
+    for (i, v) in actual.iter().enumerate() {
+        let expected = (i + 1) as f64 / (7.5f64 + 1e-6).sqrt();
+        assert!((*v as f64 - expected).abs() < 1e-6);
+    }
+    let rotary_input = x.reshape((1, 1, 1, 4)).unwrap();
+    let rotated = rotary(&rotary_input, 1, 10000.)
+        .unwrap()
+        .flatten_all()
+        .unwrap()
+        .to_vec1::<f32>()
+        .unwrap();
+    let expected = [
+        1f64.cos() - 2. * 1f64.sin(),
+        1f64.sin() + 2. * 1f64.cos(),
+        3. * 0.01f64.cos() - 4. * 0.01f64.sin(),
+        3. * 0.01f64.sin() + 4. * 0.01f64.cos(),
+    ];
+    for (a, b) in rotated.iter().zip(expected) {
+        assert!((*a as f64 - b).abs() < 1e-6);
+    }
+    let kv = Tensor::new(&[10f32, 20.], &device)
+        .unwrap()
+        .reshape((1, 2, 1, 1))
+        .unwrap();
+    assert_eq!(
+        repeat_kv(&kv, 4)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap(),
+        [10., 10., 20., 20.]
+    );
+    assert!(repeat_kv(&kv, 3).is_err());
+    let m = Transformer::init(Config::tiny(264), 17, device.clone()).unwrap();
+    let ids = Tensor::new(&[[8u32, 9, 10, 11, 12, 13]], &device).unwrap();
+    let mut changed = vec![8u32, 9, 10, 99, 98, 97];
+    let later = Tensor::new(changed.as_slice(), &device)
+        .unwrap()
+        .unsqueeze(0)
+        .unwrap();
+    let a = m.forward(&ids, None).unwrap();
+    let b = m.forward(&later, None).unwrap();
+    assert!(max_error(&a.narrow(1, 0, 3).unwrap(), &b.narrow(1, 0, 3).unwrap()) < 1e-6);
+    let padding = [true, true, false, true, true, true];
+    let padded_change = Tensor::new(&[[8u32, 9, 98, 11, 12, 13]], &device).unwrap();
+    assert!(
+        max_error(
+            &m.forward(&ids, Some(&padding))
+                .unwrap()
+                .narrow(1, 3, 3)
+                .unwrap(),
+            &m.forward(&padded_change, Some(&padding))
+                .unwrap()
+                .narrow(1, 3, 3)
+                .unwrap()
+        ) < 1e-6
+    );
+    assert!(
+        m.forward(&ids, Some(&[false; 6]))
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap()
+            .iter()
+            .all(|v| v.is_finite())
+    );
+    changed[0] = 264;
+    assert!(
+        m.forward(
+            &Tensor::new(changed.as_slice(), &device)
+                .unwrap()
+                .unsqueeze(0)
+                .unwrap(),
+            None
+        )
+        .is_err()
+    );
+    let targets = Tensor::new(&[[9u32, 10, 11, 12, 13, 14]], &device).unwrap();
+    let mask = Tensor::new(&[[0f32, 0., 1., 1., 1., 0.]], &device).unwrap();
+    let (loss, count) = masked_loss(&a, &targets, &mask).unwrap();
+    assert_eq!(count, 3);
+    assert!(loss.to_scalar::<f32>().unwrap().is_finite());
+    let grads = loss.backward().unwrap();
+    for name in [
+        "embedding",
+        "layer.0.q",
+        "layer.0.k",
+        "layer.0.v",
+        "layer.0.gate",
+        "layer.0.up",
+        "layer.0.down",
+    ] {
+        let var = &m.vars[name];
+        let gradient = grads
+            .get(var)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        assert!(gradient.iter().all(|g| g.is_finite()));
+        assert!(gradient.iter().any(|g| g.abs() > 1e-10), "{name}");
+    }
+    for name in ["embedding", "layer.0.q", "layer.0.down"] {
+        let var = &m.vars[name];
+        let gradient = grads
+            .get(var)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let index = gradient
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+            .unwrap()
+            .0;
+        let original = var.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let mut values = original.clone();
+        let epsilon = 0.001;
+        values[index] += epsilon;
+        var.set(&Tensor::from_vec(values, var.dims(), &device).unwrap())
+            .unwrap();
+        let plus = masked_loss(&m.forward(&ids, None).unwrap(), &targets, &mask)
+            .unwrap()
+            .0
+            .to_scalar::<f32>()
+            .unwrap();
+        let mut values = original.clone();
+        values[index] -= epsilon;
+        var.set(&Tensor::from_vec(values, var.dims(), &device).unwrap())
+            .unwrap();
+        let minus = masked_loss(&m.forward(&ids, None).unwrap(), &targets, &mask)
+            .unwrap()
+            .0
+            .to_scalar::<f32>()
+            .unwrap();
+        var.set(&Tensor::from_vec(original, var.dims(), &device).unwrap())
+            .unwrap();
+        assert!(
+            ((plus - minus) / (2. * epsilon) - gradient[index]).abs() < 0.005,
+            "finite difference {name}"
+        );
+    }
+}
+fn max_error(a: &candle_core::Tensor, b: &candle_core::Tensor) -> f32 {
+    a.flatten_all()
+        .unwrap()
+        .to_vec1::<f32>()
+        .unwrap()
+        .into_iter()
+        .zip(b.flatten_all().unwrap().to_vec1::<f32>().unwrap())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0., f32::max)
+}
+#[test]
+fn native_kv_chunk_rollover_parity_reset_and_identity() {
+    use candle_core::{Device, Tensor};
+    use replica_v3::neural::transformer::*;
+    let m = Transformer::init(Config::tiny(264), 19, Device::Cpu).unwrap();
+    for len in [7, 8, 9, 17, 33, 64] {
+        let ids: Vec<u32> = (8..8 + len).map(|v| v as u32).collect();
+        let full = m
+            .forward(
+                &Tensor::new(ids.as_slice(), &Device::Cpu)
+                    .unwrap()
+                    .unsqueeze(0)
+                    .unwrap(),
+                None,
+            )
+            .unwrap();
+        for chunk in [1, 7, 8, 9, 32] {
+            let mut cache = m.cache("scope-a");
+            let mut parts = Vec::new();
+            for part in ids.chunks(chunk) {
+                parts.push(
+                    m.forward_cached(
+                        &Tensor::new(part, &Device::Cpu)
+                            .unwrap()
+                            .unsqueeze(0)
+                            .unwrap(),
+                        &mut cache,
+                        "scope-a",
+                    )
+                    .unwrap(),
+                );
+            }
+            let cached = Tensor::cat(&parts, 1).unwrap();
+            let error = max_error(&full, &cached);
+            assert!(error < 2e-5, "len={len} chunk={chunk} error={error}");
+            assert_eq!(cache.retained_tokens(), [len.min(8), len]);
+            assert_eq!(cache.bytes(), (len.min(8) + len) * 2 * 2 * 8 * 4);
+            let single = Tensor::new(&[[8u32]], &Device::Cpu).unwrap();
+            assert!(m.forward_cached(&single, &mut cache, "scope-b").is_err());
+            cache.reset("scope-b");
+            assert_eq!(cache.bytes(), 0);
+            assert!(
+                max_error(
+                    &m.forward_cached(&single, &mut cache, "scope-b").unwrap(),
+                    &m.forward(&single, None).unwrap()
+                ) < 1e-6
+            );
+            let other = Transformer::init(Config::tiny(264), 20, Device::Cpu).unwrap();
+            assert!(
+                other
+                    .forward_cached(&single, &mut cache, "scope-b")
+                    .is_err()
+            );
+        }
+    }
+}
+#[test]
+fn native_checkpoint_roundtrip_and_corruption_rejection() {
+    use candle_core::Device;
+    use replica_v3::neural::{checkpoint, transformer::*};
+    let tok = tokenizer();
+    let model = Transformer::init(Config::tiny(tok.vocab_size()), 27, Device::Cpu).unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("checkpoint");
+    let manifest = checkpoint::initialized(&model, &tok, 27, hash(b"fixture-source")).unwrap();
+    let original = checkpoint::save(&p, &model, &tok, manifest, &Default::default()).unwrap();
+    assert!(checkpoint::save(&p, &model, &tok, original.clone(), &Default::default()).is_err());
+    let loaded = checkpoint::load(&p, Device::Cpu, false).unwrap();
+    assert_eq!(
+        loaded.model.weight_hash().unwrap(),
+        model.weight_hash().unwrap()
+    );
+    let path = p.join("weights.safetensors");
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::write(&path, &bytes[..bytes.len() - 1]).unwrap();
+    assert!(checkpoint::load(&p, Device::Cpu, false).is_err());
+    std::fs::write(&path, &bytes).unwrap();
+    let mut broken = original;
+    broken.tokenizer_sha256 = hash(b"wrong tokenizer");
+    std::fs::write(
+        p.join("manifest.json"),
+        serde_json::to_vec(&broken).unwrap(),
+    )
+    .unwrap();
+    assert!(checkpoint::load(&p, Device::Cpu, false).is_err());
+}
+
+#[test]
+fn native_local_global_mask_and_greedy_generation_boundaries() {
+    use candle_core::{Device, Tensor};
+    use replica_v3::neural::transformer::*;
+    use std::sync::atomic::AtomicBool;
+    let device = Device::Cpu;
+    let local = attention_mask(2..5, 0..5, Some(2), None, 1, &device)
+        .unwrap()
+        .reshape((3, 5))
+        .unwrap()
+        .to_vec2::<f32>()
+        .unwrap();
+    assert_eq!(
+        local,
+        vec![
+            vec![0., 1., 1., 0., 0.],
+            vec![0., 0., 1., 1., 0.],
+            vec![0., 0., 0., 1., 1.]
+        ]
+    );
+    let global = attention_mask(2..5, 0..5, None, None, 1, &device)
+        .unwrap()
+        .reshape((3, 5))
+        .unwrap()
+        .to_vec2::<f32>()
+        .unwrap();
+    assert_eq!(
+        global,
+        vec![
+            vec![1., 1., 1., 0., 0.],
+            vec![1., 1., 1., 1., 0.],
+            vec![1., 1., 1., 1., 1.]
+        ]
+    );
+    let mask = attention_mask(0..3, 0..3, None, Some(&[true, false, true]), 1, &device)
+        .unwrap()
+        .reshape((3, 3))
+        .unwrap()
+        .to_vec2::<f32>()
+        .unwrap();
+    assert_eq!(
+        mask,
+        vec![vec![1., 0., 0.], vec![0., 0., 0.], vec![1., 0., 1.]]
+    );
+    let model = Transformer::init(Config::tiny(264), 11, device.clone()).unwrap();
+    let input = vec![8u32, 9, 10];
+    let mut full = input.clone();
+    let mut expected = Vec::new();
+    for _ in 0..3 {
+        let logits = model
+            .forward(
+                &Tensor::new(full.as_slice(), &device)
+                    .unwrap()
+                    .unsqueeze(0)
+                    .unwrap(),
+                None,
+            )
+            .unwrap();
+        let id = logits
+            .narrow(1, full.len() - 1, 1)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .argmax(0)
+            .unwrap()
+            .to_scalar::<u32>()
+            .unwrap();
+        if id == EOS {
+            break;
+        }
+        assert!(id >= 8);
+        expected.push(id);
+        full.push(id);
+    }
+    let generated = model
+        .generate(&input, 3, 1000, &AtomicBool::new(false), "test")
+        .unwrap();
+    assert_eq!(generated.tokens, expected);
+    let boundary = vec![8u32; 63];
+    assert!(!matches!(
+        model.generate(&boundary, 1, 1000, &AtomicBool::new(false), "test"),
+        Err(Error::ContextTooSmall)
+    ));
+    assert!(matches!(
+        model.generate(&boundary, 2, 1000, &AtomicBool::new(false), "test"),
+        Err(Error::ContextTooSmall)
+    ));
+    assert!(matches!(
+        model.generate(&input, 1, 1000, &AtomicBool::new(true), "test"),
+        Err(Error::Cancelled)
+    ));
+    assert!(
+        model
+            .generate(&[], 1, 1000, &AtomicBool::new(false), "test")
+            .is_err()
+    );
+}
+
+#[test]
+fn native_checkpoint_rejects_self_checksummed_nan_unknown_tensor_and_precision() {
+    use candle_core::{DType, Device, Tensor};
+    use replica_v3::neural::{checkpoint, transformer::*};
+    let tok = tokenizer();
+    let model = Transformer::init(Config::tiny(tok.vocab_size()), 37, Device::Cpu).unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("checkpoint");
+    let manifest = checkpoint::save(
+        &p,
+        &model,
+        &tok,
+        checkpoint::initialized(&model, &tok, 37, hash(b"fixture-source")).unwrap(),
+        &Default::default(),
+    )
+    .unwrap();
+    let base: std::collections::HashMap<String, Tensor> = model
+        .vars
+        .iter()
+        .map(|(k, v)| (format!("model.{k}"), v.as_detached_tensor()))
+        .collect();
+    for corruption in ["nan", "unknown", "missing", "precision", "shape"] {
+        let mut tensors = base.clone();
+        match corruption {
+            "nan" => {
+                let mut v = tensors["model.final_norm"].to_vec1::<f32>().unwrap();
+                v[0] = f32::NAN;
+                tensors.insert(
+                    "model.final_norm".into(),
+                    Tensor::new(v.as_slice(), &Device::Cpu).unwrap(),
+                );
+            }
+            "unknown" => {
+                tensors.insert(
+                    "unknown".into(),
+                    Tensor::new(&[1f32], &Device::Cpu).unwrap(),
+                );
+            }
+            "missing" => {
+                tensors.remove("model.final_norm");
+            }
+            "precision" => {
+                tensors.insert(
+                    "model.final_norm".into(),
+                    tensors["model.final_norm"].to_dtype(DType::F16).unwrap(),
+                );
+            }
+            _ => {
+                tensors.insert(
+                    "model.final_norm".into(),
+                    Tensor::new(&[1f32], &Device::Cpu).unwrap(),
+                );
+            }
+        }
+        let path = p.join("weights.safetensors");
+        candle_core::safetensors::save(&tensors, &path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let mut m = manifest.clone();
+        m.weights_sha256 = hash(&bytes);
+        m.weights_bytes = bytes.len();
+        std::fs::write(p.join("manifest.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+        assert!(
+            checkpoint::load(&p, Device::Cpu, false).is_err(),
+            "{corruption}"
+        );
+    }
+}

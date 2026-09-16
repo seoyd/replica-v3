@@ -1302,12 +1302,14 @@ name = "replica-v3"
 version = "0.1.0"
 dependencies = [
  "candle-core",
+ "candle-nn",
  "candle-transformers",
  "clap",
  "crc32c",
  "ctrlc",
  "minijinja",
  "rusqlite",
+ "safetensors",
  "serde",
  "serde_json",
  "sha2",

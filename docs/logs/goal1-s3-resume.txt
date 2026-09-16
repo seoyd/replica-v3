@@ -1,0 +1,8 @@
+   Compiling replica-v3 v0.1.0 (/Users/seo/Projects/Replica-v3)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.47s
+     Running tests/training.rs (target/debug/deps/training-58cf77b7590065dc)
+
+running 1 test
+test native_training_resume_is_identical_in_fresh_processes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 1.67s

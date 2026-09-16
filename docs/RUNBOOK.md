@@ -186,3 +186,25 @@ only the specified authorized UTF-8 document, without normalizing its bytes. Omi
 for SYNTHETIC_ONLY. Corpus serialization is training data, not a personal memory DB.
 Tokenizer's adjacent `.manifest.json` records actual sequence/token statistics.
 No external weights/tokenizer/model API is used. Neural training is not yet verified.
+
+### Native initialization / training / resume (S3)
+
+```sh
+# source_id is a SHA-256 of an explicitly recorded source manifest, not a temporary instruction.
+source_id=$(shasum -a 256 docs/logs/goal1-s3-source-digest.txt | awk '{print $1}')
+target/release/replica-train model init --tokenizer artifacts/goal1-tokenizer.json --output artifacts/small-init --profile small --seed 17 --source-id "$source_id"
+target/release/replica-train model inspect --checkpoint artifacts/small-init
+target/release/replica-train train --checkpoint artifacts/small-init --corpus artifacts/goal1-corpus --output artifacts/training-run
+# Resume uses the checkpoint's optimizer/schedule/sampler config and exact corpus hashes:
+target/release/replica-train train --resume artifacts/training-run/final --corpus artifacts/goal1-corpus --output artifacts/resumed-run
+```
+
+CPU/F32 is explicit. Default horizon 5000 steps, 20M input tokens, length512,
+microbatch1/accumulation4, clip1, LR0.001, warmup100, validation every100. Overrides
+are finite CLI config; --stop-after is an intentional optimizer-boundary stop within
+that horizon. Resume continues the saved horizon; it is not a new schedule or weight-only
+fine-tune. --numeric-probe with a tiny artifact is an explicit training-loop check,
+not a memory QA dataset. Only training tooling can reach its toy samples. A final test
+must never select the checkpoint. Ctrl-C publishes a boundary checkpoint and exits
+with cancellation; process death retains the last published checkpoint. Training RSS
+is sampled after steps with a 16 GiB stop guard, not a precise transient-peak profiler.

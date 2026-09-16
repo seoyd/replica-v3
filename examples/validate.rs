@@ -205,6 +205,9 @@ fn smoke(config: ModelConfig) -> Result<()> {
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("native-boundaries") if args.len() == 2 => {
+            native_boundaries(std::path::Path::new(&args[1]))
+        }
         Some("measure") => measure(),
         Some("smoke") => smoke(config(&args[1..])?),
         Some("__model-worker") => {
@@ -225,6 +228,62 @@ fn run() -> Result<()> {
             "usage: validate measure | smoke MODEL TOKENIZER TOKENIZER_CONFIG".into(),
         )),
     }
+}
+fn native_boundaries(path: &std::path::Path) -> Result<()> {
+    use candle_core::{Device, Tensor};
+    let loaded = replica_v3::neural::checkpoint::load(path, Device::Cpu, false)?;
+    let model = &loaded.model;
+    let start = Instant::now();
+    println!(
+        "NUMERIC_ONLY profile={} parameters={} tokenizer={} checkpoint={} backend=CPU dtype=F32",
+        model.config.profile,
+        model.config.parameters(),
+        loaded.tokenizer.id(),
+        loaded.manifest.weights_sha256
+    );
+    for len in [255usize, 256, 257, 513, 1024, 2048] {
+        if len > model.config.context {
+            continue;
+        }
+        let ids: Vec<_> = (0..len)
+            .map(|i| 8 + (i % (model.config.vocab - 8)) as u32)
+            .collect();
+        let reference = model
+            .forward(
+                &Tensor::new(ids.as_slice(), &Device::Cpu)?.unsqueeze(0)?,
+                None,
+            )?
+            .detach();
+        let mut cache = model.cache("numeric-boundary");
+        let mut parts = Vec::new();
+        for chunk in ids.chunks(128) {
+            parts.push(
+                model
+                    .forward_cached(
+                        &Tensor::new(chunk, &Device::Cpu)?.unsqueeze(0)?,
+                        &mut cache,
+                        "numeric-boundary",
+                    )?
+                    .detach(),
+            );
+        }
+        let cached = Tensor::cat(&parts, 1)?;
+        let error = (&cached - &reference)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        println!(
+            "tokens={len} max_logit_error={error} retained={:?} kv_bytes={} max_attention_tensor_bytes={} elapsed_s={:.3}",
+            cache.retained_tokens(),
+            cache.bytes(),
+            cache.max_attention_bytes,
+            start.elapsed().as_secs_f64()
+        );
+        if error > 5e-5 {
+            return Err(Error::Model("native cache/reference parity".into()));
+        }
+    }
+    Ok(())
 }
 fn main() {
     if let Err(error) = run() {

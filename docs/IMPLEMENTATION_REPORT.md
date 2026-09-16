@@ -315,3 +315,43 @@ OWN_MODEL_TRAINED=NO; TRAIN_PIPELINE_VERIFIED=NO; GOAL1_TASK_PASS=NOT_RUN.
 T-N06 corpus/tokenizer lineage is implemented; model initialization/training lineage
 remains pending S3/S4. S1 published 4edd62cafb92d077667155105f233ce1e88c4e3d and
 origin/main matched. No S3–S6 success or independent acceptance is claimed.
+
+### S3 in progress
+
+S2 published 6ded741b6e994b3b43db9f0582eee850f0bcea3d; origin/main matched.
+New source owns tensor-level decoder, bounded KV, masked loss, AdamW state and strict
+safetensors checkpoint. CPU tiny forward/gradient/cache and fresh-process 6-step vs
+3+resume-to-6 tests executed (logs/goal1-s3-direct.txt). These are numeric pipeline
+checks, not memory QA or model quality. Small-profile timing probe is running; S3
+is not yet marked complete. No external model/weight/API has been used.
+
+### S3 — implemented and executed
+
+Changed: src/neural/{transformer,checkpoint}.rs, src/training.rs, src/train_main.rs,
+shared neural/lib modules; Cargo adds only already-cached candle-nn 0.11.0 and
+safetensors 0.8.0 (lockfile adds direct edges). examples/validate.rs adds an explicit
+own-model numeric boundary command. No external model classes initialize the native
+model. Source/lineage and exact mathematical conventions are in NATIVE_MODEL.md.
+
+Final directly related gate: **11 tests passed** (logs/goal1-s3-exit-tests.txt),
+including independent operation references, finite difference, masks, real greedy
+logits, KV chunks/rollover/reset/identity, malformed tensor artifacts, optimizer state,
+exact fresh-process resume and cancellation after an observed real step. Clippy all
+ targets/features and release trainer/example builds passed. Initial clippy migration
+to Rust 1.98 as_chunks is recorded; no dependency/runtime installer was needed.
+
+Actual SMALL probe: 9,546,432 parameters, random seed17, 2 optimizer steps, 622 input
+ tokens / 26 supervised targets. Nonzero gradients and changed weight hashes observed.
+Validation was 200 separate episodes, not final test; loss 6.68363942 -> 6.23209999.
+This does not establish answer accuracy. Exact probe source fingerprint and environment:
+logs/goal1-s3-probe-source-digest.txt, goal1-s3-probe-host.txt; probe init/run logs retained.
+Final release numeric boundary execution uses that immutable initialized artifact with
+current implementation: logs/goal1-s3-small-boundaries.txt (six measured lengths through
+2048, largest error 1.252e-6). It is not six independent language tests.
+
+INIT_FROM_RANDOM=YES (seed/config/hash/observed nonzero initialization).
+TRAIN_PIPELINE_VERIFIED=YES (CPU numerical/state checks); OWN_MODEL_TRAINED=PROBE_ONLY.
+GOAL1_TASK_PASS=NOT_RUN; REAL_NATIVE_MODEL_SMOKE=NOT_RUN; M4_CPU=NUMERIC_PROBE_PASS;
+M4_METAL=NOT_RUN; QUANT_EXPORT_TEST=NOT_RUN; QUANT_DEFAULT=FP32.
+S3=VERIFIED; S4 actual overfit/full training/heldout quality remains next.
+INDEPENDENT_REVIEW=PENDING; GOAL1_READY_FOR_REVIEW=NO; GOAL1_ACCEPTED=NO.

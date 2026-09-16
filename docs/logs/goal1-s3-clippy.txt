@@ -1,0 +1,45 @@
+    Checking replica-v3 v0.1.0 (/Users/seo/Projects/Replica-v3)
+error: using `chunks_exact` with a constant chunk size
+   --> src/neural/checkpoint.rs:196:18
+    |
+196 |                 .chunks_exact(4)
+    |                  ^^^^^^^^^^^^^^^ help: consider using `as_chunks` instead: `as_chunks::<4>().0.iter()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#chunks_exact_to_as_chunks
+    = note: `-D clippy::chunks-exact-to-as-chunks` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::chunks_exact_to_as_chunks)]`
+
+error: you seem to want to iterate on a map's keys
+   --> src/neural/checkpoint.rs:216:22
+    |
+216 |     for (name, _) in &manifest.tensors {
+    |                      ^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#for_kv_map
+    = note: `-D clippy::for-kv-map` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::for_kv_map)]`
+help: use the corresponding method
+    |
+216 -     for (name, _) in &manifest.tensors {
+216 +     for name in manifest.tensors.keys() {
+    |
+
+error: using `chunks_exact` with a constant chunk size
+   --> src/neural/checkpoint.rs:223:18
+    |
+223 |                 .chunks_exact(4)
+    |                  ^^^^^^^^^^^^^^^ help: consider using `as_chunks` instead: `as_chunks::<4>().0.iter()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#chunks_exact_to_as_chunks
+
+error: using `chunks_exact` with a constant chunk size
+   --> src/neural/checkpoint.rs:236:18
+    |
+236 |                 .chunks_exact(4)
+    |                  ^^^^^^^^^^^^^^^ help: consider using `as_chunks` instead: `as_chunks::<4>().0.iter()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#chunks_exact_to_as_chunks
+
+error: could not compile `replica-v3` (lib test) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `replica-v3` (lib) due to 4 previous errors

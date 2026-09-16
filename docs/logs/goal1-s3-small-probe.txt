@@ -1,0 +1,5 @@
+backend=CPU dtype=F32 profile=NATIVE_TRPP_G1_SMALL parameters=9546432 train_samples=2000 validation_samples=200 initial_validation_loss=6.68363942 numeric_overfit_only=false initial_weight_hash=9a6850f46a7bce368ad34fa996122af86d8372c3edcb2aa931dda6aa5f1d0894 peak_sampled_rss_KiB=136784
+step=1 loss=6.58497810 grad_norm=29.29214996 weight_delta_l2=0.03082849 lr=0.00001000 consumed_tokens=366 target_tokens=15 step_tokens=366 elapsed_s=24.478 rss_KiB=689488 peak_sampled_rss_KiB=689488
+after_first_update_weight_hash=d5344f35f3f701d16806c9aa55384abc3cbe1361ef70fee2c5c9da550b1a1283
+step=2 loss=6.48413992 grad_norm=26.72855456 weight_delta_l2=0.04848498 lr=0.00002000 consumed_tokens=622 target_tokens=26 step_tokens=256 elapsed_s=24.775 rss_KiB=772352 peak_sampled_rss_KiB=772352
+TRAIN_END reason=TRAINING steps=2 consumed_tokens=622 target_tokens=26 train_loss=Some(6.484139919281006) validation_loss=Some(6.2320999925786795) elapsed_s=48.757 peak_sampled_rss_KiB=772352 checkpoint=artifacts/goal1-small-probe/final sha256=ff73f480cbc7ee374530c7bf393a05156be41bb4fb3d66c0a3e132ca576f493c exact_resume=optimizer_boundary task_quality=NOT_EVALUATED

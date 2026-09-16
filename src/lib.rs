@@ -32,5 +32,7 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Tensor(#[from] candle_core::Error),
 }
 pub type Result<T> = std::result::Result<T, Error>;
