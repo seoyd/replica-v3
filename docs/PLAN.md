@@ -9,8 +9,8 @@ verification. Source inspection and execution are separate evidence levels.
 
 | Node | State | Paths / checks / evidence | Remaining exit condition |
 |---|---|---|---|
-| S0 | VERIFIED | GOAL1_CONTRACT.md, logs/goal1-environment.txt; local instruction bytes unchanged by index-only removal | commit/push |
-| S1 | NOT_STARTED | src/{store,app,retrieval,model}.rs; tests/{store,runtime,retrieval,cli}.rs | T-R01–05 + existing v3 regression |
+| S0 | VERIFIED | GOAL1_CONTRACT.md, logs/goal1-environment.txt; local instruction bytes unchanged by index-only removal | published 7d831d0; remote matched |
+| S1 | VERIFIED | src/{store,app,retrieval,model}.rs; tests/{store,runtime,retrieval,cli}.rs; logs/goal1-s1-tests.txt; logs/goal1-s1-source-digest.txt | phase commit/push |
 | S2 | NOT_STARTED | own data/tokenizer | T-N01, T-N06 |
 | S3 | NOT_STARTED | own model/trainer/checkpoint | T-N02–05 |
 | S4 | NOT_STARTED | actual training and independent evaluation | T-N07, fixed quality thresholds |
@@ -19,11 +19,11 @@ verification. Source inspection and execution are separate evidence levels.
 
 | Trace | Required observation | State |
 |---|---|---|
-| T-R01 | canonical result binding, no model call on corruption | NOT_STARTED |
-| T-R02 | full prompt IDs and actual evidence partition | NOT_STARTED |
-| T-R03 | each search budget plus complete short search | NOT_STARTED |
-| T-R04 | synchronized startup/head commits vs genuine corruption | NOT_STARTED |
-| T-R05 | pinned backup under writes, restored bytes | NOT_STARTED |
+| T-R01 | canonical result binding, no model call on corruption | VERIFIED |
+| T-R02 | full prompt IDs and actual evidence partition | VERIFIED |
+| T-R03 | each search budget plus complete short search | VERIFIED |
+| T-R04 | synchronized startup/head commits vs genuine corruption | VERIFIED |
+| T-R05 | pinned backup under writes, restored bytes | VERIFIED |
 | T-N01 | own tokenizer roundtrip, train-only hash, no truncation | NOT_STARTED |
 | T-N02 | native forward/masks/GQA/RoPE/QK norm/SwiGLU gradients | NOT_STARTED |
 | T-N03 | bounded prefill/decode cache and reference parity | NOT_STARTED |
@@ -33,8 +33,8 @@ verification. Source inspection and execution are separate evidence levels.
 | T-N07 | >=200 heldout generations and category quality | NOT_STARTED |
 | T-N08 | packed inference, quality and memory comparison | NOT_STARTED |
 | T-I01 | five own-model memory queries and fresh restart | NOT_STARTED |
-| T-I02 | timeout/cancel/citations/COMMIT failure | NOT_STARTED |
-| T-I03 | raw bytes/history/restore/as_of/reindex/backup | NOT_STARTED |
+| T-I02 | timeout/cancel/citations/COMMIT failure | VERIFIED |
+| T-I03 | raw bytes/history/restore/as_of/reindex/backup | VERIFIED |
 | T-I04 | offline runtime and measured M4 backend | NOT_STARTED |
 | T-D01 | temporary instructions decoupled, originals preserved | VERIFIED |
-| T-D02 | phase code identity equals remote branch | NOT_STARTED |
+| T-D02 | phase code identity equals remote branch | VERIFIED (S0; later phases pending) |

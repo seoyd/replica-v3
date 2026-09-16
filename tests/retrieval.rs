@@ -164,3 +164,108 @@ fn short_query_scope_sql_syntax_and_cyclic_budget() {
     q.query = "\0".into();
     assert!(s.search(&q).is_err());
 }
+
+fn edge(s: &mut Store, from: i64, to: i64, session: &str) {
+    let mut e = Event::observation("s", session, "fixture", b"edge".to_vec());
+    e.kind = Kind::Relation {
+        relation: RelationKind::Supports,
+        from,
+        to,
+        evidence: vec![from],
+    };
+    s.append(e).unwrap();
+}
+fn node(s: &mut Store, text: &str) -> i64 {
+    s.append(Event::observation(
+        "s",
+        "a",
+        "fixture",
+        text.as_bytes().to_vec(),
+    ))
+    .unwrap()
+    .id
+}
+#[test]
+fn rv03_origin_filter_before_limit() {
+    let d = tempfile::tempdir().unwrap();
+    let mut s = Store::init(d.path().join("db")).unwrap();
+    let seed = node(&mut s, "unique-seed");
+    let target = node(&mut s, "target");
+    for _ in 0..257 {
+        edge(&mut s, seed, target, "b");
+    }
+    edge(&mut s, seed, target, "a");
+    let mut q = Search::new("s", "unique-seed");
+    q.session = Some("a".into());
+    let r = s.search(&q).unwrap();
+    assert_eq!(
+        r.items.iter().map(|e| e.event_id).collect::<Vec<_>>(),
+        [seed, target]
+    );
+    assert!(!r.truncated);
+}
+#[test]
+fn rv03_hops_output_cycles_and_duplicate_fetch_caps() {
+    for hops in [3, 4, 5] {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = Store::init(d.path().join("db")).unwrap();
+        let seed = node(&mut s, "unique-seed");
+        let mut prev = seed;
+        for _ in 0..hops {
+            let next = node(&mut s, "unmatched");
+            edge(&mut s, prev, next, "a");
+            prev = next;
+        }
+        let r = s.search(&Search::new("s", "unique-seed")).unwrap();
+        assert_eq!(r.visited, (hops + 1).min(5));
+        assert_eq!(r.truncated, hops > 4);
+    }
+    for count in [8, 9] {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = Store::init(d.path().join("db")).unwrap();
+        for _ in 0..count {
+            node(&mut s, "all-matching");
+        }
+        let mut q = Search::new("s", "all-matching");
+        q.graph = false;
+        let r = s.search(&q).unwrap();
+        assert_eq!(r.items.len(), 8);
+        assert_eq!(r.truncated, count > 8);
+    }
+    for count in [256, 257, 258] {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = Store::init(d.path().join("db")).unwrap();
+        let a = node(&mut s, "unique-seed");
+        let b = node(&mut s, "unmatched");
+        for _ in 0..count {
+            edge(&mut s, a, b, "a");
+        }
+        let r = s.search(&Search::new("s", "unique-seed")).unwrap();
+        assert_eq!(r.visited, 2);
+        assert_eq!(r.truncated, count > 256);
+    }
+}
+
+#[test]
+fn rv03_distinct_neighbor_budget_and_snapshot() {
+    for count in [256, 257, 258] {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = Store::init(d.path().join("db")).unwrap();
+        let seed = node(&mut s, "unique-seed");
+        let targets: Vec<_> = (0..count).map(|_| node(&mut s, "unmatched")).collect();
+        let snapshot = targets.last().copied().unwrap();
+        for target in targets {
+            edge(&mut s, seed, target, "a");
+        }
+        let mut q = Search::new("s", "unique-seed");
+        let r = s.search(&q).unwrap();
+        assert_eq!(r.visited, 256);
+        assert!(r.truncated);
+        assert_eq!(r.items.len(), 8);
+        assert!(r.edges_fetched >= 257);
+        q.snapshot_id = Some(snapshot);
+        let r = s.search(&q).unwrap();
+        assert_eq!(r.visited, 1);
+        assert!(!r.truncated);
+    }
+}

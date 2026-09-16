@@ -1,0 +1,27 @@
+   Compiling replica-v3 v0.1.0 (/Users/seo/Projects/Replica-v3)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.78s
+     Running tests/cli.rs (target/debug/deps/cli-97d83df322329c58)
+
+running 1 test
+test rv01_corrupt_result_has_no_success_stdout_or_write ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.71s
+
+     Running tests/runtime.rs (target/debug/deps/runtime-364b86b6945b97bc)
+
+running 3 tests
+test rv02_whole_evidence_packing_and_receipt_binding ... ok
+test rv01_results_bind_canonical_question_and_reindex_repairs ... ok
+test rv02_real_tokenizer_never_silently_truncates ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.10s
+
+     Running tests/store.rs (target/debug/deps/store-70c1a27fc42b8466)
+
+running 3 tests
+test rv05_failed_artifact_is_explicit_and_existing_destination_preserved ... ok
+test rv04_atomic_startup_and_head_with_writer_and_corrupt_control ... ok
+test rv05_pinned_backup_before_copy_and_after_done ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.16s
+

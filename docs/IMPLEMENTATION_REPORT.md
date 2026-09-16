@@ -243,3 +243,53 @@ S0: installed Rust/Cargo 1.98.0, aarch64 Apple M4 24 GiB confirmed; starting use
 changes preserved, both temporary input byte hashes unchanged by index-only removal.
 S1–S6: NOT_STARTED. Actual current tests/training/inference: NOT_RUN.
 GOAL1_ACCEPTED=NO; INDEPENDENT_REVIEW=PENDING; GOAL1_READY_FOR_REVIEW=NO.
+
+### S1 — implemented and executed
+
+RV-01: `store::result` is the common canonical kind/input/scope/session verifier.
+Both replay paths reject projection corruption without generation or canonical writes;
+append also checks newly submitted links before returning an existing result. Terminal
+success is restricted to AssistantAnswer. CLI corruption fixture emits no stdout.
+
+RV-02: production worker uses PreparedPrompt after disabling truncation/padding only
+in memory. Exact complete IDs, artifact hashes, token digest and evidence partition
+are bound in PromptReceipt and independently recomputed by LocalModel at the parent
+boundary. Whole low-ranked evidence drops for byte/token caps. Required-only overflow
+is ContextTooSmall. Tests use a locally constructed real tokenizer, not FakeModel
+for tokenization. Null/left/right truncation, padding, exact/+1, Unicode/NUL/emoji,
+evidence tails/removal, oversized bytes and receipt tampering are exercised. The
+pre-fix executed failure first exposed padding; silent truncation was source-confirmed
+and the same final test exercises both directions at 1024. Original files are not edited.
+
+RV-03: origin scope/session/time/snapshot SQL filters precede LIMIT; limit+1 sentinel,
+unique scheduling, hop/output/visited flags and separate fetched/eligible/visited
+counters. Hop uncertainty is conservative for an unvisited but possibly ineligible
+neighbor. Complete short/cyclic searches can still return truncated=false. Tests
+isolate filtered origins, duplicate and distinct 256/257/258 neighbors, 4/5 hops,
+8/9 evidence, snapshot and the existing 10003-event lexical/graph comparison.
+
+RV-04: startup and head each compare a single SQL observation. Two-connection
+channel schedules test writer commits after that observation, with genuine watermark
+and head damage as negative controls. Hooks are thread-local, feature gated and absent
+from the default release; existing concurrent correction remains covered.
+
+RV-05: an actual canonical SELECT pins the transaction before Backup::new, through
+copy, doctor and comparison. Writer schedules before copy and after Done both restore
+the pinned original bytes. Existing destinations never overwrite. Failures explicitly
+retain an untrusted destination and report its path (an allowed failure-artifact policy),
+including injected copy/validation errors and corrupt-source rejection.
+
+Evidence: logs/goal1-rv01-red.txt through goal1-rv05-red.txt record executed failures
+against baseline behavior with only extraction/scheduling instrumentation. No isolated
+baseline worktree was used. logs/goal1-s1-direct.txt, goal1-s1-extra.txt and
+ goal1-s1-visited.txt are targeted repetitions, not extra unique tests. Final gate:
+`cargo test --locked --features test-support --test codec --test store --test retrieval
+--test runtime --test cli -- --nocapture`: **22 tests passed**, none ignored (CLI 3,
+codec 2, retrieval 5, runtime 6, store 6). fmt/check/clippy -D warnings and default
+release bin/example build passed. Initial clippy type-complexity failure is retained;
+a test-only alias fixed it. Fingerprint: logs/goal1-s1-source-digest.txt.
+
+S1=VERIFIED within these boundaries; native-tokenizer boundary extensions remain S2.
+Native training/quality/restart/quantization: NOT_RUN. No external model executed.
+GOAL1_READY_FOR_REVIEW=NO; GOAL1_ACCEPTED=NO; INDEPENDENT_REVIEW=PENDING.
+S0 published commit: 7d831d08bd42410f9a38836c5ef2b1671f023b4d, origin/main matched.

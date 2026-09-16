@@ -1,0 +1,29 @@
+    Blocking waiting for file lock on build directory
+   Compiling replica-v3 v0.1.0 (/Users/seo/Projects/Replica-v3)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.58s
+     Running tests/retrieval.rs (target/debug/deps/retrieval-15b6eda7bf9aa391)
+
+running 2 tests
+
+thread 'rv03_hops_output_cycles_and_duplicate_fetch_caps' (1748703) panicked at tests/retrieval.rs:195:9:
+assertion `left == right` failed
+  left: false
+ right: true
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test rv03_hops_output_cycles_and_duplicate_fetch_caps ... FAILED
+
+thread 'rv03_origin_filter_before_limit' (1748704) panicked at tests/retrieval.rs:184:5:
+assertion `left == right` failed
+  left: [1]
+ right: [1, 2]
+test rv03_origin_filter_before_limit ... FAILED
+
+failures:
+
+failures:
+    rv03_hops_output_cycles_and_duplicate_fetch_caps
+    rv03_origin_filter_before_limit
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.41s
+
+error: test failed, to rerun pass `--test retrieval`

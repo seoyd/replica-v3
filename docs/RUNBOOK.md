@@ -159,3 +159,12 @@ actual source citations and prints unmodified model text/provenance for human
 inspection. It does not replace answers with expected strings. Not run in this task
 because the user deferred model installation. Power-loss, physical disk-full,
 true cold-cache and GPU/shared-memory measurements were not performed.
+
+## Current native Goal 1 work
+
+The preceding model installation instructions are historical B0 only and are
+superseded by [GOAL1-NATIVE-TRPP-1.0](GOAL1_CONTRACT.md). Do not obtain external weights
+or tokenizer artifacts. Native training/tooling progress is tracked in PLAN.md.
+S1 result/provenance/search/snapshot regressions are verified; neural model work is
+not yet complete. Failed backups report an untrusted retained destination path; inspect
+that artifact separately and choose a fresh path for a new backup attempt.

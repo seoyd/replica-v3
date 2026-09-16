@@ -118,8 +118,12 @@ fn terminal(event: Event) -> Result<Event> {
             event.id,
             String::from_utf8_lossy(&event.payload)
         )))
-    } else {
+    } else if matches!(event.kind, Kind::AssistantAnswer { .. }) {
         Ok(event)
+    } else {
+        Err(Error::Corrupt(
+            "terminal result is not answer/failure".into(),
+        ))
     }
 }
 pub fn citations(text: &str) -> Result<Vec<i64>> {
@@ -165,9 +169,10 @@ fn validate_response(request: &ModelRequest, response: &ModelResponse) -> Result
         || g.limits.context_tokens > request.limits.context_tokens
         || g.output_tokens
             .is_some_and(|n| n > u64::from(g.limits.max_tokens))
-        || g.input_tokens
-            .zip(g.output_tokens)
-            .is_some_and(|(i, o)| i + o > u64::from(g.limits.context_tokens))
+        || g.input_tokens.zip(g.output_tokens).is_some_and(|(i, o)| {
+            i.checked_add(o)
+                .is_none_or(|n| n > u64::from(g.limits.context_tokens))
+        })
     {
         return Err(Error::Model("response limits/usage mismatch".into()));
     }

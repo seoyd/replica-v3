@@ -33,6 +33,7 @@ fn main() {
         }
     }
     let res = ModelResponse {
+        prepared: None,
         request_id: req.request_id,
         text: req.input,
         provided: req.evidence.items.iter().map(|e| e.event_id).collect(),

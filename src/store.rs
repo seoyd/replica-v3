@@ -115,14 +115,13 @@ impl Store {
     fn startup(&self) -> Result<()> {
         identity(&self.conn)?;
         quick_check(&self.conn)?;
-        let (version, last): (i64, i64) = self.conn.query_row(
-            "SELECT version,last_id FROM projection_state WHERE singleton=1",
+        let (version, last, max): (i64, i64, i64) = self.conn.query_row(
+            "SELECT version,last_id,(SELECT coalesce(max(id),0) FROM records) FROM projection_state WHERE singleton=1",
             [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
-        let max: i64 = self
-            .conn
-            .query_row("SELECT coalesce(max(id),0) FROM records", [], |r| r.get(0))?;
+        #[cfg(feature = "test-support")]
+        sync_point("startup_observed")?;
         if version != 1 || last != max {
             return Err(Error::Corrupt(
                 "projection version/watermark; run reindex".into(),
@@ -182,15 +181,7 @@ impl Store {
         id.map(|id| self.get(id)).transpose()
     }
     pub fn result(&self, input: EventId) -> Result<Option<Event>> {
-        let id = self
-            .conn
-            .query_row(
-                "SELECT event_id FROM results WHERE input_id=?1",
-                [input],
-                |r| r.get(0),
-            )
-            .optional()?;
-        id.map(|id| self.get(id)).transpose()
+        result(&self.conn, input)
     }
     pub fn append(&mut self, event: Event) -> Result<Event> {
         let compression = self.compression;
@@ -366,13 +357,29 @@ impl Store {
     pub fn backup(&self, destination: impl AsRef<Path>) -> Result<()> {
         let path = destination.as_ref();
         new_file(path)?;
+        // On failure keep this create-new destination as an explicitly failed
+        // artifact. Never delete/overwrite a path a caller may have replaced.
+        self.backup_into(path).map_err(|e| {
+            Error::Corrupt(format!(
+                "backup failed; untrusted destination retained at {}: {e}",
+                path.display()
+            ))
+        })
+    }
+    fn backup_into(&self, path: &Path) -> Result<()> {
         let mut dest = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         // Hold a stable read snapshot for backup and exact comparison, including an open WAL.
         let snapshot = self.conn.unchecked_transaction()?;
+        let _: i64 =
+            snapshot.query_row("SELECT coalesce(max(id),0) FROM records", [], |r| r.get(0))?;
+        #[cfg(feature = "test-support")]
+        sync_point("backup_snapshot")?;
         {
             let backup = rusqlite::backup::Backup::new(&snapshot, &mut dest)?;
             let start = std::time::Instant::now();
             loop {
+                #[cfg(feature = "test-support")]
+                sync_point("backup_step")?;
                 match backup.step(128)? {
                     rusqlite::backup::StepResult::Done => break,
                     _ => {
@@ -385,6 +392,8 @@ impl Store {
             }
         }
         drop(dest);
+        #[cfg(feature = "test-support")]
+        sync_point("backup_done")?;
         let restored = Self::open(path)?;
         restored.doctor(true)?;
         if table_rows(&snapshot, "records")? != table_rows(&restored.conn, "records")? {
@@ -484,22 +493,80 @@ fn metadata(e: &Event) -> Vec<rusqlite::types::Value> {
 }
 fn head(conn: &Connection, scope: &str, slot: &Slot) -> Result<Option<Event>> {
     let key = slot.key(scope);
-    let id: Option<i64> = conn
-        .query_row(
-            "SELECT event_id FROM current_heads WHERE slot=?1",
-            [&key],
-            |r| r.get(0),
-        )
-        .optional()?;
-    let latest: Option<i64> = conn.query_row(
-        "SELECT max(id) FROM record_meta WHERE slot=?1",
-        [key],
-        |r| r.get(0),
+    let (id, latest): (Option<i64>, Option<i64>) = conn.query_row(
+        "SELECT (SELECT event_id FROM current_heads WHERE slot=?1),(SELECT max(id) FROM record_meta WHERE slot=?1)",
+        [key], |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
+    #[cfg(feature = "test-support")]
+    sync_point("head_observed")?;
     if id != latest {
         return Err(Error::Corrupt("head mismatch".into()));
     }
     id.map(|id| get(conn, id, true)).transpose()
+}
+fn result(conn: &Connection, input: EventId) -> Result<Option<Event>> {
+    let id: Option<i64> = conn
+        .query_row(
+            "SELECT event_id FROM results WHERE input_id=?1",
+            [input],
+            |r| r.get(0),
+        )
+        .optional()?;
+    id.map(|id| {
+        let read = |id| {
+            get(conn, id, true).map_err(|e| match e {
+                Error::NotFound(_) => {
+                    Error::Corrupt(format!("result references missing event {id}"))
+                }
+                other => other,
+            })
+        };
+        let terminal = read(id)?;
+        let question = read(input)?;
+        if terminal.kind.input() != Some(input)
+            || terminal.id <= input
+            || !matches!(question.kind, Kind::Observation { question: Some(_) })
+            || terminal.scope != question.scope
+            || terminal.session != question.session
+        {
+            return Err(Error::Corrupt(
+                "result canonical question/kind/scope/session mismatch; run reindex".into(),
+            ));
+        }
+        Ok(terminal)
+    })
+    .transpose()
+}
+
+// Deterministic, thread-local scheduling only in explicitly enabled test builds.
+#[cfg(feature = "test-support")]
+type SyncHook = Box<dyn FnMut(&str) -> Result<()>>;
+#[cfg(feature = "test-support")]
+thread_local! {
+    static SYNC_HOOK: std::cell::RefCell<Option<SyncHook>> =
+        std::cell::RefCell::new(None);
+}
+#[cfg(feature = "test-support")]
+pub fn with_sync_hook<T>(
+    hook: impl FnMut(&str) -> Result<()> + 'static,
+    run: impl FnOnce() -> T,
+) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            SYNC_HOOK.with(|h| *h.borrow_mut() = None);
+        }
+    }
+    SYNC_HOOK.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    let _reset = Reset;
+    run()
+}
+#[cfg(feature = "test-support")]
+fn sync_point(point: &str) -> Result<()> {
+    SYNC_HOOK.with(|h| match &mut *h.borrow_mut() {
+        Some(hook) => hook(point),
+        None => Ok(()),
+    })
 }
 fn append_in(conn: &Connection, mut e: Event, compression: Compression) -> Result<Event> {
     e.validate(false)?;
@@ -520,18 +587,12 @@ fn append_in(conn: &Connection, mut e: Event, compression: Compression) -> Resul
             };
         }
     }
-    if let Some(input) = e.kind.input() {
-        let existing: Option<i64> = conn
-            .query_row(
-                "SELECT event_id FROM results WHERE input_id=?1",
-                [input],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if let Some(id) = existing {
-            return get(conn, id, true);
-        }
-    }
+    let existing = e
+        .kind
+        .input()
+        .map(|input| result(conn, input))
+        .transpose()?
+        .flatten();
     let last_id: Option<i64> = conn.query_row("SELECT max(id) FROM records", [], |r| r.get(0))?;
     let last = last_id
         .map(|id| get(conn, id, true).map(|e| (id, e.recorded_at)))
@@ -542,6 +603,9 @@ fn append_in(conn: &Connection, mut e: Event, compression: Compression) -> Resul
         .ok_or_else(|| Error::Invalid("event ID exhausted".into()))?;
     e.recorded_at = now_ms().max(last.map_or(i64::MIN, |x| x.1));
     validate_links(conn, &e)?;
+    if let Some(existing) = existing {
+        return Ok(existing);
+    }
     let body = codec::encode(&e, compression)?;
     conn.execute("INSERT INTO records VALUES(?1,?2)", params![e.id, body])?;
     project(conn, &e)?;
@@ -625,7 +689,9 @@ fn validate_links(conn: &Connection, e: &Event) -> Result<()> {
             ..
         } => {
             let question = reference(conn, e, *input)?;
-            if !matches!(question.kind, Kind::Observation { question: Some(_) }) {
+            if !matches!(question.kind, Kind::Observation { question: Some(_) })
+                || question.session != e.session
+            {
                 return Err(Error::Invalid("answer input must be question".into()));
             }
             for id in evidence.iter().chain(provided).chain(excluded) {
@@ -644,7 +710,8 @@ fn validate_links(conn: &Connection, e: &Event) -> Result<()> {
         }
         Kind::Failure { input, .. } => {
             let q = reference(conn, e, *input)?;
-            if !matches!(q.kind, Kind::Observation { question: Some(_) }) {
+            if !matches!(q.kind, Kind::Observation { question: Some(_) }) || q.session != e.session
+            {
                 return Err(Error::Invalid("failure input must be question".into()));
             }
         }

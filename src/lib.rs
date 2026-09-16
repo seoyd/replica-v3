@@ -21,6 +21,8 @@ pub enum Error {
     NarrowScope,
     #[error("model: {0}")]
     Model(String),
+    #[error("ContextTooSmall: complete system/question exceeds input budget")]
+    ContextTooSmall,
     #[error("cancelled")]
     Cancelled,
     #[error(transparent)]

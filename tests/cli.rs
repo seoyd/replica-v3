@@ -102,3 +102,54 @@ fn kill_before_after_commit_and_before_ack() {
         assert_eq!(s.get(1).unwrap().payload, b"durable");
     }
 }
+
+#[test]
+fn rv01_corrupt_result_has_no_success_stdout_or_write() {
+    use replica_v3::{event::*, store::Store};
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("db");
+    let mut s = Store::init(&p).unwrap();
+    let mut q = Event::observation("s", "default", "user", b"question".to_vec());
+    q.kind = Kind::Observation {
+        question: Some(GenerationLimits::default()),
+    };
+    q.request_key = Some([1; 16]);
+    let q = s.append(q).unwrap();
+    let obs = s
+        .append(Event::observation(
+            "s",
+            "default",
+            "user",
+            b"wrong".to_vec(),
+        ))
+        .unwrap();
+    let conn = rusqlite::Connection::open(&p).unwrap();
+    conn.execute(
+        "INSERT INTO results VALUES(?1,?2)",
+        rusqlite::params![q.id, obs.id],
+    )
+    .unwrap();
+    let out = cli(
+        &p,
+        &[
+            "ask",
+            "--scope",
+            "s",
+            "--request-key",
+            "01010101010101010101010101010101",
+            "--model",
+            "absent",
+            "--tokenizer",
+            "absent",
+            "--tokenizer-config",
+            "absent",
+            "--text",
+            "question",
+        ],
+        b"",
+    );
+    assert!(!out.status.success());
+    assert!(out.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("corruption"));
+    assert_eq!(s.count().unwrap(), 2);
+}

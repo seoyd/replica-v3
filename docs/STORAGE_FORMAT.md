@@ -104,3 +104,11 @@ Model revisions include hashes of actual weights/tokenizer/chat-template bytes.
 FTS is deliberately the outer SQL loop (CROSS JOIN) and seed rank uses SQLite's
 FTS rank order; do not add a metadata-driven join or secondary sort that forces
 an unbounded pre-LIMIT sort. Scope and snapshot checks still precede admission.
+
+Goal 1 S1: terminal replay verifies canonical input, question kind, scope and session.
+Startup/head comparison values come from one SQL observation. Online backup pins a
+canonical read snapshot before copying and retains it through validation. A failed
+create-new backup is retained as an explicitly untrusted artifact; the error includes
+its path. Existing destinations are never overwritten/deleted. Retrieval now reports
+sentinel/hop/output limits even when duplicate/filter rejection prevents queue growth;
+fetched candidate/edge and eligible counters are transient diagnostics, not new schema.

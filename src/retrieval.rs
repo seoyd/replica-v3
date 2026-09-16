@@ -65,6 +65,12 @@ pub struct EvidenceBundle {
     pub items: Vec<Evidence>,
     pub truncated: bool,
     pub visited: usize,
+    #[serde(default)]
+    pub candidates_fetched: usize,
+    #[serde(default)]
+    pub edges_fetched: usize,
+    #[serde(default)]
+    pub eligible: usize,
 }
 const FILTER: &str = "m.scope=?1 AND (?2 IS NULL OR m.session=?2) AND (?3 IS NULL OR m.slot=?3) AND m.recorded_at>=?4 AND m.recorded_at<=?5 AND m.id<=?6 AND (?7 OR (m.kind IN (0,1,2) AND m.question=0 AND (m.kind!=1 OR (m.id=(SELECT max(v.id) FROM record_meta v WHERE v.slot=m.slot AND v.id<=?6 AND v.recorded_at<=?5) AND (m.valid_from IS NULL OR m.valid_from<=?8) AND (m.valid_until IS NULL OR m.valid_until>?8)))))";
 impl Store {
@@ -135,6 +141,7 @@ impl Store {
                     Err(e) => return Err(e.into()),
                 }
             }
+            bundle.candidates_fetched = seeds.len();
             if seeds.len() > CANDIDATES {
                 if long.is_empty() {
                     return Err(Error::NarrowScope);
@@ -152,6 +159,7 @@ impl Store {
             let mut queue: VecDeque<(i64, Vec<RelationStep>)> =
                 seeds.into_iter().map(|id| (id, Vec::new())).collect();
             let mut visited = HashSet::new();
+            let mut scheduled: HashSet<_> = queue.iter().map(|(id, _)| *id).collect();
             while let Some((id, path)) = queue.pop_front() {
                 if Instant::now() >= deadline || visited.len() >= VISITED {
                     bundle.truncated = true;
@@ -176,6 +184,7 @@ impl Store {
                     continue;
                 }
                 let e = store::get(&tx, id, true)?;
+                bundle.eligible += 1;
                 if bundle.items.len() < MAX_EVIDENCE {
                     let (excerpt, truncated) =
                         store::prefix(std::str::from_utf8(&e.payload).expect("validated"), 4096);
@@ -207,22 +216,28 @@ impl Store {
                         .into(),
                         relation_path: path.clone(),
                     });
+                } else {
+                    bundle.truncated = true;
                 }
-                if !q.graph || path.len() >= HOPS {
+                if !q.graph {
                     continue;
                 }
-                let mut edges=tx.prepare("SELECT origin,from_id,to_id,kind FROM relations WHERE (from_id=?1 OR to_id=?1) AND origin<=?2 ORDER BY origin LIMIT 257")?;
-                let mapped = edges.query_map(params![id, snapshot], |r| {
-                    Ok((
-                        r.get::<_, i64>(0)?,
-                        r.get::<_, i64>(1)?,
-                        r.get::<_, i64>(2)?,
-                        r.get::<_, u8>(3)?,
-                    ))
-                })?;
-                for edge in mapped.take(VISITED + 1) {
+                let mut edges=tx.prepare("SELECT r.origin,r.from_id,r.to_id,r.kind FROM relations r JOIN record_meta m ON m.id=r.origin WHERE (r.from_id=?1 OR r.to_id=?1) AND r.origin<=?2 AND m.scope=?3 AND (?4 IS NULL OR m.session=?4) AND m.recorded_at>=?5 AND m.recorded_at<=?6 ORDER BY r.origin,r.from_id,r.to_id,r.kind LIMIT 257")?;
+                let mapped = edges.query_map(
+                    params![id, snapshot, q.scope, q.session, after, before],
+                    |r| {
+                        Ok((
+                            r.get::<_, i64>(0)?,
+                            r.get::<_, i64>(1)?,
+                            r.get::<_, i64>(2)?,
+                            r.get::<_, u8>(3)?,
+                        ))
+                    },
+                )?;
+                for (fetched, edge) in mapped.enumerate() {
                     let (origin, from, to, kind) = edge?;
-                    if queue.len() + visited.len() >= VISITED {
+                    bundle.edges_fetched += 1;
+                    if fetched == VISITED {
                         bundle.truncated = true;
                         break;
                     }
@@ -237,7 +252,13 @@ impl Store {
                         continue;
                     }
                     let next = if from == id { to } else { from };
-                    if visited.contains(&next) {
+                    if scheduled.contains(&next) {
+                        continue;
+                    }
+                    // At the hop boundary an unexamined neighbor can still be
+                    // ineligible; report that uncertainty conservatively.
+                    if path.len() >= HOPS || scheduled.len() >= VISITED {
+                        bundle.truncated = true;
                         continue;
                     }
                     let mut next_path = path.clone();
@@ -247,6 +268,7 @@ impl Store {
                         relation: RelationKind::from_tag(kind)?,
                         origin,
                     });
+                    scheduled.insert(next);
                     queue.push_back((next, next_path));
                 }
             }

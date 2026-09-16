@@ -145,3 +145,149 @@ fn rebuild_open_wal_backup_and_corruption() {
     assert!(s.doctor(true).is_err());
     assert!(s.reindex().is_err());
 }
+
+#[cfg(feature = "test-support")]
+#[test]
+fn rv04_atomic_startup_and_head_with_writer_and_corrupt_control() {
+    use replica_v3::store::with_sync_hook;
+    for point in ["startup_observed", "head_observed"] {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("db");
+        let mut s = Store::init(&p).unwrap();
+        let first = s.append(fact("RIGHT", "c", None)).unwrap();
+        let slot = first.kind.slot().unwrap().clone();
+        let (go, receive) = std::sync::mpsc::channel();
+        let (done, wait) = std::sync::mpsc::channel();
+        let mut writer = Store::open(&p).unwrap();
+        let h = std::thread::spawn(move || {
+            receive.recv().unwrap();
+            writer.append(fact("LEFT", "c", Some(first.id))).unwrap();
+            done.send(()).unwrap();
+        });
+        let mut fired = false;
+        with_sync_hook(
+            move |at| {
+                if at == point && !fired {
+                    fired = true;
+                    go.send(()).unwrap();
+                    wait.recv().unwrap();
+                }
+                Ok(())
+            },
+            || {
+                if point == "startup_observed" {
+                    Store::open(&p).unwrap();
+                } else {
+                    assert_eq!(s.head("scope", &slot).unwrap().unwrap().payload, b"RIGHT");
+                }
+            },
+        );
+        h.join().unwrap();
+        assert_eq!(s.head("scope", &slot).unwrap().unwrap().payload, b"LEFT");
+        let conn = Connection::open(&p).unwrap();
+        conn.execute("UPDATE projection_state SET last_id=0", [])
+            .unwrap();
+        assert!(matches!(Store::open(&p), Err(Error::Corrupt(_))));
+        s.reindex().unwrap();
+        conn.execute("UPDATE current_heads SET event_id=?1", [first.id])
+            .unwrap();
+        assert!(matches!(s.head("scope", &slot), Err(Error::Corrupt(_))));
+    }
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn rv05_pinned_backup_before_copy_and_after_done() {
+    use replica_v3::store::with_sync_hook;
+    for point in ["backup_snapshot", "backup_done"] {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("db");
+        let mut s = Store::init(&p).unwrap();
+        let first = s.append(fact("RIGHT\0\n", "c", None)).unwrap();
+        let (go, receive) = std::sync::mpsc::channel();
+        let (done, wait) = std::sync::mpsc::channel();
+        let mut writer = Store::open(&p).unwrap();
+        let h = std::thread::spawn(move || {
+            receive.recv().unwrap();
+            writer
+                .append(Event::observation(
+                    "scope",
+                    "session",
+                    "user",
+                    b"later".to_vec(),
+                ))
+                .unwrap();
+            done.send(()).unwrap();
+        });
+        let b = d.path().join("backup");
+        with_sync_hook(
+            move |at| {
+                if at == point {
+                    go.send(()).unwrap();
+                    wait.recv().unwrap();
+                }
+                Ok(())
+            },
+            || s.backup(&b),
+        )
+        .unwrap();
+        h.join().unwrap();
+        let backup = Store::open(&b).unwrap();
+        backup.doctor(true).unwrap();
+        assert_eq!(backup.count().unwrap(), 1);
+        assert_eq!(backup.get(first.id).unwrap(), first);
+        assert_eq!(s.count().unwrap(), 2);
+        let restored = d.path().join("restored");
+        Store::restore(&b, &restored).unwrap();
+        assert_eq!(
+            Store::open(&restored).unwrap().get(first.id).unwrap(),
+            first
+        );
+        assert!(s.backup(&b).is_err());
+        assert_eq!(backup.count().unwrap(), 1);
+    }
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn rv05_failed_artifact_is_explicit_and_existing_destination_preserved() {
+    use replica_v3::store::with_sync_hook;
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("db");
+    let mut s = Store::init(&p).unwrap();
+    s.append(fact("bytes", "c", None)).unwrap();
+    let existing = d.path().join("existing");
+    std::fs::write(&existing, b"sentinel").unwrap();
+    assert!(s.backup(&existing).is_err());
+    assert_eq!(std::fs::read(&existing).unwrap(), b"sentinel");
+    for point in ["backup_step", "backup_done"] {
+        let target = d.path().join(point);
+        let error = with_sync_hook(
+            move |at| {
+                if at == point {
+                    Err(Error::Invalid("injected backup failure".into()))
+                } else {
+                    Ok(())
+                }
+            },
+            || s.backup(&target),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("untrusted destination retained"));
+        assert!(error.to_string().contains(target.to_str().unwrap()));
+        assert!(target.exists());
+        assert!(s.backup(&target).is_err());
+    }
+    Connection::open(&p)
+        .unwrap()
+        .execute_batch("UPDATE record_meta SET source='corrupt'")
+        .unwrap();
+    let target = d.path().join("corrupt-backup");
+    assert!(
+        s.backup(&target)
+            .unwrap_err()
+            .to_string()
+            .contains("untrusted destination retained")
+    );
+    assert!(target.exists());
+}
