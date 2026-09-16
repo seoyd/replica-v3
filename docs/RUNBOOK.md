@@ -461,6 +461,19 @@ ID/순서/entity 길이/context/값을 한 요소씩 바꿔 생성하는 DEVELOP
 가중치를 구별한다. inference-only 파일도 `evaluate ... trained ...`에 사용할 수 있고,
 학습된 파일을 random baseline으로 평가하면 거부한다. 품질 gate는 그대로 적용한다.
 
+`corpus qa-pairs --source <기존 query-pairs corpus> --output <새 directory>
+--groups <1..128>`는 새base를 만들지 않는 제한적인 일반QA 대조자료다. N개의 기존
+질문/값 quartet을 원문/인용을 생성하는 일반QA로 변환하고 N개의 기존 일반QA quartet을
+그대로 유지한다. 각각 두 근거 순서로8개, 총16N개다. validation bytes는 그대로라서
+새blind test가 아니다. 묶음 순서를 유지하는 microbatch8/sample_group_size8을 명시한다.
+이 자료가 학습됐다고 간주하지 말고 실제 sampler 노출 수와 생성 결과를 함께 확인한다.
+기존 학습을 이어갈 때는 native resume의 명시적 extension/replace-corpus를 사용하며,
+tokenizer는 새로 학습하지 않는다. 자원probe의 updates도 같은 실행 예산에 포함한다.
+
+2026-09-17 현재 이U2 실험은250updates 뒤 일반QA155/336→56/336으로 악화돼
+중단했으며 사용자 요청으로 전체 구현/학습도 PAUSED다. 위 명령은 기능 설명으로,
+학습 재개 지시나 추천 설정이 아니다. 코드 게시와 학습 재개를 구별한다.
+
 ## Native binary 기본 artifact (현재)
 
 기존 학습 디렉터리는 원본으로 보존한다. 아래 명령은 새 목적지 파일을 만들며

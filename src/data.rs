@@ -1530,6 +1530,159 @@ pub fn prepare(
     }
     Ok(())
 }
+/// Full-answer contrasts from existing training scenes; the development split stays unchanged.
+pub fn qa_pairs(source: &Path, output: &Path, groups: usize) -> Result<()> {
+    let (mut manifest, original, validation) = load(source)?;
+    if !(1..=128).contains(&groups)
+        || manifest.generator != "educational-korean-query-pairs-v12"
+        || !original.len().is_multiple_of(4)
+    {
+        return Err(Error::Invalid(
+            "QA pairs require query-pairs corpus and 1..128 groups".into(),
+        ));
+    }
+    let blocks = original.as_chunks::<4>().0;
+    let paired: Vec<_> = blocks
+        .iter()
+        .filter(|g| {
+            g.iter()
+                .all(|e| e.family.starts_with("copy/") && e.family.ends_with("/value"))
+        })
+        .take(groups)
+        .collect();
+    let ordinary: Vec<_> = blocks
+        .iter()
+        .filter(|g| {
+            g.iter()
+                .all(|e| !e.family.starts_with("copy/") && !e.answer.is_empty())
+        })
+        .take(groups)
+        .collect();
+    if paired.len() != groups || ordinary.len() != groups {
+        return Err(Error::Invalid(
+            "insufficient existing QA pair groups".into(),
+        ));
+    }
+    let mut train = Vec::with_capacity(groups * 16);
+    for (index, (paired, ordinary)) in paired.into_iter().zip(ordinary).enumerate() {
+        for (kind, group) in [("binding", paired), ("ordinary", ordinary)] {
+            let mut base = group.clone();
+            if kind == "binding" {
+                for e in &mut base {
+                    if e.request.evidence.items.len() != 2 {
+                        return Err(Error::Invalid(
+                            "QA pair requires two full source records".into(),
+                        ));
+                    }
+                    // Supervised target construction only. The worker imports neither
+                    // this module nor these expected answers/record-selection labels.
+                    let mut matching = Vec::new();
+                    for r in &e.request.evidence.items {
+                        let fields = r
+                            .original_excerpt
+                            .split_once("의 ")
+                            .and_then(|(entity, rest)| {
+                                rest.split_once(" 이동 지시는 ")
+                                    .and_then(|(context, value)| {
+                                        value
+                                            .strip_suffix("이다.")
+                                            .map(|value| (entity, context, value))
+                                    })
+                            })
+                            .ok_or_else(|| Error::Invalid("QA pair source grammar".into()))?;
+                        if r.excerpt_truncated {
+                            return Err(Error::Invalid("QA pair truncated source".into()));
+                        }
+                        if fields.2 == e.answer {
+                            matching.push((r, fields.0, fields.1));
+                        }
+                    }
+                    if matching.len() != 1 {
+                        return Err(Error::Invalid("QA pair ambiguous source value".into()));
+                    }
+                    let (record, entity, context) = matching[0];
+                    let prefix = format!("{entity}의 {context} 이동 지시는 ");
+                    if e.request
+                        .evidence
+                        .items
+                        .iter()
+                        .filter(|r| {
+                            r.version_status == record.version_status
+                                && r.original_excerpt.starts_with(&prefix)
+                        })
+                        .count()
+                        != 1
+                    {
+                        return Err(Error::Invalid("QA pair ambiguous requested record".into()));
+                    }
+                    e.category = if e
+                        .request
+                        .evidence
+                        .items
+                        .iter()
+                        .any(|r| r.version_status == "superseded")
+                    {
+                        1
+                    } else if e
+                        .request
+                        .evidence
+                        .items
+                        .iter()
+                        .all(|r| r.original_excerpt.starts_with(&format!("{entity}의 ")))
+                    {
+                        2
+                    } else {
+                        0
+                    };
+                    let when = match record.version_status.as_str() {
+                        "current" => "현재",
+                        "superseded" => "과거",
+                        _ => return Err(Error::Invalid("QA pair source status".into())),
+                    };
+                    e.request.input = match index % 3 {
+                        0 => format!("{entity} {context} {when} 이동 지시는 무엇인가?"),
+                        1 => format!("{context}에서 {entity}의 {when} 방향과 근거를 알려줘."),
+                        _ => format!(
+                            "{entity}의 {context} {when} 기록에 적힌 지시를 사건과 함께 답해줘."
+                        ),
+                    };
+                    e.request.system = SYSTEM.into();
+                    e.answer = format!("{} [event:{}]", record.original_excerpt, record.event_id);
+                    e.family = format!("qa/binding-pairs/train/{index}");
+                }
+            }
+            for reversed in [false, true] {
+                for mut e in base.clone() {
+                    e.id = format!("qa-pairs/{kind}/{reversed}/{}", e.id);
+                    e.request.request_id = e.id.clone();
+                    if reversed {
+                        e.request.evidence.items.reverse();
+                    }
+                    e.sequence = hash(&serde_json::to_vec(&(
+                        &e.request.input,
+                        &e.request.evidence.items,
+                    ))?);
+                    train.push(e);
+                }
+            }
+        }
+    }
+    check_split(&train, &validation)?;
+    manifest.split_rule = format!(
+        "DEVELOPMENT; {groups} existing query/value quartets converted to full QA and {groups} unchanged ordinary QA quartets, each in both evidence orders; no new base scenes; eight consecutive cases per sampling group; parent train={} validation={}; validation unchanged; {}",
+        manifest.train.sha256, manifest.validation.sha256, manifest.split_rule
+    );
+    manifest.generator.push_str("/qa-binding-pairs-v1");
+    std::fs::create_dir(output)?;
+    manifest.train = save_split(output, "train", &train)?;
+    manifest.validation = save_split(output, "validation", &validation)?;
+    write_new(
+        &output.join("manifest.json"),
+        &serde_json::to_vec_pretty(&manifest)?,
+    )?;
+    println!("{}", serde_json::to_string_pretty(&manifest)?);
+    Ok(())
+}
 /// A diagnostic subset of existing QA bytes, never a new heldout benchmark.
 pub fn qa_subset(source: &Path, output: &Path, count: usize) -> Result<()> {
     if !(16..=32).contains(&count) {

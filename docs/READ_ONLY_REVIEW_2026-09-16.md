@@ -29,7 +29,7 @@ INPUT_LIMITATION: 지정 파일 the originally requested implementation input �
 
 검토한 production 경로는 `main → app::ask → Store / search → LocalModel / worker → Store::append → display`와 직접 요구된 codec, fact lifecycle, doctor, reindex, backup/restore이다. 소스 8개, SQL migration, Cargo 설정/lock의 관련 dependency 항목, `tests/{codec,store,retrieval,runtime,cli}.rs`, `tests/support/worker.rs`, `examples/validate.rs`, PLAN/STORAGE_FORMAT/REUSE/RUNBOOK/IMPLEMENTATION_REPORT 및 관련 raw log를 읽었다.
 
-dependency 동작이 판정에 직접 필요한 부분만 설치된 로컬 소스로 확인했다: tokenizers 0.22.2의 tokenizer 직렬화/encode/post_process, rusqlite 0.37.0의 transaction/backup, 연결된 SQLite의 backup 구현, Candle 0.11.0의 GGUF 정수 변환/모델 연결 부분. 외부 문서 조회나 dependency 다운로드는 하지 않았다.
+dependency 동작이 판정에 직접 필요한 부분만 설치된 로컬 소스로 확인했다: tokenizers 0.22.2의 tokenizer 직렬화/encode/post_process, rusqlite 0.37.0의 transaction/backup, 연결된 SQLite의 backup 구현, Candle 0.11.0의 external-model 정수 변환/모델 연결 부분. 외부 문서 조회나 dependency 다운로드는 하지 않았다.
 
 시작 시 `/Users/seo/Projects/Replica-v3`는 Git 저장소가 아니므로 HEAD와 tracked/dirty/untracked 구분이 없었다. 구현 보고서의 v2 재사용 출처는 `6da531adebde3c4d001a313b2cdd180ae783353f`이며, 계약 기준 `063be980ab0c8233497dcc29fd7035f9f22074c6`와 다르다. 이번 리뷰에서 v2 원격/로컬 이력이나 Zig ZIP을 재검증하지 않았다. 현재 변경분과 과거 구현 사이의 회귀 여부는 확정할 수 없고, 현 소스에서 재현 조건이 성립하는 결함과 직접 연결된 테스트 공백만 보고한다.
 

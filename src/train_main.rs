@@ -210,6 +210,15 @@ enum Models {
 }
 #[derive(Subcommand)]
 enum Corpus {
+    /// Bounded full-answer query/value/order pairs from an existing query-pairs training split.
+    QaPairs {
+        #[arg(long)]
+        source: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value_t = 128, value_parser = clap::value_parser!(u16).range(1..=128))]
+        groups: u16,
+    },
     /// Preserve a small existing QA set for a learning-path memorization diagnostic.
     Subset {
         #[arg(long)]
@@ -305,6 +314,14 @@ fn run() -> Result<()> {
             corpus,
             limit,
         } => training::sampling_exposure(&start, &end, &corpus, limit),
+        Commands::Corpus {
+            command:
+                Corpus::QaPairs {
+                    source,
+                    output,
+                    groups,
+                },
+        } => data::qa_pairs(&source, &output, usize::from(groups)),
         Commands::Corpus {
             command:
                 Corpus::Subset {

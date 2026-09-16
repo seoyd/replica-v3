@@ -143,7 +143,7 @@
    Compiling zstd v0.13.3
    Compiling candle-core v0.11.0
    Compiling candle-nn v0.11.0
-   Compiling candle-transformers v0.11.0
+   Compiling external-model-library [name removed by request] v0.11.0
    Compiling replica-v3 v0.1.0 (/Users/seo/Projects/Replica-v3)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 19.97s
      Running tests/codec.rs (target/debug/deps/codec-e7ec6d47b2d5484d)

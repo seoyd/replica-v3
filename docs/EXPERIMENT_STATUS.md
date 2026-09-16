@@ -1,9 +1,120 @@
 # 진단 및 구현 상태
 
-계약: R3-CUSTOMIZE-AND-DIAGNOSE-1.0. 2026-09-17.
+계약: GOAL1-NATIVE-TRPP-1.0 및 R3-CUSTOMIZE-AND-DIAGNOSE-1.0. 2026-09-17.
 모든 성공 표시는 구현자 확인이며 INDEPENDENT_PENDING이다.
 
-현재 신경망 학습 프로세스는 NOT_RUNNING이다. 기존 v12는 step 21,750에서
+## 현재 중단 시점 보고 — 2026-09-17
+
+RESULT: PARTIAL. EXECUTION: PAUSED_BY_USER / NOT_RUNNING.
+MODEL_QUALITY_PASS: NO. S4_QUALITY: FAIL. GOAL1_READY: NO.
+사용자의 중단·보고 요청 뒤에는 학습/추론 프로세스가 없음을 확인했다. 이후 GitHub 게시
+요청으로 기존 구현과 실제 관측 결과를 보존한다. 이 게시를 학습 재개나 단계 합격으로
+해석하지 않는다. 새 학습·모델 변경·추가 과적합 진단은 실행하지 않았다.
+
+실제 gradient 학습과 작은 고정 자료 암기는 확인됐다. 그러나 새 값/근거에 대한 전이와
+일반 QA는 품질 기준을 충족하지 못했고, 최근 U2의 실제 답변 정확도는 크게 악화됐다.
+유용한 일반 지능이나 서비스 가능한 기억 응답 모델을 완성했다고 말할 근거가 없다.
+
+### 구현돼 있는 것과 남은 것
+
+| 영역 | 구현/관측 사실 | 한계 |
+|---|---|---|
+| 모델 | Rust 자체 decoder, 9,605,184 parameters; 6 layers/hidden384, Q8/KV2 GQA, pre-RMSNorm, QK-RMSNorm, RoPE, SwiGLU, bias-free, tied embedding/output, local5+global1 | 현대적인 구성 요소를 사용했다는 사실이 답변 품질을 보장하지 않음; 기본 수식은 이번 U2에서 변경하지 않음 |
+| tokenizer | 학습 split만으로 만든 byte BPE; 현재801 vocabulary; 자체 byte framing/숫자 분절/native 저장, 범용 tokenizers crate의 BPE 학습 알고리즘 재사용 | 외부 학습 tokenizer는 사용하지 않음; 목표 상한4096과 실제801을 구별 |
+| trainer/KV | 실제 backward/AdamW, target mask/shift/accumulation, causal/local KV, RNG와 optimizer 저장·복원 | 관련 회귀가 통과했어도 모든 학습 오류를 배제한 것은 아님 |
+| 저장 | 실제 native binary 기본 저장/로드/생성, inference와 resume 분리, 새 process의 정확한 resume 검증 | F32이며 INT4는 미구현; 저장 성공은 품질 성공과 별개 |
+| 기억 | 기존 SQLite 원문/사건/버전/관계/검색과 native worker/CLI 연결; 동일 snapshot DB-free archive 조회 | 운영 SQLite 유지; 실제 새 사실/재시작의 최종 품질 합격 미완 |
+| 연산 경계 | 의미/커널 교체 경계와 실제 Rust GEMV 후보 비교 | 후보가 더 느려 기각, 기존 기본 커널 유지 |
+| 최종 목표 | S0~S3 및 별도 P0~P6 구현 검증 기록 보존 | S4 품질 FAIL, S5 정식 합격 미완, S6 INT4 미구현, 독립 검토 미실시 |
+
+프로젝트 소스와 학습/변환/평가 도구는 Rust이며 외부 pretrained model/teacher/model API는
+사용하지 않았다. 범용 Candle/autograd/tokenizers/rusqlite 등의 crate는 사용한다.
+SQLite/zstd 및 선택한 OS Accelerate의 native 하위 의존까지 Rust라는 뜻은 아니다.
+상세 의존성과 실제 저장 구분은 [의존·저장 감사](DEPENDENCY_STORAGE_AUDIT.md)에 있다.
+
+### 학습됐다는 근거와 전이 실패
+
+| 진단 | 실제 결과 | 해석 |
+|---|---|---|
+| 과거 full QA32 | 400/500step32/32, final fresh reload32/32; 별도32는0/32 | 전체 문장 암기 가능, 새 QA 일반화 미확인 |
+| P1 contrast16 | random R-A600 / QA parent R-B200updates에서 각각16/16, fresh reload도 통과 | 작은 고정 입력은 학습 가능 |
+| P1 사전 동결 새64 | 한 번 실행0/64 | 새 장면 전이 실패; 재학습 선택용으로 쓰지 않음 |
+| U1 이전 근거 순서 반전 | 원본16/16인데 순서 반전0/16 | 고정 사례에서도 순서에 민감 |
+| U1 원본+반전32 학습 | 200/300updates 연속32/32; exported inference fresh reload 원본/반전 각각16/16 | 네 base scene의32개 view 암기만 통과 |
+| U1 별도 요소 변형 | 사건ID9/16, 알려진 값 교체6/16, 새로운 숫자 값0/16 | 순서 보강을 넓은 근거 이해로 일반화하지 못함 |
+
+따라서 "gradient가 전혀 작동하지 않는다"는 결론도, "작은 자료를 외웠으므로 지능이
+완성됐다"는 결론도 관측과 맞지 않는다. 현재 합성 한국어 자료의 제한된 테스트만으로
+범용 언어 능력을 평가하거나 주장하지 않는다.
+
+### 최근 일반 QA 실행 U2 — 개선 실패
+
+기존 일반 QA parent step19,750에서 시작해 새 자료2,048개로 총250updates만 실행했다.
+step20,000은 누적 표시이며 이번에20,000updates를 추가한 것이 아니다. U1 한 단어
+진단 가중치를 일반 QA 모델로 연장하지 않았다. 별도 경로에 기존 Adam/RNG를 유지했고
+변경한 corpus와8개 묶음 sampling을 명시했다. 기존 체크포인트는 모두 보존했다.
+
+| 같은 입력의 실제 자유 생성 | 시작19,750 | +20updates | +250updates/중단 |
+|---|---:|---:|---:|
+| 새 train 앞128 전체 답변 정확도 | 55/128 (42.97%) | 54/128 (42.19%) | 31/128 (24.22%) |
+| 일반 QA 개발검증336 | 155/336 (46.13%) | 153/336 (45.54%) | 56/336 (16.67%) |
+| 보조과제64 | 16/64 (25.00%) | 16/64 (25.00%) | 0/64 (0.00%) |
+| 개발검증 전체400 | 171/400 (42.75%) | 169/400 (42.25%) | 56/400 (14.00%) |
+| 개발검증 token CE | 0.27005602 | 0.24824657 | 0.33113087 |
+
+위400개는 반복 사용한 DEVELOPMENT이며 새 독립 최종 시험이 아니다. 최종 후보를
+선정할 품질에 도달하지 못해 이번 U2의 새 final heldout는 실행하지 않았다. 기존 v9의
+다른 보조64를 포함한219/400과 현재171/400을 같은 전체 평가로 비교하면 안 된다.
+
+250updates 후 개발검증30/400에서 `native tokenizer: invalid/incomplete output UTF-8`
+오류가 발생했다. 이는 실제 생성된 byte열의 디코딩 거부이며 원인 자체는 아직 분리하지
+못했다. 오류와 별도로 개발검증12건, train 표본8건은 정상 종료했지만 답변이 빈 문자열이었다.
+무근거 질문에서 답변이 사라졌고, 대상 숫자·방향값 혼합과 문구 반복도 관측됐다.
+오류/빈 답변은 모두 정답에 포함하지 않았다. 정답/기록선택 oracle은 사용하지 않았다.
+
+마지막 train loss0.008424405는 마지막 batch의 teacher-forced token loss다. 전체
+train의 답변 정확도가 아니다. 정답 앞부분을 주는 token 예측과 자기 출력으로 이어 쓰는
+자유 생성은 다르고, 숫자/값/인용 한 곳의 오류로도 전체 답변은 틀린다. 낮은 마지막 loss를
+성공으로 판단할 수 없다. 검증 CE와 실제 답변 지표는 모두 악화됐다.
+
+sampler replay 결과 전체2,048개 중1,352개만 이번run에서 한 번 이상 뽑혔다. 평가한
+train128의64개는 미추출이고64개는1~3회 추출됐다. 이64개 중22개만 맞았다(34.375%).
+이는 "전체 학습자료를 충분히 반복 학습한 뒤에도24%"라는 실험은 아니다. 그렇더라도
+이전 능력 하락·빈 응답·디코딩 오류는 분명한 실패이므로 남은750updates를 실행하지 않았다.
+
+### 원인에 대한 판단과 중단 범위
+
+확인된 사실은 순서 민감성, 새로운 값/ID 전이 실패, 최근 자료·sampling 변경 후 일반 QA
+성능 하락이다. 자료 대조를 강화하면 일반 QA가 좋아질 것이라는 U2 가설은 이번 실행에서
+지지되지 않았다. 저장/회귀 테스트 성공을 모델 품질 개선으로 대신하지 않는다.
+
+미확정 가설은 좁은 자료의 상관관계 암기, 같은 장면8개 묶음의 gradient 편향/분산,
+기존 optimizer 상태와 변경된 자료 분포의 상호작용, 첫 target 가중치의 영향이다.
+어느 하나를 근본 원인으로 확정하지 않았다. UTF-8 오류가 tokenizer 구현 결함인지,
+생성된 byte 조합/종료 문제인지도 추가 분리 없이는 단정하지 않는다. 과거 shift/mask/
+gradient/cache 검사 통과는 해당 범위의 근거이며 모든 수치·학습 문제의 부재 증명이 아니다.
+
+재개한다면 현재 전체 QA 형식의16~32개를 고정해 실제 노출·token loss·자유 생성·새
+process 복원을 함께 보는 진단이 우선 후보다. 이는 제안이며 이번 중단 후 시작하지 않았다.
+추가 학습·자료 확대·모델/optimizer 변경·INT4 작업은 진행하지 않는다.
+
+### 게시 범위와 검증
+
+U1 코드/테스트/문서는 `e365b090f3916f1c04f1886d74de2d979e9e34fb`로 이미 게시했고
+당시 원격 SHA 일치를 확인했다. 이번 스냅샷에는 U2의 `src/data.rs`, `src/train_main.rs`,
+`tests/training.rs`와 상태/계획/실행 문서를 담는다. 기존 역사 문서/이미 추적된 로그의
+명칭 정리3건도 보존하며 신규 모델 구현 성과로 세지 않는다. 새 소스 파일은 없다.
+기존 미추적 원시 로그, corpus, 가중치/Adam, 운영 DB, 임시 지시문, target은 로컬 보존한다.
+
+U2 직접 회귀 `full_qa_pairs_keep_split_and_bind_question_value_citation_in_both_orders`
+1개 통과: split bytes, 질문에서 독립 유도한 원문/인용, 근거 역순, 기존 QA 보존, 입력 한도.
+중단 전 fmt/check/Accelerate clippy/release build 통과를 확인했다. 테스트는 자료 변환의
+정확성을 검증하며 모델 답변 품질을 보증하지 않는다. 게시를 위해 학습/평가를 재실행하지
+않고 저장된 로그를 대조한다. 원격 전송 결과는 게시 후 실제 full SHA로 별도 보고한다.
+
+## P0~P6 종료 시점의 기록 (아래 수치는 해당 과거 단계 기준)
+
+당시 신경망 학습 프로세스는 NOT_RUNNING이었다. 기존 v12는 step 21,750에서
 BUDGET_REACHED로 종료했고, 신규 contrast R-A/R-B는 각각600/200 updates에서
 두 번 연속 memorization 통과 후 정상 종료했다. 대규모 QA 학습은 재개하지 않았다.
 이전 문서의 실행 중 표현은 종료 로그/manifest보다 오래된 상태였다.
@@ -38,7 +149,7 @@ QA32의 32/32는 기존 별도 memorization 실험이고 새로운 contrast16 �
 support-only 결과는 길이/방해 근거 수까지 바뀌므로 기록 선택 하나가 유일한 원인이라고
 확정할 수 없다. 64/336/400 반복 검증 자료는 DEVELOPMENT이다.
 
-## 현재 필수 결과 필드
+## P0~P6 종료 시점 필수 결과 필드
 
 RESULT: COMPLETE_THIS_CONTRACT
 DELIVERABLE_VERIFIED: YES
@@ -762,3 +873,107 @@ S4_QUALITY=FAIL; S5/S6의 선행 품질 조건 미충족; INDEPENDENT_PENDING.
 다음은 이32개를 더 오래 학습하는 작업이 아니라, 근거값과 사건번호를 함께 생성하는
 일반 QA의 대조자료/실제 생성 오류를 교정하는 제한된 단계다. 기존 수식/저장과 checkpoint를
 보존하며 새 변경·실행 예산·개발검증을 먼저 명시한다.
+
+## S4/U2: 기존 장면의 일반 QA 대조 묶음 (실행 전 고정)
+
+BASE_HEAD=e365b090f3916f1c04f1886d74de2d979e9e34fb, 정상push/원격SHA 일치 확인.
+U1은 작은 순서 대조를 암기했지만 ID/값 전이가 부족하다. U2는 기존 일반 QA가 서로 다른
+근거의 값과 인용을 섞는 문제를 대상으로 하며, U1의 방향 한 단어 모델을 서비스 후보로
+연장하지 않는다. 기존 validation으로 선택해 보존한 v9 step19,750을 native resume으로
+명시 import한다. Git/source/기존artifact를 과거로 되돌리지 않는다.
+
+새 `corpus qa-pairs`는 기존 query-pairs 학습20,000개에서128개 질문/값 quartet을
+일반 QA 질문+원문/인용 target으로 바꾸고128개 일반 QA quartet을 함께 유지한다.
+각 quartet의 두 근거 순서를 포함한8개씩, 총2,048개/256개 base 묶음이다.
+원문/사건ID/status/time/값 자체나 새base를 만들지 않고, 기존 전체답 문장 형식을 유지한다.
+질문은 선택할 entity/context/status를 담으며 model input에 gold ID/답을 넣지 않는다.
+선택 label은 training 전용 module에만 있다. 같은 entity/context/status가 중복되어
+요청한 기록이 모호하면 거부한다. 기존 QA quartet의 질문/정답/근거는 그대로다.
+0/1개 근거의 역순 view는 내용이 같으므로 서로 다른 관측 장면으로 세지 않는다.
+
+train 분류별720/464/464/200/200, validation400은 이전 DEVELOPMENT bytes와 같다.
+처음 만든 초안은 보조과제의 category3 표시를 계승했으므로 사용하지 않았다. 실제 과제의
+대상/버전/장소 분류로 바꾼 별도 fixed corpus를 사용한다. 검증 자료를 학습에 섞지 않는다.
+
+| 실행 전 고정 identity | SHA-256 |
+|---|---|
+| source 목록 | 4be449d0505e1fb85152bbc5112ac3c6088587307b758f8de53fce600dcb5c86 |
+| parent native resume | 1bcae73d7f2f7f501acc43e3958d66781b22d139533b12d6e369624171356849 |
+| fixed train2,048 | 7c19a05354ddbed179b7ccb2f9dc667ad71a98d2f4bd426a9e74e0ffd8046b70 |
+| 동일 validation400 | f8d18fe3f6bd2b14045218139eafabec41486420779295fe1273a12c8d697864 |
+
+실제 기존 SMALL/F32/801BPE/Adam/RNG를 유지한다. CPU/Accelerate,
+VECLIB1/RAYON1, LR.0003/warmup100, micro8/accumulation1, first_target_weight8을
+그대로 쓰며, 추가로 명시한 sample_group_size8로 대조 묶음 전체를 뽑는다. 기존 일반
+trainer의 explicit extension/corpus replacement를 재사용한다. 시작step19,750,
+input32,501,322, sampler2077817959327737305. 최대추가1,000updates/2,000만input/
+45분 중 먼저 닿는 예산, 수치 이상/16GiB 초과는 중단한다.20updates probe를 먼저
+저장하고 이 동일 예산/state 안에서만 재개한다. 무제한 extension/LR·seed sweep은 없다.
+
+고정start와 probe의 train앞128/validation400 실제 생성을 비교하고, 이후 저장된
+step20,000/20,250/20,500/20,750에서 validation의 일반QA macro로만 후보를 선택한다.
+동률은 일반CE가 낮은 것, 다시 동률이면 앞선step이다. 보조64와 일반336을 분리해
+보고한다. 일반QA 전체95%/각분류90%도 못 넘으면 새 최종heldout를 소모하지 않는다.
+새 최종fixture는 후보가 고정되고 개발 품질을 통과한 뒤 생성한다. 원래Goal1 조건은
+그대로이며 대조 묶음의 암기만으로 완료하지 않는다.
+
+NODE=S4/U2, STATUS=EXPERIMENT_FAILED / PAUSED_BY_USER; 최종20,000step에서 중단.
+아래20update 기록은 중간 관측이며 현재 상태는 뒤의250update 종료 기록을 따른다.
+소스: data.rs/train_main.rs, 직접 통합회귀: tests/training.rs의 full_qa_pairs...
+1개 통과. validation byte동일성, 원문/인용/질문 유일성, 순서 대조, 기존 일반QA 보존,
+한도 거부를 검사했고 fmt/check/Accelerate clippy/release build를 실행했다.
+
+20update probe는step19,770에서 명시 stop_after로 정상 저장했다. 추가input50,084/
+target4,696, 실행39.32s, OS maximum RSS5,641,568,256B이며 단계 사이 ps의 최고
+1,429,680KiB보다 높다. sampled RSS만 최대 메모리로 보고하지 않는다. 종료이유TRAINING,
+optimizer_boundary exact resume 가능, validation CE0.27005602→0.2482465661이다.
+
+| 실제 greedy DEVELOPMENT | start19,750 | probe19,770 |
+|---|---:|---:|
+| 새train 앞128 전체답 | 55/128 | 54/128 |
+| 기존일반QA | 155/336 | 153/336 |
+| 기존보조 | 16/64 | 16/64 |
+| 일반QA0 | 13/68 | 13/68 |
+| 일반QA1 | 22/68 | 22/68 |
+| 일반QA2 | 5/68 | 9/68 |
+| 일반QA3 | 54/68 | 50/68 |
+| 일반QA4 | 61/64 | 59/64 |
+
+이 시점에서 품질 개선을 주장하지 않는다. 저장된sampler의 결정적 replay로 총160개가
+한 번씩 노출됐고1,888개는 이번run에 미노출임을 확인했다. 평가한train 앞128 중에는
+8개만1회 노출,120개 미노출이다. corpus에 속한다는 사실과 이번run에서 학습했다는
+사실을 구별한다. 이후 명시 중단점20,000까지 진행한 결과는 다음과 같다.
+
+### U2 최종250update 관측 및 보존
+
+20update probe 이후230updates를 같은 예산/Adam/RNG로 재개해step20,000에서
+`--stop-after 20000`으로 정상 저장·종료했다. 로그의 `reason=TRAINING`은 이 명시
+중단점의 내부 상태이며 프로세스가 계속 실행 중이라는 뜻이 아니다. 이후 새 process에서
+고정 checkpoint의 train128/development400 생성을 완료했다. 결과는 문서 첫 표와 같고
+일반QA 분류별4/68,13/68,5/68,26/68,8/64; 보조0/64다. 품질 하락으로 남은750updates와
+나머지 사전 후보 지점20,250/20,500/20,750은 실행하지 않았다.
+
+추가 input613,756/target57,272, 누적 input33,115,078/target2,275,700.
+학습 두 구간39.32s+244.90s=284.22s이며 평가 시간은 제외한다. 두 번째 구간 OS maximum
+RSS6,547,439,616B(약6.10GiB), swaps0; sampled max1,567,936KiB와 구별한다.
+NaN/OOM을 종료 원인으로 보고하지 않는다. 마지막 plain train CE0.0084244050,
+validation CE0.3311308720; `task_quality=NOT_EVALUATED`인 trainer 로그와 별도로
+위 실제 생성 품질은 FAIL이다.
+
+전체 exposure histogram은0회696/1회856/2회376/3회88/4회32, 총2,000draws다.
+train 앞128은0회64/1회48/2회8/3회8, 각각 정답9/18/2/2다. saved sampler state와
+결정적 replay가 일치하며 과거 parent 전체 lifetime의 노출 수로 확대하지 않는다.
+
+아래 파일은 `artifacts/goal1-resume-20260917/` 아래 로컬에 보존한다. 전체 파일 SHA와
+모델 tensor 내용 digest를 혼용하지 않는다. final의 tensor digest는
+`dc2842a267f29d87b64f63a142310fb1735c4e43c727956c0fb1e5f9934ee0f0`이다.
+
+| 로컬 보존 파일 | 전체 파일 SHA-256 |
+|---|---|
+| u2-to-20000/final | 34c2ef0630b6afe1df1b4b901a8679d4461edb041e4885b812fe91935eb1ad2c |
+| u2-to-20000.txt | 5fb86cb2999582b46c52464c4048853a8536a16e41707065510d273779529c00 |
+| u2-20000-train.jsonl | 40b278503f18c2deffe797c91a4e7fbcf69c763abded72b268133d6f57586be6 |
+| u2-20000-validation.jsonl | 3605f11e505cb87e0ee280ade6e129a26755bccb909dd17e586c765b6fbc804e |
+| u2-20000-exposure.txt | e73209cd51127694cd16be0c55456b3874c1eb934feef785a762cad076835147 |
+
+parent checkpoint, P1/U1, U2 start/probe/final은 덮어쓰거나 삭제하지 않았다.

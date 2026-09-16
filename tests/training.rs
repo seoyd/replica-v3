@@ -1,5 +1,144 @@
 use std::process::Command;
 #[test]
+fn full_qa_pairs_keep_split_and_bind_question_value_citation_in_both_orders() {
+    let d = tempfile::tempdir().unwrap();
+    let source = d.path().join("source");
+    let output = d.path().join("paired");
+    let run = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_replica-train"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    run(&[
+        "corpus",
+        "prepare",
+        "--profile",
+        "query-pairs",
+        "--documents",
+        "3840",
+        "--seed",
+        "317",
+        "--output",
+        source.to_str().unwrap(),
+    ]);
+    run(&[
+        "corpus",
+        "qa-pairs",
+        "--source",
+        source.to_str().unwrap(),
+        "--output",
+        output.to_str().unwrap(),
+        "--groups",
+        "8",
+    ]);
+    assert_eq!(
+        std::fs::read(source.join("validation.json")).unwrap(),
+        std::fs::read(output.join("validation.json")).unwrap()
+    );
+    let original: Vec<serde_json::Value> =
+        serde_json::from_slice(&std::fs::read(source.join("train.json")).unwrap()).unwrap();
+    let train: Vec<serde_json::Value> =
+        serde_json::from_slice(&std::fs::read(output.join("train.json")).unwrap()).unwrap();
+    assert_eq!(train.len(), 128);
+    for group in train.as_chunks::<8>().0 {
+        for i in 0..4 {
+            let a = &group[i];
+            let b = &group[i + 4];
+            assert_eq!(a["answer"], b["answer"]);
+            assert_eq!(a["request"]["input"], b["request"]["input"]);
+            assert_eq!(a["request"]["system"], b["request"]["system"]);
+            let mut reversed = a["request"]["evidence"]["items"]
+                .as_array()
+                .unwrap()
+                .clone();
+            reversed.reverse();
+            assert_eq!(
+                serde_json::json!(reversed),
+                b["request"]["evidence"]["items"]
+            );
+            if let Some(id) = a["id"]
+                .as_str()
+                .unwrap()
+                .strip_prefix("qa-pairs/ordinary/false/")
+            {
+                let old = original.iter().find(|e| e["id"] == id).unwrap();
+                assert_eq!(a["answer"], old["answer"]);
+                assert_eq!(a["request"]["input"], old["request"]["input"]);
+                assert_eq!(a["request"]["evidence"], old["request"]["evidence"]);
+            } else {
+                assert_eq!(a["request"]["system"], replica_v3::model::SYSTEM);
+                let question = a["request"]["input"].as_str().unwrap();
+                let wanted_status = if question.contains("과거") {
+                    "superseded"
+                } else {
+                    "current"
+                };
+                // Derive the support from the serialized question/records, independently of
+                // the answer, binding, generator choice, and position within this group.
+                let support: Vec<_> = a["request"]["evidence"]["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|r| {
+                        let raw = r["original_excerpt"].as_str().unwrap();
+                        let (entity, rest) = raw.split_once("의 ").unwrap();
+                        let (context, _) = rest.split_once(" 이동 지시는 ").unwrap();
+                        question.contains(entity)
+                            && question.contains(context)
+                            && r["version_status"] == wanted_status
+                    })
+                    .collect();
+                assert_eq!(support.len(), 1);
+                let id = support[0]["event_id"].as_i64().unwrap();
+                let answer = a["answer"].as_str().unwrap();
+                assert_eq!(replica_v3::app::citations(answer).unwrap(), [id]);
+                assert_eq!(
+                    answer.strip_suffix(&format!(" [event:{id}]")),
+                    support[0]["original_excerpt"].as_str()
+                );
+                assert_eq!(group[0]["request"]["input"], group[2]["request"]["input"]);
+                assert_eq!(group[1]["request"]["input"], group[3]["request"]["input"]);
+                assert_ne!(group[0]["request"]["input"], group[1]["request"]["input"]);
+                assert_eq!(
+                    group[0]["request"]["evidence"],
+                    group[1]["request"]["evidence"]
+                );
+                assert_eq!(
+                    group[2]["request"]["evidence"],
+                    group[3]["request"]["evidence"]
+                );
+            }
+        }
+    }
+    let out = Command::new(env!("CARGO_BIN_EXE_replica-train"))
+        .args([
+            "corpus",
+            "qa-pairs",
+            "--source",
+            source.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+            "--groups",
+            "129",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert_eq!(
+        train,
+        serde_json::from_slice::<Vec<serde_json::Value>>(
+            &std::fs::read(output.join("train.json")).unwrap()
+        )
+        .unwrap()
+    );
+}
+#[test]
 fn query_pairs_require_question_and_evidence_with_validation_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     for profile in ["field-pairs", "query-pairs"] {

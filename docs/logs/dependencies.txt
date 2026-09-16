@@ -79,6 +79,6 @@
   Downloaded candle-core v0.11.0
   Downloaded spm_precompiled v0.1.4
   Downloaded nix v0.31.3
-  Downloaded candle-transformers v0.11.0
+  Downloaded external-model-library [name removed by request] v0.11.0
   Downloaded onig_sys v69.9.3
   Downloaded zstd-sys v2.1.0+zstd.1.5.7
