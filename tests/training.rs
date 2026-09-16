@@ -1335,6 +1335,46 @@ fn native_training_resume_is_identical_in_fresh_processes() {
     let a = checkpoint::load(&full.join("final"), Device::Cpu, true).unwrap();
     let b = checkpoint::load(&resumed.join("final"), Device::Cpu, true).unwrap();
     assert_eq!(a.manifest.weights_sha256, b.manifest.weights_sha256);
+    assert_eq!(a.optimizer.len(), a.model.vars.len() * 2);
+    for (name, t) in &a.optimizer {
+        assert_eq!(
+            t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+            b.optimizer[name]
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap(),
+            "{name}"
+        );
+    }
+    for (name, t) in &a.model.vars {
+        assert_eq!(
+            t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+            b.model.vars[name]
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap(),
+            "{name}"
+        );
+    }
+    let probe = candle_core::Tensor::new(&[[8u32, 9, 10]], &Device::Cpu).unwrap();
+    assert_eq!(
+        a.model
+            .forward(&probe, None)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap(),
+        b.model
+            .forward(&probe, None)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap()
+    );
     let a_state = a.manifest.training.unwrap();
     let b_state = b.manifest.training.unwrap();
     assert_eq!(a_state.step, 6);
@@ -1342,6 +1382,8 @@ fn native_training_resume_is_identical_in_fresh_processes() {
     assert_eq!(a_state.consumed_tokens, b_state.consumed_tokens);
     assert_eq!(a_state.target_tokens, b_state.target_tokens);
     assert_eq!(a_state.validation_loss, b_state.validation_loss);
+    assert_eq!(a_state.train_loss, b_state.train_loss);
+    assert_eq!(a_state.config, b_state.config);
     assert_ne!(a.model.weight_hash().unwrap(), model.weight_hash().unwrap());
     // A new bounded run is explicit; ordinary resume above preserves the original
     // schedule exactly. Extension must preserve the actual optimizer/RNG at entry.
@@ -1564,15 +1606,20 @@ fn curriculum_resume_crosses_sampling_boundary_in_fresh_process() {
     assert!(exposure.status.success());
     let exposure: serde_json::Value = serde_json::from_slice(&exposure.stdout).unwrap();
     assert_eq!(exposure["draws"], 8);
-    let saved_path = dir.path().join("full/final/manifest.json");
-    let saved = std::fs::read(&saved_path).unwrap();
-    let mut corrupted: serde_json::Value = serde_json::from_slice(&saved).unwrap();
-    corrupted["training"]["sampler_state"] = serde_json::json!(a.sampler_state ^ 1);
-    std::fs::write(&saved_path, serde_json::to_vec(&corrupted).unwrap()).unwrap();
-    let rejected = audit("full/final");
+    let mut corrupted =
+        checkpoint::load(&dir.path().join("full/final"), Device::Cpu, true).unwrap();
+    corrupted.manifest.training.as_mut().unwrap().sampler_state = a.sampler_state ^ 1;
+    checkpoint::save(
+        &dir.path().join("corrupt-rng"),
+        &corrupted.model,
+        &corrupted.tokenizer,
+        corrupted.manifest,
+        &corrupted.optimizer,
+    )
+    .unwrap();
+    let rejected = audit("corrupt-rng");
     assert!(!rejected.status.success());
     assert!(String::from_utf8_lossy(&rejected.stderr).contains("replayed sampler does not match"));
-    std::fs::write(&saved_path, saved).unwrap();
     // An explicit grouped extension must keep optimizer and sampler restart exact,
     // including the transition from the filtered copy pool to the full corpus.
     let source = hash(b"grouped sampler extension fixture");
@@ -1834,4 +1881,83 @@ fn native_training_cancel_keeps_optimizer_boundary_checkpoint() {
     assert_eq!(restored.manifest.status, "CANCELLED");
     assert!(restored.manifest.training.unwrap().step >= 1);
     assert!(!restored.optimizer.is_empty());
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn native_export_kill_before_publication_preserves_source_and_allows_retry() {
+    use replica_v3::neural::{
+        ByteBpe, checkpoint, hash,
+        transformer::{Config, Transformer},
+    };
+    use std::{
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+    let d = tempfile::tempdir().unwrap();
+    let source = d.path().join("source.r3m");
+    let destination = d.path().join("inference.r3m");
+    let marker = d.path().join("marker");
+    let tok = ByteBpe::train(
+        &[b"export fixture fixture".to_vec()],
+        &hash(b"export fixture"),
+        280,
+    )
+    .unwrap();
+    let model =
+        Transformer::init(Config::tiny(tok.vocab_size()), 23, candle_core::Device::Cpu).unwrap();
+    checkpoint::save(
+        &source,
+        &model,
+        &tok,
+        checkpoint::initialized(&model, &tok, 23, hash(b"source")).unwrap(),
+        &Default::default(),
+    )
+    .unwrap();
+    let original = std::fs::read(&source).unwrap();
+    let command = || {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_replica-train"));
+        cmd.args(["model", "export-inference", "--checkpoint"])
+            .arg(&source)
+            .arg("--output")
+            .arg(&destination);
+        cmd
+    };
+    let mut child = command()
+        .env("REPLICA_TEST_PAUSE", "artifact_before_publish")
+        .env("REPLICA_TEST_MARKER", &marker)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !marker.exists() {
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!("export exited before marker: {status}");
+        }
+        if Instant::now() > deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("export marker timeout");
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    child.kill().unwrap();
+    let result = child.wait_with_output().unwrap();
+    assert!(!result.status.success());
+    assert!(result.stdout.is_empty());
+    assert!(!destination.exists());
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+    let result = command().output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let reloaded = checkpoint::load(&destination, candle_core::Device::Cpu, false).unwrap();
+    assert_eq!(
+        reloaded.model.weights_content_id().unwrap(),
+        model.weights_content_id().unwrap()
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), original);
 }

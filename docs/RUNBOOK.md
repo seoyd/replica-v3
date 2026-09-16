@@ -447,3 +447,28 @@ random은 seed17 재초기화 hash를 대조하고 qa는 auxiliary-only checkpoi
 새64의 `contrast evaluate ... --heldout`은 암기 통과 뒤 사전 선택한 한 후보에 한 번만
 실행한다. 이 결과를 보고 추가 학습하지 않는다. 현재 실행 결과는16개 암기 통과,
 새64는0/64이며 Goal1은 미완이다. 세부 계보와 hash는 EXPERIMENT_STATUS.md에 있다.
+
+## Native binary 기본 artifact (현재)
+
+기존 학습 디렉터리는 원본으로 보존한다. 아래 명령은 새 목적지 파일을 만들며
+기존 파일/디렉터리를 덮어쓰지 않는다. 파일 확장자는 식별 기준이 아니며 magic과
+schema를 검사한다. 초기화/학습의 start/step/final도 이제 단일 binary 파일이다.
+
+```sh
+cargo run --offline --locked --release --bin replica-train -- model import-legacy --source OLD_DIRECTORY --output MODEL.r3m --kind inference
+cargo run --offline --locked --release --bin replica-train -- model import-legacy --source OLD_DIRECTORY --output RESUME.r3m --kind resume
+cargo run --offline --locked --release --bin replica-train -- model export-inference --checkpoint RESUME.r3m --output INFERENCE.r3m
+cargo run --offline --locked --release --bin replica-v3 -- generate --checkpoint MODEL.r3m --text '질문'
+cargo run --offline --locked --release --example validate -- native-load-audit MODEL.r3m inference
+cargo run --offline --locked --release --example validate -- native-load-audit RESUME.r3m resume
+```
+
+위 generate는 DB를 열지 않는다. ask/chat은 원래 SQLite 기억 검색을 유지한다.
+worker와 학습 재개는 binary만 읽으며 구형 디렉터리를 자동으로 열지 않는다.
+inference 파일의 resume은 오류다. legacy 변환물은 진단/품질 미확인 상태를 유지한다.
+저장 성공으로 모델 품질 또는 Goal1 통과를 선언하지 않는다. corpus/IPC/출력 로그의
+JSON과 모델 artifact의 JSON 제거는 별개다. 이 작업에서 tokenizer를 다시 학습하지 않는다.
+
+행렬 비교는 `validate kernel-profile MODEL.r3m FIXTURE` 및
+`validate kernel-compare MODEL.r3m FIXTURE`이다. 기본은 candle-linear-v1;
+Rust decode GEMV는 더 느린 것으로 관측돼 기본값으로 채택하지 않았다.

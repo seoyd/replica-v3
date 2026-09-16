@@ -114,3 +114,72 @@ create-new backup is retained as an explicitly untrusted artifact; the error inc
 its path. Existing destinations are never overwritten/deleted. Retrieval now reports
 sentinel/hop/output limits even when duplicate/filter rejection prevents queue growth;
 fetched candidate/edge and eligible counters are transient diagnostics, not new schema.
+
+## 자체 모델 container v1 (현재 기본 경로)
+
+사건 RPV3 codec과 별개의 `R3MODEL\0` 모델 파일이다. tensor dtype은 F32,
+integer는 명시 little-endian 또는 기존 canonical ULEB128이다. Rust 구조체/enum의
+메모리 layout을 저장하지 않는다. 파일 하나에 config/tokenizer/lineage/directory/body가
+있으며 JSON 문자열, JSON header, 압축 JSON을 넣지 않는다.
+
+64-byte prefix:
+
+| offset | bytes | 의미 |
+|---:|---:|---|
+| 0 | 8 | ASCII R3MODEL + NUL |
+| 8 | 2 | LE wire version=1 |
+| 10 | 1 | kind: 1 INFERENCE, 2 RESUME |
+| 11 | 1 | flags=0, 이 버전은 LE만 지원 |
+| 12 | 4 | LE header length, 최대2MiB |
+| 16 | 8 | LE 전체 파일 길이, 최대192MiB |
+| 24 | 32 | header SHA-256 |
+| 56 | 8 | reserved=0 |
+
+header 순서는 operator family/equation/parameter/state/numeric 문자열, bounded config,
+architecture semantic digest, model content digest, source/initial-weight/status,
+init seed/trained steps/diagnostic flag, optional legacy identity, tokenizer,
+optional training state, tensor directory이다. 문자열/bytes는 canonical 길이+원문이다.
+기존 JSON config/tokenizer/tensor file digest의 migration map은 명시 importer가
+원본 checksum/shape/mapping을 검증한 후 보존한다. native loader가 JSON을 재구성해
+이 map을 만드는 것은 아니다. legacy wire identity와 새 semantic identity는 별개다.
+
+config는 profile 문자열 다음 vocab/layers/hidden/heads/kv_heads/head_dim/ffn/
+local_layers/window/context varint, eps/rope_theta F64 LE이다. semantic ID는 profile
+label을 제외하고 수식 및 수치 설정을 포함한다. 알려지지 않은 수식/state를 같은
+shape라는 이유로 허용하지 않는다. 기존 SMALL/TINY 및 명시 experimental 상한만 허용한다.
+
+tokenizer schema1은 특수 ID0..7, byte 원문 처리, ASCII 비문자/각 숫자의 독립
+segmentation을 고정한다. train digest/legacy wire digest/semantic mapping digest,
+vocab count, ID 순서의 raw token bytes, ordered merge count와 두 입력 token ID를
+저장한다. 특수 token의 raw bytes는 비어 있고 문자 token은1..32bytes, vocab264..4096.
+256 byte fallback, 고유 vocab, merge의 앞선 구성요소/고유 결과/도달 가능한 vocab을
+검증한다. direct BPE builder를 사용하며 load 시 JSON parser를 사용하지 않는다.
+
+각 tensor descriptor는 name(한 번), dtype1=F32, rank/dims, offset/length LE u64,
+codec0=raw, payload SHA-256이다. 이름은 정렬된 정확한 parameter schema 집합이며
+rank1..3, shape/dtype/count/expected byte product를 allocation 전에 확인한다.
+첫 payload 및 각 후속 payload는64-byte 경계에 시작하며 padding은0..63개의0 byte.
+마지막 payload 직후 EOF이고 trailing bytes, 빈 tensor, overlap, duplicate, 잘못된
+정렬/shape/checksum/nonfinite를 거부한다. raw body는 contiguous F32 LE이며 whole-file
+압축을 하지 않는다. checksum은 손상 검출이고 인증/암호화가 아니다.
+
+INFERENCE에는 model weights/config/exact tokenizer와 필요한 출처·실제 update 수·
+진단 여부만 있으며 Adam/config scheduler/sampler 상태는 없다. RESUME에는 동일 모델과
+각 parameter의 Adam m/v, TrainConfig 전 필드, step, input/target budget, u64 sampler,
+corpus/validation/previous-corpora hashes, initial/parent weight lineage, loss,
+contrast16 여부와 중단 상태가 있다. F64/u64는 JSON 숫자로 우회하지 않는다.
+optimizer step 경계에서만 trainer가 저장하고 accumulation 중간 gradient는 저장하지
+않는다. SIGKILL 후 최신 미공개 gradient까지 복구된다는 의미가 아니다.
+
+inference view는 resume 파일에서도 Adam payload를 seek로 건너뛰며 읽거나 할당하지
+않는다. 따라서 그 view는 미사용 Adam payload의 checksum까지 검사했다고 주장하지
+않는다. resume view와 export의 공개 전 검증은 모든 tensor를 검사한다. inference-only
+파일을 resume으로 열면 명시 오류다. model revision은 optimizer 내용과 독립된 model
+content/architecture/tokenizer semantic ID로 구성한다.
+
+공개 절차: 동일 parent의 create_new 소유 temp → 전체 작성 → 전체 readback 검증 →
+file.sync_all → hard_link no-clobber → parent.sync_all. 일반 오류 시 자신의 temp만
+정리한다. SIGKILL은 미공개 temp를 남길 수 있지만 기존 목적지/source를 덮어쓰지 않는다.
+공개 후 directory sync 오류는 목적지가 이미 존재할 수 있다. OS/device 한계를 넘는
+power-loss proof를 주장하지 않는다. 배포 경로는 native-only이고 legacy 디렉터리 탐색
+fallback은 없다. `model import-legacy --kind inference|resume`만 명시 변환 경로다.

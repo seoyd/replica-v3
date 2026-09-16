@@ -63,14 +63,14 @@ impl Model for LocalModel {
         if cancel.load(Ordering::Relaxed) {
             return Err(Error::Cancelled);
         }
-        if !self.config.checkpoint.is_dir() {
+        if !self.config.checkpoint.is_file() {
             return Err(Error::Model(format!(
                 "MISSING_NATIVE_CHECKPOINT: {}",
                 self.config.checkpoint.display()
             )));
         }
         let (manifest, tokenizer) = crate::neural::checkpoint::metadata(&self.config.checkpoint)?;
-        if manifest.training.as_ref().is_none_or(|s| s.step == 0) {
+        if manifest.trained_steps == 0 {
             return Err(model_error(
                 "native checkpoint has no actual optimizer updates",
             ));
@@ -78,7 +78,7 @@ impl Model for LocalModel {
         let prepared = tokenizer.prepare(
             request,
             manifest.architecture.context as u32,
-            &manifest.architecture.id()?,
+            &manifest.architecture.semantic_id()?,
         )?;
         let mut cmd = Command::new(std::env::current_exe()?);
         cmd.arg("__model-worker")
@@ -86,7 +86,7 @@ impl Model for LocalModel {
             .arg(&self.config.checkpoint);
         let response = run_worker(cmd, request, cancel, LOAD_TIMEOUT)?;
         verify_prepared(request, &prepared, &response)?;
-        if response.generation.model_revision != native_revision(&manifest)? {
+        if response.generation.model_revision != native_revision(&manifest, &tokenizer)? {
             return Err(model_error("worker checkpoint identity mismatch"));
         }
         Ok(response)
@@ -285,12 +285,7 @@ pub fn worker(config: ModelConfig) -> Result<()> {
     use crate::neural::{checkpoint, cpu_backend};
     let load_start = Instant::now();
     let loaded = checkpoint::load(&config.checkpoint, candle_core::Device::Cpu, false)?;
-    if loaded
-        .manifest
-        .training
-        .as_ref()
-        .is_none_or(|s| s.step == 0)
-    {
+    if loaded.manifest.trained_steps == 0 {
         return Err(model_error(
             "native checkpoint has no actual optimizer updates",
         ));
@@ -307,9 +302,10 @@ pub fn worker(config: ModelConfig) -> Result<()> {
         .limits
         .context_tokens
         .min(loaded.model.config.context as u32);
-    let prepared = loaded
-        .tokenizer
-        .prepare(&request, context, &loaded.model.config.id()?)?;
+    let prepared =
+        loaded
+            .tokenizer
+            .prepare(&request, context, &loaded.model.config.semantic_id()?)?;
     let generated = loaded.model.generate(
         &prepared.token_ids,
         request.limits.max_tokens as usize,
@@ -333,7 +329,7 @@ pub fn worker(config: ModelConfig) -> Result<()> {
         prepared: Some(receipt),
         generation: GenerationInfo {
             model_id: loaded.model.config.profile.clone(),
-            model_revision: native_revision(&loaded.manifest)?,
+            model_revision: native_revision(&loaded.manifest, &loaded.tokenizer)?,
             runtime_revision: format!(
                 "replica-native-trpp-v1;candle-0.11.0;{};greedy;native-role-bytes-v1",
                 cpu_backend()
@@ -354,11 +350,14 @@ pub fn worker(config: ModelConfig) -> Result<()> {
     };
     write_frame(&mut stdout, &response, MAX_RESPONSE)
 }
-fn native_revision(manifest: &crate::neural::checkpoint::Manifest) -> Result<String> {
+fn native_revision(
+    manifest: &crate::neural::checkpoint::Manifest,
+    tokenizer: &crate::neural::ByteBpe,
+) -> Result<String> {
     Ok(format!(
-        "weights-sha256:{};tokenizer-sha256:{};config-sha256:{}",
-        manifest.weights_sha256,
-        manifest.tokenizer_sha256,
-        manifest.architecture.id()?
+        "weights-content:{};tokenizer-semantic:{};architecture-semantic:{};wire:1",
+        manifest.model_content_digest,
+        tokenizer.semantic_id(),
+        manifest.architecture.semantic_id()?
     ))
 }

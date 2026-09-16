@@ -122,6 +122,7 @@ pub struct ByteBpe {
     bytes: Vec<u8>,
     tokens: Vec<Vec<u8>>,
     merges: Vec<(u32, u32)>,
+    wire_id: String,
     pub train_hash: String,
 }
 impl ByteBpe {
@@ -164,6 +165,9 @@ impl ByteBpe {
             return Err(token_error("oversized metadata"));
         }
         let file: TokenizerFile = serde_json::from_slice(bytes)?;
+        Self::from_file(file, bytes.to_vec(), hash(bytes))
+    }
+    fn from_file(file: TokenizerFile, bytes: Vec<u8>, wire_id: String) -> Result<Self> {
         let n = file.vocab.len();
         if file.version != 1
             || !(256 + SPECIALS..=MAX_VOCAB).contains(&n)
@@ -202,6 +206,8 @@ impl ByteBpe {
                 return Err(token_error("missing byte fallback"));
             }
         }
+        let mut available: std::collections::BTreeSet<String> =
+            (0..=255).map(|b| alphabet(b).to_string()).collect();
         for (a, b) in &file.merges {
             if !file.vocab.contains_key(a)
                 || !file.vocab.contains_key(b)
@@ -209,9 +215,15 @@ impl ByteBpe {
                 || a.chars()
                     .chain(b.chars())
                     .any(|c| !(0x100..=0x1ff).contains(&(c as u32)))
+                || !available.contains(a)
+                || !available.contains(b)
+                || !available.insert(format!("{a}{b}"))
             {
                 return Err(token_error("invalid merge"));
             }
+        }
+        if available.len() + SPECIALS != n {
+            return Err(token_error("unreachable vocabulary token"));
         }
         let merges = file
             .merges
@@ -225,7 +237,8 @@ impl ByteBpe {
             .map_err(token_error)?;
         Ok(Self {
             model,
-            bytes: bytes.to_vec(),
+            bytes,
+            wire_id,
             tokens,
             merges,
             train_hash: file.train_hash,
@@ -235,13 +248,74 @@ impl ByteBpe {
         Self::from_bytes(&read_bounded(path, MAX_TOKENIZER_BYTES)?)
     }
     pub fn save(&self, path: &Path) -> Result<()> {
+        if self.bytes.is_empty() {
+            return Err(token_error("native tokenizer has no legacy JSON export"));
+        }
         write_new(path, &self.bytes)
     }
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
     pub fn id(&self) -> String {
-        hash(&self.bytes)
+        self.wire_id.clone()
+    }
+    pub(crate) fn mapping(&self) -> (&[Vec<u8>], &[(u32, u32)]) {
+        (&self.tokens, &self.merges)
+    }
+    pub(crate) fn from_mapping(
+        tokens: Vec<Vec<u8>>,
+        merges: Vec<(u32, u32)>,
+        train_hash: String,
+        wire_id: String,
+    ) -> Result<Self> {
+        if !(264..=MAX_VOCAB).contains(&tokens.len())
+            || merges.len() > MAX_VOCAB - 264
+            || wire_id.len() != 64
+            || !wire_id.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err(token_error("native mapping bounds"));
+        }
+        let mut vocab = BTreeMap::new();
+        let mut strings = Vec::with_capacity(tokens.len());
+        for (id, raw) in tokens.iter().enumerate() {
+            if raw.len() > 32 || (id < SPECIALS && !raw.is_empty()) {
+                return Err(token_error("native token bytes"));
+            }
+            let s = if id < SPECIALS {
+                special(id)
+            } else {
+                raw.iter().map(|&b| alphabet(b)).collect()
+            };
+            if vocab.insert(s.clone(), id as u32).is_some() {
+                return Err(token_error("duplicate native token"));
+            }
+            strings.push(s);
+        }
+        let pairs = merges
+            .iter()
+            .map(|&(a, b)| {
+                Ok((
+                    strings
+                        .get(a as usize)
+                        .ok_or_else(|| token_error("merge ID"))?
+                        .clone(),
+                    strings
+                        .get(b as usize)
+                        .ok_or_else(|| token_error("merge ID"))?
+                        .clone(),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Self::from_file(
+            TokenizerFile {
+                version: 1,
+                train_hash,
+                vocab,
+                merges: pairs,
+            },
+            Vec::new(),
+            wire_id,
+        )
     }
     /// Semantic byte mapping and ordered merge ranks, excluding JSON and training lineage.
     pub fn semantic_id(&self) -> String {
@@ -363,7 +437,7 @@ impl ByteBpe {
                     token_ids: ids,
                     provided: evidence.iter().map(|e| e.event_id).collect(),
                     excluded,
-                    tokenizer_id: self.id(),
+                    tokenizer_id: self.semantic_id(),
                     config_id: config_id.into(),
                     token_digest: format!("{:x}", digest.finalize()),
                 });
@@ -376,5 +450,6 @@ impl ByteBpe {
     }
 }
 
+pub mod artifact;
 pub mod checkpoint;
 pub mod transformer;

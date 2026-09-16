@@ -177,12 +177,18 @@ fn envelope(body: &[u8], compression: Compression) -> Result<Vec<u8>> {
     out.extend_from_slice(stored);
     Ok(out)
 }
-struct Reader<'a> {
+pub(crate) struct Reader<'a> {
     b: &'a [u8],
     pos: usize,
 }
 impl<'a> Reader<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
+    pub(crate) fn new(b: &'a [u8]) -> Self {
+        Self { b, pos: 0 }
+    }
+    pub(crate) fn finished(&self) -> bool {
+        self.pos == self.b.len()
+    }
+    pub(crate) fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         let end = self
             .pos
             .checked_add(n)
@@ -194,10 +200,10 @@ impl<'a> Reader<'a> {
         self.pos = end;
         Ok(out)
     }
-    fn byte(&mut self) -> Result<u8> {
+    pub(crate) fn byte(&mut self) -> Result<u8> {
         Ok(self.take(1)?[0])
     }
-    fn var(&mut self) -> Result<u64> {
+    pub(crate) fn var(&mut self) -> Result<u64> {
         let (v, n) = decode_varint(&self.b[self.pos..])?;
         self.pos += n;
         Ok(v)
@@ -214,21 +220,21 @@ impl<'a> Reader<'a> {
             Ok(n)
         }
     }
-    fn opt<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<Option<T>> {
+    pub(crate) fn opt<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<Option<T>> {
         match self.byte()? {
             0 => Ok(None),
             1 => f(self).map(Some),
             _ => Err(corrupt("option tag")),
         }
     }
-    fn bytes(&mut self, max: usize) -> Result<Vec<u8>> {
+    pub(crate) fn bytes(&mut self, max: usize) -> Result<Vec<u8>> {
         let n = usize::try_from(self.var()?).map_err(|_| corrupt("length overflow"))?;
         if n > max {
             return Err(corrupt("field too large"));
         }
         Ok(self.take(n)?.to_vec())
     }
-    fn text(&mut self) -> Result<String> {
+    pub(crate) fn text(&mut self) -> Result<String> {
         String::from_utf8(self.bytes(MAX_TEXT)?).map_err(|_| corrupt("UTF-8"))
     }
     fn ids(&mut self) -> Result<Vec<i64>> {
@@ -245,7 +251,7 @@ impl<'a> Reader<'a> {
             timeout_ms: self.var()?,
         })
     }
-    fn bool(&mut self) -> Result<bool> {
+    pub(crate) fn bool(&mut self) -> Result<bool> {
         match self.byte()? {
             0 => Ok(false),
             1 => Ok(true),
@@ -372,4 +378,63 @@ pub fn decode(bytes: &[u8]) -> Result<Event> {
     };
     e.validate(true).map_err(|e| corrupt(&e.to_string()))?;
     Ok(e)
+}
+
+/// Immutable file publication. The callback must validate the complete owned file before return.
+/// A directory-sync failure after publication can leave the destination present; no power-loss guarantee.
+pub(crate) fn publish_new<T>(
+    path: &std::path::Path,
+    write: impl FnOnce(&mut std::fs::File, &std::path::Path) -> Result<T>,
+) -> Result<T> {
+    use std::{
+        fs::{File, OpenOptions},
+        sync::atomic::{AtomicU64, Ordering},
+    };
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
+    let name = path
+        .file_name()
+        .ok_or_else(|| Error::Invalid("artifact filename".into()))?
+        .to_string_lossy();
+    let mut owned = None;
+    for _ in 0..64 {
+        let temporary = parent.join(format!(
+            ".{name}.{}.{}.pending",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&temporary) {
+            Ok(file) => {
+                owned = Some((temporary, file));
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    let (temporary, mut file) =
+        owned.ok_or_else(|| Error::Conflict("temporary name budget".into()))?;
+    struct Owned(std::path::PathBuf);
+    impl Drop for Owned {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let cleanup = Owned(temporary);
+    let result = write(&mut file, &cleanup.0)?;
+    file.sync_all()?;
+    std::fs::hard_link(&cleanup.0, path)?;
+    File::open(parent)?.sync_all()?;
+    drop(cleanup);
+    Ok(result)
 }

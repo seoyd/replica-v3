@@ -122,7 +122,7 @@ impl TrainConfig {
         }
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TrainingState {
     /// Full sixteen-case passes, not the ordinary with-replacement sampler.
@@ -145,6 +145,13 @@ pub struct TrainingState {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct LegacyIdentity {
+    pub config_json_sha256: String,
+    pub tokenizer_json_sha256: String,
+    pub tensor_file_sha256: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub version: u32,
     pub architecture: Config,
@@ -158,6 +165,14 @@ pub struct Manifest {
     pub initial_weight_hash: String,
     pub status: String,
     pub training: Option<TrainingState>,
+    #[serde(default)]
+    pub trained_steps: usize,
+    #[serde(default)]
+    pub diagnostic_only: bool,
+    #[serde(default)]
+    pub legacy_identity: Option<LegacyIdentity>,
+    #[serde(default)]
+    pub model_content_digest: String,
 }
 pub struct Loaded {
     pub model: Transformer,
@@ -165,7 +180,7 @@ pub struct Loaded {
     pub manifest: Manifest,
     pub optimizer: BTreeMap<String, Tensor>,
 }
-fn expected(m: &Manifest) -> BTreeMap<String, Vec<usize>> {
+pub(super) fn expected(m: &Manifest) -> BTreeMap<String, Vec<usize>> {
     let shapes = m.architecture.shapes();
     let mut result = BTreeMap::new();
     for (name, shape) in shapes {
@@ -182,13 +197,38 @@ fn validate<'a>(
     tok: &ByteBpe,
     bytes: &'a [u8],
 ) -> Result<safetensors::SafeTensors<'a>> {
+    validate_metadata(m, tok)?;
+    if m.weights_bytes != bytes.len() || m.weights_sha256 != hash(bytes) {
+        return Err(Error::Corrupt("legacy tensor bytes/checksum".into()));
+    }
+    let tensors =
+        safetensors::SafeTensors::deserialize(bytes).map_err(|e| Error::Corrupt(e.to_string()))?;
+    if tensors.len() != m.tensors.len() {
+        return Err(Error::Corrupt("checkpoint tensor count".into()));
+    }
+    for (name, shape) in &m.tensors {
+        let t = tensors
+            .tensor(name)
+            .map_err(|e| Error::Corrupt(e.to_string()))?;
+        if t.shape() != shape
+            || t.dtype() != safetensors::Dtype::F32
+            || t.data()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|b| !f32::from_le_bytes(*b).is_finite())
+        {
+            return Err(Error::Corrupt(format!("invalid checkpoint tensor {name}")));
+        }
+    }
+    Ok(tensors)
+}
+pub(super) fn validate_metadata(m: &Manifest, tok: &ByteBpe) -> Result<()> {
     m.architecture.validate()?;
     if m.version != 1
         || m.dtype != "F32"
         || m.tokenizer_sha256 != tok.id()
         || m.architecture.vocab != tok.vocab_size()
-        || m.weights_bytes != bytes.len()
-        || m.weights_sha256 != hash(bytes)
         || m.tensors != expected(m)
         || m.source_id.len() != 64
         || !m.source_id.bytes().all(|b| b.is_ascii_hexdigit())
@@ -239,29 +279,9 @@ fn validate<'a>(
             return Err(Error::Corrupt("checkpoint training state".into()));
         }
     }
-    let tensors =
-        safetensors::SafeTensors::deserialize(bytes).map_err(|e| Error::Corrupt(e.to_string()))?;
-    if tensors.len() != m.tensors.len() {
-        return Err(Error::Corrupt("checkpoint tensor count".into()));
-    }
-    for (name, shape) in &m.tensors {
-        let t = tensors
-            .tensor(name)
-            .map_err(|e| Error::Corrupt(e.to_string()))?;
-        if t.shape() != shape
-            || t.dtype() != safetensors::Dtype::F32
-            || t.data()
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .any(|b| !f32::from_le_bytes(*b).is_finite())
-        {
-            return Err(Error::Corrupt(format!("invalid checkpoint tensor {name}")));
-        }
-    }
-    Ok(tensors)
+    Ok(())
 }
-pub fn metadata(path: &Path) -> Result<(Manifest, ByteBpe)> {
+pub fn legacy_metadata(path: &Path) -> Result<(Manifest, ByteBpe)> {
     let manifest: Manifest =
         serde_json::from_slice(&read_bounded(&path.join("manifest.json"), 1024 * 1024)?)?;
     manifest.architecture.validate()?;
@@ -277,13 +297,20 @@ pub fn metadata(path: &Path) -> Result<(Manifest, ByteBpe)> {
     }
     Ok((manifest, tok))
 }
-pub fn load(path: &Path, device: Device, resume: bool) -> Result<Loaded> {
-    let (manifest, tok) = metadata(path)?;
+pub fn legacy_load(path: &Path, device: Device, resume: bool) -> Result<Loaded> {
+    let (mut manifest, tok) = legacy_metadata(path)?;
     let cap =
         manifest.architecture.parameters() * 4 * if manifest.training.is_some() { 3 } else { 1 }
             + 1024 * 1024;
     let bytes = read_bounded(&path.join("weights.safetensors"), cap)?;
     let tensors = validate(&manifest, &tok, &bytes)?;
+    manifest.trained_steps = manifest.training.as_ref().map_or(0, |s| s.step);
+    manifest.diagnostic_only |= manifest.training.as_ref().is_some_and(|s| s.contrast16);
+    manifest.legacy_identity = Some(LegacyIdentity {
+        config_json_sha256: manifest.architecture.id()?,
+        tokenizer_json_sha256: tok.id(),
+        tensor_file_sha256: manifest.weights_sha256.clone(),
+    });
     let mut model = BTreeMap::new();
     let mut optimizer = BTreeMap::new();
     for name in manifest.tensors.keys() {
@@ -320,6 +347,7 @@ pub fn load(path: &Path, device: Device, resume: bool) -> Result<Loaded> {
         }
     }
     let mut model = Transformer::from_tensors(manifest.architecture.clone(), model, device)?;
+    manifest.model_content_digest = model.weights_content_id()?;
     model.bind_tokenizer(&tok.id())?;
     Ok(Loaded {
         model,
@@ -328,7 +356,7 @@ pub fn load(path: &Path, device: Device, resume: bool) -> Result<Loaded> {
         optimizer,
     })
 }
-pub fn save(
+pub fn legacy_save(
     path: &Path,
     model: &Transformer,
     tokenizer: &ByteBpe,
@@ -389,5 +417,11 @@ pub fn initialized(
         initial_weight_hash: model.weight_hash()?,
         status: "RANDOM_INITIALIZED".into(),
         training: None,
+        trained_steps: 0,
+        diagnostic_only: false,
+        legacy_identity: None,
+        model_content_digest: model.weights_content_id()?,
     })
 }
+// Native is the only default loader. Legacy conversion is always explicit.
+pub use super::artifact::{load, metadata, save};

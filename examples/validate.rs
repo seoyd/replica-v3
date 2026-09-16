@@ -22,6 +22,186 @@ fn stats(label: &str, mut values: Vec<f64>) {
 fn elapsed(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0
 }
+fn native_load_audit(path: &std::path::Path, mode: &str) -> Result<()> {
+    let resume = match mode {
+        "inference" => false,
+        "resume" => true,
+        _ => return Err(Error::Invalid("load mode".into())),
+    };
+    let start = Instant::now();
+    let (loaded, stats) =
+        replica_v3::neural::artifact::load_with_stats(path, candle_core::Device::Cpu, resume)?;
+    println!(
+        "mode={mode} elapsed_ms={:.3} file_bytes={} actual_read_bytes={} header={} model={} optimizer={} padding={} model_tensors={} optimizer_tensors={} semantic_arch={} semantic_tokenizer={} weights_content={} trained_steps={} diagnostic_only={}",
+        elapsed(start),
+        std::fs::metadata(path)?.len(),
+        stats.bytes_read(),
+        stats.header_bytes,
+        stats.model_bytes,
+        stats.optimizer_bytes,
+        stats.padding_bytes,
+        loaded.model.vars.len(),
+        loaded.optimizer.len(),
+        loaded.model.config.semantic_id()?,
+        loaded.tokenizer.semantic_id(),
+        loaded.model.weights_content_id()?,
+        loaded.manifest.trained_steps,
+        loaded.manifest.diagnostic_only
+    );
+    println!(
+        "tokenizer_native_metadata_bytes={}",
+        replica_v3::neural::artifact::tokenizer_metadata_bytes(&loaded.tokenizer)
+    );
+    Ok(())
+}
+fn export_parity(legacy: &std::path::Path, native: &std::path::Path) -> Result<()> {
+    use replica_v3::neural::{artifact, checkpoint};
+    let original = checkpoint::legacy_load(legacy, candle_core::Device::Cpu, true)?;
+    let resume = artifact::metadata(native)?.0.training.is_some();
+    let converted = artifact::load(native, candle_core::Device::Cpu, resume)?;
+    if original.model.config != converted.model.config
+        || original.tokenizer.semantic_id() != converted.tokenizer.semantic_id()
+        || original.model.vars.len() != converted.model.vars.len()
+    {
+        return Err(Error::Corrupt(
+            "export config/tokenizer/count parity".into(),
+        ));
+    }
+    for (name, var) in &original.model.vars {
+        let other = converted
+            .model
+            .vars
+            .get(name)
+            .ok_or_else(|| Error::Corrupt("export missing tensor".into()))?;
+        if var.dims() != other.dims()
+            || var
+                .flatten_all()?
+                .to_vec1::<f32>()?
+                .iter()
+                .map(|v| v.to_bits())
+                .ne(other
+                    .flatten_all()?
+                    .to_vec1::<f32>()?
+                    .iter()
+                    .map(|v| v.to_bits()))
+        {
+            return Err(Error::Corrupt(format!(
+                "export bit pattern mismatch {name}"
+            )));
+        }
+    }
+    for bytes in [
+        (0..=255).collect::<Vec<_>>(),
+        "한글😀 한 0123456789 <assistant>\0".as_bytes().to_vec(),
+    ] {
+        let expected = original.tokenizer.encode(&bytes)?;
+        let actual = converted.tokenizer.encode(&bytes)?;
+        if expected != actual || converted.tokenizer.decode_bytes(&actual)? != bytes {
+            return Err(Error::Corrupt("export byte tokenizer parity".into()));
+        }
+    }
+    if resume {
+        if original.manifest.training != converted.manifest.training
+            || original.optimizer.len() != converted.optimizer.len()
+        {
+            return Err(Error::Corrupt("export resume state/count parity".into()));
+        }
+        for (name, t) in &original.optimizer {
+            let other = converted
+                .optimizer
+                .get(name)
+                .ok_or_else(|| Error::Corrupt("export Adam name".into()))?;
+            if t.dims() != other.dims()
+                || t.flatten_all()?
+                    .to_vec1::<f32>()?
+                    .iter()
+                    .map(|v| v.to_bits())
+                    .ne(other
+                        .flatten_all()?
+                        .to_vec1::<f32>()?
+                        .iter()
+                        .map(|v| v.to_bits()))
+            {
+                return Err(Error::Corrupt("export Adam bits".into()));
+            }
+        }
+        println!(
+            "all_training_config_state_exact=PASS adam_name_shape_bits=PASS tensors={}",
+            converted.optimizer.len()
+        );
+    }
+    println!(
+        "tensor_name_shape_f32_bits=PASS count={} tokenizer_mapping_merge_identity=PASS byte_token_ids_roundtrip=PASS source_trained_steps={} exported_trained_steps={} diagnostic_only={} native_tokenizer_bytes={} source_quality=INHERITED",
+        original.model.vars.len(),
+        original.manifest.trained_steps,
+        converted.manifest.trained_steps,
+        converted.manifest.diagnostic_only,
+        artifact::tokenizer_metadata_bytes(&converted.tokenizer)
+    );
+    Ok(())
+}
+// Separate-process relative export regression. Inputs are development data, never the new64 holdout.
+fn artifact_probe(
+    path: &std::path::Path,
+    mode: &str,
+    cases: &std::path::Path,
+    limit: usize,
+) -> Result<()> {
+    use candle_core::{Device, Tensor};
+    use replica_v3::neural::{checkpoint, hash, read_bounded};
+    let loaded = match mode {
+        "legacy" => checkpoint::legacy_load(path, Device::Cpu, false)?,
+        "native" => checkpoint::load(path, Device::Cpu, false)?,
+        _ => {
+            return Err(Error::Invalid(
+                "probe mode must explicitly be legacy/native".into(),
+            ));
+        }
+    };
+    let value: serde_json::Value = serde_json::from_slice(&read_bounded(cases, 64 * 1024 * 1024)?)?;
+    let rows = value
+        .as_array()
+        .or_else(|| value.get("train").and_then(|v| v.as_array()))
+        .ok_or_else(|| Error::Invalid("development cases".into()))?;
+    if limit == 0 || limit > 400 || rows.len() < limit {
+        return Err(Error::Invalid("probe case bound".into()));
+    }
+    for row in rows.iter().take(limit) {
+        let request: model::ModelRequest = serde_json::from_value(row["request"].clone())?;
+        let prompt = loaded.tokenizer.prepare(
+            &request,
+            loaded.model.config.context as u32,
+            &loaded.model.config.semantic_id()?,
+        )?;
+        let input = Tensor::new(prompt.token_ids.as_slice(), &Device::Cpu)?.unsqueeze(0)?;
+        let logits = loaded
+            .model
+            .forward(&input, None)?
+            .narrow(1, prompt.token_ids.len() - 1, 1)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let generated = loaded.model.generate(
+            &prompt.token_ids,
+            request.limits.max_tokens as usize,
+            30000,
+            &AtomicBool::new(false),
+            "artifact-relative",
+        );
+        let (tokens, text, finish) = match generated {
+            Ok(g) => (
+                g.tokens.clone(),
+                loaded.tokenizer.decode(&g.tokens)?,
+                g.finish,
+            ),
+            Err(e) => (Vec::new(), String::new(), format!("ERROR:{e}")),
+        };
+        println!(
+            "{}",
+            serde_json::json!({"id":row["id"],"prompt_digest":prompt.token_digest,"logits":logits,"tokens":tokens,"text":text,"finish":finish,"weights_content":loaded.model.weights_content_id()?,"semantic_tokenizer":loaded.tokenizer.semantic_id(),"tensor_bytes_digest":hash(&loaded.model.vars["embedding"].flatten_all()?.to_vec1::<f32>()?.iter().flat_map(|x|x.to_le_bytes()).collect::<Vec<_>>()),"relative_regression_only":true})
+        );
+    }
+    Ok(())
+}
 fn kernel_profile(checkpoint_path: &std::path::Path, fixture: &std::path::Path) -> Result<()> {
     use candle_core::{Device, Tensor};
     use replica_v3::neural::{checkpoint, read_bounded, transformer::ForwardTimings};
@@ -223,7 +403,7 @@ fn kernel_compare(checkpoint_path: &std::path::Path, fixture: &std::path::Path) 
 // publishes a replacement checkpoint; save timing uses an owned temporary path.
 fn storage_audit(path: &std::path::Path) -> Result<()> {
     use replica_v3::neural::{checkpoint, hash, read_bounded};
-    let (manifest, tokenizer) = checkpoint::metadata(path)?;
+    let (manifest, tokenizer) = checkpoint::legacy_metadata(path)?;
     let start = Instant::now();
     let bytes = read_bounded(
         &path.join("weights.safetensors"),
@@ -309,7 +489,7 @@ fn storage_audit(path: &std::path::Path) -> Result<()> {
     );
     drop(bytes);
     let start = Instant::now();
-    let loaded = checkpoint::load(path, candle_core::Device::Cpu, true)?;
+    let loaded = checkpoint::legacy_load(path, candle_core::Device::Cpu, true)?;
     println!(
         "legacy_resume_load_ms={:.3}; model_tensors={}; optimizer_tensors={}",
         elapsed(start),
@@ -318,7 +498,7 @@ fn storage_audit(path: &std::path::Path) -> Result<()> {
     );
     let root = tempfile::tempdir()?;
     let start = Instant::now();
-    let saved = checkpoint::save(
+    let saved = checkpoint::legacy_save(
         &root.path().join("save"),
         &loaded.model,
         &loaded.tokenizer,
@@ -340,7 +520,8 @@ fn checkpoint_load_audit(path: &std::path::Path, mode: &str) -> Result<()> {
         _ => return Err(Error::Invalid("load audit: inference or resume".into())),
     };
     let start = Instant::now();
-    let loaded = replica_v3::neural::checkpoint::load(path, candle_core::Device::Cpu, resume)?;
+    let loaded =
+        replica_v3::neural::checkpoint::legacy_load(path, candle_core::Device::Cpu, resume)?;
     println!(
         "mode={mode} load_ms={:.3} weights_bytes_read={} model_tensor_bytes={} optimizer_tensor_bytes={} backend=CPU accelerate={} OS_cache=NOT_FLUSHED",
         elapsed(start),
@@ -368,7 +549,7 @@ fn lineage_audit(paths: &[String]) -> Result<()> {
     println!("|---|---|---:|---:|---:|---:|---:|---:|---:|---|");
     for path in paths {
         let path = std::path::Path::new(path);
-        let (m, _) = checkpoint::metadata(path)?;
+        let (m, _) = checkpoint::legacy_metadata(path)?;
         let bytes = read_bounded(
             &path.join("weights.safetensors"),
             m.architecture.parameters() * 12 + 1024 * 1024,
@@ -551,11 +732,7 @@ fn smoke(checkpoint: &str, cli: &str, output: &str) -> Result<()> {
     use replica_v3::neural::{checkpoint as artifact, hash, write_new};
     use std::{io::Read, path::Path};
     let (manifest, _) = artifact::metadata(Path::new(checkpoint))?;
-    if manifest
-        .training
-        .as_ref()
-        .is_none_or(|state| state.step == 0)
-    {
+    if manifest.trained_steps == 0 {
         return Err(Error::Invalid(
             "smoke requires our actually trained checkpoint".into(),
         ));
@@ -930,6 +1107,9 @@ fn smoke(checkpoint: &str, cli: &str, output: &str) -> Result<()> {
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("export-parity") if args.len()==3 => export_parity(std::path::Path::new(&args[1]),std::path::Path::new(&args[2])),
+        Some("native-load-audit") if args.len()==3 => native_load_audit(std::path::Path::new(&args[1]),&args[2]),
+        Some("artifact-probe") if args.len()==5 => artifact_probe(std::path::Path::new(&args[1]),&args[2],std::path::Path::new(&args[3]),args[4].parse().map_err(|_|Error::Invalid("probe limit".into()))?),
         Some("kernel-compare") if args.len() == 3 => kernel_compare(std::path::Path::new(&args[1]), std::path::Path::new(&args[2])),
         Some("kernel-profile") if args.len() == 3 => kernel_profile(std::path::Path::new(&args[1]), std::path::Path::new(&args[2])),
         Some("lineage-audit") if args.len() > 1 => lineage_audit(&args[1..]),
@@ -1014,16 +1194,7 @@ fn native_failures(checkpoint: &str, cli: &str, output: &str) -> Result<()> {
     )?;
     drop(random);
     let corrupt = root.join("corrupt");
-    std::fs::create_dir(&corrupt)?;
-    std::fs::copy(
-        Path::new(checkpoint).join("manifest.json"),
-        corrupt.join("manifest.json"),
-    )?;
-    std::fs::copy(
-        Path::new(checkpoint).join("tokenizer.json"),
-        corrupt.join("tokenizer.json"),
-    )?;
-    write_new(&corrupt.join("weights.safetensors"), b"truncated")?;
+    write_new(&corrupt, b"truncated")?;
     let question = "설비987643 통로27 현재 이동 지시는 무엇인가?";
     let mut measurements = Vec::new();
     let mut command = Command::new(cli);

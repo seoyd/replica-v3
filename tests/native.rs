@@ -547,7 +547,7 @@ fn native_kv_chunk_rollover_parity_reset_and_identity() {
     }
 }
 #[test]
-fn native_checkpoint_roundtrip_and_corruption_rejection() {
+fn legacy_checkpoint_import_roundtrip_and_corruption_rejection() {
     use candle_core::Device;
     use replica_v3::neural::{checkpoint, transformer::*};
     let tok = tokenizer();
@@ -555,9 +555,12 @@ fn native_checkpoint_roundtrip_and_corruption_rejection() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("checkpoint");
     let manifest = checkpoint::initialized(&model, &tok, 27, hash(b"fixture-source")).unwrap();
-    let original = checkpoint::save(&p, &model, &tok, manifest, &Default::default()).unwrap();
-    assert!(checkpoint::save(&p, &model, &tok, original.clone(), &Default::default()).is_err());
-    let loaded = checkpoint::load(&p, Device::Cpu, false).unwrap();
+    let original =
+        checkpoint::legacy_save(&p, &model, &tok, manifest, &Default::default()).unwrap();
+    assert!(
+        checkpoint::legacy_save(&p, &model, &tok, original.clone(), &Default::default()).is_err()
+    );
+    let loaded = checkpoint::legacy_load(&p, Device::Cpu, false).unwrap();
     assert_eq!(
         loaded.model.weight_hash().unwrap(),
         model.weight_hash().unwrap()
@@ -565,7 +568,7 @@ fn native_checkpoint_roundtrip_and_corruption_rejection() {
     let path = p.join("weights.safetensors");
     let bytes = std::fs::read(&path).unwrap();
     std::fs::write(&path, &bytes[..bytes.len() - 1]).unwrap();
-    assert!(checkpoint::load(&p, Device::Cpu, false).is_err());
+    assert!(checkpoint::legacy_load(&p, Device::Cpu, false).is_err());
     std::fs::write(&path, &bytes).unwrap();
     let mut broken = original;
     broken.tokenizer_sha256 = hash(b"wrong tokenizer");
@@ -574,7 +577,7 @@ fn native_checkpoint_roundtrip_and_corruption_rejection() {
         serde_json::to_vec(&broken).unwrap(),
     )
     .unwrap();
-    assert!(checkpoint::load(&p, Device::Cpu, false).is_err());
+    assert!(checkpoint::legacy_load(&p, Device::Cpu, false).is_err());
 }
 
 #[test]
@@ -676,14 +679,14 @@ fn native_local_global_mask_and_greedy_generation_boundaries() {
 }
 
 #[test]
-fn native_checkpoint_rejects_self_checksummed_nan_unknown_tensor_and_precision() {
+fn legacy_checkpoint_import_rejects_self_checksummed_nan_unknown_tensor_and_precision() {
     use candle_core::{DType, Device, Tensor};
     use replica_v3::neural::{checkpoint, transformer::*};
     let tok = tokenizer();
     let model = Transformer::init(Config::tiny(tok.vocab_size()), 37, Device::Cpu).unwrap();
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("checkpoint");
-    let manifest = checkpoint::save(
+    let manifest = checkpoint::legacy_save(
         &p,
         &model,
         &tok,
@@ -737,7 +740,7 @@ fn native_checkpoint_rejects_self_checksummed_nan_unknown_tensor_and_precision()
         m.weights_bytes = bytes.len();
         std::fs::write(p.join("manifest.json"), serde_json::to_vec(&m).unwrap()).unwrap();
         assert!(
-            checkpoint::load(&p, Device::Cpu, false).is_err(),
+            checkpoint::legacy_load(&p, Device::Cpu, false).is_err(),
             "{corruption}"
         );
     }

@@ -13,7 +13,7 @@ BUDGET_REACHED로 종료했고, 신규 contrast R-A/R-B는 각각600/200 updates
 | P0 | VERIFIED / PUBLISHED | examples/validate.rs 감사 명령; 한국어 조사/상태 문서; 선행 WIP 테스트의 import/최신 Rust lint 수정 | offline tree/metadata, release build, storage-audit/load-audit/measure; 직접 회귀38개+trainer unit7개; fmt/all-target clippy; git push/ls-remote | tensor 204개 및 합성 SQLite 실측; 회귀45개 통과; 원격 full SHA 일치 | ce48514ab5fc8e76a9552ce5fabe7ce1617ff4ac | 이전 S4 WIP를 새 성과로 계산하지 않음 | P1, P2 |
 | P1 | VERIFIED; 새64 전이 EXPERIMENT_FAILED | src/contrast.rs(training 전용), train_main/training/checkpoint/data | freeze/check/train/evaluate; 신규 unit2개+기존 trainer7개; checkpoint2개/resume1개; fmt/clippy | R-A600/R-B200에서 두 평가 및 fresh reload16/16·4/4; 새64 단1회0/64·0/16 | 아래 P1 source/fixture/binary/final/log hash | memorization만 통과; S4 품질 FAIL; 추가 학습 없음 | P2 |
 | P2 | VERIFIED | neural/transformer.rs, neural.rs, tests/native.rs, examples/validate.rs | native9개, fresh-process resume1개, contrast16 재생성, kernel-profile/compare | 기본 수식·학습 gradient 보존; 의미/커널/내용/cache 분리 | 아래 P2/P4 기록 | Candle Tensor 결합 유지; legacy wire ID는 명시 보존 | P3, P5 |
-| P3 | NOT_STARTED | 없음 | NOT_RUN | JSON+safetensors 현재 경로 | 해당 없음 | native binary 미구현 | P2 |
+| P3 | VERIFIED | native artifact, checkpoint/default worker/trainer, codec publication, 직접 테스트/문서 | 명시 import/export;384개 fresh-process 상대 대조;binary resume/cancel/kill 및 손상검사;접근 차단 생성 | 모델68+Adam136 bit/state 동일;JSON/DB 없는 실제 생성;inference38,432,768 B | 아래 P3 원본/변환/실행 hash | 품질 미승격;F16/INT4 미구현;IPC/corpus JSON 유지 | P5, P6 |
 | P4 | VERIFIED / CANDIDATE_REJECTED | P2의 실제 GEMV dispatch와 비교 명령 | 동일 SMALL, warmup3/n31, CPU F32 단일 thread | 수치/생성 동일 허용오차 통과; decode/전체 생성 악화 | 아래 P2/P4 기록 | 후보 한 개만 시험, 기본 reference 유지 | P6 |
 | P5 | NOT_STARTED | 없음 | NOT_RUN | 운영 SQLite 유지 | 해당 없음 | archive 미구현 | P2 |
 | P6 | NOT_STARTED | 없음 | NOT_RUN | 신규 계약 최종 대조 전 | 해당 없음 | 독립 검토 없음 | P1~P5 |
@@ -52,13 +52,13 @@ CONTRAST16_TRAIN_EM: R-A16/16, R-B16/16; 두 평가 및 fresh reload 확인
 CONTRAST16_GROUP_ALL_CORRECT: R-A4/4, R-B4/4
 CONTRAST64_HELDOUT_EM: R-B0/64, 그룹0/16; 단1회 실행, FAIL
 QA_GENERAL_DEVELOPMENT: 기존 v12 기록 0/336
-NATIVE_BINARY_INFERENCE: NOT_IMPLEMENTED
-EXACT_RESUME_BINARY: NOT_IMPLEMENTED
-JSON_FREE_DEFAULT_ARTIFACT: NO
-LEGACY_JSON_USAGE: 모델/tokenizer manifest, safetensors header, config hash, IPC, corpus, logs
-INFERENCE_BYTES: model raw 38,420,736 B; 독립 inference artifact 아직 없음
-RESUME_BYTES: 기존 세 파일 115,316,831 B
-TOKENIZER_META_BYTES: 기존 tokenizer JSON 22,483 B
+NATIVE_BINARY_INFERENCE: VERIFIED; 기본 CLI/worker 실제 생성, 품질은 미달
+EXACT_RESUME_BINARY: VERIFIED; 6 연속 vs3+3, weights/Adam/RNG/config/loss/logits 일치
+JSON_FREE_DEFAULT_ARTIFACT: YES; 단일 자체 binary, legacy 자동 fallback 없음
+LEGACY_JSON_USAGE: 명시 importer/audit의 구형 모델/tokenizer/safetensors, legacy lineage hash; tokenizer 학습 도구, IPC, corpus, logs
+INFERENCE_BYTES: 38,432,768 B (model raw38,420,736 +header12,026 +padding6)
+RESUME_BYTES: 115,285,248 B (model38,420,736 +Adam76,841,472 +header23,008 +padding32)
+TOKENIZER_META_BYTES: native6,324 B; 기존 tokenizer JSON22,483 B
 KERNEL_REFERENCE: candle-linear-v1, 실제 이번 측정 CPU/gemm F32 (Accelerate feature 미활성)
 KERNEL_CANDIDATE: rust-f32-decode-gemv-v1, inference-only
 KERNEL_ADOPTION: KEEP_REFERENCE
@@ -70,6 +70,7 @@ S5_INTEGRATION: 미완료
 S6_QUANT: 미구현
 GOAL1_READY: NO
 COMMIT / REMOTE_SHA: P0 `ce48514ab5fc8e76a9552ce5fabe7ce1617ff4ac`, P1 `8e0a264f3b0996d9a7ca632903e727aef2c5e773` / 각각 동일 원격 SHA 확인
+P2/P4 COMMIT / REMOTE_SHA: `29df8c8a0c8f4a6d328c45046446f4418c102600` / 동일 SHA 확인
 
 ## 원본 run별 manifest 대조
 
@@ -369,3 +370,94 @@ contrast16을 대조했다. 생성 token IDs/문자열/EOS와 prompt 길이는 �
 branch logit gap은 최대 5.7220459e-6 차이가 관측돼 사전 5e-4 이내이며, 재빌드 전후
 logit의 bitwise 동일성으로 보고하지 않는다. 같은 새 backend에서 uninterrupted/split
 resume는 기존 회귀의 weight file hash·sampler·token budget·loss exact 비교를 통과했다.
+
+## P3 native binary 저장·실행 검증
+
+기본 `checkpoint::save/load/metadata`, trainer의 start/step/final, product worker가
+단일 R3MODEL v1 파일을 사용한다. inference와 resume은 artifact kind 및 CLI로 구분한다.
+기존 JSON+safetensors 디렉터리는 명시 legacy importer/audit만 읽는다. 원본 파일과
+운영 DB는 교체/삭제하지 않았다. 모델 wire 책임만 neural/artifact.rs에 분리하고
+기존 integer/bytes codec, BPE builder, Transformer/Adam/state를 재사용했다.
+
+가중치 math/config/token ID와 source quality는 보존한다. 별도 `trained_steps`와
+`diagnostic_only`, source/initial/parent/legacy migration identity가 inference에도 남는다.
+변환으로 승인되지 않은 legacy quality를 승격하지 않으므로 이번 모든 변환은 diagnostic이다.
+모델 runtime revision은 model content digest와 tokenizer/architecture semantic ID이다.
+기존 `Manifest.weights_sha256` 필드는 legacy에서 safetensors file hash였고, native에서는
+정렬된 tensor별 이름+payload digest의 집합 hash다. 실제 container file SHA는 아래에
+별도로 보고한다. 추론의 model content digest는 optimizer 내용과 독립이다.
+
+source는 v12 final step21,750, weights file SHA
+`aed892878e3f974ca8989a73bac4e2c72ff3a6a4a71f708f94a6e35a4a5b789c`로
+변환 후에도 원본 hash 일치를 확인했다. 새 artifacts는 모두 로컬만 보존한다.
+- inference file SHA: `b642e96d5a23945af172ac79f782192c18190eb50e0be1546b141eef570ac6c8`
+- resume file SHA: `d3c4646474f4417561e0f90a5d1e56d4c29a445b7a47716a0e2ae99caefaffde`
+- model content ID: `a13c3ed54c964b889a67c446036bb2acb4d1210e0605cb06a327bc1a3de653b9`
+- architecture semantic ID: `41e9889d768173eda5373878e87a3d83a35a541e6769b969d12d234d37cfa3ab`
+- tokenizer semantic ID: `652718e4864c2f06af3a2c67dac0a5174d5e2feb1387667173902da9a8a295d4`
+
+| 새 프로세스 단일 실측 | 내부 측정 ms | 실제 파일 read B | 최대 RSS B |
+|---|---:|---:|---:|
+| inference load | 307.014 | 38,432,768 | 85,966,848 |
+| resume의 inference view | 270.086 | 38,443,776 | 83,165,184 |
+| full resume load | 408.609 | 115,285,248 | 160,464,896 |
+
+헤더/정렬 padding을 포함한 read_exact 요청 byte를 세었다. inference view 두 경우
+모두 Adam payload read/allocation은0이고 model68개만 할당한다. 실제 allocator 내부
+총 할당 횟수/숨은 backend scratch는 별도 계측하지 않았으며 RSS로 대신 표시했다.
+OS cache를 flush하지 않았으므로 cold-process이지 physical cold-disk 측정이 아니다.
+P0 legacy inference는115,280,520 B 전체 tensor file을 읽고 RSS203,505,664 B였다.
+
+명시 legacy import의 load+export 총 내부 시간은 inference728.596ms/RSS208,748,544 B,
+resume1108.679ms/RSS359,972,864 B였다. native resume에서 inference를 내보내는 별도
+실행은 source load286.849ms, 작성·전체 readback 검증·sync·공개276.508ms,
+전체 프로세스 최대 RSS91,652,096 B였다. 이 출력은 legacy에서 직접 변환한 inference와
+파일 bytes가 완전히 같았다. write 단계의 검증 메모리와 loader 메모리를 섞지 않는다.
+
+모든 모델68 tensor의 name/shape/F32 to_bits, Adam136 tensor 및 TrainingState/TrainConfig
+전 필드를 원본과 직접 비교해 일치했다. u64 sampler 정밀도를 유지한다. tokenizer의
+mapping/ordered ranks, all256 bytes 및 한글/조합문자/숫자/control-spelling token IDs와
+raw-byte roundtrip도 일치했다. native tokenizer section6324 B는 기존 JSON22483 B보다
+작으며, 전체 inference overhead12032 B 중 일부이다.
+
+별도 프로세스의 같은 CPU/gemm F32/단일 thread reference에서 다음 개발 입력을
+legacy와 native로 각각 실행했다. prompt digest, 전체 마지막-position logits,
+generated token IDs/text/finish를 기록한 JSONL 파일이 cmp로 완전히 같았다.
+| 상대 회귀 입력 | 수 | 양쪽 결과 SHA-256 |
+|---|---:|---|
+| 기존 contrast16 train | 16 | 69d3869077bc25a0216203f82c6885aadfcb7676470afeb31e338bf3d41d7d4f |
+| 기존 QA32 train 입력 | 32 | 736c2d5a1f86c85523bd68249f24ed6bba8c8931809230a9afab0c3226ec328f |
+| 기존 일반 QA development | 336 | 07942b62849e4df8d304c50fb655bdb32a7b6fd21b0fed4fd2967c6ff3891da2 |
+
+세 행 모두 같은 v12 source를 사용한 RELATIVE_REGRESSION_ONLY이다. QA32 전용 모델의
+32/32 memorization이나 R-B의16/16을 v12 품질로 옮겨 계산하지 않는다. 새64는 재실행하지
+않았다. 일반 QA 대조 시작 시 기준 프로세스 종료 확인을 잘못 처리해 비교 프로세스가
+잠시 겹쳤다. 비교 프로세스 PID89773만 즉시 종료했고 부분 로그는 aborted-overlap으로
+보존했다. 기준의336개 완료를 확인한 뒤 비교336개를 단독으로 다시 실행했다. 해당
+실행의 시간을 성능 결과로 사용하지 않는다.
+
+macOS sandbox-exec에서 JSON/JSONL/safetensors/DB/SQLite 읽기와 network를 deny했다.
+실제 JSON, safetensors, 합성 SQLite file을 cat한 negative controls는 모두
+Operation not permitted였다. 같은 제한에서 기본 `replica-v3 generate`가 native 파일을
+읽고 child worker로 실제 생성했으며 지정한 absent DB는 생성되지 않았다.
+'안녕하세요' 입력에 출력은 '장비631장비', EOS stop이었다. 이는 품질 FAIL의 실제
+예시이며 저장 구현 성공과 분리한다. JSON IPC 출력은 모델 artifact가 아니다.
+
+직접 테스트: 독립 complete literal container decode/hand encoder bytes, raw bit/state
+roundtrip, 손상 header/kind/flags/version/dtype/duplicate/shape/offset/trailing/truncation/
+length/merge/payload/nonfinite 거부, inference Adam skip/resume 손상 거부, no-clobber,
+공개 전 실패 cleanup을 검사했다. 6-update 연속 vs3+3 fresh-process resume에서
+weights/Adam/config/sampler/token budget/loss/logits가 exact 일치했다. curriculum 및
+sample_group 전환 회귀, 취소 시 optimizer 경계 저장, 실제 child SIGKILL의 목적지
+미공개·source 불변·정상 재시도도 통과했다. SIGKILL이 남긴 소유 temp는 fixture
+디렉터리와 함께 정리하며 임의 temp/원본을 삭제하지 않는다.
+
+실행: `model import-legacy --kind inference|resume`, `model export-inference`,
+`validate native-load-audit`, `validate export-parity`,
+`validate artifact-probe PATH legacy|native CASES LIMIT`, sandbox default generate,
+`cargo test --lib neural::artifact`, `cargo test --test native`,
+`cargo test --features test-support --test training native_`,
+`cargo test --test training curriculum_resume_crosses_sampling_boundary_in_fresh_process`,
+fmt/clippy/release build. 직접 테스트의 반복 실행을 새 테스트 수로 합산하지 않는다.
+최초 literal fixture의 기대 token range/string length 오타와 clippy4건은 수정했으며
+실패 로그도 로컬에 보존했다. F16/INT4/packed runtime은 NOT_IMPLEMENTED, S6 완료가 아니다.

@@ -165,6 +165,22 @@ enum Contrast {
 }
 #[derive(Subcommand)]
 enum Models {
+    /// Explicit legacy JSON+safetensors conversion; never changes the source directory.
+    ImportLegacy {
+        #[arg(long)]
+        source: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, value_parser=["inference", "resume"])]
+        kind: String,
+    },
+    /// Export weights/config/tokenizer/lineage only, with no Adam or sampler state.
+    ExportInference {
+        #[arg(long)]
+        checkpoint: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
     Init {
         #[arg(long)]
         tokenizer: PathBuf,
@@ -297,6 +313,49 @@ fn run() -> Result<()> {
                 (true, true) => training::FieldAblation::QuestionAndRecord,
             },
         ),
+        Commands::Model {
+            command:
+                Models::ImportLegacy {
+                    source,
+                    output,
+                    kind,
+                },
+        } => {
+            use replica_v3::neural::artifact::{self, ArtifactKind};
+            let kind = if kind == "inference" {
+                ArtifactKind::Inference
+            } else {
+                ArtifactKind::Resume
+            };
+            let start = std::time::Instant::now();
+            let manifest = artifact::import_legacy(&source, &output, kind)?;
+            println!(
+                "export_kind={kind:?} file_bytes={} elapsed_ms={:.3} trained_steps={} diagnostic_only={} source_quality=INHERITED goal1_ready=false",
+                std::fs::metadata(&output)?.len(),
+                start.elapsed().as_secs_f64() * 1000.,
+                manifest.trained_steps,
+                manifest.diagnostic_only
+            );
+            Ok(())
+        }
+        Commands::Model {
+            command: Models::ExportInference { checkpoint, output },
+        } => {
+            use replica_v3::neural::artifact;
+            let start = std::time::Instant::now();
+            let loaded = artifact::load(&checkpoint, candle_core::Device::Cpu, false)?;
+            let load_ms = start.elapsed().as_secs_f64() * 1000.;
+            let start = std::time::Instant::now();
+            let manifest = artifact::export_inference(&output, &loaded)?;
+            println!(
+                "export_kind=Inference file_bytes={} trained_steps={} diagnostic_only={} source_load_ms={load_ms:.3} export_validate_sync_ms={:.3} source_quality=INHERITED goal1_ready=false",
+                std::fs::metadata(&output)?.len(),
+                manifest.trained_steps,
+                manifest.diagnostic_only,
+                start.elapsed().as_secs_f64() * 1000.
+            );
+            Ok(())
+        }
         Commands::Model {
             command:
                 Models::Init {
