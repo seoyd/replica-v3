@@ -291,3 +291,150 @@ fn rv05_failed_artifact_is_explicit_and_existing_destination_preserved() {
     );
     assert!(target.exists());
 }
+
+#[test]
+fn retraction_restore_and_db_free_archive_preserve_versions_bytes_and_graph() {
+    use replica_v3::{archive::Archive, codec::Compression, retrieval::GraphDirection};
+    let d = tempfile::tempdir().unwrap();
+    let db = d.path().join("source.db");
+    let mut s = Store::init(&db).unwrap();
+    let first = s.append(fact("오른쪽\0 원문", "hall", None)).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    let mut correction = fact("왼쪽 원문", "hall", Some(first.id));
+    correction.observed_at = Some(-200);
+    let second = s.append(correction).unwrap();
+    let mut retract =
+        Event::observation("scope", "session", "user", "명시 취소".as_bytes().to_vec());
+    retract.kind = Kind::Retraction {
+        slot: first.kind.slot().unwrap().clone(),
+        previous: second.id,
+        valid_from: Some(100),
+        valid_until: None,
+    };
+    let cancelled = s.append(retract).unwrap();
+    let slot = first.kind.slot().unwrap();
+    assert!(s.current("scope", slot, None, 100).unwrap().is_none());
+    assert!(
+        s.restore_fact(fact("", "hall", Some(cancelled.id)), cancelled.id)
+            .is_err()
+    );
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    let restored = s
+        .restore_fact(fact("", "hall", Some(cancelled.id)), first.id)
+        .unwrap();
+    let other = s.append(fact("다른 문맥", "room", None)).unwrap();
+    for (kind, from, to) in [
+        (RelationKind::DependsOn, first.id, other.id),
+        (RelationKind::Supports, other.id, first.id),
+        (RelationKind::CausalHypothesis, first.id, other.id),
+        (RelationKind::Precedes, second.id, restored.id),
+        (RelationKind::Contradicts, second.id, first.id),
+    ] {
+        let mut e = Event::observation("scope", "session", "user", b"stored edge".to_vec());
+        e.kind = Kind::Relation {
+            relation: kind,
+            from,
+            to,
+            evidence: vec![first.id],
+        };
+        s.append(e).unwrap();
+    }
+    s.doctor(true).unwrap();
+    let snapshot = s.count().unwrap();
+    let expected: Vec<_> = (1..=snapshot as i64).map(|id| s.get(id).unwrap()).collect();
+    for (name, compression) in [
+        ("raw.r3a", Compression::Raw),
+        ("zstd.r3a", Compression::Auto),
+    ] {
+        let path = d.path().join(name);
+        let info = s.export_archive(&path, compression).unwrap();
+        assert_eq!(info.events, snapshot as usize);
+        let a = Archive::open(&path).unwrap();
+        let conn = Connection::open(&db).unwrap();
+        for e in &expected {
+            assert_eq!(a.get(e.id).unwrap(), *e);
+            let raw: Vec<u8> = conn
+                .query_row("SELECT body FROM records WHERE id=?1", [e.id], |r| r.get(0))
+                .unwrap();
+            assert_eq!(a.canonical_body(e.id).unwrap(), raw);
+        }
+        assert_eq!(
+            a.history("scope", slot).unwrap(),
+            s.history("scope", slot).unwrap()
+        );
+        for as_of in [Some(first.recorded_at), Some(cancelled.recorded_at), None] {
+            for valid_at in [99, 100, i64::MAX] {
+                assert_eq!(
+                    a.current("scope", slot, as_of, valid_at).unwrap(),
+                    s.current("scope", slot, as_of, valid_at).unwrap()
+                );
+            }
+        }
+        let mut q = Search::new("scope", "쪽");
+        q.history = true;
+        q.valid_at = 100;
+        q.snapshot_id = Some(info.snapshot_id);
+        for direction in [
+            GraphDirection::Both,
+            GraphDirection::Outgoing,
+            GraphDirection::Incoming,
+        ] {
+            assert_eq!(
+                a.directed_graph(&q, &[first.id], direction).unwrap(),
+                s.directed_graph(&q, &[first.id], direction).unwrap()
+            );
+        }
+        q.slot = Some(slot.clone());
+        assert_eq!(a.search(&q).unwrap(), s.search(&q).unwrap());
+        q.before = Some(cancelled.recorded_at);
+        assert_eq!(a.search(&q).unwrap(), s.search(&q).unwrap());
+        q.session = Some("absent".into());
+        assert_eq!(a.search(&q).unwrap(), s.search(&q).unwrap());
+        q.query = "오른쪽".into();
+        assert!(matches!(a.search(&q), Err(Error::Unsupported(_))));
+        assert!(s.export_archive(&path, compression).is_err());
+    }
+    let a = Archive::open(&d.path().join("raw.r3a")).unwrap();
+    s.append(Event::observation(
+        "scope",
+        "session",
+        "user",
+        b"after snapshot".to_vec(),
+    ))
+    .unwrap();
+    assert_eq!(a.info.events, snapshot as usize);
+    assert!(a.get(snapshot as i64 + 1).is_err());
+    drop(s);
+    drop(a);
+    std::fs::rename(&db, d.path().join("hidden-source")).unwrap();
+    let a = Archive::open(&d.path().join("zstd.r3a")).unwrap();
+    assert_eq!(a.get(first.id).unwrap(), first);
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn archive_export_pins_snapshot_during_concurrent_sqlite_append() {
+    use replica_v3::{archive::Archive, codec::Compression};
+    let d = tempfile::tempdir().unwrap();
+    let db = d.path().join("source.db");
+    let mut s = Store::init(&db).unwrap();
+    s.append(Event::observation("s", "t", "u", b"before".to_vec()))
+        .unwrap();
+    let mut writer = Store::open(&db).unwrap();
+    let path = d.path().join("snapshot.r3a");
+    let info = replica_v3::store::with_sync_hook(
+        move |point| {
+            if point == "archive_snapshot" {
+                writer.append(Event::observation("s", "t", "u", b"after".to_vec()))?;
+            }
+            Ok(())
+        },
+        || s.export_archive(&path, Compression::Raw),
+    )
+    .unwrap();
+    assert_eq!(info.events, 1);
+    assert_eq!(s.count().unwrap(), 2);
+    let a = Archive::open(&path).unwrap();
+    assert_eq!(a.get(1).unwrap().payload, b"before");
+    assert!(a.get(2).is_err());
+}

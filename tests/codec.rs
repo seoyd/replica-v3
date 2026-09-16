@@ -78,3 +78,43 @@ fn rejects_corruption_lengths_tags_and_varints() {
     bad[HEADER] = 0;
     assert!(decode(&bad).is_err());
 }
+
+#[test]
+fn retraction_and_dependency_use_explicit_v2_without_changing_v1() {
+    let mut e = sample();
+    e.id = 9;
+    e.kind = Kind::Retraction {
+        slot: Slot {
+            entity: "device".into(),
+            predicate: "direction".into(),
+            context: "hall".into(),
+        },
+        previous: 4,
+        valid_from: Some(-10),
+        valid_until: Some(10),
+    };
+    let bytes = encode(&e, Compression::Raw).unwrap();
+    assert_eq!(&bytes[4..6], &2u16.to_le_bytes());
+    assert_eq!(decode(&bytes).unwrap(), e);
+    let mut wrong = bytes;
+    wrong[4] = 1;
+    assert!(decode(&wrong).is_err());
+    e.kind = Kind::Relation {
+        relation: RelationKind::DependsOn,
+        from: 1,
+        to: 4,
+        evidence: vec![1, 4],
+    };
+    let bytes = encode(&e, Compression::Raw).unwrap();
+    assert_eq!(&bytes[4..6], &2u16.to_le_bytes());
+    assert_eq!(decode(&bytes).unwrap(), e);
+    e.kind = Kind::Relation {
+        relation: RelationKind::CausalHypothesis,
+        from: 1,
+        to: 4,
+        evidence: vec![1, 4],
+    };
+    let bytes = encode(&e, Compression::Raw).unwrap();
+    assert_eq!(&bytes[4..6], &1u16.to_le_bytes());
+    assert_eq!(decode(&bytes).unwrap(), e);
+}

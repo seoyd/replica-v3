@@ -15,7 +15,7 @@ BUDGET_REACHED로 종료했고, 신규 contrast R-A/R-B는 각각600/200 updates
 | P2 | VERIFIED | neural/transformer.rs, neural.rs, tests/native.rs, examples/validate.rs | native9개, fresh-process resume1개, contrast16 재생성, kernel-profile/compare | 기본 수식·학습 gradient 보존; 의미/커널/내용/cache 분리 | 아래 P2/P4 기록 | Candle Tensor 결합 유지; legacy wire ID는 명시 보존 | P3, P5 |
 | P3 | VERIFIED | native artifact, checkpoint/default worker/trainer, codec publication, 직접 테스트/문서 | 명시 import/export;384개 fresh-process 상대 대조;binary resume/cancel/kill 및 손상검사;접근 차단 생성 | 모델68+Adam136 bit/state 동일;JSON/DB 없는 실제 생성;inference38,432,768 B | 아래 P3 원본/변환/실행 hash | 품질 미승격;F16/INT4 미구현;IPC/corpus JSON 유지 | P5, P6 |
 | P4 | VERIFIED / CANDIDATE_REJECTED | P2의 실제 GEMV dispatch와 비교 명령 | 동일 SMALL, warmup3/n31, CPU F32 단일 thread | 수치/생성 동일 허용오차 통과; decode/전체 생성 악화 | 아래 P2/P4 기록 | 후보 한 개만 시험, 기본 reference 유지 | P6 |
-| P5 | NOT_STARTED | 없음 | NOT_RUN | 운영 SQLite 유지 | 해당 없음 | archive 미구현 | P2 |
+| P5 | VERIFIED | archive.rs, event/codec/store/retrieval/CLI, 관련 테스트 및 측정 도구 | 직접 회귀22개+archive unit3개; 동일10,000건/329관계 raw/zstd 비교; DB 차단 새 process 조회 | 원문/ID/관계 전부 일치; 지원 lexical6/6, 미지원4 별도; DB-free 조회 | 아래 P5 hash/실측 | 읽기 전용; FTS5/live write 미구현; 무작위 조회 SQL보다 느림 | P6 |
 | P6 | NOT_STARTED | 없음 | NOT_RUN | 신규 계약 최종 대조 전 | 해당 없음 | 독립 검토 없음 | P1~P5 |
 
 `P0 → {P1,P2}; P2 → {P3,P4,P5}; {P1,P2,P3,P4,P5} → P6`.
@@ -62,7 +62,7 @@ TOKENIZER_META_BYTES: native6,324 B; 기존 tokenizer JSON22,483 B
 KERNEL_REFERENCE: candle-linear-v1, 실제 이번 측정 CPU/gemm F32 (Accelerate feature 미활성)
 KERNEL_CANDIDATE: rust-f32-decode-gemv-v1, inference-only
 KERNEL_ADOPTION: KEEP_REFERENCE
-DB_FREE_ARCHIVE_VERIFIED: NO
+DB_FREE_ARCHIVE_VERIFIED: YES; 동일 snapshot 원문10,000/10,000·관계329/329
 LIVE_SQLITE_REPLACEMENT: NO
 CODE_REVIEW_STATUS: INDEPENDENT_PENDING
 S4_QUALITY: FAIL
@@ -71,6 +71,7 @@ S6_QUANT: 미구현
 GOAL1_READY: NO
 COMMIT / REMOTE_SHA: P0 `ce48514ab5fc8e76a9552ce5fabe7ce1617ff4ac`, P1 `8e0a264f3b0996d9a7ca632903e727aef2c5e773` / 각각 동일 원격 SHA 확인
 P2/P4 COMMIT / REMOTE_SHA: `29df8c8a0c8f4a6d328c45046446f4418c102600` / 동일 SHA 확인
+P3 COMMIT / REMOTE_SHA: `4edf7159518108be302813d704ca0ff5db449395` / 동일 SHA 확인
 
 ## 원본 run별 manifest 대조
 
@@ -461,3 +462,105 @@ sample_group 전환 회귀, 취소 시 optimizer 경계 저장, 실제 child SIG
 fmt/clippy/release build. 직접 테스트의 반복 실행을 새 테스트 수로 합산하지 않는다.
 최초 literal fixture의 기대 token range/string length 오타와 clippy4건은 수정했으며
 실패 로그도 로컬에 보존했다. F16/INT4/packed runtime은 NOT_IMPLEMENTED, S6 완료가 아니다.
+
+## P5 동일 원문·관계의 읽기 전용 archive 검증
+
+SOURCE_CHANGED: src/archive.rs(new), event/codec/store/retrieval/lib/main, examples/validate,
+tests/codec/store/cli 및 관련 기존 문서. 기존 SQL projection/validation/BFS를 재사용하고
+명시 취소·복원 head·DependsOn을 확장했다. schema1 bytes는 유지한다.
+DELIVERABLE_VERIFIED=YES, MODEL_QUALITY_PASS=NO, LIVE_SQLITE_REPLACEMENT=NO.
+
+fixture는 seed917055로 만든 정확히10,000사건이며 학습 corpus가 아니다. 초기654건에
+정정/취소/복원/다른 context/무관 지시/실행/사고/명시 관계/cycle/chain/wide graph,
+나머지9,346건에 긴 한국어10건, 반복2,334건, 난수ASCII2,333건, 기타4,669건을 담았다.
+원문을 요약하거나 사건 ID를 재배정하지 않았다. SQL canonical body 자체는 기존 Auto
+event 압축이고, raw archive라는 말은 그 body 바깥 block을 추가 압축하지 않는다는 뜻이다.
+
+모든10,000개의 ID/body bytes/Event 객체와 전체329개 sparse edges를 양쪽에서 대조했다.
+timeline/current9개, lexical/combined 지원6개, 방향·session·time 조합9개 및 cycle/
+hop4/visited256/snapshot edge 제한과 truncated가 일치했다. 미지원 lexical4개는
+오른쪽/원인 미확정/명시관계/반복 한국어이며 별도 NOT_COMPARABLE로 기록했다.
+prefix 부분문자열과 FTS5 trigram/BM25를 같은 기능으로 부르지 않는다.
+graph seed는 fixture에서 명시한 endpoint이고 신경모델 benchmark의 정답 사건 공급이 아니다.
+
+| 저장 항목 | 실제 bytes |
+|---|---:|
+| 원문 payload 합 | 14,166,104 |
+| 압축 해제 canonical event body 합 | 14,726,981 |
+| source의 canonical envelope+encoded body 합 | 9,377,174 |
+| raw archive block 합 (5개) | 9,377,174 |
+| zstd archive block 합 (5개 모두 압축) | 8,388,952 |
+| prefix / block directory / record index / dictionary | 144 / 260 / 200,000 / 0 |
+| source+header+block SHA 필드 (위 크기에 포함) | 224 |
+| raw archive 전체 | 9,577,578 |
+| zstd archive 전체 | 8,589,356 |
+| SQL main 열린/닫힌 상태 | 78,901,248 / 78,901,248 |
+| SQL WAL 열린/닫힌 상태 | 80,459,512 / 0 |
+| SQL SHM 열린/닫힌 상태 | 163,840 / 0 |
+| 별도 검증 backup | 78,901,248 |
+| FTS에 중복 저장된 정규화 prefix bytes | 13,169,934 |
+| records pages | 9,646,080 |
+| FTS content/data/docsize/idx/config pages | 14,540,800 / 51,359,744 / 102,400 / 233,472 / 4,096 |
+| metadata / current_heads / relations pages | 643,072 / 98,304 / 12,288 |
+
+dbstat 전체 표는 로컬 측정 로그에 있고 SQL page 항목은 main 크기에 이미 포함된다.
+DB+WAL+SHM 열린 총159,524,600 B와 닫힌78,901,248 B를 구분한다.
+archive의 훨씬 작은 크기는 FTS 및 운영 transaction/index 기능 차이도 포함한다.
+동일 정보 보존은 확인했지만 같은 SQL 기능 전체를 같은 비용으로 제공한다는 뜻이 아니다.
+
+| 작업 | SQLite | raw archive | zstd archive |
+|---|---:|---:|---:|
+| durable export+readback 검증 ms | 해당 없음 | 121.133 | 133.034 |
+| 동일 process open / index rebuild ms | 해당 없음 | 54.653 / 53.965 | 54.843 / 54.157 |
+| 새 process open / index rebuild ms | 529.266 / 기존 projection | 61.395 / 60.536 | 62.589 / 61.820 |
+| 새 process 첫 get+graph ms | 0.347 | 3.845 | 4.018 |
+| get p50 / p95 ms | 0.008083 / 0.014208 | 3.477875 / 3.526167 | 3.684792 / 3.798625 |
+| graph p50 / p95 ms | 0.141875 / 0.152709 | 3.486125 / 3.586542 | 3.697750 / 3.813625 |
+| current p50 / p95 ms | 0.008958 / 0.010125 | 0.000459 / 0.000584 | 0.000500 / 0.000708 |
+| 새 process peak RSS bytes | 7,258,112 | 14,974,976 | 17,858,560 |
+
+warm 각 항목3회 warmup+101표본, 같은 조회 순서/get IDs/graph scope와 seed/current slot.
+각 루프는 get→graph→current라 한 block 캐시가 교체되는 부하도 포함한다.
+archive는 block read/checksum/해제 때문에 get/graph가 SQL보다 느리고 RSS도 더 컸다.
+OS cache는 비우지 않았으며 cold disk 측정이 아니다. SQL startup quick_check와 archive
+전체 decode/index rebuild는 각 구현의 실제 production open 비용이지 같은 내부 작업이 아니다.
+통합 생성/검증/backup 벤치마크 peak RSS224,706,560 B, wall11.52s는 reader 단독 RSS가 아니다.
+backup의 pinned copy+전체검증5,187.738ms도 archive export와 기능이 다르다.
+
+zstd는 raw보다988,222 B/10.32% 작고 get/graph p50 약6% 느렸다. 저장용 read-only
+snapshot의 기본값은 zstd로 정했으며 raw 선택을 유지한다. 추가 block-size/codec sweep은
+하지 않았다. dictionary/dedup/append e/s/concurrency/recovery는 NOT_IMPLEMENTED다.
+
+새 CLI process에 DB/SQLite/JSON/safetensors 파일 read 및 network를 차단하고 archive show와
+incoming graph를 실제 실행했다. 같은 sandbox의 source.db cat은 Operation not permitted.
+24-byte 원문은 NUL까지 그대로 나왔고 지정한 p5-must-not-open.db는 생성되지 않았다.
+통합 테스트에서는 별도 source DB를 숨긴 뒤 읽고, export 후 source append와 독립된
+snapshot을 확인했다. 동시 writer hook은 export의 snapshot을 먼저 pin한 뒤 append하여
+archive1/source2건을 검증했다. 운영 DB에는 쓰지 않았다.
+
+EXECUTED_COMMANDS:
+- cargo test --offline --locked --features test-support --test codec --test store --test retrieval --test cli: 22개 통과.
+- cargo test --offline --locked --lib archive::tests: 3개 통과 (독립 literal, 손상/상한, zstd extra-frame/expansion).
+- cargo build --offline --locked --release --bins --example validate.
+- /usr/bin/time -l validate archive-measure artifacts/customize-20260917/p5-memory-bench-fixed.
+- /usr/bin/time -l validate archive-read-probe PATH sqlite|archive: 각 저장 형태 별도 process.
+- sandbox-exec로 기본 CLI archive show/graph와 DB 접근 실패 대조.
+- fmt/all-target clippy, direct check/release: 완료 로그 기준.
+
+실패도 보존했다. RV03은 처음 방향을 하나의 SQL OR parameter로 묶어 방문 예산 회귀가
+났고 원래 양방향 endpoint 조건을 복원했다. 이후 deadline 내 반복 prepare 비용으로
+249/256이 관측되어 동일 조건 prepare_cached로 수정했다. 한도/기대값을 낮추지 않았고
+최종 기존 retrieval6개 모두 통과했다. 첫 benchmark는 지원되는 2자 단어 query를 미지원
+목록에 잘못 넣어 중단됐고 새 경로에서 수정 재실행했다. 이전 파일을 삭제하지 않았다.
+Rust1.98 clippy의 고정 chunks_exact 두 건도 as_chunks로 수정했다.
+
+FILE_HASHES:
+- source snapshot identity: 411fa074426045d38e7085b3a4ccedc70b3a3d160d6628f694f3b51157d0bb2a
+- raw.r3a: 8b918ebdfc20a083d13f9d2cf9fe587bdba98d04f8eceb55d703009a226409a9
+- zstd.r3a: d17fac53b8451cbd859bff4203d0c35ce7217f372dff08864c4b3670acdb4a90
+- p5-memory-measure-fixed.txt: eec7d120951753576a171bd6a0391c3088f12169f1540c84c68f756c12fa1cd1
+- archive-only 원문: f3dc049d050e387d40dc97efc59399cf9d7ef93cfb39c34dc9ef2ed981512b21
+
+LIMITATIONS: 읽기 전용 snapshot, FTS5 미지원, 한 block 캐시, device power-loss 보장 아님.
+원문/관계 보존 성공은 신경모델 기록 선택 및 새값 전이 실패를 해결한 결과가 아니다.
+NEXT_DEPENDENCY: P6 최종 회귀·실제 생성·계약 대조·원격 일치 확인.

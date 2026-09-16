@@ -245,7 +245,10 @@ impl Store {
         else {
             return Err(Error::Invalid("restore requires fact".into()));
         };
-        if old.scope != event.scope || old.kind.slot() != Some(slot) {
+        if old.scope != event.scope
+            || old.kind.slot() != Some(slot)
+            || !matches!(old.kind, Kind::Fact { .. })
+        {
             return Err(Error::Conflict("restore outside lineage".into()));
         }
         *restored_from = Some(target);
@@ -463,16 +466,7 @@ pub(crate) fn get(conn: &Connection, id: i64, check_meta: bool) -> Result<Event>
 }
 fn metadata(e: &Event) -> Vec<rusqlite::types::Value> {
     use rusqlite::types::Value;
-    let (from, until) = if let Kind::Fact {
-        valid_from,
-        valid_until,
-        ..
-    } = e.kind
-    {
-        (valid_from, valid_until)
-    } else {
-        (None, None)
-    };
+    let (from, until) = e.kind.validity();
     vec![
         Value::Integer(e.kind.tag().into()),
         Value::Text(e.scope.clone()),
@@ -562,7 +556,7 @@ pub fn with_sync_hook<T>(
     run()
 }
 #[cfg(feature = "test-support")]
-fn sync_point(point: &str) -> Result<()> {
+pub(crate) fn sync_point(point: &str) -> Result<()> {
     SYNC_HOOK.with(|h| match &mut *h.borrow_mut() {
         Some(hook) => hook(point),
         None => Ok(()),
@@ -611,18 +605,31 @@ fn append_in(conn: &Connection, mut e: Event, compression: Compression) -> Resul
     project(conn, &e)?;
     Ok(e)
 }
-fn reference(conn: &Connection, e: &Event, id: i64) -> Result<Event> {
-    if id <= 0 || id >= e.id {
-        return Err(Error::Invalid("reference must precede event".into()));
-    }
-    let target = get(conn, id, false)?;
-    if target.scope != e.scope {
-        return Err(Error::Invalid("cross-scope reference".into()));
-    }
-    Ok(target)
-}
 fn validate_links(conn: &Connection, e: &Event) -> Result<()> {
+    let current = e
+        .kind
+        .slot()
+        .map(|slot| head(conn, &e.scope, slot).map(|e| e.map(|e| e.id)))
+        .transpose()?
+        .flatten();
+    validate_links_with(e, |id| get(conn, id, false), current)
+}
+pub(crate) fn validate_links_with(
+    e: &Event,
+    mut get: impl FnMut(i64) -> Result<Event>,
+    current: Option<i64>,
+) -> Result<()> {
     e.validate(true)?;
+    let mut reference = |id: i64| -> Result<Event> {
+        if id <= 0 || id >= e.id {
+            return Err(Error::Invalid("reference must precede event".into()));
+        }
+        let target = get(id)?;
+        if target.scope != e.scope {
+            return Err(Error::Invalid("cross-scope reference".into()));
+        }
+        Ok(target)
+    };
     match &e.kind {
         Kind::Fact {
             slot,
@@ -631,22 +638,17 @@ fn validate_links(conn: &Connection, e: &Event) -> Result<()> {
             valid_from,
             valid_until,
         } => {
-            let current = head(conn, &e.scope, slot)?;
-            if current.as_ref().map(|e| e.id) != *previous {
+            if current != *previous {
                 return Err(Error::Conflict(
                     "stale expected head or slot already exists".into(),
                 ));
             }
             if let Some(prev) = previous {
-                let p = reference(conn, e, *prev)?;
-                if let Kind::Fact {
-                    slot: s,
-                    valid_from: f,
-                    valid_until: u,
-                    ..
-                } = p.kind
-                {
-                    if s != *slot || f != *valid_from || u != *valid_until {
+                let p = reference(*prev)?;
+                if p.kind.slot().is_some() {
+                    if p.kind.slot() != Some(slot)
+                        || p.kind.validity() != (*valid_from, *valid_until)
+                    {
                         return Err(Error::Invalid(
                             "changing lineage or validity interval is unsupported".into(),
                         ));
@@ -656,10 +658,32 @@ fn validate_links(conn: &Connection, e: &Event) -> Result<()> {
                 }
             }
             if let Some(target) = restored_from {
-                let old = reference(conn, e, *target)?;
-                if old.kind.slot() != Some(slot) || old.payload != e.payload {
+                let old = reference(*target)?;
+                if old.kind.slot() != Some(slot)
+                    || old.payload != e.payload
+                    || !matches!(old.kind, Kind::Fact { .. })
+                {
                     return Err(Error::Invalid("restore lineage/value mismatch".into()));
                 }
+            }
+        }
+        Kind::Retraction {
+            slot,
+            previous,
+            valid_from,
+            valid_until,
+        } => {
+            if current != Some(*previous) {
+                return Err(Error::Conflict("stale expected retraction head".into()));
+            }
+            let old = reference(*previous)?;
+            if old.kind.slot() != Some(slot)
+                || !matches!(old.kind, Kind::Fact { .. })
+                || old.kind.validity() != (*valid_from, *valid_until)
+            {
+                return Err(Error::Invalid(
+                    "retraction requires fact in same lineage/validity".into(),
+                ));
             }
         }
         Kind::Relation {
@@ -670,7 +694,10 @@ fn validate_links(conn: &Connection, e: &Event) -> Result<()> {
         } => {
             if matches!(
                 relation,
-                RelationKind::UsedEvidence | RelationKind::Supersedes | RelationKind::Restores
+                RelationKind::UsedEvidence
+                    | RelationKind::Supersedes
+                    | RelationKind::Restores
+                    | RelationKind::Retracts
             ) {
                 return Err(Error::Invalid("relation is transaction-derived".into()));
             }
@@ -678,7 +705,7 @@ fn validate_links(conn: &Connection, e: &Event) -> Result<()> {
                 return Err(Error::Invalid("relation needs evidence".into()));
             }
             for id in [*from, *to].iter().chain(evidence) {
-                reference(conn, e, *id)?;
+                reference(*id)?;
             }
         }
         Kind::AssistantAnswer {
@@ -688,14 +715,14 @@ fn validate_links(conn: &Connection, e: &Event) -> Result<()> {
             excluded,
             ..
         } => {
-            let question = reference(conn, e, *input)?;
+            let question = reference(*input)?;
             if !matches!(question.kind, Kind::Observation { question: Some(_) })
                 || question.session != e.session
             {
                 return Err(Error::Invalid("answer input must be question".into()));
             }
             for id in evidence.iter().chain(provided).chain(excluded) {
-                let target = reference(conn, e, *id)?;
+                let target = reference(*id)?;
                 if *id >= *input
                     || matches!(
                         target.kind,
@@ -709,7 +736,7 @@ fn validate_links(conn: &Connection, e: &Event) -> Result<()> {
             }
         }
         Kind::Failure { input, .. } => {
-            let q = reference(conn, e, *input)?;
+            let q = reference(*input)?;
             if !matches!(q.kind, Kind::Observation { question: Some(_) }) || q.session != e.session
             {
                 return Err(Error::Invalid("failure input must be question".into()));
@@ -726,6 +753,7 @@ pub fn valid_at_time(e: &Event, at: i64) -> bool {
             valid_until,
             ..
         } => valid_from.is_none_or(|n| n <= at) && valid_until.is_none_or(|n| at < n),
+        Kind::Retraction { .. } => false,
         _ => true,
     }
 }
@@ -764,37 +792,14 @@ fn project(conn: &Connection, e: &Event) -> Result<()> {
         "INSERT INTO record_fts(rowid,text) VALUES(?1,?2)",
         params![e.id, normalized(e)],
     )?;
-    let edge = |from, to, kind: RelationKind| -> Result<()> {
+    for (from, to, kind) in e.edges() {
         conn.execute(
             "INSERT INTO relations VALUES(?1,?2,?3,?4)",
             params![e.id, from, to, kind as u8],
         )?;
-        Ok(())
-    };
-    match &e.kind {
-        Kind::Fact {
-            slot,
-            previous,
-            restored_from,
-            ..
-        } => {
-            conn.execute("INSERT INTO current_heads VALUES(?1,?2) ON CONFLICT(slot) DO UPDATE SET event_id=excluded.event_id",params![slot.key(&e.scope),e.id])?;
-            if let Some(p) = previous {
-                edge(e.id, *p, RelationKind::Supersedes)?;
-            }
-            if let Some(r) = restored_from {
-                edge(e.id, *r, RelationKind::Restores)?;
-            }
-        }
-        Kind::Relation {
-            relation, from, to, ..
-        } => edge(*from, *to, *relation)?,
-        Kind::AssistantAnswer { evidence, .. } => {
-            for id in evidence {
-                edge(e.id, *id, RelationKind::UsedEvidence)?;
-            }
-        }
-        _ => {}
+    }
+    if let Some(slot) = e.kind.slot() {
+        conn.execute("INSERT INTO current_heads VALUES(?1,?2) ON CONFLICT(slot) DO UPDATE SET event_id=excluded.event_id",params![slot.key(&e.scope),e.id])?;
     }
     conn.execute(
         "UPDATE projection_state SET last_id=?1 WHERE singleton=1",

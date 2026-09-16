@@ -183,3 +183,62 @@ file.sync_all → hard_link no-clobber → parent.sync_all. 일반 오류 시 �
 공개 후 directory sync 오류는 목적지가 이미 존재할 수 있다. OS/device 한계를 넘는
 power-loss proof를 주장하지 않는다. 배포 경로는 native-only이고 legacy 디렉터리 탐색
 fallback은 없다. `model import-legacy --kind inference|resume`만 명시 변환 경로다.
+
+## 사건 schema2와 읽기 전용 evidence archive v1
+
+기존 schema1 사건의 bytes는 그대로 유지한다. 명시 취소 Kind5와 DependsOn7/Retracts8
+관계 tag만 schema2를 사용한다. 취소는 같은 slot/validity의 현재 Fact ID를 참조하는
+새 immutable 사건이며 이전 원문을 지우지 않는다. 최신 취소 시 current는 None이고
+이전 값으로 자동 fallback하지 않는다. restore는 실제 과거 Fact의 원문을 새 사건으로
+복원하고 취소 head 및 복원 대상에 각각 계보 edge를 남긴다. 관측시각은 기록순서와
+별개다. Precedes/DependsOn/Supports/Contradicts/CausalHypothesis는 다른 관계이며
+사고가 뒤따랐다는 이유로 원인을 확정하지 않는다. 구형 reader는 새 schema2를 거부한다.
+
+archive는 R3ARCH + NUL2개 prefix144 + 독립 block들 + directory/index의 단일 파일이다.
+운영 SQLite를 자동 변경하거나 대체하지 않는다. Export는 count/max ID를 읽은 한 SQL
+read transaction을 유지하고 모든 canonical ID/body를 재인코딩 없이 그대로 복사한다.
+작성은 모델과 동일한 create_new temp/전체 검증/fsync/no-clobber 공개를 재사용한다.
+
+| offset | bytes | 의미 (정수 little-endian) |
+|---:|---:|---|
+| 0 | 8 | magic |
+| 8 | 2 | archive version1 |
+| 10 | 1 | block 선택: raw0, zstd가 작을 때만 사용1 |
+| 11 | 1 | 지원 canonical schema2 (기존 schema1 포함) |
+| 12 | 4 | directory+index 길이 |
+| 16 | 8 | 전체 파일 길이 |
+| 24 | 8 | directory 시작 offset |
+| 32 | 8 | snapshot 최대 사건 ID; empty0 |
+| 40 | 8 | snapshot 최종 recorded_at; empty i64::MIN |
+| 48 | 4 | 사건 수 |
+| 52 | 4 | block 수 |
+| 56 | 8 | canonical envelope+encoded body 총 bytes |
+| 64 | 8 | 원문 payload 총 bytes |
+| 72 | 32 | 순서대로 id:i64/encoded_length:u64/body를 해시한 source SHA-256 |
+| 104 | 32 | prefix[0..104], prefix[136..144], directory의 SHA-256 |
+| 136 | 8 | 압축 해제한 canonical event body 총 bytes |
+
+각 block descriptor52 bytes는 offset:u64/stored:u32/raw:u32/codec:u8/reserved3zero/
+raw SHA-256이다. record index20 bytes는 id:i64/block:u32/offset:u32/length:u32이다.
+순차 block 영역 및 순차 record coverage를 완전히 검사하고 gap/overlap/중복 ID/trailing
+bytes를 거부한다. 각 block은 최대2MiB이며 event를 쪼개지 않는다. zstd level3은 기존
+의존을 쓰며 한 frame만 허용, window≤2MiB, 선언된 출력+1byte에서 해제를 제한한다.
+사전 dictionary와 payload dedup은 없다. 전역 파일 압축도 없다.
+
+상한은100,000사건, canonical encoded256MiB, decoded512MiB, directory8MiB,
+파일264MiB+144이다. 개별 event는 기존 codec 상한을 검사한다. 선언된 길이/count/offset을
+allocation 전에 검사하고 전체 canonical linkage, ID/시간순서/request/result 중복/
+원문 합계/source digest도 확인한다. SHA/CRC는 손상 검출이며 인증이 아니다.
+prefix/source/block digest64+32×block_count bytes는 각 항목 크기에 이미 포함된다.
+
+읽기 경로는 SQLite를 열지 않는다. slot version, metadata, 양방향 adjacency는 파일에서
+재구성하는 메모리 index이고 원문의 대체물이 아니다. 한 block 캐시만 유지한다. get,
+history, current(as_of recorded/valid_at), outgoing/incoming/both 탐색을 제공한다.
+SQL과 archive는 같은 bounded BFS를 사용한다: 후보64, 방문256, hop4, 출력8,
+협력적100ms deadline. scope/session/기록시각/snapshot과 edge origin 제한을 적용한다.
+
+lexical은 모든 단어가3자 미만인 기존 정규화 원문 prefix의 전체 query substring
+경로만 동일하다. 그 외는 SQLite FTS5 trigram/BM25를 구현하지 않았으므로
+UNSUPPORTED/NOT_COMPARABLE이다. append/live transaction/동시 쓰기/recovery는
+NOT_IMPLEMENTED이다. archive와 SQLite 모두 명시된 각 snapshot의 원본 data source이며
+archive가 운영 DB의 대체 backup/recovery라고 주장하지 않는다.

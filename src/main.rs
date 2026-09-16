@@ -99,6 +99,14 @@ enum Facts {
         #[arg(long)]
         target: i64,
     },
+    Retract {
+        #[command(flatten)]
+        args: FactWrite,
+        #[arg(long)]
+        expected_head: i64,
+        #[command(flatten)]
+        input: Input,
+    },
     Current {
         #[arg(long)]
         scope: String,
@@ -136,6 +144,12 @@ enum Relations {
 #[derive(Subcommand)]
 enum Commands {
     Init,
+    Archive {
+        #[arg(long)]
+        path: PathBuf,
+        #[command(subcommand)]
+        command: Archives,
+    },
     Record {
         #[command(flatten)]
         identity: Identity,
@@ -224,6 +238,67 @@ enum Commands {
         config: ModelConfig,
     },
 }
+#[derive(Subcommand)]
+enum Archives {
+    Export {
+        #[arg(long,default_value="zstd",value_parser=["raw","zstd"])]
+        compression: String,
+    },
+    Inspect,
+    Show {
+        id: i64,
+        #[arg(long)]
+        metadata: bool,
+    },
+    History {
+        #[arg(long)]
+        scope: String,
+        #[command(flatten)]
+        slot: SlotArgs,
+    },
+    Current {
+        #[arg(long)]
+        scope: String,
+        #[command(flatten)]
+        slot: SlotArgs,
+        #[arg(long)]
+        as_of: Option<i64>,
+        #[arg(long)]
+        valid_at: Option<i64>,
+    },
+    Graph {
+        #[arg(long)]
+        scope: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        seeds: Vec<i64>,
+        #[arg(long,default_value="both",value_parser=["both","outgoing","incoming"])]
+        direction: String,
+        #[arg(long)]
+        after: Option<i64>,
+        #[arg(long)]
+        before: Option<i64>,
+        #[arg(long)]
+        history: bool,
+    },
+    Search {
+        #[arg(long)]
+        scope: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        query: String,
+        #[arg(long)]
+        after: Option<i64>,
+        #[arg(long)]
+        before: Option<i64>,
+        #[arg(long)]
+        history: bool,
+        #[arg(long)]
+        lexical_only: bool,
+    },
+}
 fn input_bytes(input: Input) -> Result<Vec<u8>> {
     if let Some(text) = input.text {
         return Ok(text.into_bytes());
@@ -285,6 +360,102 @@ fn default_db() -> Result<PathBuf> {
 }
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    // Archive read commands return before default_db/Store::open: they need no SQLite file.
+    if let Commands::Archive { path, command } = cli.command {
+        if let Archives::Export { compression } = command {
+            let db = cli.db.map(Ok).unwrap_or_else(default_db)?;
+            let info = Store::open(db)?.export_archive(
+                &path,
+                if compression == "raw" {
+                    replica_v3::codec::Compression::Raw
+                } else {
+                    replica_v3::codec::Compression::Auto
+                },
+            )?;
+            println!("{}", serde_json::to_string(&info)?);
+            return Ok(());
+        }
+        let archive = replica_v3::archive::Archive::open(&path)?;
+        match command {
+            Archives::Inspect => println!(
+                "{}\nindex_rebuild_ms={:.3} live_sqlite_replacement=false",
+                serde_json::to_string(&archive.info)?,
+                archive.index_rebuild_ms
+            ),
+            Archives::Show { id, metadata } => {
+                let e = archive.get(id)?;
+                if metadata {
+                    display(&e)
+                } else {
+                    std::io::stdout().lock().write_all(&e.payload)?;
+                }
+            }
+            Archives::History { scope, slot } => {
+                for e in archive.history(&scope, &slot.slot())? {
+                    display(&e)
+                }
+            }
+            Archives::Current {
+                scope,
+                slot,
+                as_of,
+                valid_at,
+            } => {
+                match archive.current(
+                    &scope,
+                    &slot.slot(),
+                    as_of,
+                    valid_at.unwrap_or_else(now_ms),
+                )? {
+                    Some(e) => display(&e),
+                    None => println!("no valid fact"),
+                }
+            }
+            Archives::Graph {
+                scope,
+                session,
+                seeds,
+                direction,
+                after,
+                before,
+                history,
+            } => {
+                let mut q = Search::new(&scope, "");
+                q.session = session;
+                q.after = after;
+                q.before = before;
+                q.history = history;
+                let direction = match direction.as_str() {
+                    "outgoing" => replica_v3::retrieval::GraphDirection::Outgoing,
+                    "incoming" => replica_v3::retrieval::GraphDirection::Incoming,
+                    _ => replica_v3::retrieval::GraphDirection::Both,
+                };
+                println!(
+                    "{}",
+                    serde_json::to_string(&archive.directed_graph(&q, &seeds, direction)?)?
+                );
+            }
+            Archives::Search {
+                scope,
+                session,
+                query,
+                after,
+                before,
+                history,
+                lexical_only,
+            } => {
+                let mut q = Search::new(&scope, &query);
+                q.session = session;
+                q.after = after;
+                q.before = before;
+                q.history = history;
+                q.graph = !lexical_only;
+                println!("{}", serde_json::to_string(&archive.search(&q)?)?);
+            }
+            Archives::Export { .. } => unreachable!(),
+        }
+        return Ok(());
+    }
     if let Commands::ModelWorker { config } = cli.command {
         return model::worker(config);
     }
@@ -360,6 +531,21 @@ fn run() -> Result<()> {
                     Some(e) => display(&e),
                     None => println!("no valid fact"),
                 }
+            }
+            Facts::Retract {
+                args,
+                expected_head,
+                input,
+            } => {
+                let mut event = fact(args, input_bytes(input)?, Some(expected_head))?;
+                let (valid_from, valid_until) = event.kind.validity();
+                event.kind = Kind::Retraction {
+                    slot: event.kind.slot().expect("fact constructor").clone(),
+                    previous: expected_head,
+                    valid_from,
+                    valid_until,
+                };
+                display(&store.append(event)?);
             }
             Facts::History { scope, slot } => {
                 for e in store.history(&scope, &slot.slot())? {
@@ -544,6 +730,7 @@ fn run() -> Result<()> {
         | Commands::Restore { .. }
         | Commands::ModelWorker { .. }
         | Commands::Generate { .. } => unreachable!(),
+        Commands::Archive { .. } => unreachable!(),
     }
     Ok(())
 }

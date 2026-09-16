@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod app;
+pub mod archive;
 pub mod codec;
 pub mod event;
 pub mod model;
@@ -20,6 +21,8 @@ pub enum Error {
     NotFound(String),
     #[error("NarrowScope: short query exceeds 64 candidates; specify time or slot")]
     NarrowScope,
+    #[error("UNSUPPORTED / NOT_COMPARABLE: {0}")]
+    Unsupported(String),
     #[error("model: {0}")]
     Model(String),
     #[error("ContextTooSmall: complete system/question exceeds input budget")]

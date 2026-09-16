@@ -472,3 +472,29 @@ JSON과 모델 artifact의 JSON 제거는 별개다. 이 작업에서 tokenizer�
 행렬 비교는 `validate kernel-profile MODEL.r3m FIXTURE` 및
 `validate kernel-compare MODEL.r3m FIXTURE`이다. 기본은 candle-linear-v1;
 Rust decode GEMV는 더 느린 것으로 관측돼 기본값으로 채택하지 않았다.
+
+## DB 없이 읽는 evidence archive
+
+```sh
+replica-v3 --db SOURCE.db archive --path NEW.r3a export --compression zstd
+replica-v3 archive --path NEW.r3a inspect
+replica-v3 archive --path NEW.r3a show 1
+replica-v3 archive --path NEW.r3a history --scope S --entity E --predicate P --context C
+replica-v3 archive --path NEW.r3a current --scope S --entity E --predicate P --context C --as-of 1000 --valid-at 900
+replica-v3 archive --path NEW.r3a graph --scope S --seeds 1,2 --direction incoming --history
+replica-v3 archive --path NEW.r3a search --scope S --query '쪽' --history
+```
+
+export만 source SQLite를 연다. 다른 archive 명령은 --db/default DB와 무관하게
+archive 파일만 읽는다. show 기본 출력은 원문 bytes이며 --metadata로 사건 필드를 본다.
+source DB/기존 archive를 덮어쓰지 않는다. 다른 시점의 최신 DB와 비교할 때는 snapshot
+ID/기록시각/source identity를 먼저 맞춘다. current는 기록시점 as_of와 유효시점 valid_at을
+구분한다. 새 취소는 fact retract이며 기존 fact write와 같은 scope/slot/expected-head/
+validity 검증을 거친다. 운영 기억 추가·ask/chat은 계속 SQLite를 사용한다.
+
+실측10,000건에서 zstd는 raw보다988,222B(10.32%) 작고, block 교체가 발생하는
+get/graph 중앙값은 약6% 느렸다. 저장용 읽기 전용 archive 기본값은 zstd이며 속도/메모리
+우선이면 --compression raw를 명시한다. SQLite FTS 및 live writes의 대체 완료가 아니다.
+validate archive-measure NEW_DIRECTORY는 사용자 DB가 아닌 별도10,000건 합성 fixture만
+만들어 비교한다. validate archive-read-probe PATH sqlite|archive는 새 프로세스 open과
+첫 조회를 측정하며 OS cache를 강제로 비우지 않는다. 상세 실측은 EXPERIMENT_STATUS.md.

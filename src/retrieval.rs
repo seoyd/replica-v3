@@ -44,14 +44,14 @@ impl Search {
         }
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RelationStep {
     pub from: i64,
     pub to: i64,
     pub relation: RelationKind,
     pub origin: i64,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Evidence {
     pub event_id: i64,
     pub original_excerpt: String,
@@ -63,7 +63,7 @@ pub struct Evidence {
     pub retrieval_reason: String,
     pub relation_path: Vec<RelationStep>,
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvidenceBundle {
     pub items: Vec<Evidence>,
     pub truncated: bool,
@@ -105,7 +105,7 @@ impl Store {
             let after = q.after.unwrap_or(i64::MIN);
             let before = q.before.unwrap_or(i64::MAX);
             let filter = if q.memory_only {
-                format!("{FILTER} AND m.kind IN (0,1,2) AND m.question=0")
+                format!("{FILTER} AND m.kind IN (0,1,2,5) AND m.question=0")
             } else {
                 FILTER.to_string()
             };
@@ -164,124 +164,14 @@ impl Store {
                     Err(_) => true,
                 });
             }
-            let mut queue: VecDeque<(i64, Vec<RelationStep>)> =
-                seeds.into_iter().map(|id| (id, Vec::new())).collect();
-            let mut visited = HashSet::new();
-            let mut scheduled: HashSet<_> = queue.iter().map(|(id, _)| *id).collect();
-            while let Some((id, path)) = queue.pop_front() {
-                if Instant::now() >= deadline || visited.len() >= VISITED {
-                    bundle.truncated = true;
-                    break;
-                }
-                if !visited.insert(id) {
-                    continue;
-                }
-                let eligible_sql =
-                    format!("SELECT m.id FROM record_meta m WHERE {filter} AND m.id=?9");
-                let eligible = tx
-                    .query_row(
-                        &eligible_sql,
-                        params![
-                            q.scope, q.session, slot, after, before, snapshot, q.history,
-                            q.valid_at, id
-                        ],
-                        |r| r.get::<_, i64>(0),
-                    )
-                    .optional()?;
-                if eligible.is_none() {
-                    continue;
-                }
-                let e = store::get(&tx, id, true)?;
-                bundle.eligible += 1;
-                if bundle.items.len() < MAX_EVIDENCE {
-                    let (excerpt, truncated) =
-                        store::prefix(std::str::from_utf8(&e.payload).expect("validated"), 4096);
-                    let status = if let Some(s) = e.kind.slot() {
-                        let last:i64=tx.query_row("SELECT max(id) FROM record_meta WHERE slot=?1 AND id<=?2 AND recorded_at<=?3",params![s.key(&e.scope),snapshot,before],|r|r.get(0))?;
-                        if last != id {
-                            "superseded"
-                        } else if !store::valid_at_time(&e, q.valid_at) {
-                            "outside_valid_time"
-                        } else {
-                            "current"
-                        }
-                    } else {
-                        "observation_or_interpretation"
-                    };
-                    bundle.items.push(Evidence {
-                        event_id: id,
-                        original_excerpt: excerpt.into(),
-                        excerpt_truncated: truncated,
-                        source: e.source,
-                        recorded_at: e.recorded_at,
-                        observed_at: e.observed_at,
-                        version_status: status.into(),
-                        retrieval_reason: if path.is_empty() {
-                            "lexical"
-                        } else {
-                            "stored_relation"
-                        }
-                        .into(),
-                        relation_path: path.clone(),
-                    });
-                } else {
-                    bundle.truncated = true;
-                }
-                if !q.graph {
-                    continue;
-                }
-                let mut edges=tx.prepare("SELECT r.origin,r.from_id,r.to_id,r.kind FROM relations r JOIN record_meta m ON m.id=r.origin WHERE (r.from_id=?1 OR r.to_id=?1) AND r.origin<=?2 AND m.scope=?3 AND (?4 IS NULL OR m.session=?4) AND m.recorded_at>=?5 AND m.recorded_at<=?6 ORDER BY r.origin,r.from_id,r.to_id,r.kind LIMIT 257")?;
-                let mapped = edges.query_map(
-                    params![id, snapshot, q.scope, q.session, after, before],
-                    |r| {
-                        Ok((
-                            r.get::<_, i64>(0)?,
-                            r.get::<_, i64>(1)?,
-                            r.get::<_, i64>(2)?,
-                            r.get::<_, u8>(3)?,
-                        ))
-                    },
-                )?;
-                for (fetched, edge) in mapped.enumerate() {
-                    let (origin, from, to, kind) = edge?;
-                    bundle.edges_fetched += 1;
-                    if fetched == VISITED {
-                        bundle.truncated = true;
-                        break;
-                    }
-                    let origin_event = store::get(&tx, origin, true)?;
-                    if origin_event.scope != q.scope
-                        || q.session
-                            .as_ref()
-                            .is_some_and(|s| *s != origin_event.session)
-                        || origin_event.recorded_at > before
-                        || origin_event.recorded_at < after
-                    {
-                        continue;
-                    }
-                    let next = if from == id { to } else { from };
-                    if scheduled.contains(&next) {
-                        continue;
-                    }
-                    // At the hop boundary an unexamined neighbor can still be
-                    // ineligible; report that uncertainty conservatively.
-                    if path.len() >= HOPS || scheduled.len() >= VISITED {
-                        bundle.truncated = true;
-                        continue;
-                    }
-                    let mut next_path = path.clone();
-                    next_path.push(RelationStep {
-                        from,
-                        to,
-                        relation: RelationKind::from_tag(kind)?,
-                        origin,
-                    });
-                    scheduled.insert(next);
-                    queue.push_back((next, next_path));
-                }
-            }
-            bundle.visited = visited.len();
-            Ok(bundle)
+            traverse(
+                &SqliteEvidence(&tx, GraphDirection::Both),
+                q,
+                seeds,
+                bundle,
+                deadline,
+                "lexical",
+            )
         })();
         self.conn.progress_handler(0, None::<fn() -> bool>);
         match result {
@@ -295,4 +185,265 @@ impl Store {
 }
 fn interrupted(e: &rusqlite::Error) -> bool {
     matches!(e,rusqlite::Error::SqliteFailure(code,_)if code.code==rusqlite::ErrorCode::OperationInterrupted)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphDirection {
+    Both,
+    Outgoing,
+    Incoming,
+}
+impl GraphDirection {
+    pub(crate) fn matches(self, id: i64, from: i64, to: i64) -> bool {
+        match self {
+            Self::Both => from == id || to == id,
+            Self::Outgoing => from == id,
+            Self::Incoming => to == id,
+        }
+    }
+}
+pub(crate) trait EvidenceRead {
+    fn get(&self, id: i64) -> Result<Event>;
+    fn eligible(&self, id: i64, q: &Search) -> Result<bool>;
+    fn last(&self, event: &Event, q: &Search) -> Result<i64>;
+    fn edges(&self, id: i64, q: &Search) -> Result<Vec<RelationStep>>;
+}
+struct SqliteEvidence<'a>(&'a rusqlite::Connection, GraphDirection);
+impl EvidenceRead for SqliteEvidence<'_> {
+    fn get(&self, id: i64) -> Result<Event> {
+        store::get(self.0, id, true)
+    }
+    fn eligible(&self, id: i64, q: &Search) -> Result<bool> {
+        let filter = if q.memory_only {
+            format!("{FILTER} AND m.kind IN (0,1,2,5) AND m.question=0")
+        } else {
+            FILTER.to_string()
+        };
+        let sql = format!("SELECT m.id FROM record_meta m WHERE {filter} AND m.id=?9");
+        Ok(self
+            .0
+            .prepare_cached(&sql)?
+            .query_row(
+                params![
+                    q.scope,
+                    q.session,
+                    q.slot.as_ref().map(|s| s.key(&q.scope)),
+                    q.after.unwrap_or(i64::MIN),
+                    q.before.unwrap_or(i64::MAX),
+                    q.snapshot_id.unwrap_or(i64::MAX),
+                    q.history,
+                    q.valid_at,
+                    id
+                ],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?
+            .is_some())
+    }
+    fn last(&self, e: &Event, q: &Search) -> Result<i64> {
+        Ok(self.0.query_row(
+            "SELECT max(id) FROM record_meta WHERE slot=?1 AND id<=?2 AND recorded_at<=?3",
+            params![
+                e.kind
+                    .slot()
+                    .expect("slot checked by traversal")
+                    .key(&e.scope),
+                q.snapshot_id.unwrap_or(i64::MAX),
+                q.before.unwrap_or(i64::MAX)
+            ],
+            |r| r.get(0),
+        )?)
+    }
+    fn edges(&self, id: i64, q: &Search) -> Result<Vec<RelationStep>> {
+        // Static direction clauses retain SQLite's indexed OR plan for the existing Both path.
+        let endpoint = match self.1 {
+            GraphDirection::Both => "r.from_id=?1 OR r.to_id=?1",
+            GraphDirection::Outgoing => "r.from_id=?1",
+            GraphDirection::Incoming => "r.to_id=?1",
+        };
+        let mut stmt=self.0.prepare_cached(&format!("SELECT r.origin,r.from_id,r.to_id,r.kind FROM relations r JOIN record_meta m ON m.id=r.origin WHERE ({endpoint}) AND r.origin<=?2 AND m.scope=?3 AND (?4 IS NULL OR m.session=?4) AND m.recorded_at>=?5 AND m.recorded_at<=?6 ORDER BY r.origin,r.from_id,r.to_id,r.kind LIMIT 257"))?;
+        stmt.query_map(
+            params![
+                id,
+                q.snapshot_id.unwrap_or(i64::MAX),
+                q.scope,
+                q.session,
+                q.after.unwrap_or(i64::MIN),
+                q.before.unwrap_or(i64::MAX)
+            ],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, u8>(3)?,
+                ))
+            },
+        )?
+        .map(|row| {
+            let (origin, from, to, kind) = row?;
+            Ok(RelationStep {
+                origin,
+                from,
+                to,
+                relation: RelationKind::from_tag(kind)?,
+            })
+        })
+        .collect()
+    }
+}
+pub(crate) fn graph_bounds(q: &Search, seeds: &[i64]) -> Result<()> {
+    check_text(&q.scope)?;
+    if seeds.len() > CANDIDATES
+        || seeds.iter().any(|&id| id <= 0)
+        || q.after.zip(q.before).is_some_and(|(a, b)| a > b)
+    {
+        return Err(Error::Invalid("graph seed/range bounds".into()));
+    }
+    Ok(())
+}
+impl Store {
+    pub fn directed_graph(
+        &self,
+        q: &Search,
+        seeds: &[i64],
+        direction: GraphDirection,
+    ) -> Result<EvidenceBundle> {
+        graph_bounds(q, seeds)?;
+        let deadline = Instant::now() + Duration::from_millis(100);
+        self.conn
+            .progress_handler(1000, Some(move || Instant::now() >= deadline));
+        let result = (|| {
+            let tx = self.conn.unchecked_transaction()?;
+            traverse(
+                &SqliteEvidence(&tx, direction),
+                q,
+                seeds.to_vec(),
+                EvidenceBundle::default(),
+                deadline,
+                "graph_seed",
+            )
+        })();
+        self.conn.progress_handler(0, None::<fn() -> bool>);
+        match result {
+            Err(Error::Sql(e)) if interrupted(&e) => Ok(EvidenceBundle {
+                truncated: true,
+                ..Default::default()
+            }),
+            other => other,
+        }
+    }
+}
+pub(crate) fn traverse(
+    source: &impl EvidenceRead,
+    q: &Search,
+    seeds: Vec<i64>,
+    mut bundle: EvidenceBundle,
+    deadline: Instant,
+    seed_reason: &str,
+) -> Result<EvidenceBundle> {
+    let after = q.after.unwrap_or(i64::MIN);
+    let before = q.before.unwrap_or(i64::MAX);
+    let mut queue: VecDeque<(i64, Vec<RelationStep>)> =
+        seeds.into_iter().map(|id| (id, Vec::new())).collect();
+    let mut visited = HashSet::new();
+    let mut scheduled: HashSet<_> = queue.iter().map(|(id, _)| *id).collect();
+    while let Some((id, path)) = queue.pop_front() {
+        if Instant::now() >= deadline || visited.len() >= VISITED {
+            bundle.truncated = true;
+            break;
+        }
+        if !visited.insert(id) {
+            continue;
+        }
+        if !source.eligible(id, q)? {
+            continue;
+        }
+        let e = source.get(id)?;
+        bundle.eligible += 1;
+        if bundle.items.len() < MAX_EVIDENCE {
+            let (excerpt, truncated) =
+                store::prefix(std::str::from_utf8(&e.payload).expect("validated"), 4096);
+            let status = if e.kind.slot().is_some() {
+                let last = source.last(&e, q)?;
+                if last != id {
+                    "superseded"
+                } else if matches!(e.kind, Kind::Retraction { .. }) {
+                    "retracted"
+                } else if !store::valid_at_time(&e, q.valid_at) {
+                    "outside_valid_time"
+                } else {
+                    "current"
+                }
+            } else {
+                "observation_or_interpretation"
+            };
+            bundle.items.push(Evidence {
+                event_id: id,
+                original_excerpt: excerpt.into(),
+                excerpt_truncated: truncated,
+                source: e.source,
+                recorded_at: e.recorded_at,
+                observed_at: e.observed_at,
+                version_status: status.into(),
+                retrieval_reason: if path.is_empty() {
+                    seed_reason
+                } else {
+                    "stored_relation"
+                }
+                .into(),
+                relation_path: path.clone(),
+            });
+        } else {
+            bundle.truncated = true;
+        }
+        if !q.graph {
+            continue;
+        }
+        let edges = source.edges(id, q)?;
+        for (fetched, edge) in edges.into_iter().enumerate() {
+            let RelationStep {
+                origin,
+                from,
+                to,
+                relation,
+            } = edge;
+            bundle.edges_fetched += 1;
+            if fetched == VISITED {
+                bundle.truncated = true;
+                break;
+            }
+            let origin_event = source.get(origin)?;
+            if origin_event.scope != q.scope
+                || q.session
+                    .as_ref()
+                    .is_some_and(|s| *s != origin_event.session)
+                || origin_event.recorded_at > before
+                || origin_event.recorded_at < after
+            {
+                continue;
+            }
+            let next = if from == id { to } else { from };
+            if scheduled.contains(&next) {
+                continue;
+            }
+            // At the hop boundary an unexamined neighbor can still be
+            // ineligible; report that uncertainty conservatively.
+            if path.len() >= HOPS || scheduled.len() >= VISITED {
+                bundle.truncated = true;
+                continue;
+            }
+            let mut next_path = path.clone();
+            next_path.push(RelationStep {
+                from,
+                to,
+                relation,
+                origin,
+            });
+            scheduled.insert(next);
+            queue.push_back((next, next_path));
+        }
+    }
+    bundle.visited = visited.len();
+    Ok(bundle)
 }

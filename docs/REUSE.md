@@ -20,3 +20,16 @@ Only generic Candle tensor/autograd/activation operations are reused. The former
 external model adapter and its dependency have been removed. Own byte BPE learns
 from the declared training corpus; its artifact is bundled with our checkpoint.
 No Python or C++ worker or bridge was created.
+
+## 읽기 전용 archive에서 재사용한 v3 의미
+
+이번에는 v2를 새로 열거나 추가 소스를 가져오지 않았다. 위에 기록한 v2 출처와 별개로
+현재 v3 4edf7159518108be302813d704ca0ff5db449395의 event/codec/store/retrieval을
+기준으로 확장했다. Event::edges와 순수 linkage validator는 SQL projection과 archive가
+함께 쓰고, 기존 bounded BFS는 EvidenceRead의 SQL/archive 입력으로 실행한다. 의미/한도는
+공유하되 SQLite FTS5는 archive가 구현했다고 표시하지 않는다. 기존 v3 tests/codec.rs의
+독립33-byte literal을 archive 독립249-byte fixture 안에 그대로 넣어 검증했다.
+
+새 module은 읽기 전용 binary directory/block/index 수명과 검증을 맡는 archive.rs 한 개다.
+일반 DB framework, v2 BrainGraph/policy/BC loop, 모델 정답 selector는 가져오지 않았다.
+취소와 DependsOn의 명시 tag는 새 schema2이며 과거와의 byte compatibility를 가정하지 않는다.

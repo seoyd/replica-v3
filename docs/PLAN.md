@@ -10,7 +10,7 @@
 | P2 | VERIFIED | P0 | semantic/kernel/content/cache ID, 제한 config, 기본 출력/gradient/resume 보존; native9+resume1 통과 |
 | P3 | VERIFIED | P2 | native binary inference/resume, 384입력 무손실 logits/생성, 접근 차단 실제 생성, exact resume 및 kill/retry |
 | P4 | VERIFIED / KEEP_REFERENCE | P2 | Rust GEMV 수치 통과, 실제 SMALL decode2.17→4.73ms/전체생성50.05→53.00ms 악화로 기각 |
-| P5 | NOT_STARTED | P2 | 동일 snapshot/원문/관계 DB-free archive와 실제 합성10,000사건 비교 |
+| P5 | VERIFIED | P2 | 동일10,000건 canonical bytes/ID 및329관계 일치; raw/zstd/SQLite 실측, DB 접근 차단 실제 조회; live SQLite 유지 |
 | P6 | NOT_STARTED | P1~P5 | 직접 회귀/실제 생성/최종 대조/기여 분리/원격 SHA |
 
 `P0 → {P1,P2}; P2 → {P3,P4,P5}; {P1,P2,P3,P4,P5} → P6`.

@@ -150,10 +150,23 @@ pub fn encode(event: &Event, compression: Compression) -> Result<Vec<u8>> {
             id(&mut b, *input);
             text(&mut b, code);
         }
+        Kind::Retraction {
+            slot,
+            previous,
+            valid_from,
+            valid_until,
+        } => {
+            for s in [&slot.entity, &slot.predicate, &slot.context] {
+                text(&mut b, s);
+            }
+            id(&mut b, *previous);
+            option(&mut b, *valid_from, signed);
+            option(&mut b, *valid_until, signed);
+        }
     }
-    envelope(&b, compression)
+    envelope(&b, compression, event.kind.codec_version())
 }
-fn envelope(body: &[u8], compression: Compression) -> Result<Vec<u8>> {
+fn envelope(body: &[u8], compression: Compression, version: u16) -> Result<Vec<u8>> {
     if body.len() > MAX_BODY {
         return Err(corrupt("body too large"));
     }
@@ -168,7 +181,7 @@ fn envelope(body: &[u8], compression: Compression) -> Result<Vec<u8>> {
     };
     let mut out = Vec::with_capacity(HEADER + stored.len());
     out.extend_from_slice(b"RPV3");
-    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&version.to_le_bytes());
     out.push(codec);
     out.push(0);
     out.extend_from_slice(&(body.len() as u32).to_le_bytes());
@@ -263,7 +276,8 @@ pub fn decode(bytes: &[u8]) -> Result<Event> {
     if bytes.len() < HEADER || bytes.len() > HEADER + MAX_BODY {
         return Err(corrupt("envelope length"));
     }
-    if &bytes[..4] != b"RPV3" || bytes[4..6] != 1u16.to_le_bytes() || bytes[7] != 0 {
+    let version = u16::from_le_bytes(bytes[4..6].try_into().expect("checked header"));
+    if &bytes[..4] != b"RPV3" || ![1, 2].contains(&version) || bytes[7] != 0 {
         return Err(corrupt("magic/version/flags"));
     }
     let u32_at = |i| u32::from_le_bytes(bytes[i..i + 4].try_into().expect("checked header"));
@@ -360,8 +374,21 @@ pub fn decode(bytes: &[u8]) -> Result<Event> {
             input: r.id()?,
             code: r.text()?,
         },
+        5 => Kind::Retraction {
+            slot: Slot {
+                entity: r.text()?,
+                predicate: r.text()?,
+                context: r.text()?,
+            },
+            previous: r.id()?,
+            valid_from: r.opt(Reader::signed)?,
+            valid_until: r.opt(Reader::signed)?,
+        },
         _ => return Err(corrupt("unknown kind")),
     };
+    if kind.codec_version() != version {
+        return Err(corrupt("kind/codec version mismatch"));
+    }
     if r.pos != body.len() {
         return Err(corrupt("trailing bytes"));
     }

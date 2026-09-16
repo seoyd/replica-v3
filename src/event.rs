@@ -72,6 +72,8 @@ pub enum RelationKind {
     CausalHypothesis,
     Supersedes,
     Restores,
+    DependsOn,
+    Retracts,
 }
 impl RelationKind {
     pub fn from_tag(tag: u8) -> Result<Self> {
@@ -83,6 +85,8 @@ impl RelationKind {
             4 => Ok(Self::CausalHypothesis),
             5 => Ok(Self::Supersedes),
             6 => Ok(Self::Restores),
+            7 => Ok(Self::DependsOn),
+            8 => Ok(Self::Retracts),
             _ => Err(Error::Corrupt("unknown relation tag".into())),
         }
     }
@@ -98,6 +102,8 @@ impl std::str::FromStr for RelationKind {
             "causal_hypothesis" => Ok(Self::CausalHypothesis),
             "supersedes" => Ok(Self::Supersedes),
             "restores" => Ok(Self::Restores),
+            "depends_on" => Ok(Self::DependsOn),
+            "retracts" => Ok(Self::Retracts),
             _ => Err(Error::Invalid("unknown relation type".into())),
         }
     }
@@ -147,6 +153,12 @@ pub enum Kind {
         input: EventId,
         code: String,
     },
+    Retraction {
+        slot: Slot,
+        previous: EventId,
+        valid_from: Option<i64>,
+        valid_until: Option<i64>,
+    },
 }
 impl Kind {
     pub fn tag(&self) -> u8 {
@@ -156,6 +168,7 @@ impl Kind {
             Self::Relation { .. } => 2,
             Self::AssistantAnswer { .. } => 3,
             Self::Failure { .. } => 4,
+            Self::Retraction { .. } => 5,
         }
     }
     pub fn input(&self) -> Option<EventId> {
@@ -165,10 +178,39 @@ impl Kind {
         }
     }
     pub fn slot(&self) -> Option<&Slot> {
-        if let Self::Fact { slot, .. } = self {
+        if let Self::Fact { slot, .. } | Self::Retraction { slot, .. } = self {
             Some(slot)
         } else {
             None
+        }
+    }
+    pub fn validity(&self) -> (Option<i64>, Option<i64>) {
+        match self {
+            Self::Fact {
+                valid_from,
+                valid_until,
+                ..
+            }
+            | Self::Retraction {
+                valid_from,
+                valid_until,
+                ..
+            } => (*valid_from, *valid_until),
+            _ => (None, None),
+        }
+    }
+    pub fn codec_version(&self) -> u16 {
+        if matches!(
+            self,
+            Self::Retraction { .. }
+                | Self::Relation {
+                    relation: RelationKind::DependsOn | RelationKind::Retracts,
+                    ..
+                }
+        ) {
+            2
+        } else {
+            1
         }
     }
 }
@@ -239,6 +281,22 @@ impl Event {
                 }
             }
             Kind::Relation { evidence, .. } => check_refs(evidence)?,
+            Kind::Retraction {
+                slot,
+                previous,
+                valid_from,
+                valid_until,
+            } => {
+                for s in [&slot.entity, &slot.predicate, &slot.context] {
+                    check_text(s)?;
+                }
+                check_refs(&[*previous])?;
+                if valid_until.is_some_and(|end| valid_from.is_none_or(|start| start >= end)) {
+                    return Err(Error::Invalid(
+                        "invalid retraction validity interval".into(),
+                    ));
+                }
+            }
             Kind::AssistantAnswer {
                 evidence,
                 provided,
@@ -279,6 +337,35 @@ impl Event {
         a.recorded_at = 0;
         b.recorded_at = 0;
         a == b
+    }
+    /// Canonical graph projection shared by SQLite and the read-only archive.
+    /// Tuple order is (from, to, kind); the origin is always this event's ID.
+    pub fn edges(&self) -> Vec<(EventId, EventId, RelationKind)> {
+        match &self.kind {
+            Kind::Fact {
+                previous,
+                restored_from,
+                ..
+            } => {
+                let mut edges = Vec::new();
+                if let Some(id) = previous {
+                    edges.push((self.id, *id, RelationKind::Supersedes));
+                }
+                if let Some(id) = restored_from {
+                    edges.push((self.id, *id, RelationKind::Restores));
+                }
+                edges
+            }
+            Kind::Retraction { previous, .. } => vec![(self.id, *previous, RelationKind::Retracts)],
+            Kind::Relation {
+                from, to, relation, ..
+            } => vec![(*from, *to, *relation)],
+            Kind::AssistantAnswer { evidence, .. } => evidence
+                .iter()
+                .map(|&id| (self.id, id, RelationKind::UsedEvidence))
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 }
 pub fn check_text(s: &str) -> Result<()> {

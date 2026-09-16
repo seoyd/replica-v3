@@ -236,3 +236,41 @@ fn rv01_corrupt_result_has_no_success_stdout_or_write() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("corruption"));
     assert_eq!(s.count().unwrap(), 2);
 }
+
+#[test]
+fn archive_only_process_reads_original_after_database_is_hidden() {
+    use replica_v3::{codec::Compression, event::Event, store::Store};
+    let d = tempfile::tempdir().unwrap();
+    let db = d.path().join("source.db");
+    let archive = d.path().join("evidence.r3a");
+    let unused = d.path().join("must-not-exist.db");
+    let bytes = "한글\0\n  원문 😀".as_bytes();
+    let mut store = Store::init(&db).unwrap();
+    store
+        .append(Event::observation("s", "t", "u", bytes.to_vec()))
+        .unwrap();
+    store.export_archive(&archive, Compression::Auto).unwrap();
+    drop(store);
+    std::fs::rename(&db, d.path().join("hidden-original")).unwrap();
+    let result = cli(
+        &unused,
+        &["archive", "--path", archive.to_str().unwrap(), "show", "1"],
+        b"",
+    );
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(result.stdout, bytes);
+    assert!(!unused.exists());
+    assert!(!db.exists());
+    let result = cli(
+        &unused,
+        &["archive", "--path", archive.to_str().unwrap(), "inspect"],
+        b"",
+    );
+    assert!(result.status.success());
+    assert!(String::from_utf8_lossy(&result.stdout).contains("index_rebuild_ms="));
+    assert!(!unused.exists());
+}
