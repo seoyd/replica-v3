@@ -16,7 +16,7 @@ BUDGET_REACHED로 종료했고, 신규 contrast R-A/R-B는 각각600/200 updates
 | P3 | VERIFIED | native artifact, checkpoint/default worker/trainer, codec publication, 직접 테스트/문서 | 명시 import/export;384개 fresh-process 상대 대조;binary resume/cancel/kill 및 손상검사;접근 차단 생성 | 모델68+Adam136 bit/state 동일;JSON/DB 없는 실제 생성;inference38,432,768 B | 아래 P3 원본/변환/실행 hash | 품질 미승격;F16/INT4 미구현;IPC/corpus JSON 유지 | P5, P6 |
 | P4 | VERIFIED / CANDIDATE_REJECTED | P2의 실제 GEMV dispatch와 비교 명령 | 동일 SMALL, warmup3/n31, CPU F32 단일 thread | 수치/생성 동일 허용오차 통과; decode/전체 생성 악화 | 아래 P2/P4 기록 | 후보 한 개만 시험, 기본 reference 유지 | P6 |
 | P5 | VERIFIED | archive.rs, event/codec/store/retrieval/CLI, 관련 테스트 및 측정 도구 | 직접 회귀22개+archive unit3개; 동일10,000건/329관계 raw/zstd 비교; DB 차단 새 process 조회 | 원문/ID/관계 전부 일치; 지원 lexical6/6, 미지원4 별도; DB-free 조회 | 아래 P5 hash/실측 | 읽기 전용; FTS5/live write 미구현; 무작위 조회 SQL보다 느림 | P6 |
-| P6 | NOT_STARTED | 없음 | NOT_RUN | 신규 계약 최종 대조 전 | 해당 없음 | 독립 검토 없음 | P1~P5 |
+| P6 | VERIFIED / IMPLEMENTER_VERIFIED | kernel stride 및 artifact equation/state 거부 회귀 보강, 현재 보고 정리 | 직접43+resume/cancel/kill/group4개, fmt/check/clippy/release; fresh native contrast16/생성/archive/kernel | 필수 구현·실행 최종 대조 완료; 새값 전이 실패 유지 | 아래 최종 source/binary/log SHA | INDEPENDENT_PENDING; Goal1 미완 | 없음: 이번 계약 종료, 대규모 학습 재개 없음 |
 
 `P0 → {P1,P2}; P2 → {P3,P4,P5}; {P1,P2,P3,P4,P5} → P6`.
 한 번에 하나의 heavy 작업만 실행하고 P1 실행 동안 source를 변경하지 않는다.
@@ -40,14 +40,16 @@ support-only 결과는 길이/방해 근거 수까지 바뀌므로 기록 선택
 
 ## 현재 필수 결과 필드
 
-RESULT: PARTIAL
-FINAL_SOURCE_IDENTITY: 아직 최종 아님
+RESULT: COMPLETE_THIS_CONTRACT
+DELIVERABLE_VERIFIED: YES
+MODEL_QUALITY_PASS: NO
+FINAL_SOURCE_IDENTITY: 63117c99c09430e2b497e9c2b3f24fe65e0e1ff3f28654d18eb2aa1b0dadf706
 DEPENDENCY_AUDIT: 실측 표는 DEPENDENCY_STORAGE_AUDIT.md
 UNUSED_DEPENDENCIES_REMOVED: 이번 P0 없음; 이전 S4 WIP 별도
 EXTERNAL_WEIGHTS_USED: NO
 EXTERNAL_MODEL_API_USED: NO
 PROJECT_SOURCE_LANGUAGE: RUST
-NATIVE_TRANSITIVE_DEPENDENCIES: SQLite C, zstd C, onig C, Accelerate/OS
+NATIVE_TRANSITIVE_DEPENDENCIES: SQLite C, zstd C, onig C, OS; Accelerate는 선택 feature, 최종 실행은 CPU/gemm
 CONTRAST16_TRAIN_EM: R-A16/16, R-B16/16; 두 평가 및 fresh reload 확인
 CONTRAST16_GROUP_ALL_CORRECT: R-A4/4, R-B4/4
 CONTRAST64_HELDOUT_EM: R-B0/64, 그룹0/16; 단1회 실행, FAIL
@@ -72,6 +74,8 @@ GOAL1_READY: NO
 COMMIT / REMOTE_SHA: P0 `ce48514ab5fc8e76a9552ce5fabe7ce1617ff4ac`, P1 `8e0a264f3b0996d9a7ca632903e727aef2c5e773` / 각각 동일 원격 SHA 확인
 P2/P4 COMMIT / REMOTE_SHA: `29df8c8a0c8f4a6d328c45046446f4418c102600` / 동일 SHA 확인
 P3 COMMIT / REMOTE_SHA: `4edf7159518108be302813d704ca0ff5db449395` / 동일 SHA 확인
+P5 COMMIT / REMOTE_SHA: `5802ac56ccdc2c08c1a99002e6367bc5f8d89d50` / 동일 SHA 확인
+P6 COMMIT / REMOTE_SHA: 이 보고를 포함하는 최종 commit 전송 후 full SHA를 최종 응답 및 로컬 p6-publication.txt에 기록한다. 자기 commit SHA를 문서에 순환 삽입하지 않는다.
 
 ## 원본 run별 manifest 대조
 
@@ -564,3 +568,101 @@ FILE_HASHES:
 LIMITATIONS: 읽기 전용 snapshot, FTS5 미지원, 한 block 캐시, device power-loss 보장 아님.
 원문/관계 보존 성공은 신경모델 기록 선택 및 새값 전이 실패를 해결한 결과가 아니다.
 NEXT_DEPENDENCY: P6 최종 회귀·실제 생성·계약 대조·원격 일치 확인.
+
+## P6 최종 대조와 종료
+
+이번 계약의 필수 구현·실행은 완료했다. RESULT=COMPLETE_THIS_CONTRACT는 진단과 저장
+구현 계약의 완료이며 모델 품질 통과나 Goal1 완료가 아니다. DELIVERABLE_VERIFIED=YES,
+MODEL_QUALITY_PASS=NO, GOAL1_READY=NO, 독립 검토는 INDEPENDENT_PENDING이다.
+대규모 학습/자료 확장은 재개하지 않았다. 마지막 학습은 P1의 제한 R-A600/R-B200이고
+P6는 보존한 가중치의 변환/재생성/수치 회귀이다.
+
+SOURCE_CHANGED는 tests/native.rs의 shape가 유효한 비연속 stride 거부 검사,
+neural/artifact.rs의 독립 fixture equation/state ID 손상 검사와 현재 문서 보완이다.
+공식 project source는 Rust1.98.0/edition2024이며 새로운 의존은 없다.
+수식/토크나이저 mapping/default reference는 P2/P3 검증 이후 바뀌지 않았다.
+
+| 요구사항 | 실제 연결 및 관측 | 최종 판정 |
+|---|---|---|
+| 로컬 WIP·checkpoint 보존 | P0 시작 diff/파일 digest, 원본 init/일반 QA parent/v12/R-A/R-B weights 및 freeze SHA 재검증 | 보존; reset/stash/clean/모델 설치 없음 |
+| 의존·JSON·tensor·SQLite 상세 조사 | DEPENDENCY_STORAGE_AUDIT의 활성175개/204tensor/FTS·WAL·SHM·cache 구분 | 완료; 각 crate 비용 미측정은 UNKNOWN |
+| 고정16 입력독립 검증·제한학습 | 자체 input-only validator; shift/mask/denom/68gradient/batch/cache; 같은 LR/새 Adam, full16/update | R-A600/R-B200, 두 평가+fresh16/16·4/4 |
+| 새로운64 사전동결·분리 | P1에서 R-B 한 번 평가 후 추가 tuning 없음 | 0/64·0/16 EXPERIMENT_FAILED 유지 |
+| 수식/커널/내용/토크나이저/cache 경계 | 실제 dispatch, OperatorSpec/Capabilities, bounded experimental config, unknown equation/state 거부 | 기존 SMALL 의미 보존 |
+| inference/resume native binary | 기본 checkpoint/worker/trainer가 실제 binary 사용; 명시 legacy import | JSON 없는 자체 format, Adam 분리 |
+| 바이너리 정확성·내구성 | 독립 literal/encoder bytes, 손상/상한, F32 bits/merge token IDs, no-clobber/kill/retry | 검증; power-loss proof 아님 |
+| 동일 checkpoint 상대 평가 | P3 fresh-process contrast16+QA32+일반QA336의 logits/생성384입력 일치 | RELATIVE_REGRESSION_ONLY; 품질 미승격 |
+| 실제 JSON 없는 모델 생성 | P6 sandbox가 JSON/safetensors/DB/network 접근 차단; 기본 generate 성공 | 실제 logits 경로, 응답 품질 미달 |
+| 정확한 재개 | 실제 TINY 6연속 vs3+fresh3, Adam/weights/RNG/config/loss/logits; group boundary; 취소/kill | 4개 직접 회귀 재통과 |
+| 실측 병목 한 후보 | 같은 SMALL/prompt CPU/gemm F32 단일thread warm3/n31, Rust GEMV | 수치 통과, 느려서 KEEP_REFERENCE |
+| 그래프 의미·DB-free archive | 동일10,000원문/329edge, 정정/취소/restore/as_of/scope/time/cycle/caps, 독립 literal와 손상 | DB_FREE_ARCHIVE_VERIFIED |
+| 정확한 비교 범위 | lexical/combined 지원6개, FTS 미지원4개 별도; raw/zstd byte·시간·RSS | SQLite live/FTS 대체 완료 아님 |
+| 기존 RV01~05와 실행 경계 | runtime/CLI/store/retrieval/codec 직접 회귀 | 원문·answer commit·취소·timeout·replay·scope·재시작 보존 |
+| 단계 전송·기여 구분 | P0/P1/P2+P4/P3/P5 각 정상 push/full 원격 SHA 확인; P6 종료 후 동일 절차 | force/대형 artifact push 없음 |
+
+최종 직접 테스트는 library6 + native9 + runtime6 + cli5 + codec3 + store8 +
+retrieval6 = 43개, 별도 binary resume/cancel/kill3 + group resume1 = 4개로 **47개**다.
+이전 P0/P1/P3/P5 반복 통과를 여기에 다시 더하지 않는다. 0 tests는 집계하지 않는다.
+cargo test --offline --locked --features test-support --lib --test native --test runtime
+--test cli --test codec --test store --test retrieval, training native_ 및 지정 group resume
+filter를 실행했다. fmt --check, all-target check/clippy -D warnings, release bins/validate
+빌드도 통과했다. v1/v2 전체 테스트나 별도 대규모 학습을 실행하지 않았다.
+
+P6 R-B legacy→새 native resume은115,285,184 B, trained_steps200, diagnostic_only=true이다.
+모델68개와 Adam136개의 이름/shape/F32 bit 및 TrainingState/TrainConfig 전 필드를 대조했다.
+다시 읽은 native의 고정16 생성은16/16·4/4, EOS16/16이며 기존 P1 fresh reload와
+ID/생성 token IDs/문자열/finish가 모두 같았다. 빌드 간 정답-대조 logit gap 차이 최대
+5.7220459e-6은 사전 tolerance 이내이고 bitwise logits 동일이라고 부르지 않는다.
+P3 동일-build legacy/native384입력의 완전 일치와는 다른 비교다.
+
+원본 train 로그 마지막 loss는 R-A600=0.000222076, R-B200=0.000059094였다.
+보존 manifest 값은 각각0.00022207557049114257 / 0.00005909441824769601로,
+로그의9자리 반올림과 일치한다. 해당 snapshot SHA와 token budget/노출 수를 재확인했고,
+R-B는 binary 변환 후 이 loss를 포함한 전체 상태도 exact 비교했다. 이 값은 당시 step의
+실제 teacher-forced 학습 loss이며 새64 생성 정확도나 새로 실행한 optimizer step이 아니다.
+원본·신규 로그는 로컬에 남기고 보고에는 익명 통계/hash만 넣었다.
+
+P6 기본 generate는 P3와 동일한 v12 inference artifact/입력/상한으로 새 process에서
+실행했다. 장비631장비, stop, output6tokens로 이전과 같았으며 제대로 된 인사 응답은
+아니다. load315ms/first-token30ms/generation40ms는 단일 warm-OS 관측이고 성능 보장 아님.
+같은 sandbox의 archive show는 NUL 포함24bytes 원문을 이전 결과와 cmp로 대조했다.
+두 명령 모두 지정한 p6-must-not-open.db를 만들지 않았다.
+
+P6 동일 kernel 후보 재측정 (warm3/n31, CPU/gemm F32, VECLIB1/RAYON1):
+reference/candidate median ms는 micro0.0470/0.1533, decode2.1386/4.6219,
+prefill43.6446/43.6050, 전체생성48.9697/51.6462다. 최대 logit 차이3.8146973e-6
+(기준5e-4), 생성 token/EOS 일치. prefill/학습은 기존 differentiable reference이고
+후보는 decode만 쓴다. 후보를 기본값으로 올리지 않았으며 새 후보/추가 tuning은 없다.
+
+FINAL_SOURCE_IDENTITY는 git ls-files의 Cargo.toml/Cargo.lock/src/tests/examples 각 파일에
+shasum -a256을 적용한 순서 있는 목록 자체의 SHA다. 문서·학습자료·모델·target은 별개다.
+목록은 로컬 p6-source-files.sha256이며 공개 commit의 source bytes를 식별한다.
+
+| P6 파일/증거 | SHA-256 |
+|---|---|
+| 최종 source 목록 | 63117c99c09430e2b497e9c2b3f24fe65e0e1ff3f28654d18eb2aa1b0dadf706 |
+| R-B native resume | 946f41b0370e85f589e7920ec2769ea9d766d5b4253edced9458262cc9c7d37a |
+| contrast16 native raw 출력 | 5ad6fca5bf1dd9d868a12b31673658121b5f33348802b8448fa8598f46fcc57a |
+| kernel 실측 | 26e81ece4111512a0707f333b85107eda24585f1e882e7aaabdaa0a1c584325c |
+| 직접43개 테스트 로그 | b3544795556da9d7acd9d50fe60e3c75db1225275465731b35cff4fbbd52db39 |
+| binary resume/cancel/kill 로그 | 6f6b9feab2078c992ff8ab67a2376d2d09aa02c6140b0047f03761691e84839a |
+| group resume 로그 | 1c70604fb57493efde0b9ad59111c3dd18a5da7173d7f6eab5ea55874ed19f59 |
+| 실제 generate stdout | 44f764fdd92addb56a3ec01b503fb6797d3007fa542db59a72b09cec3b6a9df4 |
+| 실제 archive 원문 | f3dc049d050e387d40dc97efc59399cf9d7ef93cfb39c34dc9ef2ed981512b21 |
+| release replica-v3 | 06ee2bd0860f93693dc6ab1f9d0278359a819540a421d5874e687f5829f0a3f0 |
+| release replica-train | c26dab84d16d57d9d020ab6347913b58475ee4499af080a77655d3f8a5e9da38 |
+| release validate | 034fcbf65b582812d1626f1821d9520ebe6e1bc5e43b731e2fec2a3b39660dfb |
+
+새 tracked 파일은 소스3개(contrast.rs: 제품에서 분리된 제한 진단, neural/artifact.rs:
+모델 전용 binary, archive.rs: DB-free evidence 수명/검증)와 지정 보고2개다.
+그 밖의 보고서는 기존 문서에 합쳤다. 기존 사용자 미커밋 문서3개와 untracked 과거 로그는
+이번 commit에 섞지 않고 유지했다. 모델/optimizer/corpus/DB/raw 로그/임시 입력/target도
+commit하지 않았다.
+
+LIMITATIONS / REMAINING:
+이번 좁은 계약의 필수 구현 미완 항목은 없다. 새64 전이는 실패했고 기존 일반 QA0/336,
+S4 품질 FAIL, S5 정식 품질 합격 미완, S6 quant 미구현, 독립 검토 미실시는 그대로다.
+F16/INT4/packed runtime, live SQLite 대체, 완전한 자체 tensor/autograd는 이번 완료 주장이
+아니다. CPU RSS와 실제 read bytes는 측정했지만 allocator 내부 모든 임시 allocation을
+추적하거나 GPU 메모리/성능·진짜 cold disk·전원 장애 내구성을 검증하지 않았다.
+NEXT_DEPENDENCY: 없음. 별도 방향 결정 없이 대규모 학습/새 architecture 실험을 시작하지 않는다.

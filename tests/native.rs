@@ -138,6 +138,23 @@ fn rust_decode_gemv_independent_values_bounds_and_model_cache_parity() {
         .is_err()
     );
     assert!(decode_linear(&x, &w.t().unwrap(), Kernel::RustDecodeGemv).is_err());
+    // Same valid N/K and values: reject strides independently of a shape mismatch.
+    let strided = Tensor::new(&[[1f32, -1.], [2., 0.], [3., 2.]], &cpu)
+        .unwrap()
+        .t()
+        .unwrap();
+    assert_eq!(strided.dims(), w.dims());
+    assert!(!strided.is_contiguous());
+    assert!(decode_linear(&x, &strided, Kernel::RustDecodeGemv).is_err());
+    assert_eq!(
+        decode_linear(&x, &strided.contiguous().unwrap(), Kernel::RustDecodeGemv)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap(),
+        [8., 6.]
+    );
     assert!(
         decode_linear(
             &Tensor::zeros((1, 1, 0), candle_core::DType::F32, &cpu).unwrap(),

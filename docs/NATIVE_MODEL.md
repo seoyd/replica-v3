@@ -237,3 +237,31 @@ unimplemented. The continuation has replaced the former external adapter with th
 own-model worker and added native generate/chat/history interfaces. S5 acceptance
 still requires the final qualified model and actual memory/restart trials. S6 is
 not implemented. There is no accepted product model or Goal1 pass.
+
+## 현재 제한 진단·native 저장 경로 (2026-09-17)
+
+위 run/JSON+safetensors 설명은 당시 S3/S4 기록이다. 현재 기본 runtime/trainer 저장은
+STORAGE_FORMAT.md의 단일 자체 binary이다. INFERENCE는 F32 가중치+config+자체 tokenizer+
+출처만, RESUME은 같은 모델에 Adam m/v와 정확한 scheduler/sampler/RNG/data/budget 상태를
+추가한다. SQLite는 모델 tensor 저장에 쓰지 않는다. 구형 checkpoint는 보존하고 명시
+import 명령에서만 읽는다. native runtime은 JSON을 재구성해 parser에 넣지 않는다.
+
+이번 SMALL 수식은 바꾸지 않았다: pre-RMSNorm/QK-RMSNorm/RoPE/GQA/SwiGLU/tied embedding,
+local5/global1이다. semantic equation/parameter/state ID와 kernel ID를 분리했다.
+같은 계산의 tiled/fused kernel은 검증된 오차/gradient/cache 호환 범위에서 weight를
+재사용할 수 있다. 같은 shape라도 다른 수식은 새 equation ID·cache 폐기·재평가가 필요하고,
+attention→SSM 같은 변경은 weight/state 직접 이식이 보장되지 않는다. 원문 evidence는
+이들과 독립적으로 남는다. 현재 interface는 여전히 Candle Tensor를 받으므로 Candle 전체를
+교체했다고 주장하지 않는다. CPU F32 decode 전용 자체 Rust GEMV 한 후보만 실측했고,
+느려서 기본은 기존 differentiable reference다. 학습/prefill은 reference를 유지한다.
+
+고정16개는 R-A random seed17에서600 updates, R-B 일반 QA parent에서200 updates로
+마지막 두 평가와 새 process 각각16/16·그룹4/4를 통과했다. 같은 구조/tokenizer/LR와
+새 Adam을 썼으며 update마다16개 전체를 포함했다. R-B의 학습 전 동결 새64 평가 단1회는
+0/64·그룹0/16이었다. 암기는 됐지만 새 ID/값/형태 전이는 실패했으며 단일 원인을 확정하지
+않는다. 추가 대규모 학습/자료 확장은 없고 S4=QUALITY_FAIL, GOAL1_READY=NO다.
+
+상세 의존·기존 tensor inventory는 DEPENDENCY_STORAGE_AUDIT.md, 새 저장/실측/진단과
+기여·한계·정확한 hash는 EXPERIMENT_STATUS.md에 기록했다. 외부 모델/학습 tokenizer/
+teacher/API는 쓰지 않았고 프로젝트 소스는 Rust다. SQLite/zstd/onig의 native C 하위
+의존은 유지하며 순수 Rust 의존 트리로 표현하지 않는다.

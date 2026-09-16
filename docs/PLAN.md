@@ -11,7 +11,7 @@
 | P3 | VERIFIED | P2 | native binary inference/resume, 384입력 무손실 logits/생성, 접근 차단 실제 생성, exact resume 및 kill/retry |
 | P4 | VERIFIED / KEEP_REFERENCE | P2 | Rust GEMV 수치 통과, 실제 SMALL decode2.17→4.73ms/전체생성50.05→53.00ms 악화로 기각 |
 | P5 | VERIFIED | P2 | 동일10,000건 canonical bytes/ID 및329관계 일치; raw/zstd/SQLite 실측, DB 접근 차단 실제 조회; live SQLite 유지 |
-| P6 | NOT_STARTED | P1~P5 | 직접 회귀/실제 생성/최종 대조/기여 분리/원격 SHA |
+| P6 | VERIFIED / IMPLEMENTER_VERIFIED | P1~P5 | 직접47개, fmt/check/clippy/release; native 실제 생성/16개재검증/exact resume/archive/kernel 실행 및 요구 최종 대조. 독립 검토 미실시 |
 
 `P0 → {P1,P2}; P2 → {P3,P4,P5}; {P1,P2,P3,P4,P5} → P6`.
 heavy 작업은 한 번에 하나이고 P1 실행 중 source 편집은 금지한다.

@@ -1,7 +1,7 @@
 # 의존성과 저장 비용 실측
 
 계약: R3-CUSTOMIZE-AND-DIAGNOSE-1.0. 조사일: 2026-09-17.
-단계: P0. 구현자 확인이며 독립 검토는 INDEPENDENT_PENDING이다.
+단계: P0 기준 실측, P6에서 현재 JSON/저장 경로 차이 보완. 독립 검토는 INDEPENDENT_PENDING이다.
 
 프로젝트 소스는 Rust이다. 전체 의존 트리가 순수 Rust인 것은 아니다.
 외부 모델 가중치·학습된 외부 tokenizer·teacher·모델 API는 사용하지 않았다.
@@ -64,11 +64,15 @@ build 설정도 함께 조사했다. crc32c는 손상 검사, SHA-256은 내용 
 
 ## JSON의 용도별 현황
 
+용량·204개 tensor 표는 보존한 P0 원본의 측정이다. 아래 판정은 P3/P6 이후 기본 경로까지
+반영한다. 의존 추가/제거는 없으며 P0의 accelerate feature 조사와 최종 기본 CPU/gemm
+실행은 구분한다. 새 binary 및 archive의 실측 수치는 EXPERIMENT_STATUS.md에 있다.
+
 | 경로 | 실제 JSON 용도 | 판정 |
 |---|---|---|
-| src/neural/checkpoint.rs | manifest, 학습 config/state, safetensors JSON header | P3 native artifact로 대체할 대상; 현재 사용 중 |
-| src/neural.rs | 자체 tokenizer vocab/merge 저장·BPE 재구성 | P3 binary tokenizer 및 JSON 없는 builder 대상 |
-| src/neural/transformer.rs::Config::id | config 직렬화 hash | semantic ID와 wire ID 분리 필요 |
+| src/neural/checkpoint.rs | 명시 legacy importer/audit의 manifest/config/state/safetensors header | 기본 save/load는 neural/artifact.rs의 native binary; JSON fallback 없음 |
+| src/neural.rs | 기존 tokenizer 학습/export 도구 및 legacy import JSON | native는 raw byte vocab/ordered merges와 직접 BPE builder; load 시 JSON 생성 없음 |
+| src/neural/transformer.rs::Config::id | 보존한 legacy wire hash/호환 진단 | 기본 model/cache/artifact는 별도 canonical semantic ID; migration identity 보존 |
 | src/model.rs | worker IPC, request digest | artifact JSON 제거와 별개; 현재 필요 |
 | src/data.rs | 합성 corpus와 split manifest | 개발/학습 자료; 개인 기억 canonical 저장과 다름 |
 | src/training.rs, src/train_main.rs | 평가 로그, checkpoint 검사/설정 출력 | 보고/개발용; 모델 추론 산출물과 분리 |

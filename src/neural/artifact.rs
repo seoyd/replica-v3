@@ -934,6 +934,8 @@ mod tests {
         let path = d.path().join("bad");
         for case in [
             "kind",
+            "equation",
+            "state_schema",
             "flags",
             "version",
             "header_checksum",
@@ -951,6 +953,16 @@ mod tests {
             let mut b = good.clone();
             match case {
                 "kind" => b[10] = 9,
+                "equation" | "state_schema" => {
+                    let text: &[u8] = if case == "equation" {
+                        b"prerms-qknorm-rope-causal-local-global-swiglu-tied-v1"
+                    } else {
+                        b"absolute-kv-history-v1"
+                    };
+                    let at = b.windows(text.len()).position(|v| v == text).unwrap();
+                    b[at] = b'X';
+                    checksum(&mut b);
+                }
                 "flags" => b[11] = 1,
                 "version" => b[8] = 2,
                 "header_checksum" => b[24] ^= 1,
