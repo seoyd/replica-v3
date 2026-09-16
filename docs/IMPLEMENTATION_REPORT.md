@@ -8,10 +8,10 @@ IMPLEMENTATION_STATUS: PARTIAL
 VALIDATION_STATUS: DETERMINISTIC_TESTS_VERIFIED; REAL_MODEL_VERIFIED=NO (BLOCKED_MODEL); TARGET_M4_VERIFIED=storage/CLI only; full model path=NOT_RUN  
 B0_READY: NO
 
-Workspace initially contains only imsi1.md (42295 bytes) and empty imsi2.md;
+Workspace initially contains only the implementation instruction (42295 bytes) and empty the review instruction;
 not a Git repository, no HEAD or tracked/dirty distinction. No applicable
 AGENTS.md found in workspace or ancestors. v2 is read-only at
-/Users/seo/Projects/Replica-v2, initial untracked .DS_Store, imsi1.md, imsi2.md,
+/Users/seo/Projects/Replica-v2, initial untracked .DS_Store, the implementation instruction, the review instruction,
 untitled.md; tracked files clean. v1 /Users/seo/Projects/Replica HEAD
 f1990c51004a7256bb6610cd7d9b5cea7641eeab has pre-existing modifications to
 resources/reports/v0_84_682_parent_bound_small_replica_deliberation_final_report.md
@@ -68,8 +68,8 @@ MIR audits and follow-up planners were excluded. There is no v2 path dependency.
 Added Cargo.toml/Cargo.lock/rust-toolchain.toml/.gitignore; 8 src Rust modules;
 one SQL migration; five integration test files and one Rust child-test fixture;
 one explicit release measurement/real-smoke example; five documentation files
-and actual logs under docs/logs. No existing v3 source was replaced. imsi1.md and
-imsi2.md were not edited. A user untitled.md appeared during the task and was left
+and actual logs under docs/logs. No existing v3 source was replaced. the implementation instruction and
+the review instruction were not edited. A user untitled.md appeared during the task and was left
 untouched. The initially observed v2 untracked .DS_Store was absent from the final
 status; this agent performed no v2 writes/deletions. Tracked v1/v2 statuses and
 HEADs remained as recorded above. No private DB was opened by the implementation.
@@ -185,7 +185,7 @@ written. Existing imsi documents, v1/v2 source, model files and private database
 were not changed. No checkout/reset/clean/merge/commit/push was used. Source baseline
 reads were read-only; final tracked statuses matched the starting state.
 
-After implementation, imsi1.md was reread from start to finish and compared:
+After implementation, the implementation instruction was reread from start to finish and compared:
 
 | Requirements | Implemented boundary / final status |
 |---|---|
@@ -230,3 +230,16 @@ run `validate smoke` until the deferred model work is resumed with real local fi
 This workspace has no Git history/diff. docs/logs/package-digest.txt records SHA-256
 for final source/config/tests/docs (excluding this self-referencing report and logs),
 plus a digest of that sorted manifest. It also fingerprints the unchanged imsi files.
+
+## Native Goal 1 execution (2026-09-16)
+
+MODE: IMPLEMENT; CONTRACT: GOAL1-NATIVE-TRPP-1.0.
+BASELINE_SHA: 436ed1d1cdc9efa18c3728bc75fe972b8a5fab14 (local and origin/main matched).
+The preceding report describes historical B0 only. Its model deferral is superseded
+by the native from-scratch task; no external weights/API are authorized. Temporary
+instruction references were edited for separation, preserving historical values and
+failure facts. Original reports/manifests remain available at the baseline commit.
+S0: installed Rust/Cargo 1.98.0, aarch64 Apple M4 24 GiB confirmed; starting user
+changes preserved, both temporary input byte hashes unchanged by index-only removal.
+S1–S6: NOT_STARTED. Actual current tests/training/inference: NOT_RUN.
+GOAL1_ACCEPTED=NO; INDEPENDENT_REVIEW=PENDING; GOAL1_READY_FOR_REVIEW=NO.

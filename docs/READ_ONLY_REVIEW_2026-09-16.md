@@ -2,7 +2,7 @@
 
 ```text
 MODE: INDEPENDENT_REVIEW / STATIC_READ_ONLY
-CONTRACT: B0-CONTRACT-1.0 (imsi1.md에 명시된 버전)
+CONTRACT: B0-CONTRACT-1.0 (the implementation instruction에 명시된 버전)
 IMPLEMENTATION_PROMPT_SHA256: 03e51e9e6c8826d4d1d7a1d6befa2afc3a9a63cac6aa6ec95c6ea36fba406ae8
 REVIEW_PROMPT_SHA256: 7f678d1537493ec0ec4b4a13f9a5c4e7b56b923a7e033af1c7d37c720feb4bd2
 REVIEWED_CODE_IDENTITY: 시작 HEAD 없음; 기존 48개 파일의 경로/내용 해시 manifest로 식별
@@ -12,7 +12,7 @@ CODE_VERDICT: FAIL — 아래 5건의 소스상 결함; 실행 재현은 NOT_RUN
 REAL_MODEL_VERDICT: NOT_RUN
 TARGET_M4_VERDICT: NOT_RUN (호스트 M4 확인, 이번 리뷰에서 제품 실행 없음)
 B0_READY: NO
-INPUT_LIMITATION: 지정 파일 01_IMPLEMENTATION_PROMPT.md 및 시작 Git 이력/diff 없음
+INPUT_LIMITATION: 지정 파일 the originally requested implementation input 및 시작 Git 이력/diff 없음
 ```
 
 **결론**
@@ -25,7 +25,7 @@ INPUT_LIMITATION: 지정 파일 01_IMPLEMENTATION_PROMPT.md 및 시작 Git 이�
 
 **범위와 증거 수준**
 
-먼저 현재 `imsi2.md` 전체를 읽었다. 문서가 지목한 `01_IMPLEMENTATION_PROMPT.md`는 없으므로 그 이름의 파일을 검토했다고 주장하지 않는다. 실제 존재하는 `imsi1.md` 전체가 B0-CONTRACT-1.0을 명시하여 요구사항 대조에 사용했다. 위 implementation hash는 `imsi1.md`의 값이다. 지정 파일 부재와 변경 전후 diff 부재는 `BLOCKED_INPUT`이다.
+먼저 현재 `the review instruction` 전체를 읽었다. 문서가 지목한 `the originally requested implementation input`는 없으므로 그 이름의 파일을 검토했다고 주장하지 않는다. 실제 존재하는 `the implementation instruction` 전체가 B0-CONTRACT-1.0을 명시하여 요구사항 대조에 사용했다. 위 implementation hash는 `the implementation instruction`의 값이다. 지정 파일 부재와 변경 전후 diff 부재는 `BLOCKED_INPUT`이다.
 
 검토한 production 경로는 `main → app::ask → Store / search → LocalModel / worker → Store::append → display`와 직접 요구된 codec, fact lifecycle, doctor, reindex, backup/restore이다. 소스 8개, SQL migration, Cargo 설정/lock의 관련 dependency 항목, `tests/{codec,store,retrieval,runtime,cli}.rs`, `tests/support/worker.rs`, `examples/validate.rs`, PLAN/STORAGE_FORMAT/REUSE/RUNBOOK/IMPLEMENTATION_REPORT 및 관련 raw log를 읽었다.
 
@@ -76,7 +76,7 @@ dependency 동작이 판정에 직접 필요한 부분만 설치된 로컬 소�
 - Severity: **Medium**
 - 파일 / 함수 / 라인: `src/retrieval.rs:211–250` `Store::search`.
 - 코드 근거: 이웃 SQL은 session/time origin 필터 적용 전에 `LIMIT 257`을 적용한다. 이후 필터에서 제외하거나 이미 방문한 노드를 건너뛰면 queue/visited가 증가하지 않는다. 257개를 읽은 사실 자체로 `bundle.truncated`를 설정하지 않는다. 또한 `path.len() >= HOPS` 분기는 곧바로 continue하여 hop 한도로 생긴 누락을 알리지 않는다.
-- 왜 문제인지: `docs/STORAGE_FORMAT.md:81–83`과 imsi2.md §8.2는 검색 범위 한도 도달을 표시하도록 요구한다. 현재 결과는 실제로 검사하지 않은 관계가 남아 있어도 완전하게 검색한 것처럼 `truncated=false`가 된다.
+- 왜 문제인지: `docs/STORAGE_FORMAT.md:81–83`과 the review instruction §8.2는 검색 범위 한도 도달을 표시하도록 요구한다. 현재 결과는 실제로 검사하지 않은 관계가 남아 있어도 완전하게 검색한 것처럼 `truncated=false`가 된다.
 - 실제 영향 범위: 관계가 많은 노드에 session/time 필터를 건 검색, 또는 4 hop을 넘어 이어지는 관계 검색. 원본 데이터는 유지되지만 CLI 및 모델 응답에 저장하는 retrieval_truncated가 누락되어 증거 부재와 미탐색을 구분할 수 없다.
 - 재현 가능한 조건: scope S/session A의 유일한 lexical seed에 대해, 먼저 생성한 관계 257개의 origin session은 B이고, 258번째 관계의 origin session은 A이며 A의 다른 증거 T를 연결한다. query는 seed에만 일치한다. A로 검색하면 앞 257개는 모두 필터에서 제외되고 T의 관계는 SQL limit 때문에 읽히지 않는다. 시간 제한 미도달 시 seed만 반환되고 truncated=false다. 더 작은 조건은 seed 하나에서 5개 edge로 연결된 chain으로, 5 hop의 사건이 제외되어도 해당 플래그가 설정되지 않는다. 실행 재현은 NOT_RUN.
 - 수정 권장 / 수정 대상: `Store::search`에서 scope/session/time 등 필요한 origin 필터를 가능한 한 SQL limit 전에 적용하고, 별도의 이웃 조회 budget과 초과 감지를 둔다. 필터·중복 제거 여부와 관계없이 조회를 예산 때문에 중단하면 truncated=true를 보존한다. hop 경계도 미탐색 확장이 존재하면 표시하거나 계약에 맞게 보수적으로 표시한다. 한도를 늘리거나 제거할 필요는 없다.
@@ -149,3 +149,7 @@ dependency 동작이 판정에 직접 필요한 부분만 설치된 로컬 소�
 별도 승인된 저장 단계의 변경은 이 리뷰 보고서 생성과 Git 메타데이터/commit/push이다. 기존 소스, 테스트, lockfile, imsi 문서 및 기존 보고서/로그는 수정하지 않는다. 모델/DB/빌드 산출물은 저장 대상에 포함하지 않는다. 원격 `seoyd/replica-v3`는 저장 단계의 읽기 조회에서 빈 저장소로 확인했다. 업로드 결과와 commit은 최종 응답에서 보고한다.
 
 재검토 범위는 RV-01~05의 수정 함수, 이에 직접 연결된 위 회귀, tokenizer/model 실제 smoke와 저장·재시작·종료 경로로 한정한다. 직접 패치는 적용하지 않았다.
+
+편집 이력 (Goal 1 S0): 임시 입력의 경로 참조만 설명 문구로 바꿨다. 당시 계약 ID,
+해시, SOURCE 결함, 실행 NOT_RUN 및 FAIL 판정은 과거 사실로 보존했다. 이 문서와
+옛 manifest는 현행 수정 코드의 인증이나 신규 독립 승인으로 사용하지 않는다.

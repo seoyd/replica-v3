@@ -1,7 +1,7 @@
 # Replica v3 B0 runbook
 
 This project is Rust only. The user's later instructions override the MLX suggestion
-in imsi1.md: use installed Rust 1.98.0, no Python bridge, no external inference API,
+in the implementation instruction: use installed Rust 1.98.0, no Python bridge, no external inference API,
 no canned product answers, and defer model/runtime installation until a later task.
 Only Cargo build dependencies were fetched. No model or runtime installer was run.
 

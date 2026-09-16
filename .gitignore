@@ -4,3 +4,8 @@ __pycache__/
 *.db
 *.db-wal
 *.db-shm
+/imsi1.md
+/imsi2.md
+/artifacts/
+*.safetensors
+*.inference.lock
