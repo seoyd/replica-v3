@@ -54,10 +54,31 @@ incomplete checkpoint or identity mismatch cannot resume. Do not copy a stopped 
 a new output to reset its allowance. Stopped files remain available for explicit inspection
 and native inference export; successful loading does not make them quality candidates.
 
-The current H3 run is CLOSED_QUALITY_GUARD at128updates, with candidate/resume eligibility
-false. Its resume rejection was tested through the actual CLI. No further learning or H4–H8
-execution is scheduled. S5/S6 receipt verifiers and release acceptance remain pending their
-quality prerequisites; the release checker fails closed in the meantime.
+An explicitly authorized continuation after a reported quality stop uses a new output and
+`--renew-from-quality-stop`; this is not plain resume or an automatic budget reset. It binds
+the preserved stop's policy/result/native state and inherits all prior updates/tokens/time,
+Adam, tape, LR and ordinary-watch baseline. Cancellation/resource/integrity/incomplete stops
+are ineligible. The separately approved `--finish-copy-budget` amendment accepts only the
+eligible stopped512-update state, allows at most1024total, and records intermediate UTF-8
+counts with a stop on two consecutive increases. Control/empty and other guards remain;
+final accuracy/zero-error acceptance is unchanged. Clean time-split resume persists the
+previous UTF-8 count and growth streak, without a new allowance. See the active plan.
+
+The final H3 run is CLOSED_BUDGET/QUALITY_FAIL at1024updates: full208/256, entity233,
+event249, UTF-8 errors2, watch18/32. The original128/512 QUALITY_GUARD receipts remain
+immutable. Final candidate/resume eligibility is false; plain resume and another explicit
+finish request were both rejected through the actual CLI before any generation/update.
+No further learning or H4–H8 execution is scheduled. S5/S6 receipt verifiers and release
+acceptance remain pending their quality prerequisites; the release checker fails closed.
+
+`recovery skill-diagnose` performs bounded no-update checks of the original stopped H3
+segment: trace/tape/token exposure, stratified exposed/unexposed training panels, and cached
+versus full-prefix logits of recorded failures. These panels are not heldout quality gates.
+`recovery skill-recount --evaluation PATH --output NEW_FILE` only derives scores from
+preserved dev/watch raw rows; no model or optimizer calls and no candidate promotion.
+Both reuse the existing Rust recovery CLI. Detailed local paths and reproduction commands
+are in EXPERIMENT_STATUS.md. Keep native checkpoints together with their adjacent policy
+and receipts; moving only the file is not a verified way to preserve the stage's LR policy.
 
 ## Build and targeted verification
 

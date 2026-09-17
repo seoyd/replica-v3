@@ -4,7 +4,299 @@
 2026-09-17. 이전 R3-CUSTOMIZE-AND-DIAGNOSE-1.0 실행 이력은 아래 보존한다.
 모든 성공 표시는 구현자 확인이며 INDEPENDENT_PENDING이다.
 
-## 현재: H3 실제 학습 종료 — QUALITY_GUARD / PARTIAL
+## 현재: H3 1,024updates 종료 — 개선 관측, 품질 미달 / PARTIAL
+
+2026-09-17, EXECUTED_THIS_RUN. 사용자가 승인한 마지막512회를 실행해 H3 누적1,024회에서
+종료했다. 전체 답변은512회의0/256에서768회123/256,1,024회208/256(81.25%)으로
+개선됐다. 따라서 이번 결과를 “변화 없음”으로 보고하지 않는다. 다만 full244/256,
+entity254/256, event254/256, 생성 오류0이라는 합격 조건에는 미달이다.
+STATE=NOT_RUNNING, STOP_REASON=SCREENING_BUDGET_REACHED, candidate/resume=false.
+명령 exit0과 control COMPLETED는 정해진 실행이 끝났다는 뜻이며 품질 PASS가 아니다.
+H4~H8/S4/S5/S6·Goal1은 완료되지 않았다. 추가 학습·자동 재개는 설정하지 않았다.
+
+이 절은 페이블 등 다음 검토자에게 전달할 기술 인계 보고서다. 외부로 직접 전송하지 않았다.
+원본·실패·중간 결과는 아래 이전 기록과 로컬 artifact에 보존한다. SOURCE_ONLY,
+DERIVED_FROM_EXISTING_LOGS, EXECUTED_THIS_RUN을 구분하며 근본 원인은 UNRESOLVED다.
+
+### 판정과 이번 변경 범위
+
+| 항목 | 판정 | 근거와 한계 |
+|---|---|---|
+| H0/H1 M01~M04 | CODE_VERIFIED, 이전 공개 유지 | 기존 red4/green/정상·중단 회귀; 이번 quick에서도 관련 경계 통과 |
+| H2 기준점 | VERIFIED | V1000·자료 고정, 기존400 재집계, 실제 watch32/ABA; 아래 이전 상세 기록 |
+| 하네스 | QUICK_VERIFIED / MODEL_PATH_VERIFIED | quick30, 최종 native 정상2/재시작2/전이2 생성; 전체 release 수용은 미완 |
+| H3 COPY | QUALITY_FAIL / 예산 종료 | dev208/256, entity233, event249, UTF-8 2; seal 미개봉 |
+| H4 선택 / H5 질문 전이 / H6 전체 QA | NOT_RUN_PREREQUISITE | H3 실제 합격 부모 없음 |
+| FULL_QA_DEV | 최종 artifact에서는 NOT_RUN | H2 V1000의 ordinary175/336·aux64/64를 H3 모델 점수로 옮기지 않음 |
+| S4 최종 | NOT_RUN_PREREQUISITE | 새 독립200 미실행; 과거 노출 final은 개발자료로만 보존 |
+| S5 공식 기억/재시작 | NOT_RUN_PREREQUISITE | 기존 기능·중간 smoke 이력은 있으나 최종 품질 수용 아님 |
+| S6 / INT4 채택 | NOT_IMPLEMENTED / NO | 선행 S4/S5 미충족; 새 quantization/kernel 변경 없음 |
+| TARGET_M4 | CPU/Accelerate 학습 실측 | Metal/INT4 배포 성능 수용은 NOT_RUN |
+| Goal1 | IMPLEMENTER_READY=NO / ACCEPTED=NO | INDEPENDENT_REVIEW=PENDING |
+
+이번 변경 파일은 src/quality_recovery.rs, src/check_main.rs와 기존 상태/계획/실행 문서다.
+기존 recovery CLI에 무학습 skill-diagnose, 원시 평가 재집계 skill-recount, 명시적 품질 중단
+갱신과 승인된 마지막 예산 정책을 붙였다. 기존 RunControl/Adam/native/evaluator를 재사용했다.
+진단·계속 실행의 실제 production training CLI에 연결했으며 별도 framework는 만들지 않았다.
+기존 source/단계 구현과 구분해, 이번에는 Transformer·tokenizer·loss/Adam 수식·DB·저장 포맷을
+바꾸지 않았다. 새 영구 파일0, 자료 확대0, 외부 모델/teacher/모델 API 사용0이다.
+
+### 동일 H3 dev의 실제 변화
+
+아래 모든 전체 답변 점수는 normal greedy의 전체 문자열·인용·EOS 기준이며 오류도256에 포함한다.
+0/128은 보존 로그,256/512/768/1024는 이번 실제 생성이다. 보조 필드는 같은 raw rows 재집계다.
+
+| H3 updates | 0 | 128 | 256 | 512 | 768 | 1024 |
+|---|---:|---:|---:|---:|---:|---:|
+| 전체 답변 /256 | 0 | 0 | 0 | 0 | 123 | 208 |
+| entity 전체 /256 | 0 | 16 | 47 | 97 | 186 | 233 |
+| context /256 | — | 0 | 0 | 3 | 181 | 239 |
+| value /256 | — | 98 | 128 | 127 | 216 | 243 |
+| event ID /256 | 0 | 0 | 0 | 113 | 249 | 249 |
+| invalid UTF-8 | 26 | 2 | 0 | 4 | 1 | 2 |
+| length 종료 포함 생성 오류 | 28 | 19 | 13 | 4 | 1 | 2 |
+| 기존 ordinary watch /32 | 16 | 14 | 15 | 20 | 19 | 18 |
+
+1,024회의 ID 자리별 일치는1113/1152, 모든4변형을 맞힌 base는43/64다.
+각 ID 길이1~8자리의 전체 답변은32·26·30·27·27·25·27·14 / 각각32다.
+방향값116/128, 짧은 경로값92/128; 명시 대상 질문158/192, 유일한 원문만 묻는 질문50/64다.
+8자리와 짧은 경로값이 상대적으로 어렵다. 다만 현재 자료는 홀수 ID 길이가 방향값,
+짝수 길이가 경로값이므로 길이와 값 종류 효과를 독립적인 원인으로 단정할 수 없다.
+전체 entity 문자열·base·binding은 split 간 분리했으나 개별 숫자 token은 기존 vocabulary를
+재조합한 것이다. 새 언어·훈련 밖 길이·범용 한국어 지능 시험으로 확대 해석하지 않는다.
+
+dev teacher-forced micro CE는0/128/512/768/1024에서 각각
+7.199205 /1.102823 /0.455337 /0.065120 /0.020953이다.
+마지막 teacher token accuracy=0.994654, 실제 마지막 학습 batch CE=0.009906이다.
+teacher는 동일한 자체 모델에 정답 접두어를 넣어 측정한 진단이며 외부 teacher가 아니다.
+이 값은 자유 생성의 전체 답변 정확도와 다르다. 한 token 오류로도 전체 EM은 실패하며,
+오류 이후에는 정답 접두어를 제공하는 진단과 실제 생성 경로가 달라질 수 있다.
+최종 train 전체 exact-match는 측정하지 않았다. 마지막 batch loss를 train 정확도로 부르거나
+“train도 낮으므로 일반화 문제가 아니다”라고 이 결과만으로 판정할 수 없다.
+
+### 남은 실패48개와 확인된 생성 경계
+
+첫 raw byte 불일치의 위치는 entity16 / context8 / value11 / citation4 / format9다.
+이는 첫 오류 기준의 배타적48개 분류이며, 전체 답변의 각 필드 오류 수와는 다르다.
+예를 들어 entity 전체 오답23개에는 먼저 형식이 틀리거나 UTF-8 decoding이 실패한 행도 포함된다.
+정답 접두어 진단 필드 안에 저장됐지만 이 분류 자체는 실제 free-running raw bytes와 gold를 비교한다.
+
+최종 eval-1024.json에서 직접 확인한 사례:
+
+| 사례 | 정답의 해당 부분 | 실제 출력의 해당 부분 | 다른 관측 |
+|---|---|---|---|
+| digits-2, base1/view1 | 센서91 | 센서99 | 구역99077·경로25914·event115726은 일치 |
+| digits-2, base1/view3 | 구역99077 | 구역990777 | 유일한 원문 요청; entity/value/citation 일치 |
+| digits-8, base7/view1 | 장비07589721 | 장비07589712 | 숫자 순서 교환; 구역·값·인용 일치 |
+| base53/view0·view1 | 경로55798 | strict UTF-8 오류 | ID53/0,53/1 모두 EOS를 생성했지만 유효한 문자열이 아님 |
+
+마지막 두 오류는 skill-H3/dev/917260311/53/0 및 /53/1이다.
+raw bytes의46번 위치에서 invalid_sequence(error_len2)가 발생했고, EOS는 각각
+raw index56/53에 있다. 빈 답·control·timeout은0이며 오류2건을 분모에서 제거하지 않았다.
+53/1은 첫 token 차이가 index22: gold197, 실제61, 동일 접두어 teacher argmax도61이다.
+이미 생성된 token423의 bytes EA B2 다음에 필요한 BD 대신 숫자 token의 byte35가 나와
+UTF-8 연속 바이트 조건을 깨뜨렸다. raw 기록에는 이후 반복 문구도 남아 있다.
+이는 해당 실패가 출력 끝의 단순 잘림이라는 설명과 맞지 않는다. 잘못된 부분을 lossy decode나
+숫자 교정으로 수선하지 않았다. gold의 tokenizer roundtrip은 이 사례에서 true다.
+
+학습 전128 상태의 별도 무학습 진단에서는 노출 train32와 미노출 train32가 모두0/32였다.
+길이별4개씩 검사했고 각각 entity3/32·event0/32였다. 미노출 view가 이미 노출된 base와
+연관될 수 있으므로 두 패널 모두 heldout은 아니다. trace128의 입력308,182/target34,911과
+실제 sample/tape/index/RNG를 대조했고 일치했다.
+당시 새 UTF-8 실패49/2의 기록된42개 생성 위치 전체에서 cached/full-prefix logits가
+허용오차 내였고 greedy argmax와 보존 raw token도 일치했다. 잘못된 byte46까지 재현됐다.
+따라서 그 사례의 cache 경로 차이는 관측되지 않았다. 이것이 모든 checkpoint/질문의
+cache 또는 gradient가 무결하다는 증명은 아니다. 최종53/0·53/1의 전 prefix parity는 미실행이다.
+무학습 진단 명령은 exit0/중단 조건0이지만 해당 summary의 terminal_reason은 null이다.
+이 진단 summary를 정상 종료한 학습 stage receipt나 품질 승격 증거로 사용하지 않는다.
+
+### 현재 모델·자료·학습·제품 설계
+
+| 경계 | 실제 구현 |
+|---|---|
+| 모델 | NATIVE_TRPP_G1_SMALL,9,605,184 parameters, actual vocab801,6 layers×hidden384 |
+| attention | Q8/KV2/head48 GQA; learned headwise QK-RMSNorm 후 absolute RoPE(theta10000) |
+| block | pre-RMSNorm(eps1e-6), bias-free projections, SwiGLU FFN1024, residual, tied embedding/output |
+| 문맥/KV | 첫5층 local256+마지막1층 global2048; chunk128 prefill, absolute causal/padding mask; KV에는 KV heads만 유지 |
+| tokenizer | 프로젝트 train 자료로 학습한 reversible256-byte BPE;801실제 token,8reserved; 각 숫자는 독립 segment; 정규화·외부 학습 mapping 없음 |
+| 학습 target | input[:-1]→labels[1:]; response+EOS만 loss, prompt/pad 제외; first target weight8 유지 |
+| optimizer | 자체 AdamW beta1=.9/beta2=.999/eps1e-8/decay.01/clip1; V1000 moments와 누적 clock 유지 |
+| H3 LR/batch | 실제 next nominal LR0.00004751892132506239에서 min(...,3e-5)=3e-5 고정; batch8/accumulation1/group1 |
+| 실행 | CPU/Accelerate F32, Apple M4, compute threads1; Metal 학습/추론 수용 아님 |
+| 생성 | 자체 native loader→자체 Transformer logits→greedy→EOS/strict UTF-8; 정답/field-only/oracle 출력 없음 |
+| 저장 | inference38,432,768B와 Adam 포함 resume115,285,248B를 분리한 native binary |
+| 기억 | SQLite에 원문·사건·버전·관계·FTS·요청/응답 이력; 학습 가중치를 SQLite에 저장하지 않음 |
+
+모델은2017 원형을 그대로 구현한 구조가 아니며 위 GQA/RMSNorm/QK norm/RoPE/SwiGLU/
+local-global attention을 사용한다. 이 사실만으로 최신 대형 모델 수준의 능력이나 구조의 최적성을
+주장하지 않는다. 이번 품질 개선 과정에서 구조를 교체하지 않았다.
+src/neural/transformer.rs가 수식/커널 경계와 KV, src/neural.rs가 tokenizer와 prompt를 소유한다.
+src/training.rs가 실제 batch/loss/Adam, src/quality_recovery.rs가 제한 실행·평가·중단을 담당한다.
+src/model.rs의 native worker와 app/retrieval/store 경로가 제품 입력→근거→모델→응답 commit에
+연결돼 있다. 합성 정답 builder는 별도 training binary의 data 모듈에 있으며 제품 library에
+포함되지 않는다. H3의 단일 근거는 처음부터 별도로 만든 과제이며 정상 QA에서 정답 근거를
+oracle로 골라 남긴 결과가 아니다. S5의 새 사실 저장 후 공식 품질 시험은 아직 통과하지 않았다.
+
+고정 H3 train4096=기존 일반 QA anchor2048+focus2048(512base×4views),
+dev256/seal256은 각각64base×4views다. anchor 다섯 범주410/410/410/409/409.
+seed917260311, entity-prefix는 장치/설비/센서/장비, ID1~8자리·leading-zero·반복·근접 차이.
+context/event ID는 독립 생성하고, record 시각도 ID와 독립 생성한다.
+4views는 원형/이름만 변경/값만 변경/유일한 원문 질문이다. source 전체와 실제 citation+EOS를
+답해야 한다. 입력 구조로 gold 유일성을 별도 검사하며 원래 RF 문법 검사는 anchor에 유지한다.
+최대 sequence426으로 training 한도 안에 들며 잘라서 학습하지 않았다.
+512updates마다 pool별2048views를 중복 없이 노출한다. 매 batch는 서로 다른 base의
+anchor4+focus4;1,024updates는 같은 동결 pool의 두 epoch다. 자료 추가·tokenizer 재학습 없음.
+기존 corpus와 실패 checkpoint를 수정하지 않았고 seal은 구조 감사 외 모델 호출0이다.
+
+native artifact는 src/neural/artifact.rs의 R3MODEL\0/version1 형식으로,
+LE scalar/canonical ULEB128 metadata와 F32 tensors, 정확한 tokenizer/config/lineage를 저장한다.
+JSON header가 아니다. inference는 Adam/정확한 resume 상태를 제외하고 resume는 이를 보존한다.
+legacy safetensors/JSON import 경로는 별도로 존재하지만 이번 실제 산출물은 native binary다.
+corpus·policy·raw evaluation 로그의 JSON은 그대로 보존한다. 이를 가중치의 JSON 저장과 혼동하지 않는다.
+상수 LR 정책은 sidecar에 기록하며 native TrainConfig의 일반 schedule 필드는 schema 보존을 위해
+남아 있다. skill-run은 상수 LR를 명시 적용하고 일반 trainer는 옆 정책을 확인해 잘못된 재개를
+거부한다. checkpoint만 떼어 옮긴 뒤 일반 cosine resume을 해도 같다고 보장하지 않는다.
+
+검증한 설치 도구는 rustc1.98.1(48a229cea), cargo1.98.1(797e8a9bc), stable이다.
+새 설치·의존 갱신 없이 --locked --offline을 사용했다. 실제 direct dependencies는
+candle-core/candle-nn0.11.0, clap4.6.7, crc32c0.6.8, ctrlc3.5.2, rusqlite0.37.0,
+safetensors0.8.0, serde1.0.229, serde_json1.0.151, sha2 0.10.9, thiserror2.0.20,
+tokenizers0.22.2, zstd0.13.3, dev tempfile3.27.0이다. 기존 generic crate 알고리즘과
+자체 학습 mapping을 사용한다. SQLite/zstd/Accelerate 등 native 하위 의존까지 순수 Rust라는
+주장은 하지 않는다. 프로젝트 제품·진단·변환·테스트 도구 소스는 Rust다.
+
+### 실행 규칙 변경·예산·검증
+
+128 중단 후 무학습 진단을 먼저 수행했다. 계속 진행 요청에 따라 새 output에서128→512를
+명시 갱신했으나 새 UTF-8 3건과 전체 정답 증가0으로 다시 QUALITY_GUARD였다.
+이후 사용자가 명시 승인한1024 상한에 한해 primary gain≥4 연장 조건을 면제하고,
+중간 UTF-8 총수가 연속 두 평가에서 증가하면 중단하는 규칙을 적용했다.
+새 정책은4→1→2개, 증가 streak0→1이어서 중간 중단 조건을 충족하지 않았다.
+최종 오류0 조건은 그대로이므로2개 오류가 남은 모델은 합격하지 않았다.
+이전128/512의 실패 receipt를 COMPLETED로 고치지 않았다. ordinary watch/resource/cancel/
+nonfinite/control/empty guards, 전체1,024updates/6Minput/1.5Mtarget/60분 상한도 유지했다.
+
+이번 추가 SMALL896(384+512), TINY0, scalar0. H3 전체 SMALL1024이며 누적 모델
+step21750→22774다. 이번 입력2,143,560/target242,419, H3 전체2,451,742/277,330.
+H3 총 노출은anchor4096+focus4096=8192views; 각 pool의 각 view를 정확히 두 epoch 노출했다.
+이번 평가 generation/own-teacher는256/512/768/1024의1152쌍, 무학습 패널64쌍,
+종료 후 native reload/model 하네스6쌍이다. cache parity의 별도 forward는 이 생성 수와 다르다.
+원래128 실행의576쌍까지 포함하면 H3 정기평가는1728쌍이다.
+
+| 실행 | 실제 추가 updates | time -l wall | maximum RSS | 별도 peak memory footprint |
+|---|---:|---:|---:|---:|
+| 무학습 진단 | 0 | 12.16s | 649,117,696B | 진단 log 참조 |
+| 128→512 | 384 | 623.75s | 6,889,472,000B | 7,301,388,768B |
+| 512→1024 | 512 | 753.14s | 6,802,964,480B | 7,231,150,536B |
+
+마지막 work751.628283s/cleanup0.841718s, 전체 H3 누적 stage elapsed1631.647288s.
+command900s/cleanup120s와 stage3600s 안에서 종료했고 time split은 필요하지 않았다.
+운영 DB 접근·추가 자료 수집·모델 자동 다운로드는 하지 않았다.
+
+직접 새 회귀3개: 노출 패널/precancel, explicit renewal 자격·실패 보존·다른 terminal 거부,
+UTF-8 연속 증가/재개 상태/strict 기본 규칙. 실제3/3 통과, optimizer0.
+같은 source의 quick30/30, fmt/check/clippy 통과; 필터0개를 성공으로 세지 않았다.
+최종 native inference export→fresh load→정상2/재시작2/전이2 실제 생성 통과,
+normal/restart 출력 동일, raw EOS/strict UTF-8/nonempty 검증; 이6개는 품질 합격 근거가 아니다.
+1,024 종료물의 plain resume 및 추가 finish-copy-budget 요청은 실제 CLI exit1로 거부했다.
+두 경우 generation/teacher/optimizer0, 새 run 디렉터리 생성 없이 거부했다.
+현재 source digest는 학습 전 quick과 종료 후 model 하네스에서 동일하다.
+test-support 없는 제품 release 빌드도 통과했다(release-final.log). 전체 release 수용 suite는
+선행 품질 미달로 실행하지 않았고, S5/S6 전용 receipt verifier는 미구현 상태다.
+
+### 재현 경로·source·checkpoint 식별
+
+저장소 루트는 /Users/seo/Projects/Replica-v3다. 아래 경로는 이 루트 기준이며,
+큰 corpus/checkpoint/raw 로그는 ignored artifacts에 있고 GitHub에 게시하지 않는다.
+BASE_SHA=5879a3c6642211e78a0d19a91679babba5f8a6c1.
+이번 시작 HEAD=f964a2a0308dd64852fd3d33e83e8e431373ab17; 그 위 로컬 수정으로 실행했다.
+실행 당시 코드 identity는 commit SHA 대신 다음 실제 source manifest/binary hash로 고정했다.
+
+| identity | SHA256 |
+|---|---|
+| 마지막 실행 source digest | a20105cd8ef2160c565265f0ddb7d3d3f0b001e1678e540c651bb4dcdee85b4a |
+| finish-train-frozen binary | 577374f833e618e915fc39ed05ccd9d3eb52f6f375d3d374e59a36428ddd029b |
+| H3 train bytes | b246c2508c6af4141416a17fcd6b6ee222e4bca6a9a3f5331c5913f87760430a |
+| H3 dev bytes | ca5c86f91b4defe471bf1c6c2931bcc97ac0b88e084bd5506b65b0101ebccd89 |
+| 1024 eval raw JSON | 72ef3944d658cae8cd6d268784ea5158037a6d3aac750cf303452c92714c9d72 |
+| 1024 native resume physical | 48480b5f7fb740b7a7163d298372e957d931dcc0138dbdca1de9ef8e6ff479a7 |
+| 1024 inference physical | c4c0c35a631a43fe5cf0d5f4956c6bc46644efb69b818ee558468f46a38aa268 |
+| 양쪽 동일 model content | f5d875bae16494a24ad7628f1628706f9e800abb1eddc03b9425ba1f55a8182d |
+
+R=artifacts/goal1-continue-20260917, B=artifacts/harness-goal1-20260917로 읽는다.
+이는 경로 약어이며 다음 명령에는 실제 경로를 썼다.
+
+| 자료 | 실제 위치 |
+|---|---|
+| 원래 parent resume / inference | artifacts/s4-completion-20260917/binding-v-1000/final / binding-v1000-inference.r3m(같은 상위 폴더) |
+| 원래 corpus / binding corpus | artifacts/goal1-corpus-v9 / artifacts/s4-completion-20260917/binding-corpus |
+| 기준점 / H3 corpus | B/h2-baseline / B/h3-corpus(train.json,validation.json,prepared.json,manifest.json) |
+| 원래128 stop | B/h3-run/segment-00-0000/{trace.jsonl,eval-0128.json,result.json,final} |
+| 무학습 진단 | R/h3-diagnostic/{summary.json,exposed_train_views.json,unexposed_train_views.json} |
+| 512 stop | R/h3-renewed/segment-00-0128/{trace.jsonl,eval-0256.json,eval-0512.json,result.json,final} |
+| 최종1024 | R/h3-final-budget/segment-00-0512/{trace.jsonl,eval-0768.json,eval-1024.json,result.json,final} |
+| 실행 정책 | R/h3-final-budget/policy.json; 이전 각 run의 policy도 보존 |
+| 최종 inference | R/h3-1024-inference.r3m |
+| 전체 실행 stdout/RSS | R/h3-diagnostic.log, h3-renewed.log, h3-final-budget.log |
+| raw 기반 재집계 | R/recount-0128.json, recount-0256.json, recount-0512.json, recount-0768.json, recount-1024.json |
+| 테스트/로드/재시작 | R/finish-policy-tests.log, quick-finish-frozen/summary.json, model-1024/summary.json, release-final.log |
+| 거부 회귀 | R/resume-1024-rejected.log, renew-1024-rejected.log |
+
+원래 V1000 resume physical bce08fe79cccdfa44ec8fbc0abc7c27f6248611cabbac4b1a92c20bfe8221cc0,
+V1000 model f93483799d3cc2bfa80d55708ed758eb9f13dae6536cf1c42676dc346eabb89d.
+512 stop physical de0410b709e2c22945f8de4bb655856783ecb0322610be682c65a904eef00eca,
+model68abff547bb16edb4af90c9091cfbfd18c3b23089538c5827f262d22727e8719.
+원본 train SHA3ac32fca9d954f98f9b3a40c785d939010ee16ddc0bb91a73c49e7269391957a,
+binding train809b4559c44f3a9e46d68afd6038f9a0f434d3b1274fdc6264d6071e58344d77,
+두 validation572b0d9d797feb2c31fa8713566853aff91ae6b994d736c399e8bad0cb3fb004.
+이 원본 해시, 이전128/512 policy/result/checkpoint 보존 manifest를 종료 후 다시 대조했다.
+기존 미추적 파일 목록487개도 시작 목록과 byte-for-byte 동일하다. 이번 변경 외 사용자 작업과
+운영 DB를 staging하지 않는다. 최종1024 보존 hash 목록은 R/final-1024.sha256이다.
+
+무학습 재집계 명령(새 output 이름 필요):
+
+```sh
+artifacts/goal1-continue-20260917/finish-train-frozen recovery skill-recount \
+  --evaluation artifacts/goal1-continue-20260917/h3-final-budget/segment-00-0512/eval-1024.json \
+  --output artifacts/goal1-continue-20260917/reviewer-recount-1024.json
+```
+
+실제로 실행한 마지막 학습 명령은 아래와 같다. 이는 실행 이력이며 예산 갱신/추가 재학습 지시가 아니다.
+그대로 다시 실행하면 기존 output/중단 자격 검사가 거부해야 하며 실패 receipt를 지워 재시도하지 않는다.
+
+```sh
+VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 /usr/bin/time -l \
+  artifacts/goal1-continue-20260917/finish-train-frozen recovery skill-run \
+  --baseline artifacts/harness-goal1-20260917/h2-baseline \
+  --corpus artifacts/harness-goal1-20260917/h3-corpus \
+  --output artifacts/goal1-continue-20260917/h3-final-budget \
+  --harness artifacts/goal1-continue-20260917/quick-finish-frozen/summary.json \
+  --renew-from-quality-stop artifacts/goal1-continue-20260917/h3-renewed/segment-00-0128/final \
+  --finish-copy-budget
+```
+
+실제 launch 경로는 당시 target/release/replica-train이었고 위 frozen 파일과 byte hash가 같다.
+이후 model 하네스 빌드와 제품 release 빌드가 target binary를 바꾸므로 실행 재현에는 frozen을 쓴다.
+무학습 생성 재현은 기존 replica-check model에 위 inference, binding-corpus, h3-corpus,
+--split validation --limit 2 및 새 --output을 지정한다. seal은 이 명령의 입력이 아니다.
+
+### 다음 검토자에게 남기는 질문과 한계
+
+확인된 사실은 “고정 구조/자료/Adam/LR로 두 번째 epoch에서 새 복사 dev가 크게 개선됐지만
+전체 정확성과 strict UTF-8은 미달”이다. 최초128개의 무학습 trace/cache 진단에서는 결함을
+특정하지 못했다. 현재 증거로 optimizer/LR, label shift, causal mask, tokenizer, tied embedding
+중 하나를 근본 원인이라고 선언하지 않는다. 기존 수치/gradient/재개 회귀 통과도 품질 보장이 아니다.
+
+검토 우선순위는 최종48개 실패의 첫 divergence와 입력 위치를 source에 대조하는 것이다.
+특히 반복/긴 ID의 자리 교환·중복, 경로값에서 UTF-8 부분 token 뒤 잘못된 숫자를 고르는 사례,
+전체 생성과 gold-prefix 진단 차이를 확인할 수 있다. 최종53/0·53/1의 cached/full parity와
+train 정확도는 추가 관측이 필요한 경계이며 이번에 실행했다고 보고하지 않는다.
+짧은 값/길이 상관, inherited Adam과 낮은 고정 LR에서의 제한된 노출, free-running 오류 전파는
+가능한 설명이지만 분리 실험을 하지 않아 인과 결론이 없다. H3가 단일 근거라서 아직 여러 근거
+선택과 질문 표현 전이의 개선 여부도 알 수 없다. watch18/32만으로 원래336 전체 복구를 주장할 수 없다.
+이 보고서는 추가 자료 확대·LR/seed sweep·새 구조·무기한 학습을 자동 승인하지 않는다.
+
+## 이전: H3 128updates 중단 — 당시 QUALITY_GUARD / PARTIAL
 
 2026-09-17, EXECUTED_THIS_RUN. H0~H2 검증 후 H3 복사 학습을 실행했으나,
 128updates 평가에서 새 UTF-8 오류가 발생했다. 전체 답변은0/256으로 품질 미달이다.

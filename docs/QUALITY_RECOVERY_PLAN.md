@@ -2,6 +2,67 @@
 
 ## Active: R3-HARNESS-TO-GOAL1-1.0
 
+Renewed continuation after publication f964a2a0308dd64852fd3d33e83e8e431373ab17:
+the user again requests H4–H8 and S4/S5/S6/Goal1. First inspect the actual stopped H3
+without updates: verify its trace against the frozen tape and native counters; generate
+32 exposed and32 unexposed training views, explicitly not heldout; compare cached/full
+logits on the actual newly invalid generation prefix. Reuse recorded dev0/128 rows and
+keep seal closed. This diagnostic has the common900s/12GiB limits, no optimizer calls,
+no corpus/weights/tokenizer/decoding changes. Any repair must follow observed evidence;
+the failed run and its QUALITY_GUARD receipt remain immutable. No prerequisite or final
+quality threshold is waived by the request to finish. Record findings before choosing
+any further learning intervention; do not rerun the same stopped experiment blindly.
+
+Observed diagnostic: exposed32 and unexposed32 training views both0/32; each entity3/32,
+event0/32. Unexposed views can share an exposed base and are not heldout. The newly invalid
+dev case reproduces every recorded greedy token with both cached and full-prefix logits;
+strict decoding sees the same invalid byte46. Trace input/target counts match actual samples.
+This does not identify a numerical/cache defect or establish that another512 steps will work.
+
+One explicit renewed H3 attempt is authorized by the user's continuation request after the
+reported stop. Keep the original stop receipt/checkpoint immutable and start a new output
+with `--renew-from-quality-stop`. This is distinct from the still-forbidden plain resume of
+a quality stop. Inherit the128-update checkpoint, Adam, LR3e-5, original tape position and
+the original total budgets (including prior updates/tokens/time); do not reset the allowance.
+The previously observed invalid IDs are acknowledged in the new policy, not erased from
+past scores. Any additional new UTF-8/control/empty still stops, as does the original watch
+guard against16/32. Acceptance still requires zero errors, full244/256 and entity/event254/256,
+ordinary retention and a once-only seal. At512 total updates, extend only for the originally
+required≥4 primary gain since the preceding dev evaluation. No second explicit renewal is
+automatic, no cancellation/resource/integrity stop is eligible, and no failed parent moves
+to H4. A new failure closes this renewed attempt with the next stages unexecuted.
+
+Observed first renewal:512total updates, dev0/256, entity97/256, context3/256,
+event113/256, value127/256, watch20/32. Four invalid UTF-8 cases (three new) stopped
+the run. Additional384updates consumed917,689input/103,754target tokens; wall623.75s.
+No second epoch was launched under that policy; original and renewed stops remain intact.
+
+Explicit user amendment after seeing those results: complete up to1024 total H3 updates
+(512 further), despite the primary-gain extension condition. Keep corpus/tape/Adam/LR,
+all aggregate token/time caps, ordinary-watch/resource/nonfinite/cancel/control/empty
+guards and final acceptance unchanged. For this final continuation only, intermediate
+UTF-8 counts are fully retained and stop on two consecutive evaluation-to-evaluation
+increases. Persist the previous count and growth streak across a clean TIME_BUDGET resume.
+Use a new output and explicit `--renew-from-quality-stop ... --finish-copy-budget`;
+only an eligible stopped512-update state can start it. No automatic further renewal,
+no budget reset, and no changes to earlier receipts. Seal remains closed until dev passes.
+This amendment supersedes only H3's two intermediate rules in the original plan below.
+The user also requests a detailed technical handoff if the final continuation still fails:
+record design, actual failures, reproduction, artifact/source identities, tested boundaries
+and unresolved hypotheses separately. Do not present a hypothesis as a confirmed cause.
+
+Closed final continuation:1024total H3 updates, dev208/256 (768:123/256), entity233,
+context239, value243, event249; UTF-8 errors2, control/empty0, watch18/32. The policy's
+UTF-8 counts4→1→2 give growth streak1, so no intermediate guard fired; the unchanged
+final zero-error and accuracy gates still FAIL. Terminal SCREENING_BUDGET_REACHED,
+comparison=true, candidate/resume=false, NOT_RUNNING. Additional512updates consumed
+1,225,871input/138,665target tokens; total2,451,742/277,330, stage elapsed1631.647288s.
+No seal/original400 candidate score or H4–H8 execution. Do not automatically extend.
+Quick30/direct3, native export/fresh-process generation6, terminal resume/renewal
+rejection and production release build passed. Full release/S5/S6 remain unverified.
+Detailed results, design, failures, limits and exact evidence paths are in
+EXPERIMENT_STATUS.md; learning improved substantially but Goal1 remains incomplete.
+
 Baseline5879a3c6642211e78a0d19a91679babba5f8a6c1; tracked clean at entry. The current
 user authorizes H0 harness → H1 four boundary repairs → H2 frozen V1000 baseline →
 H3 copy → H4 selection → H5 paraphrase → H6 normal QA/final S4 → H7 memory S5 → H8 INT4 S6.
@@ -45,7 +106,7 @@ or already inspected; preserve them as development history. Freeze one fresh ind
 only after H6 dev passes, exclude actual train/dev scenes/identifiers, never tune on that final.
 H3 implementation uses the existing loss/Adam/native/RunControl with explicit constant LR,
 a precomputed4+4/no-repeat tape, and artifact/source/clock-bound TIME_BUDGET-only resume.
-Actual execution closed at128updates (cumulative21878),308,182input/34,911target tokens,
+The original execution closed at128updates (cumulative21878),308,182input/34,911target tokens,
 wall256.88s, maximum RSS6,649,823,232B. Dev full-answer0→0/256, entity0→16/256,
 event0→0/256, watch16→14/32. Invalid UTF-826→2 in total, but one case was newly invalid:
 the registered QUALITY_GUARD stops after that evaluation and before any further update.
@@ -55,7 +116,8 @@ closed run. The remaining numerical budget does not override a stop condition.
 H4–H8/S4–S6=NOT_RUN_PREREQUISITE, Goal1 ready/accepted=NO, independent review=PENDING.
 Quick and the6-generation model/restart path are verified only in their executed scope;
 full release and S5/S6-specific receipt verification remain pending those prerequisites.
-Current: H3 STOPPED_QUALITY_GUARD / NOT_RUNNING; original and failed artifacts preserved.
+Current: H3 CLOSED_BUDGET / QUALITY_FAIL / NOT_RUNNING at1024 under the explicit amendment
+above; original128/512 stops and all failed artifacts remain preserved.
 Historical plans/results below remain preserved and are not new execution evidence.
 
 ## S4 completion continuation V — authorized 2026-09-17

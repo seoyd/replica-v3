@@ -1,12 +1,14 @@
 # Native Goal 1 work graph
 
-현재 상태: **S4 INCOMPLETE / H3 STOPPED_QUALITY_GUARD / NOT_RUNNING**,
-GOAL1-NATIVE-TRPP-1.0 미완. 작은 하네스와 M01~M04 경계를 검증하고 V1000에서
-새 식별자 복사 H3를 실제128updates 학습했다. 전체 답변0/256, entity16/256,
-event0/256이며 새 UTF-8 오류1건으로 중단했다. ordinary watch16→14/32다.
-실패 native/Adam/raw 기록과 원본을 보존했고 재개 요청은 실제 CLI에서 거부했다.
+현재 상태: **S4 INCOMPLETE / H3 CLOSED_BUDGET·QUALITY_FAIL / NOT_RUNNING**,
+GOAL1-NATIVE-TRPP-1.0 미완. 사용자가 승인한 H3 총1024updates를 종료했다.
+dev 전체 답변512회0/256→768회123/256→1024회208/256으로 개선됐으나244/256에
+미달이다. entity233/256·event249/256도 각각254/256 미달이며 UTF-8 오류2가 남았다.
+ordinary watch는V1000의16/32에서18/32이며 원래336 전체 복구 증거는 아니다.
+원래128/512의 품질 중단, 모든 native/Adam/raw 기록과 원본을 보존했다.
+총1024 종료물의 plain resume과 추가 명시 갱신은 실제 CLI에서 거부했다.
 H4~H8은 선행 품질 미충족으로 NOT_RUN_PREREQUISITE, 자동 연장하지 않는다.
-하네스 quick/실제6회 생성·재시작 경로 확인은 모델 품질·S4·Goal1 수용과 별개다.
+하네스 quick30/최종 native6회 생성·재시작 확인은 모델 품질·S4·Goal1 수용과 별개다.
 구체적인 실행·예산·증거는 QUALITY_RECOVERY_PLAN.md와 EXPERIMENT_STATUS.md에 기록한다.
 
 이전 상태: **S4 INCOMPLETE / V1000 CLOSED / NOT_RUNNING**.
@@ -67,7 +69,7 @@ verification. Source inspection and execution are separate evidence levels.
 | S1 | VERIFIED | src/{store,app,retrieval,model}.rs; tests/{store,runtime,retrieval,cli}.rs; logs/goal1-s1-tests.txt; logs/goal1-s1-source-digest.txt | published 4edd62c; remote matched |
 | S2 | VERIFIED | src/{data,neural,train_main}.rs; tests/{native,training}.rs; logs/goal1-s2-final-tests.txt, goal1-s2-tokenizer.txt; goal1-s2-source-digest.txt | published 6ded741; remote matched |
 | S3 | VERIFIED | src/neural/{transformer,checkpoint}.rs, src/training.rs; logs/goal1-s3-exit-tests.txt, goal1-s3-small-boundaries.txt; goal1-s3-source-digest.txt | published 23cc5b0; remote matched |
-| S4 | INCOMPLETE; H3 QUALITY_GUARD | V1000 일반175/336 기준에서 새 복사128updates, dev0/256·새 UTF-8 오류1; 원본/실패 artifact 보존 | H3 seal 및 H4~H6 미진행; final200 NOT_RUN_PREREQUISITE; 학습 자동 연장 없음 |
+| S4 | INCOMPLETE; H3 CLOSED_BUDGET·QUALITY_FAIL | V1000 일반175/336 기준에서 새 복사1024updates, dev208/256·UTF-8 오류2; 원본/실패 artifact 보존 | H3 seal 및 H4~H6 미진행; final200 NOT_RUN_PREREQUISITE; 학습 자동 연장 없음 |
 | S5 | IMPLEMENTING | src/{model,main,app,retrieval}.rs native-only ask/generate/chat; examples/validate.rs actual CLI smoke; intermediate diagnostic4/14 correct,14/14 same-key no-model replays | prerequisite S4 pending; required five categories and fresh-process quality still FAIL |
 | S6 | BLOCKED | quantization not implemented | S4/S5 prerequisites unmet; T-N08 and complete T-I04/T-D02 pending |
 
