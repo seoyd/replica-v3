@@ -190,7 +190,7 @@ impl RunControl {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Compare a completed or stopped fixed-tape C/L run from its actual records.
+    /// Compare completed or stopped schedule/group runs from their actual records.
     ScheduleReport {
         #[arg(long)]
         fixture: PathBuf,
@@ -198,6 +198,8 @@ pub enum Command {
         control: PathBuf,
         #[arg(long)]
         treatment: PathBuf,
+        #[arg(long, default_value="schedule", value_parser=["schedule","group"])]
+        factor: String,
         #[arg(long)]
         output: PathBuf,
     },
@@ -239,7 +241,7 @@ pub enum Command {
     Arm {
         #[arg(long)]
         fixture: PathBuf,
-        #[arg(long, value_parser=["C","W","L"])]
+        #[arg(long, value_parser=["C","W","L","B"])]
         arm: String,
         #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u16).range(1..=250))]
         max_updates: u16,
@@ -496,8 +498,15 @@ pub fn run(command: Command) -> Result<()> {
             fixture,
             control,
             treatment,
+            factor,
             output,
-        } => schedule_report(&fixture, [&control, &treatment], &output, &mut budget),
+        } => schedule_report(
+            &fixture,
+            [&control, &treatment],
+            &factor,
+            &output,
+            &mut budget,
+        ),
         Command::Recount {
             fixture,
             parent_log,
@@ -2060,6 +2069,7 @@ fn read_json(path: &Path) -> Result<Value> {
 fn schedule_report(
     fixture: &Path,
     paths: [&Path; 2],
+    factor: &str,
     output: &Path,
     budget: &mut RunControl,
 ) -> Result<()> {
@@ -2079,20 +2089,35 @@ fn schedule_report(
     let base: TrainConfig = serde_json::from_value(policies[0]["config"].clone())?;
     let parent: TrainingState =
         serde_json::from_value(f.registry["GENERAL_QA_PARENT"]["manifest"]["training"].clone())?;
-    let treatment = schedule_config(&base, &parent.config, parent.step)?;
+    let group = match factor {
+        "group" => true,
+        "schedule" => false,
+        _ => return Err(Error::Invalid("comparison factor".into())),
+    };
+    let treatment = if group {
+        let initial: TrainingState =
+            serde_json::from_value(f.registry["U2_POLICY_START"]["manifest"]["training"].clone())?;
+        if base != schedule_config(&initial.config, &parent.config, parent.step)? {
+            return Err(Error::Corrupt(
+                "group comparison requires the recorded L policy".into(),
+            ));
+        }
+        TrainConfig {
+            sample_group_size: 1,
+            ..base.clone()
+        }
+    } else {
+        schedule_config(&base, &parent.config, parent.step)?
+    };
     let fixture_hash = file_hash(fixture)?;
-    if policies[0]["arm"] != "C"
-        || policies[1]["arm"] != "L"
+    if policies[0]["arm"] != if group { "L" } else { "C" }
+        || policies[1]["arm"] != if group { "B" } else { "L" }
         || json!(treatment) != policies[1]["config"]
     {
         return Err(Error::Corrupt("C/L schedule-only configuration".into()));
     }
     for key in [
         "parent",
-        "tape",
-        "tape_hash",
-        "source_id",
-        "binary_hash",
         "max_new_updates",
         "max_input_tokens",
         "max_target_tokens",
@@ -2103,10 +2128,28 @@ fn schedule_report(
             return Err(Error::Corrupt(format!("C/L changed {key}")));
         }
     }
+    if !group {
+        for key in ["tape", "tape_hash", "source_id", "binary_hash"] {
+            if policies[0][key] != policies[1][key] {
+                return Err(Error::Corrupt(format!("C/L changed {key}")));
+            }
+        }
+    }
+    let (manifest, episodes, _) = data::load(&f.corpus)?;
+    if manifest.train.sha256 != f.train_hash {
+        return Err(Error::Corrupt("comparison corpus binding".into()));
+    }
+    let pool: Vec<_> = (0..episodes.len()).collect();
     for ((policy, rows), result) in policies.iter().zip(&traces).zip(&results) {
         budget.check("schedule_trace")?;
         let config: TrainConfig = serde_json::from_value(policy["config"].clone())?;
         let tape: Vec<(Vec<usize>, u64)> = serde_json::from_value(policy["tape"].clone())?;
+        let mut rng = Rng::new(parent.sampler_state);
+        for (indices, state) in &tape {
+            if draw_indices(&pool, &config, &mut rng)? != *indices || rng.state != *state {
+                return Err(Error::Corrupt("comparison sampler replay".into()));
+            }
+        }
         if policy["fixture_hash"] != fixture_hash
             || policy["parent"] != f.registry["U2_POLICY_START"]
             || digest(&tape)? != policy["tape_hash"]
@@ -2119,7 +2162,17 @@ fn schedule_report(
         }
         for (i, (row, (indices, rng))) in rows.iter().zip(&tape).enumerate() {
             let step = parent.step + i + 1;
+            let ids = indices
+                .iter()
+                .map(|&index| {
+                    episodes
+                        .get(index)
+                        .map(|e| &e.id)
+                        .ok_or_else(|| Error::Corrupt("comparison sample index".into()))
+                })
+                .collect::<Result<Vec<_>>>()?;
             if row["indices"] != json!(indices)
+                || row["ids"] != json!(ids)
                 || row["sampler_state"] != json!(rng)
                 || row["new_update"] != i + 1
                 || row["cumulative_model_step"] != step
@@ -2143,6 +2196,9 @@ fn schedule_report(
             "optimizer_step",
             "schedule_step",
         ] {
+            if group && !["optimizer_step", "schedule_step"].contains(&key) {
+                continue;
+            }
             if a[key] != b[key] {
                 return Err(Error::Corrupt(format!("C/L actual trace {key}")));
             }
@@ -2175,6 +2231,8 @@ fn schedule_report(
         }
         let mut scores = Vec::new();
         let mut train_scores = Vec::new();
+        let mut panels: Vec<Vec<Value>> = Vec::new();
+        let mut train_ids = None;
         for path in paths {
             let evaluation = read_json(&path.join(format!("eval-{n:03}.json")))?;
             if evaluation["final_evaluation_complete"] != true {
@@ -2183,13 +2241,41 @@ fn schedule_report(
             let rows: Vec<Value> = serde_json::from_value(evaluation["watch_rows"].clone())?;
             verify_historical_rows(&f.watch, &rows)?;
             scores.push(details(&rows)?);
+            panels.push(rows);
             let train_rows: Vec<Value> =
                 serde_json::from_value(evaluation["train_exposure_panel"].clone())?;
+            let ids = train_rows
+                .iter()
+                .map(|r| r["id"].clone())
+                .collect::<Vec<_>>();
+            if train_ids.as_ref().is_some_and(|old| old != &ids) {
+                return Err(Error::Corrupt("comparison train panel changed".into()));
+            }
+            train_ids = Some(ids);
             train_scores.push(details(&train_rows)?);
+        }
+        if n == 0 {
+            for (a, b) in panels[0].iter().zip(&panels[1]) {
+                for key in [
+                    "id",
+                    "raw_tokens",
+                    "actual",
+                    "error",
+                    "prompt_digest",
+                    "provided",
+                    "excluded",
+                ] {
+                    if a[key] != b[key] {
+                        return Err(Error::Corrupt(format!(
+                            "comparison initial generation differs: {key}"
+                        )));
+                    }
+                }
+            }
         }
         let comparison = json!({"new_updates":n,"control":scores[0],"treatment":scores[1],"control_train16":train_scores[0],"treatment_train16":train_scores[1]});
         println!(
-            "step={n} C_watch={} L_watch={} C_train={} L_train={} C_components={} L_components={}",
+            "step={n} control_watch={} treatment_watch={} control_train={} treatment_train={} control_components={} treatment_components={}",
             scores[0]["exact_matches"],
             scores[1]["exact_matches"],
             train_scores[0]["exact_matches"],
@@ -2202,7 +2288,7 @@ fn schedule_report(
     budget.check("schedule_report_complete")?;
     save(
         output,
-        &json!({"status":"VERIFIED_COMPARISON","fixture_hash":fixture_hash,"source_id":policies[0]["source_id"],"binary_hash":policies[0]["binary_hash"],"same_tape_and_optimizer_clocks":true,"comparisons":comparisons,"runs":results,"new_small_optimizer_updates":traces.iter().map(Vec::len).sum::<usize>(),"final_heldout":false,"goal1_ready":false}),
+        &json!({"status":"VERIFIED_COMPARISON","factor":factor,"fixture_hash":fixture_hash,"source_ids":policies.iter().map(|p|&p["source_id"]).collect::<Vec<_>>(),"binary_hashes":policies.iter().map(|p|&p["binary_hash"]).collect::<Vec<_>>(),"same_tape":!group,"same_optimizer_clocks":true,"control_reused":group,"comparisons":comparisons,"runs":results,"recorded_small_optimizer_updates":traces.iter().map(Vec::len).sum::<usize>(),"new_small_optimizer_updates":0,"model_calls":0,"final_heldout":false,"goal1_ready":false}),
     )?;
     println!("schedule comparison saved: {}", output.display());
     Ok(())
@@ -2822,14 +2908,19 @@ fn arm_run(
         .training
         .clone()
         .ok_or_else(|| Error::Invalid("arm optimizer required".into()))?;
-    let c = if arm == "L" {
+    let starting_config = state.config.clone();
+    let c = if matches!(arm, "L" | "B") {
         let parent: TrainingState = serde_json::from_value(
             f.registry["GENERAL_QA_PARENT"]["manifest"]["training"].clone(),
         )?;
         if parent.step != state.step {
             return Err(Error::Corrupt("LR comparison parent clock".into()));
         }
-        schedule_config(&state.config, &parent.config, parent.step)?
+        let mut c = schedule_config(&state.config, &parent.config, parent.step)?;
+        if arm == "B" {
+            c.sample_group_size = 1;
+        }
+        c
     } else {
         arm_config(&state.config, arm)?
     };
@@ -2862,20 +2953,28 @@ fn arm_run(
         tape.push((ids, rng.state));
     }
     let mut seen = BTreeSet::new();
-    let selected: Vec<usize> = tape
-        .iter()
-        .flat_map(|(ids, _)| ids.iter())
-        .copied()
-        .filter(|i| seen.insert(*i))
-        .take(16)
-        .collect();
+    // Keep the declared train panel identical even when the sampling policy changes.
+    let mut panel_rng = Rng {
+        state: state.sampler_state,
+    };
+    let mut selected = Vec::new();
+    for _ in 0..max_updates {
+        for index in draw_indices(&pool, &starting_config, &mut panel_rng)? {
+            if seen.insert(index) && selected.len() < 16 {
+                selected.push(index);
+            }
+        }
+        if selected.len() == 16 {
+            break;
+        }
+    }
     let mut adam = Adam {
         moments: std::mem::take(&mut l.optimizer),
     };
     std::fs::create_dir(output)?;
     save(
         &output.join("policy.json"),
-        &json!({"arm":arm,"parent":f.registry["U2_POLICY_START"],"fixture_hash":file_hash(fixture)?,"source_id":source_id,"binary_hash":file_hash(&std::env::current_exe()?)?,"tape":tape,"tape_hash":digest(&tape)?,"config":c,"max_new_updates":max_updates,"max_input_tokens":max_input_tokens,"max_target_tokens":max_target_tokens,"max_seconds":900,"max_rss_bytes":17179869184u64,"clock_policy":if arm=="L"{"moments + cumulative optimizer clock retained; parent endpoint LR, no warmup, same cosine horizon"}else{"moments + cumulative optimizer clock retained; saved U2 schedule unchanged"}}),
+        &json!({"arm":arm,"parent":f.registry["U2_POLICY_START"],"fixture_hash":file_hash(fixture)?,"source_id":source_id,"binary_hash":file_hash(&std::env::current_exe()?)?,"tape":tape,"tape_hash":digest(&tape)?,"config":c,"max_new_updates":max_updates,"max_input_tokens":max_input_tokens,"max_target_tokens":max_target_tokens,"max_seconds":900,"max_rss_bytes":17179869184u64,"clock_policy":if matches!(arm,"L"|"B"){"moments + cumulative optimizer clock retained; parent endpoint LR, no warmup, same cosine horizon"}else{"moments + cumulative optimizer clock retained; saved U2 schedule unchanged"}}),
     )?;
     let mut log = std::fs::OpenOptions::new()
         .write(true)

@@ -4,7 +4,8 @@
 2026-09-17 사용자가 학습 제한 갱신과 S4·Goal1까지 계속 진행을 명시했다.
 RF-01~03 수정은 검증·공개됐고 원격52e8b88과 일치한다. 먼저 같은 parent/자료/tape의
 제한 C/L LR-policy 비교를 완료했다. C는200updates에서watch11/32로 품질 중단,
-L은250updates에서15/32로 종료했다. 신규 합계450updates이며 S4/S5/S6는 미통과다.
+L은250updates에서15/32로 종료했다. 이어서 L의 sampler만 변경한 B250도15/32로
+종료했다. 신규 합계700updates이며 S4/S5/S6는 미통과다. 실패 arm은 연장하지 않는다.
 구체적인 사전 예산과 중단 조건은 QUALITY_RECOVERY_PLAN.md, 실제 실행은
 EXPERIMENT_STATUS.md에 유지한다. 아래 제한 진단 종료 기록과 실패는 보존한다.
 

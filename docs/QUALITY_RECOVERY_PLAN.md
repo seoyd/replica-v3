@@ -44,6 +44,34 @@ L11/16. Actual policies/tapes/clocks/LR and row recount verified. New SMALL upda
 numeric/TINY optimizer0. Source/data/code checks passed; quality recovery NOT_ESTABLISHED.
 C/L is closed without an automatic extension, and all original evidence remains intact.
 
+Next registered experiment B: the original general-QA parent used sample_group_size1,
+whereas U2 changed to8 and each batch repeated related views of one scene. C/L alone
+did not recover parent quality; C's largest observed field loss was entity accuracy
+(21/26→14/26), and L still ended below baseline. Test the sampling policy as the next
+single intervention, using the same initial parent/Adam/corpus and L's LR policy, but
+sample_group_size1 instead of8. Keep batch8/accumulation1/first-target8 and every other
+TrainConfig field unchanged. The prior L control is reused, not trained again.
+
+B cap:250additional updates, input1M/target250k, work900s, RSS16GiB. Same watch32 and the
+same predeclared train16, evaluations0/10/25/50/100/150/200/250, same quality/nonfinite/
+resource/cancel stop criteria. No corpus/architecture/tokenizer/Adam/schema changes.
+Changing the sampler necessarily changes the actual tape and RNG advancement, so
+this is a sampling-policy comparison, not a matched-multiset batch-reordering claim.
+Replay each recorded sampler/tape against its own policy; verify matching initial raw
+watch outputs and identical LR/optimizer clocks at common steps. Source/binary IDs
+differ because B support was added after L; retain both identities and original logs.
+Train16 remains fixed from the original group8 selection, with actual B exposures counted.
+No further extension of a failing B arm; any subsequent action requires new observed
+evidence and its own recorded budget. No final heldout until validation quality is ready.
+
+B observed closure:250updates, watch15/32 and train16 10/16; final L was15/32 and11/16.
+Actual sampler/tape/clock/LR, same initial watch raw generation and fixed train16 verified.
+B used613827input/58199target tokens,395.09s wall, maximum RSS6660702208bytes. B is not
+extended and no quality recovery is claimed. Renewed SMALL total700updates so far.
+Direct6tests/fmt/check/clippy/release passed. The next learning plan will keep the original
+parent corpus rather than the narrowed U2 distribution. Ordinary QA bytes already existed
+in v8, so recent379updates alone do not establish insufficient lifetime training exposure.
+
 ## R3-S4-DIAGNOSTIC-REPAIR-1.0 — closed repair round
 
 2026-09-17, baseline main `3b671bf695ae86511273c4139d43d75bd976e490`.

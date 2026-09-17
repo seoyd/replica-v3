@@ -47,6 +47,25 @@ Rust `recovery schedule-report`가 fixture/초기상태/config 차이, 전체 �
 직접8tests와 fmt/check/clippy/release가 통과했고 원본17개 파일의 해시가 계속 일치했다.
 소스는 기존 quality_recovery.rs만 변경했고 checkpoint schema/기본 trainer 수식은 유지했다.
 결과는 C/L 진단 완료이며 S4 완료가 아니다. 다음 조치는 별도 사전 계획으로 기록한다.
+C/L 소스·기록 commit `79ac7866635960ced9a4619be98a2382438c498d`를 정상 push하고
+origin/main의 같은 full SHA를 직접 확인했다.
+
+B도250update 상한에서 종료했다. L 설정에서 sample_group_size8→1만 바꾸고 이전 L을
+control로 재사용했다. watch0/10/25/50/100/150/200/250은18/15/16/15/14/16/17/15 of32다.
+L/B 마지막 watch는 둘 다15/32이고 고정 train16은11/16 대10/16이었다. B를 연장하지 않는다.
+최종 B의 entity21/26/context21/26/value18/26/citation26/32, 새 생성 오류0이다.
+입력613827/target58199tokens, wall395.09s/max RSS6660702208bytes, 정상 상한 종료 및
+checkpoint 저장을 확인했다. 이번 재개 후 총 SMALL updates700, numeric/TINY optimizer0이다.
+
+B 실제 source digest `6661a8b2b7e3212b01d84cb979f530cb579d74b388a84aa891540bb5e6b518f6`,
+binary `ce7939cf9f34f00e5163515ab757c921f570848e7b5218dd10f308c6a8cbf2ef`다. 각 policy의
+RNG/tape/ID/step/LR를 실제 원문과 재검산하고, 시작 watch raw 출력 일치와 동일 train16을
+확인했다. 실제 draw와 노출은 서로 달라 동일 tape/동일 multiset 효과로 확대하지 않는다.
+직접6tests/fmt/check/clippy/release와 실제 group-comparison 검산이 통과했다.
+판정은 GROUP_POLICY_COMPARISON_VERIFIED / RECOVERY_NOT_ESTABLISHED이며 S4는 미완이다.
+다음 검토에서 원래 일반 QA corpus의 원문이 v8부터 유지된 사실을 확인했으므로,
+parent의 최근379update만으로 모든 QA의 학습 노출을 계산하거나 노출 부족을 원인으로
+단정하지 않는다. 새 후속 학습은 원래 corpus의 분포를 유지하는 별도 계획으로 고정한다.
 
 ## 이전: 세 진단 경계 수정 — 2026-09-17
 
