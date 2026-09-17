@@ -4,7 +4,141 @@
 2026-09-17. 이전 R3-CUSTOMIZE-AND-DIAGNOSE-1.0 실행 이력은 아래 보존한다.
 모든 성공 표시는 구현자 확인이며 INDEPENDENT_PENDING이다.
 
-## 현재: H0 하네스 / H1 네 경계 수정 — 2026-09-17
+## 현재: H3 실제 학습 종료 — QUALITY_GUARD / PARTIAL
+
+2026-09-17, EXECUTED_THIS_RUN. H0~H2 검증 후 H3 복사 학습을 실행했으나,
+128updates 평가에서 새 UTF-8 오류가 발생했다. 전체 답변은0/256으로 품질 미달이다.
+전체 오류 수가 줄었어도 새 오류를 허용하지 않는 사전 중단 조건을 그대로 적용했다.
+학습은 NOT_RUNNING이며 H4~H8을 시작하지 않는다. 도구 수정만 수행한 종료도,
+예산 소진도, S4 완료도 아니다. 중단 artifact와 원본 V1000은 모두 보존했다.
+
+| NODE | STATE / SCOPE | 관측 및 다음 조건 |
+|---|---|---|
+| H0/H1 | CODE_VERIFIED / 네 진단 경계 | M01~M04 수정 전 red4, 수정 후 직접/정상/CLI 회귀. 하네스는 아래 실행 범위만 검증 |
+| H2 | VERIFIED / 원자료·실모델 기준점 | 전체 자료 감사, 기존400 재집계, 실제 watch32+ABA, H3 split 동결 |
+| H3 | STOPPED_QUALITY_GUARD / 실제 SMALL128 | dev0/256, 새 UTF-8 오류1; skill 미통과, 후보·resume 부적격 |
+| H4/H5/H6 | NOT_RUN_PREREQUISITE | H3 dev와 봉인 전이 PASS 없음; 전체 QA 복구·독립 최종 시험 없음 |
+| H7/H8 | NOT_RUN_PREREQUISITE | S4/S5 선행 품질 미충족; 새 기억 수용·INT4 구현/측정 없음 |
+
+BASE_SHA=5879a3c6642211e78a0d19a91679babba5f8a6c1.
+H0/H1 publication=c04c695ecafab0ee65cba090fdb8c7f54dc5a348,
+H2 publication=5ce3863bfc697501cf8c6d5c86e08940eac30ac6; 각각 정상 push와 remote SHA 일치 확인.
+H3 실행 source는 H2 위의 로컬 구현이며 훈련 중 수정하지 않았다.
+실행 source manifest digest=6daf324fb943ce39bae98dd26f93d60d423a8973bbe2b6a8a3080c4b8d40cee1,
+binary SHA256=567a67900e75571306aac1425f1aaca1d87d2632fa09ed16a02f62a0073950a8.
+정확한 실행 binary는 artifacts/harness-goal1-20260917/h3-train-frozen에 보존했다.
+종료 후 checker의 raw/EOS 검증만 강화했다. 최종 코드/보고 publication SHA는 게시 후 별도 기록한다.
+직전 검토는 SOURCE_ONLY이고 독립적인 이번 변경 검토는 아직 수행하지 않았다.
+
+### 구현 및 직접 검증 범위
+
+기존 recovery CLI에 skill-run을 연결하고 기존 batch/loss/Adam/native/RunControl을 재사용했다.
+새 학습률 진입점은 상수 LR만 주입하며 clip/decay/moments/bias correction 수식은 유지한다.
+V1000 Adam·step21750·tokenizer·가중치와 first_target_weight8을 이어받았다.
+LR=min(실제 next LR0.00004751892132506239,0.00003)=0.00003을128회 모두 사용했다.
+새 corpus 계보와 constant 정책은 기존 native 상태 및 sidecar에 기록한다. 일반 trainer가
+이 상태를 cosine 정책으로 잘못 재개하지 못하게 거부한다. native 포맷은 바꾸지 않았다.
+512update epoch마다 anchor2048/focus2048을 각각 중복 없이 노출하는 사전 tape를 사용한다.
+각 batch는 서로 다른 base의 anchor4+focus4이며 index/ID/RNG/pool/token/실제 loss를 남긴다.
+같은 tape·source·binary·checkpoint·clock·남은 예산으로만 TIME_BUDGET plain resume이 가능하다.
+취소·품질 중단·무결성 오류는 resume/후보 수용을 허용하지 않는다.
+
+H3 직접 회귀5개 통과: constant Adam의 독립 scalar 기준, native 저장/재개 및 precancel,
+1024-entry tape의 혼합·중복·계보·재개 위치, 전체 답변/EOS/entity/citation gate,
+일반 trainer의 constant 정책 오해석 거부. 기존 Adam/teacher-forcing 회귀1개도 통과했다.
+실제 optimizer 합계는 TINY6/scalar6이다(실패했던 첫 시험 실행 포함). fixture의
+clock18/19 또는51/52를 그만큼 수행한 학습으로 세지 않는다. H2 독립 자료 회귀1개는
+optimizer0이며 원본 bytes·split·정답 유일성을 검사했다.
+학습 전 quick26/fmt/check/clippy/release 통과. 종료 후 native inference export→fresh load→
+정상2/재시작2/전이2의 실제 생성6회 및 teacher6회를 실행했다. raw token/EOS/nonempty/
+오류 검사를 통과하고 정상/재시작 출력이 일치했다. 틀린 정답을 저장·로딩 성공과 혼동하지
+않는다. 강화한 checker 회귀는 오류·빈 답·EOS·EM receipt 불일치를 거부한다.
+최종 quick27/fmt/check/clippy와 test-support 없는 제품 release 빌드도 통과했다.
+quick-final/summary.json의 source digest는
+aab8636c95f588d917dd357913a3be768020049d6482aa727e6c47953e1a0ffb이며 model 하네스와 같다.
+실패0/ignored0, 추가 optimizer0; release-final.log에 빌드 기록을 남겼다.
+
+HARNESS_VERDICT=QUICK_VERIFIED / MODEL_PATH_VERIFIED(6 generated rows), QUALITY_NOT_GRANTED.
+release 전체 테스트 및 S4/S5/S6 수용 검사는 NOT_RUN_PREREQUISITE다. release 진입점은
+미완료/누락 evidence를 거부하며, S5/S6 전용 receipt 검증기는 해당 선행 단계 통과 후 구현할
+부분으로 남아 있다. 현재 하네스 전체 release 수용까지 구현 완료됐다고 주장하지 않는다.
+구조 검색은 휴리스틱이며 외부 의존·gold 격리에 대한 보안 증명이 아니다.
+
+### H3 실제 결과와 예산
+
+| 지표 | 시작0updates | 종료128updates |
+|---|---:|---:|
+| dev 전체 답변 EM+EOS | 0/256 | 0/256 |
+| 전체 entity / event ID | 0/256 / 0/256 | 16/256 / 0/256 |
+| ID 자리별 일치 | 37/1152 | 305/1152 |
+| 모든 view가 맞은 base | 0/64 | 0/64 |
+| invalid UTF-8 / control / empty | 26 / 0 / 0 | 2 / 0 / 0 |
+| length 종료를 포함한 생성 오류 사례 | 28/256 | 19/256 |
+| ordinary watch | 16/32 | 14/32 |
+| teacher-forced dev micro CE / token accuracy | 7.199205 / 0.305136 | 1.102823 / 0.629560 |
+
+1~8자리 각32개, 방향값128/짧은값128, 대상명 질문192/원문만 묻는 질문64의 전체 EM은
+모두0이다. context/value, 첫 불일치, 원문/질문/인용/raw token은 각 평가 rows에 보존했다.
+digit·entity·teacher 변화는 관측됐지만 전체 답변 개선이나 S4 복구로 판정하지 않는다.
+새 UTF-8 오류 ID는 skill-H3/dev/917260311/49/2다. watch 감소2는 연속 감소3 중단 조건에
+해당하지 않는다. 실제 STOP_REASON은 새 UTF-8 오류에 의한 QUALITY_GUARD다.
+봉인256은 구조 감사만 했으며 모델 생성·점수 계산·후보 선택에 사용하지 않았다.
+256/512update 평가, second epoch, 원본400 후보 평가, seal은 실행하지 않았다.
+
+ACTUAL_UPDATES: SMALL128 / TINY6 / scalar6. SMALL cumulative21750→21878.
+DATA_EXPOSURES: anchor512+focus512=1024 views, 각 pool에서 epoch 내 중복0;
+dev256+watch32를0/128에서 생성해576generation/576teacher calls.
+INPUT/TARGET_TOKENS=308,182/34,911(실제 SMALL 학습 소비).
+ELAPSED: 작업255.289821s + cleanup0.857474s; stage256.147300s, time -l wall256.88s.
+MEMORY: maximum RSS6,649,823,232B, 별도 peak memory footprint7,245,420,952B.
+CPU/Accelerate/F32, Apple M4, compute threads1. 남은 예산은 품질 중단 후 소비하지 않았다.
+종료 후 resume 요청은 실제 CLI에서 exit1로 거부, 추가 optimizer/model calls0.
+
+### 로컬 재현 근거와 별도 판정
+
+아래 경로는 artifacts/harness-goal1-20260917/ 기준이다. 큰 파일은 게시하지 않는다.
+
+- COMMAND: h3-train-frozen recovery skill-run --baseline h2-baseline --corpus h3-corpus
+  --output h3-run --harness quick-h3-frozen/summary.json (각 경로에 위 prefix 적용).
+- h3-run.log; h3-run/policy.json SHA f6621c38afa34edd4be6fbcc2762711174a7656e06b1668b9873f977120609d4.
+- h3-run/segment-00-0000/: trace.jsonl128행, eval-0000.json, eval-0128.json, result.json,
+  step-0000/step-0128/final. final native resume115,285,248B,
+  SHA83b250bd02190d6bcc065f1f2558947784994cc2a0631ea98c82bc0a2c27f077.
+- h3-stopped-inference.r3m: Adam 없는 native38,432,768B,
+  SHA138311f492b114cfb948e1718c58e6f5a5643a353880a23a42201b77bf7aab2b.
+  resume/inference model content는 동일한 e3e5fb69a6c389b29dacdd4599245c9d181b606e1ce4cce8305147818cb51267.
+- h3-final-inspect.txt, h3-export.log, h3-inference-inspect.txt, h3-resume-rejected.log,
+  model-harness/summary.json 및 normal/restart/transfer.jsonl, h3-corpus/prepared.json.
+
+H2_BASELINE/FULL_QA_DEV: 원본400 기존 로그 재집계175/336, auxiliary64/64,
+각 category25/68·24/68·10/68·54/68·62/64. H3 종료 artifact에 이 점수를 붙이지 않는다.
+S4_FINAL=NOT_RUN_PREREQUISITE; 과거 final은 노출 이력 때문에 재사용하지 않으며 아래
+사전 동결 절차를 유지한다. S5_OFFICIAL=NOT_RUN_PREREQUISITE.
+S6_IMPLEMENTATION=NOT_RUN_PREREQUISITE, INT4_ADOPTED=NO,
+TARGET_M4=S6_NOT_RUN(H3 CPU 학습 실측만 있음, Metal/저비트 성능 주장은 없음).
+ROOT_CAUSE_CLAIM=CONFIRMED_AT_BOUNDARY(M01~M04만); 모델 품질 실패의 근본 원인 UNRESOLVED.
+GOAL1_IMPLEMENTER_READY=NO, INDEPENDENT_REVIEW=PENDING, GOAL1_ACCEPTED=NO.
+
+FAILED_ATTEMPTS: H1 red4와 초기 checker/fixture/컴파일 실패, H3 tape의 base 중복 음성시험
+실패 및 metric 합성 fixture 형식 실패를 보존했다. fixture 실패는 모델 결함 재현이 아니다.
+실제 H3 품질 중단도 실패 기록이며 성공 실행으로 덮어쓰지 않는다.
+PRESERVED_ARTIFACTS: 기존487 untracked, 원본 corpus/validation/checkpoint/Adam/raw/final,
+사용자 로컬 지시문. original V1000 resume/export 보존 해시를 종료 후 다시 확인했다.
+기존 untracked487개 전체 경로 목록이 시작 목록과 일치하고 원본/변환 train·validation
+네 파일의 실제 SHA도 H2 동결 값과 일치함을 최종 확인했다.
+LIMITATIONS: 제한된 합성 복사 문법이며 범용 언어 능력을 대표하지 않는다. 방향/짧은값은
+ID 길이 층과 결합돼 있어 독립적인 두 요인 효과를 주장하지 않는다. 결과를 보고 자료를
+다시 만들거나 같은 seal로 반복 평가하지 않았다.
+NEXT_DEPENDENCY: 새 오류 원인과 복사 실패에 대한 별도 조사/실행 계약이 필요하다.
+현재 계약의 중단 상태를 유지하며 자동 학습/자료 확장/다음 단계 실행은 없다.
+
+CHANGED_FILES(전체 H0~H3): Cargo.toml, rust-toolchain.toml, AGENTS.md,
+src/check_main.rs, src/data.rs, src/contrast.rs, src/training.rs, src/quality_recovery.rs,
+tests/training.rs, docs/QUALITY_RECOVERY_PLAN.md, docs/EXPERIMENT_STATUS.md,
+docs/RUNBOOK.md, docs/PLAN.md. NEW_FILES=AGENTS.md, src/check_main.rs 두 개.
+Cargo.lock/모델 core/SQLite/archive/저장 포맷/tokenizer 변경 없음.
+
+## 이전 단계: H0 하네스 / H1 네 경계 수정 / H2 동결 — 2026-09-17
 
 H0/H1 publication: c04c695ecafab0ee65cba090fdb8c7f54dc5a348,
 정상 push 뒤 실제 origin/main SHA 일치 확인.
@@ -15,7 +149,7 @@ f93483799d3cc2bfa80d55708ed758eb9f13dae6536cf1c42676dc346eabb89d 확인.
 resume SHA bce08fe79cccdfa44ec8fbc0abc7c27f6248611cabbac4b1a92c20bfe8221cc0,
 inference SHA f498afc20e3b3af192c55c8a69bede346735963a73c849a11a14c5131cf8c094.
 step21750, 원래 Adam/RNG 보존. 실제 next LR0.00004751892132506239;
-H3 고정 설계 LR0.00003. 아직 새 optimizer update0.
+H3 고정 설계 LR0.00003. H2 종료 시 새 optimizer update0.
 원본/변환 train 각20,000(ordinary16,668/aux3,332), validation400(336/64)을 전체 감사:
 contradicted/unsupported/ambiguous0; 보조 과제는 감사 OUT_OF_SCOPE로 별도 표시.
 기존 로그400 재집계 ordinary175/336, aux64/64; 범주25/68,24/68,10/68,54/68,62/64.
@@ -77,14 +211,14 @@ M04의50clock은 명시적인 테스트 상태 fixture이며50학습을 수행�
 
 로컬 근거: artifacts/harness-goal1-20260917/ (baseline/preserved hashes, red/green,
 quick 명령별 로그). quick-h1-final은 source digest를 기록하며 실패/0-test를 숨기지 않는다.
-HARNESS_VERDICT=QUICK_VERIFIED; model/release 품질 증거는 아직 NOT_RUN.
+H1/H2 당시 HARNESS_VERDICT=QUICK_VERIFIED; model/release 품질 증거 NOT_RUN.
 H2=VERIFIED: V1000 resume/export content, 원본/변환 corpus 감사와400재집계/watch32 및 split 동결.
-H3~H8=NOT_RUN_PREREQUISITE. S4/S5/S6=NO, GOAL1_IMPLEMENTER_READY=NO,
+H2 종료 시 H3~H8=NOT_RUN_PREREQUISITE. S4/S5/S6=NO, GOAL1_IMPLEMENTER_READY=NO,
 ROOT_CAUSE_CLAIM=CONFIRMED_AT_BOUNDARY_ONLY(과거 모델 붕괴 원인은 UNRESOLVED),
 INDEPENDENT_REVIEW=PENDING, GOAL1_ACCEPTED=NO.
 
 NEW_FILES: AGENTS.md, src/check_main.rs. Native/core/storage/tokenizer 변경 없음.
-단계 publication 및 H2 결과는 검증 후 이 절에 추가한다.
+후속 실제 실행과 publication은 상단의 현재 상태에 기록한다.
 
 ## 이전: S4 V1000 종료, 품질 미달 — 2026-09-17
 

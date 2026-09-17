@@ -54,8 +54,41 @@ impl Adam {
         grads: &BTreeMap<String, Tensor>,
         config: &TrainConfig,
         step: usize,
+        observe: impl FnMut(&str, &Tensor, &Tensor, &Tensor) -> Result<()>,
+    ) -> Result<(f64, f64)> {
+        self.step_with_rate(
+            vars,
+            grads,
+            config,
+            step,
+            config.learning_rate(step),
+            observe,
+        )
+    }
+    pub fn step_constant(
+        &mut self,
+        vars: &BTreeMap<String, Var>,
+        grads: &BTreeMap<String, Tensor>,
+        config: &TrainConfig,
+        step: usize,
+        rate: f64,
+    ) -> Result<(f64, f64)> {
+        self.step_with_rate(vars, grads, config, step, rate, |_, _, _, _| Ok(()))
+    }
+    // Only the rate policy differs; moments, clipping, decay and cumulative Adam clock are shared.
+    #[allow(clippy::too_many_arguments)]
+    fn step_with_rate(
+        &mut self,
+        vars: &BTreeMap<String, Var>,
+        grads: &BTreeMap<String, Tensor>,
+        config: &TrainConfig,
+        step: usize,
+        lr: f64,
         mut observe: impl FnMut(&str, &Tensor, &Tensor, &Tensor) -> Result<()>,
     ) -> Result<(f64, f64)> {
+        if !lr.is_finite() || lr <= 0. || lr > 0.1 || step == 0 || step > i32::MAX as usize {
+            return Err(Error::Invalid("optimizer rate/clock".into()));
+        }
         let mut norm2 = 0f64;
         for name in vars.keys() {
             let grad = grads
@@ -69,7 +102,6 @@ impl Adam {
         }
         let norm = norm2.sqrt();
         let clip = (config.clip / (norm + 1e-12)).min(1.);
-        let lr = config.learning_rate(step);
         let mut updates = Vec::new();
         let mut delta2 = 0f64;
         for (name, var) in vars {
@@ -708,6 +740,18 @@ fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<
         ));
     }
     let started = Instant::now();
+    if run.resume
+        && let Some(root) = run.checkpoint.parent().and_then(Path::parent)
+    {
+        let policy = root.join("policy.json");
+        if policy.is_file() {
+            let policy: serde_json::Value =
+                serde_json::from_slice(&neural::read_bounded(&policy, 16 * 1024 * 1024)?)?;
+            if policy["stage"] == "H3" && policy.get("constant_lr").is_some() {
+                return Err(Error::Invalid("constant-rate skill checkpoint requires recovery skill-run --resume and its frozen policy".into()));
+            }
+        }
+    }
     let mut loaded = checkpoint::load(run.checkpoint, Device::Cpu, run.resume)?;
     control.check("training_loaded")?;
     let mut config = if run.resume {
@@ -1720,5 +1764,37 @@ mod tests {
         grads.insert("x".into(), Tensor::new(&[f32::NAN, 1.], &device).unwrap());
         assert!(clipped.step(&vars, &grads, &config, 2).is_err());
         assert_eq!(vars["x"].to_vec1::<f32>().unwrap(), before);
+    }
+    #[test]
+    fn harness_h3_constant_rate_independent_scalar_reference() {
+        let vars = BTreeMap::from([("x".into(), Var::new(&[1f32], &Device::Cpu).unwrap())]);
+        let mut adam = Adam::new(&vars).unwrap();
+        let c = TrainConfig {
+            lr: 0.001,
+            warmup: 0,
+            max_steps: 100,
+            clip: 100.,
+            ..Default::default()
+        };
+        let (mut weight, mut m, mut v) = (1f64, 0f64, 0f64);
+        let rate = 3e-5;
+        for (clock, g) in [(51usize, 0.5f64), (52, -0.25)] {
+            m = c.beta1 * m + (1. - c.beta1) * g;
+            v = c.beta2 * v + (1. - c.beta2) * g * g;
+            weight = weight * (1. - rate * c.weight_decay)
+                - rate * (m / (1. - c.beta1.powi(clock as i32)))
+                    / ((v / (1. - c.beta2.powi(clock as i32))).sqrt() + c.eps);
+            let grads =
+                BTreeMap::from([("x".into(), Tensor::new(&[g as f32], &Device::Cpu).unwrap())]);
+            adam.step_constant(&vars, &grads, &c, clock, rate).unwrap();
+            assert!((f64::from(vars["x"].to_vec1::<f32>().unwrap()[0]) - weight).abs() < 1e-6);
+        }
+        let before = vars["x"].to_vec1::<f32>().unwrap();
+        let grads = BTreeMap::from([("x".into(), Tensor::new(&[1f32], &Device::Cpu).unwrap())]);
+        for bad in [f64::NAN, 0., -1.] {
+            assert!(adam.step_constant(&vars, &grads, &c, 53, bad).is_err());
+        }
+        assert_eq!(vars["x"].to_vec1::<f32>().unwrap(), before);
+        println!("H3_SCALAR_REFERENCE actual_scalar_updates=2 SMALL/TINY_updates=0");
     }
 }

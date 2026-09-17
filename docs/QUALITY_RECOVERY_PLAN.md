@@ -43,7 +43,19 @@ watch32=16/32 with zero raw/output differences (33calls including ABA). H3 train
 materialized and independently checked before learning. Old final artifacts are exposure-unknown
 or already inspected; preserve them as development history. Freeze one fresh independent200
 only after H6 dev passes, exclude actual train/dev scenes/identifiers, never tune on that final.
-Current: H3 constant-rate continuation/sampler/resume implementation; learning NOT_RUN.
+H3 implementation uses the existing loss/Adam/native/RunControl with explicit constant LR,
+a precomputed4+4/no-repeat tape, and artifact/source/clock-bound TIME_BUDGET-only resume.
+Actual execution closed at128updates (cumulative21878),308,182input/34,911target tokens,
+wall256.88s, maximum RSS6,649,823,232B. Dev full-answer0→0/256, entity0→16/256,
+event0→0/256, watch16→14/32. Invalid UTF-826→2 in total, but one case was newly invalid:
+the registered QUALITY_GUARD stops after that evaluation and before any further update.
+Candidate/resume are ineligible; a real resume request was rejected. No retry, second epoch,
+seal score, candidate original400 evaluation or downstream learning is allowed under this
+closed run. The remaining numerical budget does not override a stop condition.
+H4–H8/S4–S6=NOT_RUN_PREREQUISITE, Goal1 ready/accepted=NO, independent review=PENDING.
+Quick and the6-generation model/restart path are verified only in their executed scope;
+full release and S5/S6-specific receipt verification remain pending those prerequisites.
+Current: H3 STOPPED_QUALITY_GUARD / NOT_RUNNING; original and failed artifacts preserved.
 Historical plans/results below remain preserved and are not new execution evidence.
 
 ## S4 completion continuation V — authorized 2026-09-17

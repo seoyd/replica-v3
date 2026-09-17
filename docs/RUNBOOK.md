@@ -37,6 +37,28 @@ diagnostic input fails before model load/output creation. C/W close requires bot
 original terminal receipts, complete watch/train panels and native artifact/clock
 bindings. Missing legacy fields are unverified; fresh replay cannot cure a prior stop.
 
+## Bounded copy curriculum continuation
+
+`replica-train recovery baseline`, `skill-prepare` and `skill-run` reuse the native trainer,
+corpus and control paths. Inspect their `--help` for explicit paths; use only audited frozen
+inputs and a passing quick summary for the exact current source. The run freezes checkpoint,
+corpus, tape, binary, source, LR policy, token/update/time limits and sampler lineage before
+the first update. Source and binary must remain unchanged while it runs. No ordinary QA
+support oracle or field-only output is used. Exact commands/results live in the status document.
+
+The native resume contains inherited Adam and cumulative clock. Its adjacent policy retains
+the stage's constant LR; the ordinary `train --resume` path refuses to reinterpret it as a
+cosine schedule. Only `skill-run --resume` accepts a matching clean TIME_BUDGET recovery,
+using the same root output/tape and remaining cumulative budget. Cancellation, quality guard,
+incomplete checkpoint or identity mismatch cannot resume. Do not copy a stopped artifact to
+a new output to reset its allowance. Stopped files remain available for explicit inspection
+and native inference export; successful loading does not make them quality candidates.
+
+The current H3 run is CLOSED_QUALITY_GUARD at128updates, with candidate/resume eligibility
+false. Its resume rejection was tested through the actual CLI. No further learning or H4–H8
+execution is scheduled. S5/S6 receipt verifiers and release acceptance remain pending their
+quality prerequisites; the release checker fails closed in the meantime.
+
 ## Build and targeted verification
 
 ```sh

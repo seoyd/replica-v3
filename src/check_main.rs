@@ -18,6 +18,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const FEATURES: &str = "accelerate,test-support";
 
 #[derive(Parser)]
+#[command(name = "replica-check")]
 struct Cli {
     #[command(subcommand)]
     command: Checks,
@@ -300,6 +301,30 @@ fn evaluation_rows(path: &Path) -> Result<Vec<Value>> {
     if rows.is_empty() {
         return Err("empty evaluation rows".into());
     }
+    for row in &rows {
+        let raw = row["raw_tokens"]
+            .as_array()
+            .ok_or("missing raw generation tokens")?;
+        let eos = row["eos_index"]
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok());
+        if !row["error"].is_null()
+            || row["generation_completed"] != true
+            || row["actual"].as_str().is_none_or(|s| s.trim().is_empty())
+            || row["finish_reason"] != "stop"
+            || eos.is_none_or(|i| {
+                i + 1 != raw.len() || raw.get(i) != Some(&json!(replica_v3::neural::EOS))
+            })
+        {
+            return Err(
+                "generation failed strict UTF-8/control/nonempty/EOS checks; raw rows retained"
+                    .into(),
+            );
+        }
+        if row["exact_match"] != (row["actual"] == row["expected"]) {
+            return Err("exact-match receipt mismatch".into());
+        }
+    }
     Ok(rows)
 }
 // Receipts must contain independently inspectable per-case observations, not a PASS flag.
@@ -487,6 +512,10 @@ fn main() {
     let cli = Cli::parse();
     let result = (|| -> Result<()> {
         let (source, files) = source_identity()?;
+        let source_files: std::collections::BTreeMap<_, _> = files
+            .iter()
+            .map(|p| Ok((p.display().to_string(), file_hash(p)?)))
+            .collect::<Result<_>>()?;
         let output = cli
             .output
             .as_ref()
@@ -502,7 +531,7 @@ fn main() {
         };
         let outcome = execute(&cli, &mut runner, &files);
         let unchanged = source_identity()?.0 == source;
-        let summary = json!({"source_digest":source,"source_unchanged":unchanged,"commands":runner.records,
+        let summary = json!({"source_digest":source,"source_files":source_files,"source_unchanged":unchanged,"commands":runner.records,
             "result":if outcome.is_ok() && unchanged {"CHECKED_SCOPE_PASS"} else {"FAIL_OR_BLOCKED"},
             "error":outcome.as_ref().err().map(ToString::to_string),"actual_small_updates":0,
             "quality":"NOT_GRANTED_BY_HARNESS","goal1_accepted":false,"not_run":"dependent commands after first failure; S4/S5/S6 unless explicit release evidence passes"});
@@ -619,5 +648,31 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn harness_model_rows_require_actual_eos_and_keep_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rows.jsonl");
+        let header = json!({"header":true,"oracle_question_ablation":false,"oracle_field_task_label":false,"oracle_record_selection":false});
+        let row = json!({"id":"independent/0","actual":"a","expected":"a","exact_match":true,"raw_tokens":[8,2],"eos_index":1,"finish_reason":"stop","generation_completed":true,"error":null});
+        let terminal =
+            json!({"terminal":true,"final_evaluation_complete":true,"comparison_eligible":true});
+        let write =
+            |row: &Value| fs::write(&path, format!("{header}\n{row}\n{terminal}\n")).unwrap();
+        write(&row);
+        assert_eq!(evaluation_rows(&path).unwrap().len(), 1);
+        for (key, value) in [
+            ("error", json!("invalid UTF-8")),
+            ("finish_reason", json!("length")),
+            ("eos_index", Value::Null),
+            ("actual", json!("")),
+            ("raw_tokens", json!([8, 3])),
+            ("generation_completed", json!(false)),
+        ] {
+            let mut bad = row.clone();
+            bad[key] = value;
+            write(&bad);
+            assert!(evaluation_rows(&path).is_err(), "{key}");
+        }
     }
 }

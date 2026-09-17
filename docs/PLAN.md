@@ -1,6 +1,15 @@
 # Native Goal 1 work graph
 
-현재 상태: **S4 INCOMPLETE / V1000 CLOSED / NOT_RUNNING**, GOAL1-NATIVE-TRPP-1.0 미완.
+현재 상태: **S4 INCOMPLETE / H3 STOPPED_QUALITY_GUARD / NOT_RUNNING**,
+GOAL1-NATIVE-TRPP-1.0 미완. 작은 하네스와 M01~M04 경계를 검증하고 V1000에서
+새 식별자 복사 H3를 실제128updates 학습했다. 전체 답변0/256, entity16/256,
+event0/256이며 새 UTF-8 오류1건으로 중단했다. ordinary watch16→14/32다.
+실패 native/Adam/raw 기록과 원본을 보존했고 재개 요청은 실제 CLI에서 거부했다.
+H4~H8은 선행 품질 미충족으로 NOT_RUN_PREREQUISITE, 자동 연장하지 않는다.
+하네스 quick/실제6회 생성·재시작 경로 확인은 모델 품질·S4·Goal1 수용과 별개다.
+구체적인 실행·예산·증거는 QUALITY_RECOVERY_PLAN.md와 EXPERIMENT_STATUS.md에 기록한다.
+
+이전 상태: **S4 INCOMPLETE / V1000 CLOSED / NOT_RUNNING**.
 기존 C/L/B/P/T는 CLOSED이며, 같은 P1000 출발점의 질문/값 대조 V도1000updates에서
 닫았다. 같은 원본 validation의 일반 QA175/336으로 이전169/336보다6개 높지만 품질 기준은
 미달이다. V1000 평가 전에 정한 조기 종료에 따라1500/2000구간은 실행하지 않았다.
@@ -58,7 +67,7 @@ verification. Source inspection and execution are separate evidence levels.
 | S1 | VERIFIED | src/{store,app,retrieval,model}.rs; tests/{store,runtime,retrieval,cli}.rs; logs/goal1-s1-tests.txt; logs/goal1-s1-source-digest.txt | published 4edd62c; remote matched |
 | S2 | VERIFIED | src/{data,neural,train_main}.rs; tests/{native,training}.rs; logs/goal1-s2-final-tests.txt, goal1-s2-tokenizer.txt; goal1-s2-source-digest.txt | published 6ded741; remote matched |
 | S3 | VERIFIED | src/neural/{transformer,checkpoint}.rs, src/training.rs; logs/goal1-s3-exit-tests.txt, goal1-s3-small-boundaries.txt; goal1-s3-source-digest.txt | published 23cc5b0; remote matched |
-| S4 | INCOMPLETE; V1000 CLOSED | 같은 P1000/학습 정책에서 자료 수를 유지한 질문/값 대조 V1000 검증. 일반 QA175/336, 이전 T500169/336; 새 파일0, 실제1000updates | final200 NOT_RUN_NOT_ELIGIBLE; 품질95%/각90% 미달; 학습 자동 연장 없음 |
+| S4 | INCOMPLETE; H3 QUALITY_GUARD | V1000 일반175/336 기준에서 새 복사128updates, dev0/256·새 UTF-8 오류1; 원본/실패 artifact 보존 | H3 seal 및 H4~H6 미진행; final200 NOT_RUN_PREREQUISITE; 학습 자동 연장 없음 |
 | S5 | IMPLEMENTING | src/{model,main,app,retrieval}.rs native-only ask/generate/chat; examples/validate.rs actual CLI smoke; intermediate diagnostic4/14 correct,14/14 same-key no-model replays | prerequisite S4 pending; required five categories and fresh-process quality still FAIL |
 | S6 | BLOCKED | quantization not implemented | S4/S5 prerequisites unmet; T-N08 and complete T-I04/T-D02 pending |
 

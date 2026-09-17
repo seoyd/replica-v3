@@ -209,6 +209,20 @@ impl RunControl {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Bounded H3 only; constant LR, inherited Adam/clock and frozen without-replacement tape.
+    SkillRun {
+        #[arg(long)]
+        baseline: PathBuf,
+        #[arg(long)]
+        corpus: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        harness: PathBuf,
+        /// Explicit plain resume of a clean time-limited segment; never resumes cancellation.
+        #[arg(long)]
+        resume: Option<PathBuf>,
+    },
     /// Freeze H3 train/dev/seal only after a verified parent/data baseline; no learning.
     SkillPrepare {
         #[arg(long)]
@@ -536,9 +550,26 @@ fn registry(path: &Path) -> Result<Value> {
     )
 }
 pub fn run(command: Command) -> Result<()> {
-    let mut budget = RunControl::command(matches!(&command, Command::Arm { .. }))?;
+    let mut budget = RunControl::command(matches!(
+        &command,
+        Command::Arm { .. } | Command::SkillRun { .. }
+    ))?;
     budget.check("command_started")?;
     let outcome = match command {
+        Command::SkillRun {
+            baseline,
+            corpus,
+            output,
+            harness,
+            resume,
+        } => skill_run(
+            &baseline,
+            &corpus,
+            &output,
+            &harness,
+            resume.as_deref(),
+            &mut budget,
+        ),
         Command::SkillPrepare {
             baseline,
             output,
@@ -2346,6 +2377,650 @@ fn verify_copy_curriculum(
         "input_target_training_tokens_planned_one_epoch":[framed.iter().map(|s|s.tokens.len()-1).sum::<usize>(),framed.iter().map(|s|s.tokens.len()-s.response_start).sum::<usize>()],"model_calls":0,"eos_is_supervised":true}),
     )
 }
+fn skill_tape(episodes: &[Episode], sampler: u64) -> Result<Vec<(Vec<usize>, u64)>> {
+    if episodes.len() != 4096 {
+        return Err(Error::Invalid("skill pool size".into()));
+    }
+    if episodes[..2048]
+        .iter()
+        .map(scene)
+        .collect::<BTreeSet<_>>()
+        .len()
+        != 2048
+        || episodes[2048..]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|g| g.iter().any(|e| scene(e) != scene(&g[0])))
+        || episodes[2048..]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|g| scene(&g[0]))
+            .collect::<BTreeSet<_>>()
+            .len()
+            != 512
+    {
+        return Err(Error::Invalid("skill pool base lineage".into()));
+    }
+    let mut rng = Rng { state: sampler };
+    let shuffle = |v: &mut [usize], rng: &mut Rng| {
+        for i in (1..v.len()).rev() {
+            v.swap(i, (rng.next_u64() % (i + 1) as u64) as usize);
+        }
+    };
+    let mut tape = Vec::new();
+    for _epoch in 0..2 {
+        let mut anchors: Vec<_> = (0..2048).collect();
+        shuffle(&mut anchors, &mut rng);
+        let mut variants = vec![[0, 1, 2, 3]; 512];
+        for v in &mut variants {
+            shuffle(v, &mut rng);
+        }
+        for view in [0, 1, 2, 3] {
+            let mut bases: Vec<_> = (0..512).collect();
+            shuffle(&mut bases, &mut rng);
+            for (batch, group) in bases.as_chunks::<4>().0.iter().enumerate() {
+                let at = view * 512 + batch * 4;
+                let mut indices = anchors[at..at + 4].to_vec();
+                indices.extend(
+                    group
+                        .iter()
+                        .map(|base| 2048 + base * 4 + variants[*base][view]),
+                );
+                if indices
+                    .iter()
+                    .map(|i| scene(&episodes[*i]))
+                    .collect::<BTreeSet<_>>()
+                    .len()
+                    != 8
+                {
+                    return Err(Error::Invalid("skill batch repeats a base".into()));
+                }
+                tape.push((indices, rng.state));
+            }
+        }
+    }
+    for epoch in tape.as_chunks::<512>().0 {
+        let ids: BTreeSet<_> = epoch
+            .iter()
+            .flat_map(|(ids, _)| ids.iter().copied())
+            .collect();
+        if ids.len() != 4096 || ids.first() != Some(&0) || ids.last() != Some(&4095) {
+            return Err(Error::Corrupt("skill tape exposure".into()));
+        }
+    }
+    Ok(tape)
+}
+fn skill_score(rows: &[Value]) -> Result<Value> {
+    let mut score = summarize(rows)?;
+    let mut entity = 0;
+    let mut event = 0;
+    let mut digit_correct = 0;
+    let mut digit_total = 0;
+    let mut groups = BTreeMap::<String, [usize; 2]>::new();
+    let mut strata = BTreeMap::<String, [usize; 2]>::new();
+    for row in rows {
+        entity += usize::from(row["components"]["entity"] == true);
+        event += usize::from(row["components"]["citation_exact"] == true);
+        let g = groups
+            .entry(row["scene"].as_str().unwrap_or("MISSING").into())
+            .or_default();
+        g[0] += usize::from(row["exact_match"] == true);
+        g[1] += 1;
+        if let Some((gold, _, value)) = row["expected"].as_str().and_then(fields) {
+            let digits = gold.trim_start_matches(|c: char| !c.is_ascii_digit());
+            let actual = row["actual"]
+                .as_str()
+                .and_then(fields)
+                .map(|(e, _, _)| e.trim_start_matches(|c: char| !c.is_ascii_digit()))
+                .unwrap_or("");
+            digit_total += digits.len();
+            digit_correct += digits
+                .bytes()
+                .enumerate()
+                .filter(|(i, b)| actual.as_bytes().get(*i) == Some(b))
+                .count();
+            for key in [
+                format!("digits-{}", digits.len()),
+                if value.starts_with("경로") {
+                    "short-value".into()
+                } else {
+                    "direction".into()
+                },
+                if row["question"]
+                    .as_str()
+                    .is_some_and(|q| mentions_target(q, gold))
+                {
+                    "explicit-entity".into()
+                } else {
+                    "source-only".into()
+                },
+            ] {
+                let s = strata.entry(key).or_default();
+                s[0] += usize::from(row["exact_match"] == true);
+                s[1] += 1;
+            }
+        }
+    }
+    let errors = rows
+        .iter()
+        .filter(|r| {
+            !r["error"].is_null()
+                || r["actual"].as_str().is_none_or(str::is_empty)
+                || r["whitespace_only"] == true
+                || r["finish_reason"] != "stop"
+                || !r["eos_index"].is_number()
+                || r["generation_completed"] != true
+                || !r["interruption"].is_null()
+        })
+        .count();
+    score["entity_correct"] = json!(entity);
+    score["event_id_correct"] = json!(event);
+    score["digit_accuracy_counts"] = json!([digit_correct, digit_total]);
+    score["whole_base_correct_total"] = json!([
+        groups.values().filter(|g| g[0] == 4 && g[1] == 4).count(),
+        groups.len()
+    ]);
+    score["strata"] = json!(strata);
+    score["generation_error_cases"] = json!(errors);
+    score["skill_pass"] = json!(
+        rows.len() == 256
+            && score["exact_matches"].as_u64().unwrap_or(0) >= 244
+            && entity >= 254
+            && event >= 254
+            && errors == 0
+    );
+    Ok(score)
+}
+fn skill_evaluation(
+    l: &Loaded,
+    dev: &[Episode],
+    watch: &[Episode],
+    control: &mut RunControl,
+) -> Result<Value> {
+    let dev_rows = evaluate_panel(l, dev, control);
+    let watch_rows = if control.stop.is_none() {
+        evaluate_panel(l, watch, control)
+    } else {
+        vec![]
+    };
+    let all: Vec<_> = dev_rows.iter().chain(&watch_rows).cloned().collect();
+    let mut value = json!({"dev":skill_score(&dev_rows)?,"watch":summarize(&watch_rows)?,"dev_rows":dev_rows,"watch_rows":watch_rows,
+        "previous_skill":"NOT_APPLICABLE_H3","oracle":false});
+    add_partial_counts(&mut value, &all, dev.len() + watch.len(), control);
+    Ok(value)
+}
+fn skill_error_ids(evaluation: &Value) -> BTreeSet<String> {
+    ["dev_rows", "watch_rows"]
+        .iter()
+        .flat_map(|k| evaluation[*k].as_array().into_iter().flatten())
+        .filter(|r| {
+            matches!(
+                r["error_class"].as_str(),
+                Some("strict_utf8" | "control_token")
+            ) || r["actual"] == ""
+                || r["whitespace_only"] == true
+        })
+        .filter_map(|r| r["id"].as_str().map(str::to_owned))
+        .collect()
+}
+fn verified_harness(path: &Path) -> Result<Value> {
+    let h = read_json(path)?;
+    if h["result"] != "CHECKED_SCOPE_PASS" || h["source_unchanged"] != true {
+        return Err(Error::Invalid("passing quick harness required".into()));
+    }
+    let files = h["source_files"]
+        .as_object()
+        .ok_or_else(|| Error::Invalid("harness source files required".into()))?;
+    if ![
+        "Cargo.lock",
+        "src/training.rs",
+        "src/quality_recovery.rs",
+        "src/neural/transformer.rs",
+    ]
+    .iter()
+    .all(|p| files.contains_key(*p))
+    {
+        return Err(Error::Invalid("harness source coverage".into()));
+    }
+    for (file, hash) in files {
+        if file_hash(Path::new(file))? != *hash {
+            return Err(Error::Corrupt(format!(
+                "source changed after harness: {file}"
+            )));
+        }
+    }
+    Ok(h)
+}
+fn skill_run(
+    baseline: &Path,
+    corpus: &Path,
+    output: &Path,
+    harness: &Path,
+    resume: Option<&Path>,
+    control: &mut RunControl,
+) -> Result<()> {
+    control.check("skill_start")?;
+    let checked = verified_harness(harness)?;
+    let source = checked["source_digest"]
+        .as_str()
+        .ok_or_else(|| Error::Invalid("harness source identity".into()))?;
+    let base_report = read_json(&baseline.join("summary.json"))?;
+    let frozen = load(&baseline.join("frozen.json"))?;
+    let prepared = read_json(&corpus.join("prepared.json"))?;
+    let (manifest, episodes, dev) = data::load(corpus)?;
+    if base_report["baseline_verified"] != true
+        || prepared["status"] != "PRETRAIN_STRUCTURE_VERIFIED"
+        || prepared["baseline_summary_hash"] != file_hash(&baseline.join("summary.json"))?
+        || prepared["manifest_hash"] != file_hash(&corpus.join("manifest.json"))?
+        || base_report["parent"]["physical_hash"] != file_hash(&frozen.start)?
+        || manifest.train.documents != 4096
+        || dev.len() != 256
+    {
+        return Err(Error::Invalid(
+            "verified H2 parent/data prerequisite".into(),
+        ));
+    }
+    let mut l = checkpoint::load(resume.unwrap_or(&frozen.start), Device::Cpu, true)?;
+    control.check("skill_loaded")?;
+    if l.model.config.profile != "NATIVE_TRPP_G1_SMALL"
+        || l.tokenizer.semantic_id() != frozen.tokenizer
+    {
+        return Err(Error::Invalid("frozen SMALL/tokenizer required".into()));
+    }
+    let mut state = l
+        .manifest
+        .training
+        .clone()
+        .ok_or_else(|| Error::Invalid("inherited Adam required".into()))?;
+    if state.config.microbatch != 8
+        || state.config.accumulation != 1
+        || state.config.sample_group_size != 1
+    {
+        return Err(Error::Invalid(
+            "4+4 batch8 accumulation1/group1 required".into(),
+        ));
+    }
+    let start_step = base_report["parent"]["cumulative_model_step"]
+        .as_u64()
+        .ok_or_else(|| Error::Corrupt("parent clock".into()))? as usize;
+    let start_input = base_report["parent"]["manifest"]["training"]["consumed_tokens"]
+        .as_u64()
+        .ok_or_else(|| Error::Corrupt("parent tokens".into()))?;
+    let start_target = base_report["parent"]["manifest"]["training"]["target_tokens"]
+        .as_u64()
+        .ok_or_else(|| Error::Corrupt("parent targets".into()))?;
+    let rate = base_report["proposed_constant_lr"]
+        .as_f64()
+        .filter(|v| v.is_finite() && *v > 0. && *v <= 3e-5)
+        .ok_or_else(|| Error::Corrupt("constant LR".into()))?;
+    let binary_hash = file_hash(&std::env::current_exe()?)?;
+    let policy;
+    let previous;
+    if let Some(resume) = resume {
+        policy = read_json(&output.join("policy.json"))?;
+        previous = read_json(
+            &resume
+                .parent()
+                .ok_or_else(|| Error::Invalid("resume segment".into()))?
+                .join("result.json"),
+        )?;
+        if previous["reason"] != "TIME_BUDGET"
+            || previous["checkpoint_saved"] != true
+            || previous["resume_allowed"] != true
+            || previous["checkpoint_file_sha256"] != file_hash(resume)?
+            || previous["model_content_hash"] != l.model.weight_hash()?
+            || previous["cumulative_model_step"] != state.step
+            || previous["sampler_state"] != state.sampler_state
+            || previous["stage_elapsed_seconds"]
+                .as_f64()
+                .is_none_or(|s| !s.is_finite() || s < 0. || s >= 3600.)
+            || policy["source_id"] != source
+            || policy["binary_hash"] != binary_hash
+            || policy["train_hash"] != manifest.train.sha256
+            || policy["dev_hash"] != manifest.validation.sha256
+            || policy["constant_lr"] != rate
+            || policy["prepared_hash"] != file_hash(&corpus.join("prepared.json"))?
+            || policy["baseline_hash"] != file_hash(&baseline.join("summary.json"))?
+            || previous["policy_sha256"] != file_hash(&output.join("policy.json"))?
+            || previous["additional_input_tokens"]
+                .as_u64()
+                .and_then(|n| start_input.checked_add(n))
+                != Some(state.consumed_tokens)
+            || previous["additional_target_tokens"]
+                .as_u64()
+                .and_then(|n| start_target.checked_add(n))
+                != Some(state.target_tokens)
+        {
+            return Err(Error::Invalid("plain skill resume requires matching clean time-bound recovery; no cancellation resume".into()));
+        }
+        let previous_directory = std::fs::canonicalize(
+            resume
+                .parent()
+                .ok_or_else(|| Error::Invalid("resume segment".into()))?,
+        )?;
+        for entry in std::fs::read_dir(output)? {
+            let path = entry?.path();
+            if path.is_dir()
+                && path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("segment-"))
+            {
+                let receipt = read_json(&path.join("result.json"))?;
+                if std::fs::canonicalize(&path)? != previous_directory
+                    && receipt["stage_elapsed_seconds"].as_f64().is_none_or(|s| {
+                        s >= previous["stage_elapsed_seconds"].as_f64().unwrap_or(0.)
+                    })
+                {
+                    return Err(Error::Invalid(
+                        "skill resume must use the latest closed owned segment".into(),
+                    ));
+                }
+            }
+        }
+    } else {
+        if state.step != start_step
+            || l.model.weight_hash()? != base_report["parent"]["model_content_hash"]
+        {
+            return Err(Error::Corrupt("H3 starting state".into()));
+        }
+        let tape = skill_tape(&episodes, state.sampler_state)?;
+        let c = &mut state.config;
+        c.lr = rate;
+        c.warmup = 0;
+        c.budget_start_step = start_step;
+        c.max_steps = start_step + 1024;
+        c.budget_start_tokens = start_input;
+        c.max_tokens = start_input + 6_000_000;
+        c.validate_every = 128;
+        c.validate(l.model.config.context)?;
+        state.previous_corpora.push(state.corpus_hash.clone());
+        state.previous_corpora.sort();
+        state.previous_corpora.dedup();
+        state.corpus_hash = manifest.train.sha256.clone();
+        state.validation_hash = manifest.validation.sha256.clone();
+        state.train_loss = None;
+        state.validation_loss = None;
+        state.parent_checkpoint_hash = Some(l.manifest.weights_sha256.clone());
+        policy = json!({"stage":"H3","source_id":source,"binary_hash":binary_hash,"harness_hash":file_hash(harness)?,"baseline_hash":file_hash(&baseline.join("summary.json"))?,
+            "prepared_hash":file_hash(&corpus.join("prepared.json"))?,"train_hash":manifest.train.sha256,"dev_hash":manifest.validation.sha256,"parent":base_report["parent"],
+            "tape":tape,"tape_hash":digest(&tape)?,"config":state.config,"constant_lr":rate,"lr_policy":"explicit constant; native config schedule is not used by this stage",
+            "default_updates":512,"maximum_updates":1024,"max_input_tokens":6_000_000,"max_target_tokens":1_500_000,"max_stage_seconds":3600,"command_seconds":900,"cleanup_seconds":120,
+            "sampler":"4 distinct anchor bases +4 distinct focus bases; each frozen pool without replacement per512 updates; inherited RNG"});
+        std::fs::create_dir(output)?;
+        save(&output.join("policy.json"), &policy)?;
+        previous = Value::Null;
+    }
+    if serde_json::to_value(&state.config)? != policy["config"]
+        || policy["tape_hash"] != digest(&policy["tape"])?
+    {
+        return Err(Error::Corrupt("skill config/tape".into()));
+    }
+    let tape: Vec<(Vec<usize>, u64)> = serde_json::from_value(policy["tape"].clone())?;
+    if tape.len() != 1024 || state.step < start_step || state.step > start_step + 1024 {
+        return Err(Error::Corrupt("skill remaining budget".into()));
+    }
+    if resume.is_some()
+        && state.step > start_step
+        && state.sampler_state != tape[state.step - start_step - 1].1
+    {
+        return Err(Error::Corrupt("skill resume RNG/tape position".into()));
+    }
+    let samples = samples(&episodes, &l.tokenizer, 512)?;
+    if samples.iter().any(|s| s.tokens.len() > 513) {
+        return Err(Error::Invalid("skill sample would truncate".into()));
+    }
+    let c = state.config.clone();
+    let mut adam = Adam {
+        moments: std::mem::take(&mut l.optimizer),
+    };
+    l.manifest.source_id = source.into();
+    let elapsed_before = previous["stage_elapsed_seconds"].as_f64().unwrap_or(0.);
+    let segment_number = std::fs::read_dir(output)?
+        .filter_map(std::result::Result::ok)
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with("segment-"))
+        })
+        .count();
+    let segment = output.join(format!(
+        "segment-{segment_number:02}-{:04}",
+        state.step - start_step
+    ));
+    std::fs::create_dir(&segment)?;
+    let mut log = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(segment.join("trace.jsonl"))?;
+    let mut last = previous["last_evaluation"].clone();
+    let mut base_errors: BTreeSet<String> = if previous.is_null() {
+        BTreeSet::new()
+    } else {
+        serde_json::from_value(previous["baseline_error_ids"].clone())?
+    };
+    let mut base_watch = previous["baseline_watch"].as_u64().unwrap_or(0);
+    let mut streak = previous["bad_streak"].as_u64().unwrap_or(0);
+    let mut previous_dev = previous["previous_dev_correct"].as_u64().unwrap_or(0);
+    let mut extension = previous["extension_allowed"].as_bool().unwrap_or(false);
+    let mut final_complete = false;
+    let mut quality_pass = false;
+    let mut full_qa = Value::Null;
+    let mut seal_score = Value::Null;
+    let outcome = (|| -> Result<()> {
+        loop {
+            control.check("skill_next_boundary")?;
+            if elapsed_before + control.start.elapsed().as_secs_f64() >= 3600. {
+                control.observe(StopReason::TimeBudget);
+                return control.stop_result();
+            }
+            let n = state.step - start_step;
+            let due = [0, 128, 256, 512, 768, 1024].contains(&n)
+                && (last["new_updates"] != n || last["final_evaluation_complete"] != true);
+            if due {
+                l.model.refresh_identity()?;
+                let mut evaluation = skill_evaluation(&l, &dev, &frozen.watch, control)?;
+                evaluation["new_updates"] = json!(n);
+                evaluation["model_content_hash"] = json!(l.model.weight_hash()?);
+                let score = evaluation["dev"]["exact_matches"].as_u64().unwrap_or(0);
+                let watch = evaluation["watch"]["exact_matches"].as_u64().unwrap_or(0);
+                let errors = skill_error_ids(&evaluation);
+                if n == 0 {
+                    base_errors = errors.clone();
+                    base_watch = watch;
+                }
+                let new_errors: Vec<_> = errors.difference(&base_errors).cloned().collect();
+                streak = if base_watch.saturating_sub(watch) >= 3 {
+                    streak + 1
+                } else {
+                    0
+                };
+                evaluation["new_error_ids"] = json!(new_errors);
+                evaluation["bad_streak"] = json!(streak);
+                save(&segment.join(format!("eval-{n:04}.json")), &evaluation)?;
+                last = evaluation;
+                println!(
+                    "NODE=H3 eval updates={n} dev={score}/256 entity={} event={} watch={watch}/32 new_errors={} input={} target={} elapsed_s={:.2}",
+                    last["dev"]["entity_correct"],
+                    last["dev"]["event_id_correct"],
+                    new_errors.len(),
+                    state.consumed_tokens - start_input,
+                    state.target_tokens - start_target,
+                    elapsed_before + control.start.elapsed().as_secs_f64()
+                );
+                control.check("skill_evaluation_recorded")?;
+                save_arm(
+                    &mut l,
+                    &state,
+                    &adam,
+                    &segment.join(format!("step-{n:04}")),
+                    "RECOVERY_SCREENING",
+                )?;
+                if streak >= 2 || !new_errors.is_empty() {
+                    control.observe(StopReason::QualityGuard);
+                    return control.stop_result();
+                }
+                if n == 512 {
+                    extension = score >= previous_dev + 4 && last["dev"]["skill_pass"] != true;
+                }
+                previous_dev = score;
+            }
+            if (n == 0 && last["dev"]["skill_pass"] == true)
+                || (n == 512 && !extension)
+                || n == 1024
+            {
+                final_complete = last["final_evaluation_complete"] == true;
+                if last["dev"]["skill_pass"] == true {
+                    if control.start.elapsed().as_secs_f64() > 600. {
+                        control.observe(StopReason::TimeBudget);
+                        return control.stop_result();
+                    }
+                    let (_, _, ordinary) = data::load(&frozen.corpus)?;
+                    let rows = evaluate_panel(&l, &ordinary, control);
+                    full_qa = summarize(&rows)?;
+                    save(
+                        &segment.join("original400.json"),
+                        &json!({"score":full_qa,"rows":rows}),
+                    )?;
+                    control.check("skill_original_qa_recorded")?;
+                    if full_qa["qa"][0].as_u64().unwrap_or(0)
+                        < base_report["recount"]["qa"][0].as_u64().unwrap_or(u64::MAX)
+                    {
+                        control.observe(StopReason::QualityGuard);
+                        return control.stop_result();
+                    }
+                    save(
+                        &output.join("seal-attempt.json"),
+                        &json!({"model_content_hash":l.model.weight_hash()?,"dev":last["dev"],"new_updates":n}),
+                    )?;
+                    let descriptor: data::Split = serde_json::from_value(prepared["seal"].clone())?;
+                    let seal = data::load_split(corpus, &descriptor)?;
+                    let rows = evaluate_panel(&l, &seal, control);
+                    seal_score = skill_score(&rows)?;
+                    save(
+                        &segment.join("seal.json"),
+                        &json!({"score":seal_score,"rows":rows}),
+                    )?;
+                    control.check("skill_seal_recorded")?;
+                    quality_pass = seal_score["skill_pass"] == true;
+                }
+                break;
+            }
+            let (indices, sampler) = &tape[n];
+            control.check("skill_before_batch")?;
+            let batch = batch(&samples, indices, &Device::Cpu)?;
+            let target_count: usize = indices
+                .iter()
+                .map(|i| samples[*i].tokens.len() - samples[*i].response_start)
+                .sum();
+            if state.consumed_tokens - start_input + batch.tokens as u64 > 6_000_000
+                || state.target_tokens - start_target + target_count as u64 > 1_500_000
+            {
+                control.observe(StopReason::TokenBudget);
+                return control.stop_result();
+            }
+            let (ce, obj, targets) = response_loss(
+                &l.model.forward(&batch.input, Some(&batch.valid))?,
+                &batch,
+                c.first_target_weight,
+            )?;
+            control.check("skill_forward_returned")?;
+            let ce = ce.to_scalar::<f32>()?;
+            let objective = obj.to_scalar::<f32>()?;
+            if !ce.is_finite() || !objective.is_finite() {
+                return Err(Error::Model("nonfinite skill loss".into()));
+            }
+            let gradients = obj.backward()?;
+            control.check("skill_backward_returned")?;
+            let gradients = l
+                .model
+                .vars
+                .iter()
+                .map(|(name, var)| -> Result<_> {
+                    let g = gradients
+                        .get(var)
+                        .ok_or_else(|| Error::Model(format!("missing {name}")))?;
+                    Ok((
+                        name.clone(),
+                        ((g * targets as f64)?.detach() / targets as f64)?,
+                    ))
+                })
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            control.check("skill_before_optimizer")?;
+            let (norm, delta) =
+                adam.step_constant(&l.model.vars, &gradients, &c, state.step + 1, rate)?;
+            state.step += 1;
+            state.consumed_tokens += batch.tokens as u64;
+            state.target_tokens += targets as u64;
+            state.sampler_state = *sampler;
+            state.train_loss = Some(ce as f64);
+            state.validation_loss = None;
+            let _ = control.check("skill_optimizer_committed");
+            let row = json!({"new_update":n+1,"cumulative_model_step":state.step,"optimizer_step":state.step,"lr":rate,"lr_policy":"constant","sampler_state":sampler,"indices":indices,
+                "ids":indices.iter().map(|i|&episodes[*i].id).collect::<Vec<_>>(),"pools":["anchor","anchor","anchor","anchor","focus","focus","focus","focus"],
+                "input_tokens":batch.tokens,"target_tokens":targets,"consumed_input_tokens":state.consumed_tokens-start_input,"consumed_target_tokens":state.target_tokens-start_target,
+                "ce":ce,"objective":objective,"first_target_weight":c.first_target_weight,"gradient_norm":norm,"update_norm":delta,"rss_kib":control.last_rss_kib,"elapsed_seconds":elapsed_before+control.start.elapsed().as_secs_f64()});
+            writeln!(log, "{row}")?;
+            log.flush()?;
+            if (n + 1).is_multiple_of(32) {
+                println!(
+                    "NODE=H3 step={} cumulative={} input={} target={} lr={rate} ce={ce:.6}",
+                    n + 1,
+                    state.step,
+                    state.consumed_tokens - start_input,
+                    state.target_tokens - start_target
+                );
+            }
+            control.stop_result()?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = &outcome {
+        control.classify_error(error);
+    }
+    let mut result = finish_arm(control, final_complete, |reason| {
+        save_arm(&mut l, &state, &adam, &segment.join("final"), reason)
+    });
+    let elapsed = elapsed_before + control.start.elapsed().as_secs_f64();
+    let cleanup_overrun = result["cleanup_elapsed_seconds"]
+        .as_f64()
+        .is_none_or(|seconds| seconds > 120.);
+    if cleanup_overrun {
+        result["comparison_eligible"] = json!(false);
+    }
+    let details = json!({"stage":"H3","source_id":source,"policy_sha256":file_hash(&output.join("policy.json"))?,"new_updates":state.step-start_step,"cumulative_model_step":state.step,"sampler_state":state.sampler_state,
+        "additional_input_tokens":state.consumed_tokens-start_input,"additional_target_tokens":state.target_tokens-start_target,"stage_elapsed_seconds":elapsed,
+        "baseline_error_ids":base_errors,"baseline_watch":base_watch,"bad_streak":streak,"previous_dev_correct":previous_dev,"extension_allowed":extension,"last_evaluation":last,
+        "model_content_hash":l.model.weight_hash()?,"full_qa":full_qa,"seal":seal_score,"skill_quality_pass":quality_pass&&control.stop.is_none()&&!cleanup_overrun,
+        "candidate_eligible":quality_pass&&control.stop.is_none()&&!cleanup_overrun,"cleanup_limit_exceeded":cleanup_overrun,"error":outcome.as_ref().err().map(ToString::to_string),"goal1_ready":false,"h4":"NOT_RUN_UNTIL_H3_PASS",
+        "resume_allowed":control.reason()==Some("TIME_BUDGET") && elapsed<3600. && !cleanup_overrun && !output.join("seal-attempt.json").exists() && result["checkpoint_saved"]==true});
+    result
+        .as_object_mut()
+        .unwrap()
+        .extend(details.as_object().unwrap().clone());
+    if result["checkpoint_saved"] == true {
+        result["checkpoint_file_sha256"] = json!(file_hash(&segment.join("final"))?);
+    }
+    save(&segment.join("result.json"), &result)?;
+    log.sync_all()?;
+    println!(
+        "NODE=H3 terminal reason={} updates={} input={} target={} skill_pass={} resume_allowed={}",
+        result["reason"],
+        result["new_updates"],
+        result["additional_input_tokens"],
+        result["additional_target_tokens"],
+        result["skill_quality_pass"],
+        result["resume_allowed"]
+    );
+    if cleanup_overrun {
+        return Err(Error::Model(
+            "skill cleanup deadline exceeded; checkpoint preserved but ineligible".into(),
+        ));
+    }
+    outcome.and(control.stop_result())
+}
 fn compare(a: &Tensor, b: &Tensor) -> Result<Value> {
     if a.dims() != b.dims() {
         return Err(Error::Model("numeric shape mismatch".into()));
@@ -3859,6 +4534,210 @@ mod tests {
             manifest,
             optimizer: BTreeMap::new(),
         }
+    }
+    #[test]
+    fn harness_h3_constant_rate_native_resume_and_precancel() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut l = repair_loaded();
+        let config = TrainConfig {
+            seq_len: 32,
+            warmup: 0,
+            max_steps: 100,
+            microbatch: 1,
+            accumulation: 1,
+            ..Default::default()
+        };
+        let episode = repair_episode("constant-rate-real-native");
+        let framed = samples(&[episode], &l.tokenizer, 32).unwrap();
+        let b = batch(&framed, &[0], &Device::Cpu).unwrap();
+        let update = |l: &Loaded, adam: &mut Adam, step| {
+            let (_, loss, n) =
+                response_loss(&l.model.forward(&b.input, Some(&b.valid)).unwrap(), &b, 1.).unwrap();
+            let g = loss.backward().unwrap();
+            let grads = l
+                .model
+                .vars
+                .iter()
+                .map(|(k, v)| (k.clone(), g.get(v).unwrap().detach()))
+                .collect();
+            adam.step_constant(&l.model.vars, &grads, &config, step, 3e-5)
+                .unwrap();
+            n
+        };
+        let mut adam = Adam::new(&l.model.vars).unwrap();
+        let n = update(&l, &mut adam, 18);
+        let state = TrainingState {
+            contrast16: false,
+            parent_checkpoint_hash: None,
+            config: config.clone(),
+            step: 18,
+            consumed_tokens: 100,
+            target_tokens: n as u64,
+            sampler_state: 987,
+            corpus_hash: l.tokenizer.train_hash.clone(),
+            validation_hash: "3".repeat(64),
+            previous_corpora: vec![],
+            initial_weight_hash: l.manifest.initial_weight_hash.clone(),
+            train_loss: None,
+            validation_loss: None,
+        };
+        save_arm(
+            &mut l,
+            &state,
+            &adam,
+            &dir.path().join("native-resume"),
+            "RECOVERY_SCREENING",
+        )
+        .unwrap();
+        update(&l, &mut adam, 19);
+        let resumed =
+            checkpoint::load(&dir.path().join("native-resume"), Device::Cpu, true).unwrap();
+        assert_eq!(resumed.manifest.training.as_ref().unwrap().step, 18);
+        let mut restored = Adam {
+            moments: resumed.optimizer.clone(),
+        };
+        update(&resumed, &mut restored, 19);
+        assert_eq!(
+            l.model.weight_hash().unwrap(),
+            resumed.model.weight_hash().unwrap()
+        );
+        for (name, moment) in &adam.moments {
+            assert_eq!(
+                moment.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+                restored.moments[name]
+                    .flatten_all()
+                    .unwrap()
+                    .to_vec1::<f32>()
+                    .unwrap()
+            );
+        }
+        assert_ne!(config.learning_rate(19), 3e-5);
+        let mut cancelled = repair_control();
+        cancelled.cancel.store(true, Ordering::Relaxed);
+        assert!(
+            skill_run(
+                dir.path(),
+                dir.path(),
+                &dir.path().join("unused"),
+                dir.path(),
+                None,
+                &mut cancelled
+            )
+            .is_err()
+        );
+        assert_eq!(cancelled.generation_calls, 0);
+        assert!(!dir.path().join("unused").exists());
+        println!(
+            "H3_NUMERIC_REGRESSION actual_TINY_updates=3 SMALL_updates=0; constructed starting clock17 is not training"
+        );
+    }
+    #[test]
+    fn harness_h3_tape_mixture_no_repeat_base_and_exact_resume_position() {
+        let episodes: Vec<_> = (0..4096)
+            .map(|i| {
+                repair_episode(&if i < 2048 {
+                    format!("anchor/{i}/0")
+                } else {
+                    format!("focus/{}/{}", (i - 2048) / 4, (i - 2048) % 4)
+                })
+            })
+            .collect();
+        let tape = skill_tape(&episodes, 921_917).unwrap();
+        assert_eq!(tape.len(), 1024);
+        assert_eq!(
+            digest(&tape).unwrap(),
+            digest(&skill_tape(&episodes, 921_917).unwrap()).unwrap()
+        );
+        for epoch in tape.as_chunks::<512>().0 {
+            let mut seen = BTreeSet::new();
+            for (indices, _) in epoch {
+                assert!(indices[..4].iter().all(|i| *i < 2048));
+                assert!(indices[4..].iter().all(|i| *i >= 2048));
+                assert_eq!(
+                    indices
+                        .iter()
+                        .map(|i| scene(&episodes[*i]))
+                        .collect::<BTreeSet<_>>()
+                        .len(),
+                    8
+                );
+                for i in indices {
+                    assert!(seen.insert(*i));
+                }
+            }
+            assert_eq!(seen.len(), 4096);
+        }
+        let persisted = serde_json::to_vec(&tape).unwrap();
+        let restored: Vec<(Vec<usize>, u64)> = serde_json::from_slice(&persisted).unwrap();
+        assert_eq!(&tape[193..], &restored[193..]);
+        let mut duplicate = episodes;
+        duplicate[1].id = duplicate[0].id.clone();
+        assert!(skill_tape(&duplicate, 921_917).is_err());
+    }
+    #[test]
+    fn harness_h3_metric_requires_complete_eos_and_entity_citation_thresholds() {
+        let row = json!({"expected":"센서31의 구역1 이동 지시는 동쪽이다. [event:7]","actual":"센서31의 구역1 이동 지시는 동쪽이다. [event:7]",
+            "question":"센서31의 구역1 원문은?","category":0,"family":"skill/H3/test","exact_match":true,"error":null,"interruption":null,
+            "finish_reason":"stop","generation":{"finish":"stop","generated":21},"eos_index":20,"generation_completed":true,"components":{"entity":true,"citation_exact":true}});
+        let rows: Vec<_> = (0..256)
+            .map(|i| {
+                let mut r = row.clone();
+                r["id"] = json!(format!("metric/{i}"));
+                r["scene"] = json!(format!("base/{}", i / 4));
+                r
+            })
+            .collect();
+        assert_eq!(skill_score(&rows).unwrap()["skill_pass"], true);
+        for (field, value) in [
+            ("finish_reason", json!("length")),
+            ("eos_index", Value::Null),
+            ("generation_completed", json!(false)),
+            ("actual", json!("")),
+        ] {
+            let mut bad = rows.clone();
+            bad[0][field] = value;
+            if field == "actual" {
+                bad[0]["exact_match"] = json!(false);
+            }
+            if field == "finish_reason" {
+                bad[0]["generation"]["finish"] = json!("length");
+                bad[0]["exact_match"] = json!(false);
+            }
+            assert_eq!(skill_score(&bad).unwrap()["skill_pass"], false, "{field}");
+            assert_eq!(skill_score(&bad).unwrap()["denominator"], 256);
+        }
+        for field in ["entity", "citation_exact"] {
+            let mut bad = rows.clone();
+            for row in &mut bad[..3] {
+                row["components"][field] = json!(false);
+                row["exact_match"] = json!(false);
+                row["actual"] = json!("잘못된 답변");
+            }
+            assert_eq!(skill_score(&bad).unwrap()["skill_pass"], false, "{field}");
+        }
+    }
+    #[test]
+    fn harness_h3_ordinary_resume_cannot_change_saved_constant_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let segment = dir.path().join("segment");
+        std::fs::create_dir(&segment).unwrap();
+        save(
+            &dir.path().join("policy.json"),
+            &json!({"stage":"H3","constant_lr":3e-5}),
+        )
+        .unwrap();
+        let checkpoint = segment.join("must-not-load");
+        let output = dir.path().join("must-not-create");
+        let mut run = training_run(&checkpoint, &output);
+        run.resume = true;
+        let result = train_controlled(run, &mut repair_control());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("requires recovery skill-run")
+        );
+        assert!(!output.exists());
     }
     #[test]
     fn harness_h2_copy_materialization_independent_grammar_and_split_rejection() {
