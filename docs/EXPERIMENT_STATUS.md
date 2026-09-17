@@ -1,10 +1,205 @@
 # 진단 및 구현 상태
 
-현재 계약: R3-S4-QUALITY-RECOVERY-1.0. 기존 GOAL1-NATIVE-TRPP-1.0의 품질 기준 유지.
+현재 계약: R3-S4-DIAGNOSTIC-REPAIR-1.0. 기존 GOAL1-NATIVE-TRPP-1.0의 품질 기준 유지.
 2026-09-17. 이전 R3-CUSTOMIZE-AND-DIAGNOSE-1.0 실행 이력은 아래 보존한다.
 모든 성공 표시는 구현자 확인이며 INDEPENDENT_PENDING이다.
 
-## 제한 품질 회복 진단 종료 — 2026-09-17
+## 현재: 세 진단 경계 수정 — 2026-09-17
+
+**RF-01~03 진단 경계의 수정과 제한 검증을 완료했다. 모델 품질은 회복되지 않았다.**
+동일 원자료 감사에서 지원 범위 내 label 모순은 발견하지 못했다. 기존400 재집계와
+parent/실패 모델의 제한 replay는 이전 기록과 일치했다. 신규 SMALL 학습은0update다.
+기준 `3b671bf695ae86511273c4139d43d75bd976e490`의 독립 source 판정은
+CODE_VERDICT=FAIL로 보존하며, 아래 새 수정의 PASS는 구현자 검증이다.
+
+| 판정 키 | 이번 실행 결과 |
+|---|---|
+| RESULT / REPAIR_IMPLEMENTER_VERDICT | VERIFIED_REPAIR / PASS |
+| INDEPENDENT_REVIEW | PENDING — 새 소스의 독립 검토 미실행 |
+| RF01_SPLIT_BINDING | PASS |
+| RF02_TARGET_SEMANTICS | PASS — 현재 합성 QA의 제한 문법 |
+| RF03_EVAL_STOP | PASS — 협력적 취소/deadline; hard kill 아님 |
+| DATA_AUDIT | CHECKED_BOUNDARIES_PASS — ordinary4092, 보조404 의미 제외 |
+| SEMANTIC_SCOPE | scanned4496 / validated4092 / contradicted0 / unsupported0 / ambiguous0 / out_of_scope404 |
+| HISTORICAL_LEDGER_RECOUNT | PASS — 기존400 및 C/W trace 읽기·재집계 |
+| NATIVE_REPLAY_PARITY | PASS — parent32+ABA1, 실패32+ABA1; 총66회 |
+| SOURCE_SHA_AND_WORKTREE_DIGEST | 기준3b671bf; 아래 실행/전달 digest 구분 |
+| SMALL_OPTIMIZER_UPDATES_THIS_ROUND | 0 |
+| NUMERIC_TEST_OPTIMIZER_UPDATES | 0 — scalar Adam/accumulation 및 TINY 학습·resume 시험 미실행 |
+| MODEL_WEIGHTS_CHANGED | NO — 보존 원본17파일의 시작/종료 해시 일치 |
+| ROOT_CAUSE_EVIDENCE | UNRESOLVED — 검산 범위 내 새 자료 결함 미확인 |
+| REGRESSION_RECOVERED / TRANSFER_IMPROVED | NO / NOT_TESTED |
+| S4_QUALITY_PASS / GOAL1_READY | NO / NO |
+| NEXT_TRAINING_AUTHORIZED | NO |
+
+### 수정 경계와 실행 회귀
+
+`src/quality_recovery.rs`의 기존 replay/scan/평가/arm 종료 경로와
+`src/training.rs`의 직접 평가 호출자를 수정했다. synthetic fixture는 기존 테스트 모듈
+안에 두었다. 새 소스·dependency·영구 문서·checkpoint schema는 추가하지 않았다.
+Rust1.98.0/Cargo.lock/Accelerate를 유지했고 외부 모델·teacher·API를 사용하지 않았다.
+여기서 teacher 진단은 동일 로컬 모델의 gold-prefix forward이며 외부 teacher가 아니다.
+
+RF-01은 all에서 loader가 검증한 동일 소유 validation과 manifest를 보존해 frozen hash를
+대조한다. 불일치는 모델 로드·호출·output 생성 전에 거부한다. watch/failures는 frozen의
+episode만 사용한다. `source_validation_hash`는 유래이며 `actual_split_hash`는 all의 검증된
+현재 split이다. 실제 panel 내용은 `evaluated_cases_hash`로 구분한다. 이 값은 모든 필드를
+포함한 순서 있는 `Vec<Episode>`의 compact `serde_json::to_vec` 바이트 SHA256이다.
+`ordered_ids_hash`는 순서만 식별한다. 옛 `split_hash`는 panel 자체가 아닌 유래400의
+hash였으며 옛 로그는 수정하지 않았다. 알 수 없는 panel도 오류로 거부한다.
+
+RF-02는 request의 질문·원문·status·시각으로 의무를 유도하고, target 문장을 별도로
+파싱해 대상/위치/값/인용/시간순서/인과 불확실성을 검사한다. 근거 없음, 원인 미확인,
+chronology, 구조화 QA의 긍정/부정 사례를 구분한다. 올바른 ID만 인용하거나 불확실성
+문구 뒤에 확정 원인을 덧붙여도 통과하지 못한다. 비지원 문법과 모호한 근거는 각각
+UNSUPPORTED_FORM/AMBIGUOUS_EVIDENCE이며 승인하지 않는다. 기존 copy/* 보조 범위를
+늘리지 않았다. 제품 retrieval/ask/worker에는 이 checker나 gold를 연결하지 않았다.
+
+RF-03은 command의 동일 flag/deadline을 생성·teacher·watch/train panel·replay·close·마지막
+평가·저장·종료에 전달한다. generation timeout은 원래 한도와 남은 command budget 중
+작은 값이며 적용값을 별도 receipt에 남긴다. 1ms 미만 잔여에는 새 작업을 시작하지 않는다.
+중단 후 teacher/다음 case/ABA/update는 실행하지 않고, 마지막 일관 상태 저장만 허용한다.
+planned/attempted/completed/not-run/interrupted ID와 실제 사유를 기록하며 부분 결과는
+comparison/candidate 부적격이다. 오류 생성은 완료 panel의 EM 분모에 그대로 남긴다.
+마지막 terminal 확인 뒤 발생한 cancel은 이미 닫힌 판정을 소급 변경하지 않는다.
+
+동시 조건의 우선순위는 cancel→deadline→RSS 관측 실패→RSS 초과다. 첫 사유를 래치하고
+나머지 관측 조건도 보존한다. save 실패는 `checkpoint_saved=false`와 `save_error`로 별도
+기록한다. 기존 native status vocabulary를 유지하므로 저장 직후 stop이 관측되면
+`checkpoint_save_status_reason`과 최종 sidecar의 terminal reason이 다를 수 있다.
+판정에는 최종 sidecar를 사용한다. work/cleanup/overrun 시간을 분리한다. 동기 tensor 연산,
+파일 sync, 기존 worker IPC는 중간 강제 중단을 보장하지 않아 deadline을 넘을 수 있다.
+
+| 회귀 | 수정 전 실제 실패 | 수정 후 실제 통과 |
+|---|---|---|
+| RF-01 | 동일 ID/current 변경을 옛 replay가 실행함: rf01-red.txt | hash/count/manifest 불일치, output 보존, 0호출, panel 내용, 정상 all: 신규3test |
+| RF-02 | no-evidence 확정 원인을 scan이 승인함: rf02-red.txt | 실제 scan→audit positive/negative/unknown 및 기존 chronology positive: 신규2test+기존1test |
+| RF-03 | pre-cancel인데 옛 평가가 생성/teacher를 수행함: rf03-red.txt | 실제 TINY shared flag, 생성 중단, 시간 경계, 최종 평가/저장/terminal: 신규5test |
+
+RF-03 red는 budget 입력이 없던 기준 함수에 test-only 연결용 wrapper를 두어
+**수정하지 않은 기준 평가 본문**을 호출한 실행 실패다. 컴파일 실패를 red로 세지 않았다.
+RF-01 초기 exact filter의0test 실행도 성공·실패 근거에서 제외했다. 실패/WIP 로그는
+모두 로컬 보존한다. 실제 TINY는 무작위 초기화된 모델의 forward/generate만 사용했다.
+최종 n=50 상태는 평가/종료 helper에 직접 진입시켜 검사했으며50회 학습을 돌리지 않았다.
+
+직접 테스트는 신규10개, 기존 gold independence/support/causal/분모/byte/control/tape-clock
+7개, decode receipt1개로 **서로 다른18개 전부 통과**했다. 관련 변경 후 재실행은 이 수에
+중복 합산하지 않는다. `cargo fmt --all -- --check`, offline/locked
+`cargo check --all-targets --features accelerate`,
+`cargo clippy --all-targets --features accelerate -- -D warnings`,
+`cargo build --release --features accelerate --bins`도 통과했다. 전체 suite는 실행하지 않았다.
+
+### 동일 자료 감사와 과거 결과 재집계
+
+아래 감사는 tokenization/정적 자료 검산이며 모델 forward·gradient·generation은0이다.
+
+| 범위 | scanned | ordinary / validated | contradicted | unsupported | ambiguous | out_of_scope |
+|---|---:|---:|---:|---:|---:|---:|
+| U2 train 전체 | 2048 | 2048 / 2048 | 0 | 0 | 0 | 0 |
+| Parent train 앞2048 | 2048 | 1708 / 1708 | 0 | 0 | 0 | 340 |
+| Validation400 | 400 | 336 / 336 | 0 | 0 | 0 | 64 |
+| 합계 | 4496 | 4092 / 4092 | 0 | 0 | 0 | 404 |
+
+prefix 불일치/동일 token prompt의 다른 target/검산한 구조화 entity의 split 교집합도0이다.
+이 결과는 parent 전체20000 및 범위 밖404의 의미 정확성을 보증하지 않는다.
+첫 실제 감사에서는 기존의 “이동 값” 질문형과 점검 완료·사고 자료 부재의 원문형을
+checker가 해석하지 못했다. 초기 U2 unsupported88/ambiguous24, parent184/40,
+validation0/8을 원본 ID·이유와 함께 `data-audit.json`에 보존했다. 실제 source/원문을
+확인해 이 두 제한 형식과 독립 positive 회귀만 보완했다. 원문/정답/제외 범위는 불변이다.
+현재 판정은 `data-audit-final.json`이다. 초기 미완료 감사의 stderr가 INTEGRITY_FAIL로
+분류되던 것도 AUDIT_INCOMPLETE로 분리했으며 초기 로그를 고쳐 쓰지 않았다.
+
+새 Rust `recovery recount`는 기존400 raw hash, fixture/split/checkpoint binding,
+ID 중복·누락, 질문·근거·target, C/W policy/tape/실제 trace/세 clock/LR를 검증했다.
+row의 actual/expected/error/finish로 점수를 다시 계산했다. C/W는 기존50+50 trace를
+읽었으며 이번 학습 횟수로 합산하지 않는다.
+
+| 읽어서 재집계한 기존 결과 | Parent | U2+250 | 기존 C50 / W50 |
+|---|---:|---:|---:|
+| 일반 QA | 155/336 | 56/336 | 해당 없음 |
+| 보조 | 16/64 | 0/64 | 해당 없음 |
+| 전체 EM+EOS | 171/400 | 56/400 | 해당 없음 |
+| watch32 | 해당 없음 | 해당 없음 | 17/32 / 17/32 |
+
+이400개를 새로 생성하지 않았다. 과거30개 UTF-8 오류는 raw receipt가 없으므로 해당
+finish를 UNKNOWN으로 유지한다. frozen label 기준 점수라는 의미도 그대로 기록했다.
+이번 checker의 지원 범위에서는 추가 label 모순이 확인되지 않았다.
+
+### 제한 무학습 native replay와 식별자
+
+기존 watch32를 parent/실패 각각 한 번 재생하고 각1회 ABA만 추가했다. reference에는
+이전 `artifacts/quality-recovery-20260917/parent-watch.jsonl`과 `failed-watch.jsonl`을
+지정했다. optional failures 추가, C/W replay, 전체400 생성은 실행하지 않았다.
+
+| 이번 실제 생성 | Parent | U2+250 실패 |
+|---|---:|---:|
+| generation calls (32+ABA1) | 33 | 33 |
+| 전체 panel EM+EOS | 18/32 | 5/32 |
+| invalid UTF-8 / empty / first-EOS | 0 / 0 / 0 | 4 / 1 / 1 |
+| planned / attempted / completed / not-run | 32 / 32 / 32 / 0 | 32 / 32 / 32 / 0 |
+| 기존 raw tokens/text/error/prompt/provided/excluded 차이 | 0 | 0 |
+| ABA | 동일 | 동일 |
+| command wall / OS maximum RSS | 4.73s / 769654784 bytes | 6.24s / 787087360 bytes |
+
+합계66generation/10.97s다. command work≤900s, 합계≤1800s, 생성≤70 한도 안에서
+완료했다. CPU/Accelerate/F32, M4, 두 thread 환경변수1로 이전 실행과 맞췄다.
+생성이 오류로 끝난4건도 분모32에서 제외하지 않았다. 부분 완료나 timeout은 없었다.
+
+기준 source HEAD는 `3b671bf695ae86511273c4139d43d75bd976e490`이다. 실행 source digest는
+정렬한 `src/tests/examples`의 Rust 파일과 Cargo.toml/Cargo.lock별 SHA256 manifest의
+SHA256이며 git commit과 구별한다.
+
+| 식별 대상 | SHA256 |
+|---|---|
+| 66회 replay 실행 source manifest | cb930b1a7a69010eeea032aa6e0d7e9db25a0faebdb7607e40984657393220ed |
+| 해당 실행 binary | 3a62e251031772dc722454c3e57ba51f25d0c2dcf58f1be754df5ad8b2855178 |
+| 최종 전달 source manifest | aa978d4d9b74c4ad7491001c74df8bafd3ff05a81b10fdcacb53f155363fafee |
+| 최종 release binary | 9ce7198c5b8bcb8512558798ed14020b204dafa0ec3fef914a80f924b5f35778 |
+| 원래 frozen fixture | 48a356ca63c8d24fdd2da57ecc25391847127f2f814bc8f90102b994a87e74b4 |
+| Parent physical checkpoint | 1bcae73d7f2f7f501acc43e3958d66781b22d139533b12d6e369624171356849 |
+| 실패 physical checkpoint | 34c2ef0630b6afe1df1b4b901a8679d4461edb041e4885b812fe91935eb1ad2c |
+| U2 train content | 7c19a05354ddbed179b7ccb2f9dc667ad71a98d2f4bd426a9e74e0ffd8046b70 |
+| U2 validation content | f8d18fe3f6bd2b14045218139eafabec41486420779295fe1273a12c8d697864 |
+
+제한 replay 이후 정상 terminal의 무중단 사유를 null 대신 COMPLETED로 명시하고,
+회귀에서 실제0호출/정상 종료 assertion을 보강했다. 생성 계산·입력 변경은 없다.
+최종 소스에서 직접 회귀와 fmt/check/clippy/release를 완료했으며 SMALL replay를 반복하지
+않았다. 기존66회의 원시 로그에는 실행 당시 null과 complete=true가 그대로 남아 있다.
+이전 실행 binary와 최종 전달 binary를 동일하다고 보고하지 않는다.
+
+주요 로컬 위치는 다음과 같다. 모든 경로의 기준은 저장소 root다.
+
+| 내용 | 보존 위치 |
+|---|---|
+| Parent native | artifacts/goal1-resume-20260917/u2-parent-resume.r3m |
+| 실패 native | artifacts/goal1-resume-20260917/u2-to-20000/final |
+| Parent corpus / U2 corpus | artifacts/goal1-corpus-v9 / artifacts/goal1-resume-20260917/u2-corpus-fixed |
+| 기존400 parent raw | artifacts/goal1-resume-20260917/u2-start-validation.jsonl |
+| 기존400 실패 raw | artifacts/goal1-resume-20260917/u2-20000-validation.jsonl |
+| 기존 frozen | artifacts/quality-recovery-20260917/frozen.json |
+| 기존 C / W | artifacts/quality-recovery-20260917/arm-c-fixed / artifacts/quality-recovery-20260917/arm-w |
+| 이번 실행 증거 root | artifacts/diagnostic-repair-20260917 |
+| 감사 / 재집계 | 해당 root의 data-audit-final.json / historical-recount.json |
+| 실제 replay / 자원·command receipt | 해당 root의 parent-watch.jsonl / failed-watch.jsonl 및 각각 .txt |
+| 회귀 / 빌드 | 해당 root의 rf01-red.txt, rf02-red.txt, rf03-red.txt, final-repair-tests.txt, existing-direct-tests.txt, decode-receipt-test.txt, final-*.txt |
+| 소스·원본 보존 증거 | 해당 root의 native-parity-source.sha256, delivery-source.sha256, originals.sha256, originals-end-check.txt, initial-untracked.txt |
+
+### 종료와 다음 가설의 경계
+
+R0~R4와 R5의 직접 검증을 완료했다. 기존 미추적487파일과 raw/private 증거는 로컬에
+보존한다. 공개 범위는 수정한 Rust2파일과 기존 상태/계획 문서2파일뿐이다.
+모델/Adam/DB/corpus/raw log를 staging하지 않는다. 소스 검토 commit과 최종 문서 commit은
+별도로 식별하고 정상 push 후 원격 full SHA로 확인한다. 새 독립 source 검토는 PENDING이다.
+
+다음에 제안하는 가설은 **Adam moments를 유지한 schedule restart의 LR 영향** 하나다.
+이번에는 NOT_RUN이며 재학습 권한도 없다. 별도 승인 시 같은 일반 QA parent의 weights,
+moments, optimizer clock, 자료·tape·batch·first-target weight를 맞춘 C/L 두 군에서
+schedule/LR 정책만 비교하고, 현상이 생겼던 warmup100 이후~250update 범위를 별도 예산으로
+정해야 한다. nonfinite/시간·메모리·token 한도는 즉시 중단하고, parent 대비 watch EM4개
+이상 감소 또는 새 오류2개 이상이 연속 두 평가면 중단한다. 이는 자동 연장이나 기존50회
+재실행 승인이 아니다. C/W 음성 결과는 LR·batch·250update 원인을 배제하지 않는다.
+
+## 이전 제한 품질 회복 진단 종료 — 2026-09-17
 
 **원래 U2+250의 성능 하락은 재현됐지만 학습 원인은 미확정이다.** 평가 시 UTF-8
 decode 실패로 생성 ID와 종료 정보를 잃던 결함을 수정했다. 이것은 관측 결함이며

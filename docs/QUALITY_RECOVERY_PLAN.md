@@ -1,4 +1,133 @@
-# R3-S4-QUALITY-RECOVERY-1.0
+# Diagnostic repair and bounded quality recovery
+
+## R3-S4-DIAGNOSTIC-REPAIR-1.0 — current round
+
+2026-09-17, baseline main `3b671bf695ae86511273c4139d43d75bd976e490`.
+Origin `https://github.com/seoyd/replica-v3.git`. Tracked tree initially clean; 487 older
+untracked logs preserved. Rust/Cargo1.98.0, macOS27/M4/24GiB, CPU/Accelerate/F32.
+Shell thread variables were unset; executions explicitly set both VECLIB_MAXIMUM_THREADS
+and RAYON_NUM_THREADS to1. No project training/worker process was running.
+
+Independent source review identified RF-01 split binding, RF-02 target semantics and
+RF-03 evaluation cancellation/deadline defects. Baseline independent CODE_VERDICT=FAIL;
+the older CHECKED_BOUNDARIES_PASS below is a historical implementer scope verdict.
+Source repair is separate from model quality. SMALL new optimizer updates=0. No C/W
+training, final heldout, data expansion, model/optimizer/tokenizer/kernel/storage changes.
+
+R0 preserve identities → R1 frozen/current split binding + red/green → R2 limited target
+grammar + red/green → R3 shared cooperative budget + red/green → R4 read-only data audit,
+historical recount, limited native parity → R5 direct checks, report, commit/push.
+All named artifacts from the previous round are AVAILABLE. Original byte hashes and
+initial untracked inventory are in local artifacts/diagnostic-repair-20260917/.
+
+R1: all validates the loader-owned snapshot before model/output access; panels use their
+frozen episodes. Ordered IDs are not a content hash. Hash ordered serialized Episode
+content with SHA256 over compact serde_json::to_vec, including request/limits/answer.
+R2: derive obligations from question/evidence/status/time only, parse target claims, then
+check facts/citation/order/uncertainty. Unknown forms remain UNSUPPORTED_FORM; no corpus
+edits or new out-of-scope exclusions. Audit U2 train2048, parent first2048 and validation400
+(ordinary336/auxiliary64); existing copy/* auxiliary semantics remain OUT_OF_SCOPE.
+R3: one command flag/deadline, stop before/after large synchronous boundaries and before
+teacher/next case/update. Record partial counts and first observed stop. Native weights
+retain atomic optimizer boundaries. Cleanup is separate; synchronous compute/fsync can
+overrun a cooperative deadline. No hard-kill claim or new scheduler.
+
+Real SMALL generation cap70 calls (parent/failed watch32 plus one ABA each; optional
+two fixed failures per model); command work cap900s, aggregate native verification1800s.
+No full400/C/W generation reruns. Related deterministic tests only; TINY/scalar optimizer
+calls counted separately. Source/artifacts/raw logs remain preserved; only changed Rust,
+small synthetic tests and anonymous status docs are published after verification.
+
+### Closed verification and requirement cross-check
+
+RESULT=VERIFIED_REPAIR, REPAIR_IMPLEMENTER_VERDICT=PASS, new INDEPENDENT_REVIEW=PENDING.
+RF01_SPLIT_BINDING/PASS, RF02_TARGET_SEMANTICS/PASS, RF03_EVAL_STOP/PASS. These are
+implementation boundary results; REGRESSION_RECOVERED=NO, TRANSFER_IMPROVED=NOT_TESTED,
+S4_QUALITY_PASS=NO, GOAL1_READY=NO and NEXT_TRAINING_AUTHORIZED=NO remain separate.
+
+| Node | READ/SOURCE | IMPLEMENTED | EXECUTED / OBSERVED | BOUNDARY / LIMITATION |
+|---|---|---|---|---|
+| R0 | Baseline/source manifest, existing checkpoint/corpus/raw records available | Preservation manifest and untracked inventory, local only | Original17file start/end hashes equal; Rust1.98/M4 observed | No reset, model replacement, training or toolchain change |
+| R1 | Existing replay/data loader and panels | Owned all snapshot, pre-model hash validation, explicit panel dispatch, complete-content digest | Baseline red; 3 direct regressions pass, including unchanged positives/0calls/old-output preservation | Legacy split_hash means source split, not subset content; no checkpoint identity change |
+| R2 | Existing request/support/scan and corpus grammar | Separate request obligation, whole target grammar and semantic decision; scan→audit statuses | Baseline red; independent positive/negative/unknown fixtures and existing richer-causal regression pass | Training-only limited grammar, no answer-fed support selection or product oracle |
+| R3 | evaluate_one/teacher/replay/close/arm/training caller | Shared cooperative control, remaining timeout, partial counts, latched stop, final preservation/terminal checks | Baseline-body pre-cancel red; 5 new tests pass, including real random TINY generation and final-state interruption without updates | Synchronous tensor/fsync/worker IPC can overrun; no hard-kill guarantee |
+| R4 | Same frozen U2/parent/validation, original400 and C/W traces | Existing audit extended; small Rust recount command; optional replay reference check | Data scope4092/4496 validated; existing400/C/W recount PASS; parent/failed66native calls, raw parity differences0 | No additional failures/C-W/full400 generation; auxiliary404 remains outside semantic scope |
+| R5 | Final source diff and all contract requirements | Existing plan/status updated with evidence and separate verdicts | 18 distinct related tests, fmt/check/clippy/release PASS | Independent review pending; publication receipt recorded after actual normal push |
+
+RF-01 content encoding is SHA256 over compact serde_json::to_vec of the ordered complete
+Vec<Episode>. IDs alone are not content identity. All records retain expected/source hashes
+separately; panel evaluations use only frozen episodes. Same-ID question/evidence/answer
+changes, count changes, and invalid manifest fail before a model call or output mutation.
+
+RF-02 validates structured entity/context/value, no-evidence uncertainty, unknown-cause
+accident claims and requested chronology including order/uncertainty. Contradiction,
+unsupported form, ambiguous evidence and predeclared auxiliary scope are separate states.
+The initial real audit exposed two unsupported existing source forms (movement-value
+question and completed-inspection/no-accident record); only these forms and independent
+positive fixtures were added. Initial incomplete logs are preserved. No labels, source
+records, episode IDs or exclusion rules were changed to obtain the final audit result.
+
+| Final audit scope | scanned | ordinary | validated | contradicted | unsupported | ambiguous | out-of-scope |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| U2 all train | 2048 | 2048 | 2048 | 0 | 0 | 0 | 0 |
+| Parent first2048 | 2048 | 1708 | 1708 | 0 | 0 | 0 | 340 |
+| Validation400 | 400 | 336 | 336 | 0 | 0 | 0 | 64 |
+| Total | 4496 | 4092 | 4092 | 0 | 0 | 0 | 404 |
+
+DATA_AUDIT=CHECKED_BOUNDARIES_PASS at this scope, not a full-parent/auxiliary audit.
+Prefix/collision/checked entity overlap findings=0. ROOT_CAUSE_EVIDENCE=UNRESOLVED.
+Historical scores are recalculated from original rows including errors: parent155/336+
+16/64=171/400; failed56/336+0/64=56/400; previous C/W each17/32. Missing old error receipts30
+remain UNKNOWN. HISTORICAL_LEDGER_RECOUNT=PASS is not new400 generation or new C/W work.
+
+RF-03 simultaneous observation priority is cancel, deadline, RSS observation failure,
+then RSS limit. The first cause is retained even if cleanup fails; observed conditions
+are also recorded. Generation/teacher/next-case/ABA/update stop together. Native optimizer
+updates remain atomic, and preservation only saves the last consistent state. The final
+sidecar distinguishes checkpoint save status/reason from a stop observed after saving.
+Work time, cleanup time and deadline overrun are reported separately. The terminal check
+is the completion decision; signals after it do not retroactively change that decision.
+
+Actual native parity: fixed parent32+ABA1 and failed32+ABA1, total66generation calls and
+10.97s OS wall time, no timeout/interruption. Parent18/32, failed5/32, same raw tokens/text/
+errors/prompt/provided/excluded, both ABA equal. Parent/failed max RSS769654784/787087360
+bytes. Original requests, tokenizer, weights and CPU/Accelerate/F32/two thread limits1
+were unchanged. NATIVE_REPLAY_PARITY=PASS; no claim of recovered intelligence follows.
+
+SMALL_OPTIMIZER_UPDATES_THIS_ROUND=0 and NUMERIC_TEST_OPTIMIZER_UPDATES=0. Related tests
+used TINY forward/generation without training. Scalar Adam, accumulated-gradient and
+exact-resume training tests were intentionally not run. Historical100C/W updates are not
+this round's work. No final heldout, contrast16/QA32 memorization, corpus expansion or
+new numeric/kernel experiments were performed.
+
+Local evidence root: artifacts/diagnostic-repair-20260917. Red proofs are rf01-red.txt,
+rf02-red.txt, rf03-red.txt. RF-03 red used a test adapter into the unchanged baseline
+evaluation body because that API originally had no budget parameter. The accidental
+initial RF-01 zero-test filter is excluded. Final10new+7existing+1decode tests passed;
+offline/locked pinned-feature fmt/check/clippy/release also passed. R4 evidence is
+data-audit-final.json, historical-recount.json and parent-watch/failed-watch.jsonl/.txt.
+
+Executed parity source-manifest SHA256:
+`cb930b1a7a69010eeea032aa6e0d7e9db25a0faebdb7607e40984657393220ed`.
+Final delivery source-manifest SHA256:
+`aa978d4d9b74c4ad7491001c74df8bafd3ff05a81b10fdcacb53f155363fafee`.
+Manifests hash sorted Rust sources/tests/examples plus Cargo.toml/Cargo.lock and are
+distinct from commit SHAs. After actual parity, the normal terminal reason was made
+explicit (COMPLETED instead of null), with zero-call/normal-terminal assertions added.
+Final direct checks cover this bookkeeping change; SMALL parity was not repeated.
+The original66call logs retain their executed null/no-stop terminal metadata unchanged.
+Full source/binary/artifact identities and actual paths are in EXPERIMENT_STATUS.md.
+
+Only next hypothesis proposed: retained-Adam schedule restart/LR effect. NOT_RUN and no
+new training authorization. A separately approved C/L comparison would retain the same
+general-QA parent weights/moments/optimizer clock/tape/batch/first-target weight, vary only
+the schedule/LR policy and explicitly budget the post-warmup100 through historical250
+range. Nonfinite/resource/time/token conditions stop immediately; watch loss of at least
+4EM or at least2new errors on two consecutive evaluations stops the arm. This is not an
+automatic extension or another default50update run. C/W's negative result does not rule
+out LR, batch or longer-range causes. The present repair closes without that experiment.
+
+## Previous R3-S4-QUALITY-RECOVERY-1.0 (historical)
 
 2026-09-17. 기준 HEAD `9fb5059696553b41d9a3190856888a929d0931be`, origin
 `https://github.com/seoyd/replica-v3.git`, main. 시작 tracked dirty 없음.

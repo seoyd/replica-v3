@@ -365,6 +365,8 @@ pub fn evaluate_corpus(
     field_ablation: FieldAblation,
 ) -> Result<()> {
     use std::io::Write;
+    let mut control = recovery::RunControl::command(false)?;
+    control.check("evaluate_corpus_started")?;
     let rephrase_field = matches!(
         field_ablation,
         FieldAblation::Question | FieldAblation::QuestionAndRecord
@@ -374,6 +376,7 @@ pub fn evaluate_corpus(
         FieldAblation::Record | FieldAblation::QuestionAndRecord
     );
     let (manifest, train, validation) = data::load(corpus)?;
+    control.check("evaluate_corpus_loaded")?;
     let (episodes, split_hash) = match split {
         "train" => (train, &manifest.train.sha256),
         "validation" => (validation, &manifest.validation.sha256),
@@ -403,6 +406,7 @@ pub fn evaluate_corpus(
         return Err(Error::Invalid("diagnostic generation count".into()));
     }
     let loaded = checkpoint::load(checkpoint, Device::Cpu, false)?;
+    control.check("evaluate_model_loaded")?;
     if let Some(state) = &loaded.manifest.training
         && (state.corpus_hash != manifest.train.sha256
             || state.validation_hash != manifest.validation.sha256)
@@ -421,7 +425,11 @@ pub fn evaluate_corpus(
     let mut exact = 0;
     let mut failed = 0;
     let mut groups: BTreeMap<String, [usize; 2]> = BTreeMap::new();
+    let mut evaluated = Vec::new();
     for episode in episodes.iter().take(limit) {
+        if control.check("evaluate_next_case").is_err() {
+            break;
+        }
         let mut request = episode.request.clone();
         if single_record {
             let mut fields = episode.binding.split('/');
@@ -449,7 +457,7 @@ pub fn evaluate_corpus(
                 fields.next().unwrap_or_default(),
             )?;
         }
-        let row = recovery::evaluate_one(&loaded, episode, &request);
+        let row = recovery::evaluate_one(&loaded, episode, &request, &mut control);
         let matched = row["exact_match"] == true;
         failed += usize::from(!row["error"].is_null());
         exact += usize::from(matched);
@@ -467,12 +475,23 @@ pub fn evaluate_corpus(
             "{split} id={} exact={matched} error={}",
             episode.id, row["error"]
         );
+        evaluated.push(row);
+        if control.check("evaluate_case_recorded").is_err() {
+            break;
+        }
     }
-    let summary = serde_json::json!({"summary":true,"split":split,"exact_matches":exact,"denominator":limit,"generation_failures":failed,"groups_correct_total":groups,"final_heldout":false,"oracle_question_ablation":rephrase || rephrase_field,"oracle_field_task_label":rephrase_field || single_record,"oracle_record_selection":single_record});
+    let _ = control.check("evaluate_summary");
+    let mut summary = serde_json::json!({"summary":true,"split":split,"exact_matches":exact,"denominator":evaluated.len(),"generation_failures":failed,"groups_correct_total":groups,"final_heldout":false,"oracle_question_ablation":rephrase || rephrase_field,"oracle_field_task_label":rephrase_field || single_record,"oracle_record_selection":single_record});
+    recovery::add_partial_counts(&mut summary, &evaluated, limit, &control);
     writeln!(log, "{summary}")?;
     log.sync_all()?;
+    let _ = control.seal_terminal();
+    let mut terminal = serde_json::json!({"terminal":true});
+    recovery::add_partial_counts(&mut terminal, &evaluated, limit, &control);
+    writeln!(log, "{terminal}")?;
+    log.sync_all()?;
     println!("{summary}");
-    Ok(())
+    control.stop_result()
 }
 fn decode_generated(
     tok: &ByteBpe,

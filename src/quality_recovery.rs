@@ -4,10 +4,209 @@ use clap::Subcommand;
 use replica_v3::{model::ModelRequest, neural::checkpoint::Loaded};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{collections::BTreeSet, io::Write, path::PathBuf};
+use std::{collections::BTreeSet, io::Write, path::PathBuf, sync::Arc, time::Duration};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum StopReason {
+    Cancelled,
+    TimeBudget,
+    ResourceLimit,
+    ResourceObservationFailed,
+    IntegrityFail,
+    QualityGuard,
+    TokenBudget,
+    AuditIncomplete,
+}
+impl StopReason {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Cancelled => "CANCELLED",
+            Self::TimeBudget => "TIME_BUDGET",
+            Self::ResourceLimit => "RESOURCE_LIMIT",
+            Self::ResourceObservationFailed => "RESOURCE_OBSERVATION_FAILED",
+            Self::IntegrityFail => "INTEGRITY_FAIL",
+            Self::QualityGuard => "QUALITY_GUARD",
+            Self::TokenBudget => "TOKEN_BUDGET",
+            Self::AuditIncomplete => "AUDIT_INCOMPLETE",
+        }
+    }
+}
+/// One cooperative command budget. Synchronous tensor operations/fsync cannot be preempted.
+pub(super) struct RunControl {
+    cancel: Arc<AtomicBool>,
+    start: Instant,
+    deadline: Instant,
+    max_rss_kib: u64,
+    last_rss_kib: Option<u64>,
+    stop: Option<StopReason>,
+    observed: Vec<StopReason>,
+    terminal: bool,
+    generation_calls: usize,
+    completed_generation_count: usize,
+    attempted_case_count: usize,
+    interrupted_case_id: Option<String>,
+    teacher_calls: usize,
+    #[cfg(test)]
+    elapsed_override: Option<Duration>,
+    #[cfg(test)]
+    #[allow(clippy::type_complexity)]
+    hook: Option<Box<dyn FnMut(&str, &Arc<AtomicBool>)>>,
+}
+impl RunControl {
+    fn new(cancel: Arc<AtomicBool>, duration: Duration, max_rss_kib: u64) -> Result<Self> {
+        let start = Instant::now();
+        let deadline = start
+            .checked_add(duration)
+            .ok_or_else(|| Error::Invalid("command deadline overflow".into()))?;
+        Ok(Self {
+            cancel,
+            start,
+            deadline,
+            max_rss_kib,
+            last_rss_kib: None,
+            stop: None,
+            observed: vec![],
+            terminal: false,
+            generation_calls: 0,
+            completed_generation_count: 0,
+            attempted_case_count: 0,
+            interrupted_case_id: None,
+            teacher_calls: 0,
+            #[cfg(test)]
+            elapsed_override: None,
+            #[cfg(test)]
+            hook: None,
+        })
+    }
+    pub(super) fn command(training: bool) -> Result<Self> {
+        let flag = Arc::new(AtomicBool::new(false));
+        let signal = flag.clone();
+        let control = Self::new(
+            flag,
+            Duration::from_secs(900),
+            if training { 16 } else { 12 } * 1024 * 1024,
+        )?;
+        ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed))
+            .map_err(|e| Error::Model(e.to_string()))?;
+        Ok(control)
+    }
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(elapsed) = self.elapsed_override {
+            return self.start + elapsed;
+        }
+        Instant::now()
+    }
+    fn observe(&mut self, reason: StopReason) {
+        if self.terminal {
+            return;
+        }
+        if !self.observed.contains(&reason) {
+            self.observed.push(reason);
+        }
+        self.stop.get_or_insert(reason);
+    }
+    pub(super) fn stop_result(&self) -> Result<()> {
+        match self.stop {
+            None => Ok(()),
+            Some(StopReason::Cancelled) => Err(Error::Cancelled),
+            Some(r) => Err(Error::Model(r.name().into())),
+        }
+    }
+    fn check_at(&mut self, now: Instant, rss: Result<u64>) -> Result<()> {
+        if self.terminal {
+            return self.stop_result();
+        }
+        // Simultaneous observation priority: user cancel, deadline, RSS failure, RSS limit.
+        if self.cancel.load(Ordering::Relaxed) {
+            self.observe(StopReason::Cancelled);
+        }
+        if now >= self.deadline {
+            self.observe(StopReason::TimeBudget);
+        }
+        self.last_rss_kib = rss.as_ref().ok().copied();
+        match rss {
+            Err(_) => self.observe(StopReason::ResourceObservationFailed),
+            Ok(n) if n > self.max_rss_kib => self.observe(StopReason::ResourceLimit),
+            _ => {}
+        }
+        self.stop_result()
+    }
+    pub(super) fn check(&mut self, boundary: &str) -> Result<()> {
+        #[cfg(test)]
+        if let Some(hook) = &mut self.hook {
+            hook(boundary, &self.cancel);
+        }
+        #[cfg(not(test))]
+        let _ = boundary;
+        let rss = rss_kib();
+        self.check_at(self.now(), rss)
+    }
+    fn effective_timeout(&mut self, original: u64) -> Result<u64> {
+        self.check("generation_budget")?;
+        let remaining = self
+            .deadline
+            .saturating_duration_since(self.now())
+            .as_millis();
+        let remaining = u64::try_from(remaining)
+            .map_err(|_| Error::Invalid("remaining timeout overflow".into()))?;
+        if remaining == 0 {
+            self.observe(StopReason::TimeBudget);
+            return self.stop_result().map(|_| 0);
+        }
+        if original == 0 {
+            return Err(Error::Invalid("zero request timeout".into()));
+        }
+        Ok(original.min(remaining))
+    }
+    fn classify_error(&mut self, e: &Error) {
+        if matches!(e, Error::Cancelled) {
+            self.observe(StopReason::Cancelled);
+        } else if self.stop.is_none() {
+            self.observe(StopReason::IntegrityFail);
+        }
+    }
+    fn terminal_reason(&mut self, complete: bool) -> &'static str {
+        let _ = self.check("terminal");
+        if self.stop.is_none() && !complete {
+            self.observe(StopReason::IntegrityFail);
+        }
+        self.terminal = true; // Later signals do not retroactively invalidate this decision.
+        self.stop
+            .map_or("SCREENING_BUDGET_REACHED", StopReason::name)
+    }
+    pub(super) fn seal_terminal(&mut self) -> Result<()> {
+        let result = self.check("terminal");
+        self.terminal = true;
+        result
+    }
+    fn receipt(&self) -> Value {
+        json!({"terminal_reason":self.stop.map(StopReason::name).or_else(||self.terminal.then_some("COMPLETED")),"observed_conditions":self.observed,"generation_calls":self.generation_calls,"teacher_calls":self.teacher_calls,"completed_generation_count":self.completed_generation_count,"attempted_case_count":self.attempted_case_count,"interrupted_case_id":self.interrupted_case_id,
+            "elapsed_seconds":self.now().duration_since(self.start).as_secs_f64(),"work_budget_seconds":self.deadline.duration_since(self.start).as_secs_f64(),
+            "work_deadline_overrun_seconds":self.now().saturating_duration_since(self.deadline).as_secs_f64(),"cooperative_only":true})
+    }
+}
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Recount preserved ledgers and verify C/W trace binding without model calls.
+    Recount {
+        #[arg(long)]
+        fixture: PathBuf,
+        #[arg(long)]
+        parent_log: PathBuf,
+        #[arg(long)]
+        failed_log: PathBuf,
+        #[arg(long)]
+        control: PathBuf,
+        #[arg(long)]
+        treatment: PathBuf,
+        #[arg(long)]
+        audit: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Verify the actual one-factor traces, fresh-process artifacts and product worker.
     Close {
         #[arg(long)]
@@ -65,6 +264,9 @@ pub enum Command {
         checkpoint: PathBuf,
         #[arg(long)]
         source_id: Option<String>,
+        /// Prior raw receipts for the identical panel; compared without extra generation.
+        #[arg(long)]
+        reference: Option<PathBuf>,
         #[arg(long)]
         output: PathBuf,
         #[arg(long, default_value="watch", value_parser=["watch", "failures", "all"])]
@@ -169,8 +371,18 @@ fn rows(path: &Path) -> Result<(Value, Vec<Value>)> {
         .collect();
     let summary = summarize(&cases)?;
     let old = values
-        .last()
+        .iter()
+        .rev()
+        .find(|v| v["summary"] == true)
         .ok_or_else(|| Error::Corrupt("evaluation summary".into()))?;
+    if values
+        .iter()
+        .any(|v| v["terminal"] == true && v["comparison_eligible"] != true)
+    {
+        return Err(Error::Invalid(
+            "partial evaluation is not comparison eligible".into(),
+        ));
+    }
     if old["summary"] != true
         || old["denominator"] != summary["denominator"]
         || old["exact_matches"] != summary["exact_matches"]
@@ -264,7 +476,25 @@ fn registry(path: &Path) -> Result<Value> {
     )
 }
 pub fn run(command: Command) -> Result<()> {
-    match command {
+    let mut budget = RunControl::command(matches!(&command, Command::Arm { .. }))?;
+    budget.check("command_started")?;
+    let outcome = match command {
+        Command::Recount {
+            fixture,
+            parent_log,
+            failed_log,
+            control,
+            treatment,
+            audit,
+            output,
+        } => recount(
+            &fixture,
+            [&parent_log, &failed_log],
+            [&control, &treatment],
+            &audit,
+            &output,
+            &mut budget,
+        ),
         Command::Close {
             fixture,
             control,
@@ -273,21 +503,41 @@ pub fn run(command: Command) -> Result<()> {
             worker_binary,
             source_id,
             output,
-        } => close(
-            &fixture,
-            &control,
-            &treatment,
-            &legacy_tokenizer,
-            &worker_binary,
-            &source_id,
-            &output,
-        ),
+        } => {
+            let output_existed = output.exists();
+            let outcome = close(
+                &fixture,
+                &control,
+                &treatment,
+                &legacy_tokenizer,
+                &worker_binary,
+                &source_id,
+                &output,
+                &mut budget,
+            );
+            if let Err(error) = &outcome {
+                budget.classify_error(error);
+                if !output_existed && output.is_dir() {
+                    let planned = load(&fixture)?.watch.len() * 2 + 6;
+                    let mut partial = budget.receipt();
+                    partial["planned_case_count"] = json!(planned);
+                    partial["not_run_count"] =
+                        json!(planned.saturating_sub(budget.attempted_case_count));
+                    partial["final_evaluation_complete"] = json!(false);
+                    partial["comparison_eligible"] = json!(false);
+                    partial["candidate_eligible"] = json!(false);
+                    partial["worker_calls_are_separate"] = json!(true);
+                    save(&output.join("interrupted.json"), &partial)?;
+                }
+            }
+            outcome
+        }
         Command::Arm {
             fixture,
             arm,
             source_id,
             output,
-        } => arm_run(&fixture, &arm, &source_id, &output),
+        } => arm_run(&fixture, &arm, &source_id, &output, &mut budget),
         Command::Freeze {
             parent,
             start,
@@ -399,16 +649,32 @@ pub fn run(command: Command) -> Result<()> {
             fixture,
             checkpoint,
             source_id,
+            reference,
             output,
             panel,
-        } => replay(&fixture, &checkpoint, &output, &panel, source_id.as_deref()),
-        Command::Audit { fixture, output } => audit(&fixture, &output),
+        } => replay(
+            &fixture,
+            &checkpoint,
+            &output,
+            &panel,
+            source_id.as_deref(),
+            &mut budget,
+            true,
+            reference.as_deref(),
+        ),
+        Command::Audit { fixture, output } => audit(&fixture, &output, &mut budget),
         Command::Numeric {
             fixture,
             checkpoint,
             output,
         } => numeric(&fixture, &checkpoint, &output),
+    };
+    if let Err(error) = &outcome {
+        budget.classify_error(error);
     }
+    let _ = budget.check("command_returned");
+    eprintln!("{}", budget.receipt());
+    outcome.and(budget.stop_result())
 }
 
 fn bytes_receipt(tok: &ByteBpe, ids: &[u32]) -> Value {
@@ -436,24 +702,63 @@ fn components(actual: Option<&str>, expected: &str, provided: &[i64]) -> Value {
     json!({"entity":e.map(|e|a.is_some_and(|a|a.0==e.0)),"context":e.map(|e|a.is_some_and(|a|a.1==e.1)),"value":e.map(|e|a.is_some_and(|a|a.2==e.2)),
         "citation_exact":ids.as_ref().is_some_and(|a|Some(a)==expected_ids.as_ref()),"citation_in_provided":ids.as_ref().map(|a|a.iter().all(|id|provided.contains(id))),"citation_nonempty":ids.as_ref().is_some_and(|a|!a.is_empty())})
 }
-pub(super) fn evaluate_one(loaded: &Loaded, e: &Episode, request: &ModelRequest) -> Value {
+pub(super) fn evaluate_one(
+    loaded: &Loaded,
+    e: &Episode,
+    request: &ModelRequest,
+    control: &mut RunControl,
+) -> Value {
     let mut row = json!({"id":e.id,"scene":scene(e),"category":e.category,"family":e.family,"question":e.request.input,"generated_question":request.input,
-        "evidence":e.request.evidence,"generated_evidence":request.evidence,"expected":e.answer,"exact_match":false,"actual":null,"error":null});
+        "evidence":e.request.evidence,"generated_evidence":request.evidence,"expected":e.answer,"exact_match":false,"actual":null,"error":null,"generation_started":false,"generation_completed":false,"interruption":null});
     let result = (|| -> Result<()> {
+        control.check("case_started")?;
+        control.attempted_case_count += 1;
         let prompt = loaded.tokenizer.prepare(
             request,
             loaded.model.config.context as u32,
             &loaded.model.config.id()?,
         )?;
+        control.check("prompt_prepared")?;
+        let effective_timeout = control.effective_timeout(request.limits.timeout_ms)?;
+        row["effective_timeout_ms"] = json!(effective_timeout);
+        row["original_timeout_ms"] = json!(request.limits.timeout_ms);
+        row["generation_started"] = json!(true);
+        control.generation_calls += 1;
+        let cancel = control.cancel.clone();
         let mut raw = Vec::new();
         let result = loaded.model.generate_observed(
             &prompt.token_ids,
             request.limits.max_tokens as usize,
-            request.limits.timeout_ms,
-            &AtomicBool::new(false),
+            effective_timeout,
+            &cancel,
             &e.id,
-            |id| raw.push(id),
+            |id| {
+                raw.push(id);
+                #[cfg(test)]
+                if let Some(hook) = &mut control.hook {
+                    hook("token_generated", &cancel);
+                }
+            },
         );
+        if matches!(&result, Err(Error::Cancelled)) {
+            control.observe(StopReason::Cancelled);
+        }
+        if result
+            .as_ref()
+            .err()
+            .is_some_and(|e| e.to_string().contains("timeout"))
+            && effective_timeout < request.limits.timeout_ms
+        {
+            control.observe(StopReason::TimeBudget);
+        }
+        if result
+            .as_ref()
+            .err()
+            .is_some_and(|e| e.to_string().contains("nonfinite"))
+        {
+            control.observe(StopReason::IntegrityFail);
+        }
+        let after_generation = control.check("generation_returned");
         let (text, generated, error) = decode_generated(&loaded.tokenizer, result);
         let bytes_ids: Vec<_> = raw
             .iter()
@@ -493,25 +798,51 @@ pub(super) fn evaluate_one(loaded: &Loaded, e: &Episode, request: &ModelRequest)
             .as_ref()
             .map_or_else(|| row["error_class"].clone(), |g| json!(g.finish));
         row["raw_generated_count"] = json!(raw.len());
+        row["generation_completed"] = json!(control.stop.is_none());
+        control.completed_generation_count += usize::from(control.stop.is_none());
         row["whitespace_only"] = json!(
             text.as_ref()
                 .is_some_and(|s| !s.is_empty() && s.trim().is_empty())
         );
+        // Keep the actual generation receipt before propagating a command stop.
+        after_generation?;
+        control.check("before_teacher")?;
         // Gold enters only after free generation has completed, including failures.
         row["teacher_forced_diagnostic_after_generation"] =
-            match teacher(loaded, e, &prompt.token_ids, &raw) {
+            match teacher(loaded, e, &prompt.token_ids, &raw, control) {
                 Ok(t) => t,
-                Err(e) => json!({"error":e.to_string()}),
+                Err(e) => {
+                    if e.to_string().contains("nonfinite") {
+                        control.classify_error(&e);
+                    }
+                    json!({"error":e.to_string()})
+                }
             };
         Ok(())
     })();
     if let Err(error) = result {
-        row["error"] = json!(error.to_string());
-        row["error_class"] = json!("preparation_or_receipt");
+        if control.stop.is_none() {
+            row["error"] = json!(error.to_string());
+            row["error_class"] = json!("preparation_or_receipt");
+        } else {
+            row["diagnostic_stop_error"] = json!(error.to_string());
+        }
+    }
+    if let Some(stop) = control.stop {
+        row["interruption"] = json!(stop);
+        control.interrupted_case_id = Some(e.id.clone());
     }
     row
 }
-fn teacher(l: &Loaded, e: &Episode, prompt: &[u32], raw: &[u32]) -> Result<Value> {
+fn teacher(
+    l: &Loaded,
+    e: &Episode,
+    prompt: &[u32],
+    raw: &[u32],
+    control: &mut RunControl,
+) -> Result<Value> {
+    control.check("teacher_started")?;
+    control.teacher_calls += 1;
     let mut gold = l.tokenizer.encode(e.answer.as_bytes())?;
     gold.push(EOS);
     let mut sequence = prompt.to_vec();
@@ -519,6 +850,7 @@ fn teacher(l: &Loaded, e: &Episode, prompt: &[u32], raw: &[u32]) -> Result<Value
     if sequence.len() > l.model.config.context {
         return Err(Error::ContextTooSmall);
     }
+    control.check("teacher_forward")?;
     let logits = l
         .model
         .forward(
@@ -527,6 +859,7 @@ fn teacher(l: &Loaded, e: &Episode, prompt: &[u32], raw: &[u32]) -> Result<Value
         )?
         .narrow(1, prompt.len() - 1, gold.len())?
         .squeeze(0)?;
+    control.check("teacher_returned")?;
     let lp = candle_nn::ops::log_softmax(&logits, 1)?.to_vec2::<f32>()?;
     if lp.iter().flatten().any(|x| !x.is_finite()) {
         return Err(Error::Model("nonfinite diagnostic logits".into()));
@@ -583,6 +916,7 @@ fn teacher(l: &Loaded, e: &Episode, prompt: &[u32], raw: &[u32]) -> Result<Value
         let rival=raw.get(i).copied().unwrap_or(predicted[i]);
         json!({"index":i,"gold_id":gold[i],"actual_id":raw.get(i),"teacher_argmax":predicted[i],"gold_log_probability":lp[i][gold[i] as usize],"gold_minus_rival_logit":lp[i][gold[i] as usize]-lp[i][rival as usize],"prefix":"gold; at first divergence identical to generation prefix"})
     });
+    control.check("teacher_completed")?;
     Ok(
         json!({"target_tokens_including_eos":gold.len(),"mean_nll":nll.iter().sum::<f64>()/gold.len() as f64,"first_target_nll":nll[0],
         "remaining_mean_nll":nll.iter().skip(1).sum::<f64>()/(gold.len()-1).max(1) as f64,"objective":(nll.iter().sum::<f64>()+(w-1.)*nll[0])/gold.len() as f64,"first_target_weight":w,
@@ -614,14 +948,43 @@ fn field_at(answer: &str, byte: usize) -> &'static str {
     }
     "text"
 }
+#[allow(clippy::too_many_arguments)] // Existing command inputs, shared budget, and optional raw parity receipt.
 fn replay(
     fixture: &Path,
     path: &Path,
     output: &Path,
     panel: &str,
     source_id: Option<&str>,
+    control: &mut RunControl,
+    command_terminal: bool,
+    reference: Option<&Path>,
 ) -> Result<()> {
+    control.check("replay_started")?;
     let f = load(fixture)?;
+    // This owns the exact bytes-validated episodes. Do not re-read the split after binding.
+    // Reject before opening an output or loading a model.
+    let (cases, binding) = replay_cases(&f, panel)?;
+    let reference_rows = reference
+        .map(|path| -> Result<_> {
+            let (header, rows) = rows(path)?;
+            let source_split = header
+                .get("source_validation_hash")
+                .unwrap_or(&header["split_hash"]);
+            if header["fixture_hash"] != file_hash(fixture)?
+                || header["tokenizer_semantic_hash"] != f.tokenizer
+                || header["prompt_format"] != neural::PROMPT_FORMAT
+                || *source_split != f.validation_hash
+                || header["ordered_ids_hash"] != binding["ordered_ids_hash"]
+                || header["decoding"]
+                    != json!(cases.iter().map(|e| &e.request.limits).collect::<Vec<_>>())
+            {
+                return Err(Error::Corrupt("reference replay binding".into()));
+            }
+            verify_historical_rows(&cases, &rows)?;
+            Ok((header, rows))
+        })
+        .transpose()?;
+    control.check("replay_bound")?;
     let binary_hash = file_hash(&std::env::current_exe()?)?;
     let source_id = source_id
         .or_else(|| {
@@ -634,51 +997,61 @@ fn replay(
             Error::Invalid("changed evaluation binary requires explicit --source-id".into())
         })?;
     let l = checkpoint::load(path, Device::Cpu, false)?;
+    control.check("replay_loaded")?;
     if l.tokenizer.semantic_id() != f.tokenizer {
         return Err(Error::Corrupt("replay tokenizer".into()));
     }
-    let (_, _, validation) = data::load(&f.corpus)?;
-    let cases = match panel {
-        "watch" => &f.watch,
-        "failures" => &f.failures,
-        _ => &validation,
-    };
+    let model_content_hash = l.model.weight_hash()?;
+    if reference_rows
+        .as_ref()
+        .is_some_and(|(h, _)| h["model_content_hash"] != model_content_hash)
+    {
+        return Err(Error::Corrupt("reference model content binding".into()));
+    }
     let mut out = std::fs::OpenOptions::new()
         .create_new(true)
         .write(true)
         .open(output)?;
-    let ledger = json!({"header":true,"fixture_hash":file_hash(fixture)?,"binary_hash":file_hash(&std::env::current_exe()?)?,"checkpoint_physical_hash":file_hash(path)?,"model_content_hash":l.model.weight_hash()?,"tokenizer_semantic_hash":l.tokenizer.semantic_id(),"prompt_format":neural::PROMPT_FORMAT,"split_hash":f.validation_hash,"ordered_ids_hash":digest(&cases.iter().map(|e|&e.id).collect::<Vec<_>>())?,"decoding":cases.iter().map(|e|&e.request.limits).collect::<Vec<_>>(),"metric":"strict-full-answer-eos-v1","panel":panel,"final_heldout":false});
+    let ledger = json!({"header":true,"fixture_hash":file_hash(fixture)?,"binary_hash":file_hash(&std::env::current_exe()?)?,"checkpoint_physical_hash":file_hash(path)?,"model_content_hash":model_content_hash,"tokenizer_semantic_hash":l.tokenizer.semantic_id(),"prompt_format":neural::PROMPT_FORMAT,"decoding":cases.iter().map(|e|&e.request.limits).collect::<Vec<_>>(),"metric":"strict-full-answer-eos-v1","panel":panel,"final_heldout":false});
     let mut ledger = ledger;
+    ledger
+        .as_object_mut()
+        .unwrap()
+        .extend(binding.as_object().unwrap().clone());
     ledger["source_commit"] = json!(source_commit()?);
     ledger["working_source_manifest_hash"] = json!(source_id);
     ledger["model_tensor_content_digest"] = json!(l.model.weights_content_id()?);
+    ledger["reference_raw_hash"] = json!(reference.map(file_hash).transpose()?);
     writeln!(out, "{ledger}")?;
-    let started = Instant::now();
     let mut rows = Vec::new();
-    for e in cases {
-        if started.elapsed().as_secs() > 900 {
-            return Err(Error::Model(
-                "replay command timeout; partial receipts preserved".into(),
-            ));
+    for e in &cases {
+        if control.check("panel_next_case").is_err() {
+            break;
         }
-        let row = evaluate_one(&l, e, &e.request);
+        let row = evaluate_one(&l, e, &e.request, control);
         writeln!(out, "{row}")?;
         out.flush()?;
         rows.push(row);
+        if control.check("case_recorded").is_err() {
+            break;
+        }
     }
     // A->B->A: each call uses a fresh actual model cache; gold never affects request IDs.
-    if cases.len() > 1 {
-        let a = evaluate_one(&l, &cases[0], &cases[0].request);
-        if a["raw_tokens"] != rows[0]["raw_tokens"]
-            || a["error"] != rows[0]["error"]
-            || a["prompt_digest"] != rows[0]["prompt_digest"]
+    let mut aba_equal = None;
+    if cases.len() > 1 && control.check("before_aba").is_ok() && rows.len() == cases.len() {
+        let a = evaluate_one(&l, &cases[0], &cases[0].request, control);
+        if control.stop.is_none()
+            && (a["raw_tokens"] != rows[0]["raw_tokens"]
+                || a["error"] != rows[0]["error"]
+                || a["prompt_digest"] != rows[0]["prompt_digest"])
         {
             return Err(Error::Model("cache/request order regression".into()));
         }
+        aba_equal = control.stop.is_none().then_some(true);
     }
-    let old = if l.model.weight_hash()? == f.registry["U2_POLICY_START"]["model_content_hash"] {
+    let old = if model_content_hash == f.registry["U2_POLICY_START"]["model_content_hash"] {
         Some(&f.previous_parent)
-    } else if l.model.weight_hash()? == f.registry["U2_AFTER_250"]["model_content_hash"] {
+    } else if model_content_hash == f.registry["U2_AFTER_250"]["model_content_hash"] {
         Some(&f.previous_failed)
     } else {
         None
@@ -698,10 +1071,54 @@ fn replay(
         }
     }
     let mut summary = summarize(&rows)?;
+    let mut reference_differences = Vec::new();
+    if let Some((_, previous)) = &reference_rows {
+        for row in &rows {
+            let before = previous
+                .iter()
+                .find(|r| r["id"] == row["id"])
+                .ok_or_else(|| Error::Corrupt("reference case missing".into()))?;
+            for key in [
+                "raw_tokens",
+                "actual",
+                "error",
+                "prompt_digest",
+                "provided",
+                "excluded",
+            ] {
+                if row[key] != before[key] {
+                    reference_differences.push(json!({"id":row["id"],"field":key}));
+                }
+            }
+        }
+    }
+    if !reference_differences.is_empty() && control.stop.is_none() {
+        control.observe(StopReason::IntegrityFail);
+    }
+    summary["reference_differences"] = json!(reference_differences);
+    summary["reference_parity"] =
+        json!(reference_rows.as_ref().map(|_| if control.stop.is_some() {
+            "PARTIAL_OR_FAILED"
+        } else {
+            "PASS"
+        }));
+    if differences > 0 {
+        control.observe(StopReason::IntegrityFail);
+    }
     summary["old_output_differences"] = json!(old.map(|_| differences));
-    summary["aba_equal"] = json!(true);
-    summary["elapsed_seconds"] = json!(started.elapsed().as_secs_f64());
+    summary["aba_equal"] = json!(aba_equal);
+    let _ = control.check("before_evaluation_record");
+    add_partial_counts(&mut summary, &rows, cases.len(), control);
     writeln!(out, "{summary}")?;
+    out.sync_all()?;
+    let _ = control.check("evaluation_recorded");
+    if command_terminal {
+        control.terminal = true;
+    }
+    let mut terminal = json!({"terminal":true,"control":control.receipt()});
+    terminal["command_terminal"] = json!(command_terminal);
+    add_partial_counts(&mut terminal, &rows, cases.len(), control);
+    writeln!(out, "{terminal}")?;
     out.sync_all()?;
     println!("{summary}");
     if differences > 0 {
@@ -709,7 +1126,80 @@ fn replay(
             "replay differs; no training authorized by this gate".into(),
         ));
     }
-    Ok(())
+    control.stop_result()
+}
+
+pub(super) fn add_partial_counts(
+    value: &mut Value,
+    rows: &[Value],
+    planned: usize,
+    control: &RunControl,
+) {
+    let complete = rows.len() == planned && control.stop.is_none();
+    value["planned_case_count"] = json!(planned);
+    value["attempted_case_count"] = json!(rows.len());
+    value["completed_generation_count"] = json!(
+        rows.iter()
+            .filter(|r| r["generation_completed"] == true)
+            .count()
+    );
+    value["not_run_count"] = json!(planned.saturating_sub(rows.len()));
+    value["interrupted_case_id"] = rows
+        .iter()
+        .find(|r| !r["interruption"].is_null())
+        .map_or(Value::Null, |r| r["id"].clone());
+    value["terminal_reason"] = control.receipt()["terminal_reason"].clone();
+    value["final_evaluation_complete"] = json!(complete);
+    value["comparison_eligible"] = json!(complete);
+    value["candidate_eligible"] = json!(false); // This receipt alone never selects a model.
+    value["score_scope"] = json!(if complete {
+        "complete_panel"
+    } else {
+        "partial_attempted_cases_only"
+    });
+}
+
+fn evaluate_panel(l: &Loaded, cases: &[Episode], control: &mut RunControl) -> Vec<Value> {
+    let mut rows = Vec::new();
+    for e in cases {
+        if control.check("panel_next_case").is_err() {
+            break;
+        }
+        rows.push(evaluate_one(l, e, &e.request, control));
+        if control.check("panel_case_returned").is_err() {
+            break;
+        }
+    }
+    let _ = control.check("panel_completed");
+    rows
+}
+
+fn replay_cases(f: &Frozen, panel: &str) -> Result<(Vec<Episode>, Value)> {
+    let (cases, actual_split_hash) = match panel {
+        "watch" => (f.watch.clone(), None),
+        "failures" => (f.failures.clone(), None),
+        "all" => {
+            let (manifest, _, validation) = data::load(&f.corpus)?;
+            if manifest.validation.sha256 != f.validation_hash {
+                return Err(Error::Corrupt(
+                    "frozen/current validation binding mismatch".into(),
+                ));
+            }
+            (validation, Some(manifest.validation.sha256))
+        }
+        _ => return Err(Error::Invalid("unknown recovery replay panel".into())),
+    };
+    let binding = json!({
+        "source_validation_hash":f.validation_hash,
+        "frozen_expected_validation_hash":f.validation_hash,
+        "actual_split_hash":actual_split_hash,
+        "evaluated_cases_hash":digest(&cases)?,
+        "evaluated_cases_encoding":"sha256(serde_json::to_vec(ordered Vec<Episode>)); complete fields, no whitespace",
+        "ordered_ids_hash":digest(&cases.iter().map(|e|&e.id).collect::<Vec<_>>())?,
+        "planned_case_count":cases.len(),
+        "input_source":if panel=="all" {"validated_current_snapshot"} else {"frozen_panel"}
+    });
+    Ok((cases, binding))
 }
 
 // Independent semantic check: only serialized question, original records and status/time.
@@ -789,6 +1279,316 @@ fn support(request: &ModelRequest) -> Result<Vec<i64>> {
     }
     Ok(vec![selected[0].event_id])
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum SemanticState {
+    Validated,
+    Contradicted,
+    UnsupportedForm,
+    AmbiguousEvidence,
+    OutOfScope,
+}
+enum Obligation<'a> {
+    Fact {
+        fields: (&'a str, &'a str, &'a str),
+        id: i64,
+    },
+    Cause {
+        accident: Option<i64>,
+        entity: Option<&'a str>,
+        chronology: Option<Vec<i64>>,
+        require_chronology: bool,
+    },
+}
+enum TargetClaims<'a> {
+    Fact {
+        fields: (&'a str, &'a str, &'a str),
+        id: i64,
+    },
+    NoEvidence,
+    Uncertain(i64),
+    Chronology {
+        entity: Option<&'a str>,
+        ids: Vec<i64>,
+        uncertain: bool,
+    },
+    CauseAssertion,
+}
+fn exact_fact(text: &str) -> Option<(&str, &str, &str)> {
+    let text = text.strip_suffix("이다.")?;
+    let (entity, rest) = text.split_once("의 ")?;
+    let (context, value) = rest.split_once(" 이동 지시는 ")?;
+    let atom =
+        |s: &str| !s.is_empty() && !s.chars().any(|c| c.is_whitespace() || ".[]!?".contains(c));
+    (atom(entity) && atom(context) && atom(value)).then_some((entity, context, value))
+}
+fn accident_entity(text: &str) -> Option<&str> {
+    text.strip_prefix("이후 ")?
+        .strip_suffix("의 사고가 기록되었다. 원인은 확인되지 않았다.")
+        .filter(|s| !s.is_empty() && !s.chars().any(char::is_whitespace))
+}
+fn derive_obligation(
+    request: &ModelRequest,
+) -> std::result::Result<Obligation<'_>, (SemanticState, &'static str)> {
+    let q = request.input.as_str();
+    if q.contains("원인") || q.contains("인과관계") {
+        if ![
+            "사고 원인은 무엇인가?",
+            "사고의 원인이 자료로 확인되는가?",
+            "원인으로 확정됐나?",
+            "원인을 알 수 있나?",
+            "원인을 확인할 수 있어?",
+            "원인을 알 수 있는지 답해줘.",
+            "원인으로 확정한 기록이 있어?",
+            "원인도 확인되는가?",
+            "원인을 구분하여 말해줘.",
+            "한계를 함께 답해줘.",
+            "불확실성을 설명해줘.",
+            "인과관계도 확정된 것인가?",
+        ]
+        .iter()
+        .any(|s| q.ends_with(s))
+        {
+            return Err((
+                SemanticState::UnsupportedForm,
+                "unsupported causal question grammar",
+            ));
+        }
+        let records: Vec<_> = request
+            .evidence
+            .items
+            .iter()
+            .filter_map(|r| {
+                accident_entity(&r.original_excerpt)
+                    .filter(|entity| mentions_target(q, entity))
+                    .map(|entity| (r, entity))
+            })
+            .collect();
+        if records.len() > 1 || records.iter().any(|(r, _)| r.excerpt_truncated) {
+            return Err((
+                SemanticState::AmbiguousEvidence,
+                "multiple/truncated accident records",
+            ));
+        }
+        // Unparsed accident evidence cannot be treated as proof of absence.
+        if records.is_empty()
+            && request.evidence.items.iter().any(|r| {
+                r.original_excerpt.contains("사고")
+                    && r.original_excerpt
+                        .strip_suffix("의 점검은 끝났지만 사고 자료는 없다.")
+                        .is_none_or(|entity| {
+                            entity.is_empty()
+                                || entity.chars().any(char::is_whitespace)
+                                || r.excerpt_truncated
+                        })
+            })
+        {
+            return Err((
+                SemanticState::AmbiguousEvidence,
+                "accident evidence outside supported record grammar or target",
+            ));
+        }
+        let require_chronology = q.contains("함께")
+            || q.contains("불확실성을 설명")
+            || q.contains("순서와 확정 원인을 구분");
+        let chronology = chronology_citations(request);
+        if require_chronology && chronology.is_none() {
+            return Err((
+                SemanticState::AmbiguousEvidence,
+                "required chronology not uniquely supported",
+            ));
+        }
+        return Ok(Obligation::Cause {
+            accident: records.first().map(|(r, _)| r.event_id),
+            entity: records.first().map(|(_, s)| *s),
+            chronology,
+            require_chronology,
+        });
+    }
+    if !["지시", "방향", "기록", "원문", "이동 값"]
+        .iter()
+        .any(|s| q.contains(s))
+    {
+        return Err((
+            SemanticState::UnsupportedForm,
+            "unsupported fact question grammar",
+        ));
+    }
+    let ids = support(request)
+        .map_err(|_| (SemanticState::AmbiguousEvidence, "fact support not unique"))?;
+    let record = request
+        .evidence
+        .items
+        .iter()
+        .find(|r| ids == [r.event_id])
+        .ok_or((SemanticState::AmbiguousEvidence, "fact support missing"))?;
+    let fields = exact_fact(&record.original_excerpt).ok_or((
+        SemanticState::UnsupportedForm,
+        "unsupported fact record grammar",
+    ))?;
+    Ok(Obligation::Fact {
+        fields,
+        id: record.event_id,
+    })
+}
+fn citation_literal(text: &str) -> Option<i64> {
+    let digits = text.strip_prefix("[event:")?.strip_suffix(']')?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok().filter(|id| *id > 0)
+}
+fn cause_assertion(text: &str) -> bool {
+    if [
+        "원인은 확정되었습니다.",
+        "원인은 확인되었습니다.",
+        "원인이 확인되었습니다.",
+    ]
+    .contains(&text)
+    {
+        return true;
+    }
+    ["이 원인이다.", "은 원인이 아니다.", " 때문에 사고가 났다."]
+        .iter()
+        .any(|suffix| {
+            text.strip_suffix(suffix).is_some_and(|subject| {
+                !subject.is_empty() && !subject.chars().any(|c| ".[]!?".contains(c))
+            })
+        })
+}
+fn parse_target_claims(answer: &str) -> Option<TargetClaims<'_>> {
+    if answer == "근거가 없어 알 수 없습니다." {
+        return Some(TargetClaims::NoEvidence);
+    }
+    if let Some((left, right)) = answer.split_once(" 하지만 ") {
+        let left_known = left == "원인은 확인되지 않았다." || parse_target_claims(left).is_some();
+        if left_known && cause_assertion(right) {
+            return Some(TargetClaims::CauseAssertion);
+        }
+        return None;
+    }
+    let (body, id) = answer
+        .rsplit_once(' ')
+        .and_then(|(a, b)| citation_literal(b).map(|id| (a, id)))
+        .map_or((answer, None), |(a, id)| (a, Some(id)));
+    if cause_assertion(body) {
+        return Some(TargetClaims::CauseAssertion);
+    }
+    if body == "원인은 확정되지 않았습니다." {
+        return id.map(TargetClaims::Uncertain);
+    }
+    if let Some(fields) = exact_fact(body) {
+        return id.map(|id| TargetClaims::Fact { fields, id });
+    }
+    let (body, uncertain) = answer
+        .strip_suffix(" 원인은 확정되지 않았습니다.")
+        .map_or((answer, false), |b| (b, true));
+    let body = body.strip_suffix("가 기록되었습니다.")?;
+    let (entity, body) = if let Some(body) = body.strip_prefix("지시 ") {
+        (None, body)
+    } else {
+        let (entity, body) = body.split_once("의 지시 ")?;
+        (Some(entity), body)
+    };
+    let (a, body) = body.split_once(" 뒤 실행 ")?;
+    let (b, c) = body.split_once(", 이후 사고 ")?;
+    Some(TargetClaims::Chronology {
+        entity,
+        ids: vec![
+            citation_literal(a)?,
+            citation_literal(b)?,
+            citation_literal(c)?,
+        ],
+        uncertain,
+    })
+}
+fn check_target(obligation: &Obligation<'_>, claims: &TargetClaims<'_>) -> bool {
+    match (obligation, claims) {
+        (
+            Obligation::Fact {
+                fields: a,
+                id: a_id,
+            },
+            TargetClaims::Fact {
+                fields: b,
+                id: b_id,
+            },
+        ) => a == b && a_id == b_id,
+        (
+            Obligation::Cause {
+                accident: None,
+                require_chronology: false,
+                ..
+            },
+            TargetClaims::NoEvidence,
+        ) => true,
+        (
+            Obligation::Cause {
+                accident: Some(a),
+                require_chronology: false,
+                ..
+            },
+            TargetClaims::Uncertain(b),
+        ) => a == b,
+        (
+            Obligation::Cause {
+                entity,
+                chronology: Some(expected),
+                ..
+            },
+            TargetClaims::Chronology {
+                entity: claimed,
+                ids,
+                uncertain,
+            },
+        ) => *uncertain && expected == ids && claimed.is_none_or(|s| Some(s) == *entity),
+        _ => false,
+    }
+}
+fn target_semantics(request: &ModelRequest, answer: &str) -> (SemanticState, &'static str) {
+    let obligation = match derive_obligation(request) {
+        Ok(o) => o,
+        Err(e) => return e,
+    };
+    let Some(claims) = parse_target_claims(answer) else {
+        return (
+            SemanticState::UnsupportedForm,
+            "unsupported complete target grammar",
+        );
+    };
+    if check_target(&obligation, &claims) {
+        (
+            SemanticState::Validated,
+            "facts/citation/order/uncertainty match",
+        )
+    } else {
+        (
+            SemanticState::Contradicted,
+            "target claim contradicts evidence or required facts/order/uncertainty",
+        )
+    }
+}
+fn audit_status(reports: &[&Value], overlap: &[String]) -> &'static str {
+    if !overlap.is_empty()
+        || reports.iter().any(|r| {
+            r["contradicted"].as_u64().unwrap_or(0) > 0
+                || [
+                    "prompt_target_contradictions",
+                    "train_generation_prefix_mismatches",
+                ]
+                .iter()
+                .any(|k| r[*k].as_array().is_some_and(|a| !a.is_empty()))
+        })
+    {
+        "INTEGRITY_FAIL"
+    } else if reports.iter().any(|r| {
+        r["unsupported"].as_u64().unwrap_or(0) > 0 || r["ambiguous"].as_u64().unwrap_or(0) > 0
+    }) {
+        "AUDIT_INCOMPLETE"
+    } else {
+        "CHECKED_BOUNDARIES_PASS"
+    }
+}
 fn scan(episodes: &[Episode], l: &Loaded, limit: usize) -> Result<Value> {
     let mut prompts: BTreeMap<String, (String, String)> = BTreeMap::new();
     let mut collisions = Vec::new();
@@ -806,6 +1606,7 @@ fn scan(episodes: &[Episode], l: &Loaded, limit: usize) -> Result<Value> {
     let mut value_combinations = BTreeSet::new();
     let mut entity_digit_lengths = BTreeMap::new();
     let mut orders = BTreeSet::new();
+    let mut semantic_counts = [0usize; 5];
     let (
         mut checked,
         mut auxiliary,
@@ -816,6 +1617,24 @@ fn scan(episodes: &[Episode], l: &Loaded, limit: usize) -> Result<Value> {
     ) = (0, 0, 0, 0, 0, 0);
     for e in episodes.iter().take(limit) {
         *categories.entry(e.category).or_default() += 1;
+        let (semantic, reason) = if e.family.starts_with("copy/") {
+            (SemanticState::OutOfScope, "predeclared auxiliary task")
+        } else {
+            target_semantics(&e.request, &e.answer)
+        };
+        semantic_counts[match semantic {
+            SemanticState::Validated => 0,
+            SemanticState::Contradicted => 1,
+            SemanticState::UnsupportedForm => 2,
+            SemanticState::AmbiguousEvidence => 3,
+            SemanticState::OutOfScope => 4,
+        }] += 1;
+        if !matches!(
+            semantic,
+            SemanticState::Validated | SemanticState::OutOfScope
+        ) {
+            invalid.push(json!({"id":e.id,"status":semantic,"reason":reason}));
+        }
         let s = samples(std::slice::from_ref(e), &l.tokenizer, 512)?.remove(0);
         let p = l.tokenizer.prepare(
             &e.request,
@@ -880,58 +1699,16 @@ fn scan(episodes: &[Episode], l: &Loaded, limit: usize) -> Result<Value> {
             continue;
         }
         checked += 1;
-        let support = match support(&e.request) {
-            Ok(ids) => ids,
-            Err(error) => {
-                invalid.push(json!({"id":e.id,"error":error.to_string()}));
-                continue;
-            }
-        };
+        let support = support(&e.request).unwrap_or_default(); // Distribution only, never approval.
         if support.is_empty() {
             no_evidence += 1;
         }
         let mut reversed = e.request.clone();
         reversed.evidence.items.reverse();
-        if self::support(&reversed)? != support {
+        if target_semantics(&reversed, &e.answer) != (semantic, reason) {
             return Err(Error::Corrupt(
-                "support changes with evidence permutation".into(),
+                "semantic verdict changes with evidence permutation".into(),
             ));
-        }
-        let mut supplied = citations(&e.answer)?;
-        supplied.sort_unstable();
-        let mut expected = support.clone();
-        expected.sort_unstable();
-        let wrong_value = support.len() == 1
-            && e.request
-                .evidence
-                .items
-                .iter()
-                .find(|r| r.event_id == support[0])
-                .and_then(|r| fields(&r.original_excerpt))
-                .is_some_and(|(_, _, v)| {
-                    !e.answer.contains(&format!("{v}이다."))
-                        && !e.answer.starts_with(&format!("{v}입니다."))
-                });
-        // A chronology plus an uncertainty statement and the accident-only uncertainty
-        // answer can both be supported. Do not mistake a richer answer for a data contradiction.
-        let chronology_option = chronology_citations(&e.request);
-        let compatible_chronology = chronology_option.as_ref().is_some_and(|ids| {
-            let mut sorted = ids.clone();
-            sorted.sort_unstable();
-            sorted == supplied
-        });
-        let wrong_fields = support.len() == 1
-            && fields(&e.answer).is_some_and(|a| {
-                e.request
-                    .evidence
-                    .items
-                    .iter()
-                    .find(|r| r.event_id == support[0])
-                    .and_then(|r| fields(&r.original_excerpt))
-                    .is_none_or(|r| r != a)
-            });
-        if (expected != supplied && !compatible_chronology) || wrong_value || wrong_fields {
-            invalid.push(json!({"id":e.id,"error":"DATA_AMBIGUITY: independent support/target mismatch","expected_ids":support,"actual_ids":supplied}));
         }
         if let Some(id) = support.first()
             && let Some(position) = e
@@ -948,27 +1725,45 @@ fn scan(episodes: &[Episode], l: &Loaded, limit: usize) -> Result<Value> {
     report["unique_question_forms_ascii_digit_runs_collapsed"] = json!(question_forms.len());
     report["unique_evidence_value_multisets_including_empty"] = json!(value_combinations.len());
     report["entity_digit_lengths_per_structured_evidence"] = json!(entity_digit_lengths);
+    for (name, n) in [
+        "validated",
+        "contradicted",
+        "unsupported",
+        "ambiguous",
+        "explicitly_out_of_scope",
+    ]
+    .into_iter()
+    .zip(semantic_counts)
+    {
+        report[name] = json!(n);
+    }
+    report["ordinary_in_scope"] = json!(checked);
+    report["semantic_findings"] = report["data_ambiguities"].clone();
+    report["status"] = json!(audit_status(&[&report], &[]));
     Ok(report)
 }
 fn chronology_citations(request: &ModelRequest) -> Option<Vec<i64>> {
-    if !request.input.contains("원인") || request.evidence.items.len() != 3 {
+    if !(request.input.contains("원인") || request.input.contains("인과관계"))
+        || request.evidence.items.len() != 3
+    {
         return None;
     }
     let mut records: Vec<_> = request.evidence.items.iter().collect();
     records.sort_by_key(|r| r.recorded_at);
-    let (entity, _, _) = fields(&records[0].original_excerpt)?;
+    let (entity, _, value) = exact_fact(&records[0].original_excerpt)?;
     if !mentions_target(&request.input, entity)
         || !records
             .iter()
-            .all(|r| mentions_target(&r.original_excerpt, entity))
+            .all(|r| !r.excerpt_truncated && mentions_target(&r.original_excerpt, entity))
     {
         return None;
     }
-    if fields(&records[0].original_excerpt).is_none()
-        || !records[1].original_excerpt.contains("지시를 실행했다")
-        || !records[2]
-            .original_excerpt
-            .contains("원인은 확인되지 않았다")
+    let execution = records[1]
+        .original_excerpt
+        .strip_suffix(" 지시를 실행했다.")?
+        .split_once("는 ")?;
+    if execution != (entity, value)
+        || accident_entity(&records[2].original_excerpt) != Some(entity)
         || records
             .windows(2)
             .any(|pair| pair[0].recorded_at >= pair[1].recorded_at)
@@ -977,9 +1772,9 @@ fn chronology_citations(request: &ModelRequest) -> Option<Vec<i64>> {
     }
     Some(records.iter().map(|r| r.event_id).collect())
 }
-fn audit(fixture: &Path, output: &Path) -> Result<()> {
+fn audit(fixture: &Path, output: &Path, control: &mut RunControl) -> Result<()> {
+    control.check("audit_started")?;
     let f = load(fixture)?;
-    let l = checkpoint::load(&f.start, Device::Cpu, false)?;
     let (m, train, validation) = data::load(&f.corpus)?;
     let (pm, parent, pv) = data::load(&f.parent_corpus)?;
     if m.train.sha256 != f.train_hash
@@ -988,8 +1783,14 @@ fn audit(fixture: &Path, output: &Path) -> Result<()> {
     {
         return Err(Error::Corrupt("audit corpus changed".into()));
     }
+    let l = checkpoint::load(&f.start, Device::Cpu, false)?;
+    control.check("audit_loaded")?;
     let u2 = scan(&train, &l, train.len())?;
+    control.check("audit_u2_scanned")?;
     let original = scan(&parent, &l, 2048)?;
+    control.check("audit_parent_scanned")?;
+    let development = scan(&validation, &l, validation.len())?;
+    control.check("audit_validation_scanned")?;
     let entities = |cases: &[Episode]| -> BTreeSet<String> {
         cases
             .iter()
@@ -1002,27 +1803,23 @@ fn audit(fixture: &Path, output: &Path) -> Result<()> {
         .cloned()
         .collect::<Vec<_>>();
     overlap.extend(entities(&parent).intersection(&entities(&pv)).cloned());
-    let fail = !overlap.is_empty()
-        || [&u2, &original].iter().any(|v| {
-            [
-                "prompt_target_contradictions",
-                "data_ambiguities",
-                "train_generation_prefix_mismatches",
-            ]
-            .iter()
-            .any(|k| !v[*k].as_array().unwrap().is_empty())
-        });
-    let result = json!({"u2_all":u2,"parent_bounded_first2048":original,"cross_split_entity_overlap":overlap,"optimizer_updates":0,"status":if fail{"INTEGRITY_FAIL"}else{"CHECKED_BOUNDARIES_PASS"},"fixture_hash":file_hash(fixture)?});
+    let status = audit_status(&[&u2, &original, &development], &overlap);
+    let result = json!({"u2_all":u2,"parent_bounded_first2048":original,"validation400":development,"cross_split_entity_overlap":overlap,"optimizer_updates":0,"status":status,"fixture_hash":file_hash(fixture)?,"actual_train_hash":m.train.sha256,"actual_validation_hash":m.validation.sha256,"frozen_expected_validation_hash":f.validation_hash,"evaluated_validation_cases_hash":digest(&validation)?,"parent_train_hash":pm.train.sha256,"scope":"U2 all ordinary; parent first2048 and validation400; copy/* auxiliary OUT_OF_SCOPE"});
     save(output, &result)?;
     println!(
         "audit status={} output={}",
         result["status"],
         output.display()
     );
-    if fail {
-        Err(Error::Invalid(
-            "data/prefix integrity gate; inspect preserved audit".into(),
-        ))
+    if status != "CHECKED_BOUNDARIES_PASS" {
+        control.observe(if status == "AUDIT_INCOMPLETE" {
+            StopReason::AuditIncomplete
+        } else {
+            StopReason::IntegrityFail
+        });
+        Err(Error::Invalid(format!(
+            "{status}; inspect preserved semantic scope and findings"
+        )))
     } else {
         Ok(())
     }
@@ -1231,12 +2028,14 @@ fn worker_receipt(
     binary: &Path,
     checkpoint: &Path,
     request: &ModelRequest,
+    budget: &mut RunControl,
 ) -> Result<(bool, Value, String)> {
     use std::{
         io::Read,
         process::{Command, Stdio},
         time::Duration,
     };
+    budget.check("worker_started")?;
     let mut child = Command::new(binary)
         .args(["__model-worker", "--checkpoint"])
         .arg(checkpoint)
@@ -1272,12 +2071,23 @@ fn worker_receipt(
     }
     let started = Instant::now();
     let status = loop {
+        if let Err(error) = budget.check("worker_poll") {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
         if let Some(status) = child.try_wait()? {
             break status;
         }
         if started.elapsed()
             > replica_v3::model::LOAD_TIMEOUT
-                + Duration::from_millis(request.limits.timeout_ms + 1000)
+                + Duration::from_millis(
+                    request
+                        .limits
+                        .timeout_ms
+                        .checked_add(1000)
+                        .ok_or_else(|| Error::Invalid("worker timeout overflow".into()))?,
+                )
         {
             child.kill()?;
             let _ = child.wait();
@@ -1285,6 +2095,7 @@ fn worker_receipt(
         }
         std::thread::sleep(Duration::from_millis(10));
     };
+    budget.check("worker_returned")?;
     let bytes = out
         .join()
         .map_err(|_| Error::Model("worker reader panic".into()))??;
@@ -1305,6 +2116,7 @@ fn worker_receipt(
     };
     Ok((status.success(), response, error))
 }
+#[allow(clippy::too_many_arguments)] // Existing CLI inputs plus the shared command budget.
 fn close(
     fixture: &Path,
     control: &Path,
@@ -1313,7 +2125,9 @@ fn close(
     worker: &Path,
     source_id: &str,
     output: &Path,
+    budget: &mut RunControl,
 ) -> Result<()> {
+    budget.check("close_started")?;
     let f = load(fixture)?;
     let cp = read_json(&control.join("policy.json"))?;
     let wp = read_json(&treatment.join("policy.json"))?;
@@ -1359,13 +2173,24 @@ fn close(
     let mut reports = Vec::new();
     let mut worker_checks = Vec::new();
     for (name, directory) in [("C", control), ("W", treatment)] {
+        budget.check("close_next_artifact")?;
         let checkpoint = directory.join("final");
         let loaded = checkpoint::load(&checkpoint, Device::Cpu, false)?;
+        budget.check("close_loaded")?;
         if loaded.tokenizer.semantic_id() != tok.semantic_id() {
             return Err(Error::Corrupt("legacy/native tokenizer mapping".into()));
         }
         let replay_path = output.join(format!("{name}-fresh.jsonl"));
-        replay(fixture, &checkpoint, &replay_path, "watch", Some(source_id))?;
+        replay(
+            fixture,
+            &checkpoint,
+            &replay_path,
+            "watch",
+            Some(source_id),
+            budget,
+            false,
+            None,
+        )?;
         let (_, actual) = rows(&replay_path)?;
         let scored = read_json(&directory.join("eval-050.json"))?;
         for row in &actual {
@@ -1397,8 +2222,10 @@ fn close(
             }
         }
         let case = &f.watch[0];
-        let direct = evaluate_one(&loaded, case, &case.request);
-        worker_checks.push(check_worker(worker, &checkpoint, case, &direct)?);
+        let direct = evaluate_one(&loaded, case, &case.request, budget);
+        save(&output.join(format!("{name}-direct.json")), &direct)?;
+        budget.check("close_direct_returned")?;
+        worker_checks.push(check_worker(worker, &checkpoint, case, &direct, budget)?);
         let mut stats = summarize(&actual)?;
         let mut fields: BTreeMap<String, [usize; 2]> = BTreeMap::new();
         for row in &actual {
@@ -1424,7 +2251,9 @@ fn close(
             .as_str()
             .ok_or_else(|| Error::Corrupt("failed path".into()))?,
     );
+    budget.check("close_before_failed_load")?;
     let failed = checkpoint::load(&failed_path, Device::Cpu, false)?;
+    budget.check("close_failed_loaded")?;
     for kind in ["utf8", "empty"] {
         let e = f
             .failures
@@ -1440,7 +2269,9 @@ fn close(
                 })
             })
             .ok_or_else(|| Error::Corrupt("frozen failure coverage".into()))?;
-        let direct = evaluate_one(&failed, e, &e.request);
+        let direct = evaluate_one(&failed, e, &e.request, budget);
+        save(&output.join(format!("failed-{kind}-direct.json")), &direct)?;
+        budget.check("close_failure_returned")?;
         let ids: Vec<u32> = serde_json::from_value(direct["raw_tokens"].clone())?;
         let ids: Vec<_> = ids
             .into_iter()
@@ -1451,7 +2282,7 @@ fn close(
                 "failed legacy/native mapping mismatch".into(),
             ));
         }
-        worker_checks.push(check_worker(worker, &failed_path, e, &direct)?);
+        worker_checks.push(check_worker(worker, &failed_path, e, &direct, budget)?);
     }
     let base = read_json(&control.join("eval-000.json"))?["watch"]["exact_matches"]
         .as_u64()
@@ -1475,17 +2306,194 @@ fn close(
         .is_some_and(|n| n >= base && n > cs["exact_matches"].as_u64().unwrap_or(0))
         && ws["generation_failures"].as_u64().unwrap_or(u64::MAX) == 0
         && ws["empty"].as_u64().unwrap_or(u64::MAX) == 0;
-    let summary = json!({"one_factor_actual_trace_verified":true,"optimizer_updates_small":c.len()+w.len(),"same_sample_multiset_and_order":true,"same_clocks_and_lr":true,"reports":reports,"product_worker":worker_checks,"tokenizer_native_legacy_mapping":"PASS","candidate_eligible":eligible,"confirmation":if eligible{"REQUIRED_NOT_RUN"}else{"NOT_RUN_NO_SCREENING_EFFECT"},"regression_within_50":if regression{"REPRODUCED_ON_WATCH"}else{"NOT_REPRODUCED_WITHIN_BUDGET"},"s4_quality":"NOT_EVALUATED_HERE","goal1_ready":false});
+    let mut summary = json!({"one_factor_actual_trace_verified":true,"optimizer_updates_small":c.len()+w.len(),"same_sample_multiset_and_order":true,"same_clocks_and_lr":true,"reports":reports,"product_worker":worker_checks,"tokenizer_native_legacy_mapping":"PASS","candidate_eligible":eligible,"confirmation":if eligible{"REQUIRED_NOT_RUN"}else{"NOT_RUN_NO_SCREENING_EFFECT"},"regression_within_50":if regression{"REPRODUCED_ON_WATCH"}else{"NOT_REPRODUCED_WITHIN_BUDGET"},"s4_quality":"NOT_EVALUATED_HERE","goal1_ready":false});
+    budget.check("close_before_terminal")?;
+    save(&output.join("evaluations.json"), &summary)?;
+    let sealed = budget.seal_terminal();
+    summary["final_evaluation_complete"] = json!(sealed.is_ok());
+    summary["comparison_eligible"] = json!(sealed.is_ok());
+    summary["control"] = budget.receipt();
+    if sealed.is_err() {
+        summary["candidate_eligible"] = json!(false);
+    }
     save(&output.join("summary.json"), &summary)?;
     println!(
         "closure report={} SMALL_updates={}",
         output.display(),
         c.len() + w.len()
     );
+    sealed
+}
+
+fn verify_historical_rows(cases: &[Episode], rows: &[Value]) -> Result<()> {
+    if rows.len() != cases.len() {
+        return Err(Error::Corrupt("historical missing/count mismatch".into()));
+    }
+    let expected: BTreeMap<_, _> = cases.iter().map(|e| (e.id.as_str(), e)).collect();
+    let mut seen = BTreeSet::new();
+    for row in rows {
+        let id = row["id"]
+            .as_str()
+            .ok_or_else(|| Error::Corrupt("historical ID".into()))?;
+        let e = expected
+            .get(id)
+            .ok_or_else(|| Error::Corrupt("historical unknown ID".into()))?;
+        if !seen.insert(id)
+            || row["question"] != e.request.input
+            || row["expected"] != e.answer
+            || row["evidence"] != serde_json::to_value(&e.request.evidence)?
+            || row["generated_question"] != e.request.input
+            || row["generated_evidence"] != serde_json::to_value(&e.request.evidence)?
+        {
+            return Err(Error::Corrupt(
+                "historical duplicate/content binding".into(),
+            ));
+        }
+    }
     Ok(())
 }
-fn check_worker(binary: &Path, path: &Path, e: &Episode, direct: &Value) -> Result<Value> {
-    let (success, response, error) = worker_receipt(binary, path, &e.request)?;
+fn recount(
+    fixture: &Path,
+    logs: [&Path; 2],
+    arms: [&Path; 2],
+    audit_path: &Path,
+    output: &Path,
+    control: &mut RunControl,
+) -> Result<()> {
+    control.check("recount_started")?;
+    let f = load(fixture)?;
+    let (validation, binding) = replay_cases(&f, "all")?;
+    let (manifest, train, _) = data::load(&f.corpus)?;
+    if manifest.train.sha256 != f.train_hash {
+        return Err(Error::Corrupt("recount train binding".into()));
+    }
+    let audit = read_json(audit_path)?;
+    let fixture_hash = file_hash(fixture)?;
+    if audit["fixture_hash"] != fixture_hash || audit["actual_validation_hash"] != f.validation_hash
+    {
+        return Err(Error::Corrupt("audit/recount binding".into()));
+    }
+    let mut historical = Vec::new();
+    for ((path, label), raw_key) in logs
+        .into_iter()
+        .zip(["U2_POLICY_START", "U2_AFTER_250"])
+        .zip(["parent_raw_hash", "failed_raw_hash"])
+    {
+        control.check("recount_next_log")?;
+        let (header, cases) = rows(path)?;
+        if file_hash(path)? != f.registry[raw_key]
+            || header["split_sha256"] != f.validation_hash
+            || header["checkpoint_sha256"] != f.registry[label]["manifest"]["weights_sha256"]
+        {
+            return Err(Error::Corrupt(
+                "historical raw/split/checkpoint binding".into(),
+            ));
+        }
+        verify_historical_rows(&validation, &cases)?;
+        historical.push(json!({"artifact":label,"raw_hash":file_hash(path)?,"score":summarize(&cases)?,"score_interpretation":"SCORE_AGAINST_FROZEN_LABELS","missing_error_generation_receipts":cases.iter().filter(|r|!r["error"].is_null()&&r["generation"].is_null()).count(),"missing_receipt_finish":"UNKNOWN"}));
+    }
+    let policies = arms
+        .map(|p| read_json(&p.join("policy.json")))
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+    let traces = arms
+        .map(|p| trace(&p.join("trace.jsonl")))
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+    let mut expected_w = policies[0]["config"].clone();
+    expected_w["first_target_weight"] = json!(1.);
+    if expected_w != policies[1]["config"]
+        || policies[0]["config"]["first_target_weight"] != 8.
+        || ["parent", "tape", "tape_hash", "source_id", "binary_hash"]
+            .iter()
+            .any(|k| policies[0][*k] != policies[1][*k])
+    {
+        return Err(Error::Corrupt("historical C/W one-factor binding".into()));
+    }
+    let mut arm_reports = Vec::new();
+    for ((directory, policy), trace) in arms.iter().zip(&policies).zip(&traces) {
+        control.check("recount_next_arm")?;
+        let config: TrainConfig = serde_json::from_value(policy["config"].clone())?;
+        let tape: Vec<(Vec<usize>, u64)> = serde_json::from_value(policy["tape"].clone())?;
+        let parent_step = policy["parent"]["cumulative_model_step"]
+            .as_u64()
+            .ok_or_else(|| Error::Corrupt("policy parent step".into()))?
+            as usize;
+        if policy["fixture_hash"] != fixture_hash
+            || policy["parent"] != f.registry["U2_POLICY_START"]
+            || digest(&tape)? != policy["tape_hash"]
+            || trace.len() != tape.len()
+        {
+            return Err(Error::Corrupt(
+                "historical arm fixture/tape/parent binding".into(),
+            ));
+        }
+        for (i, (row, (indices, rng))) in trace.iter().zip(&tape).enumerate() {
+            let ids = indices
+                .iter()
+                .map(|&n| {
+                    train
+                        .get(n)
+                        .map(|e| &e.id)
+                        .ok_or_else(|| Error::Corrupt("trace sample index".into()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            if row["indices"] != json!(indices)
+                || row["ids"] != json!(ids)
+                || row["sampler_state"] != json!(rng)
+                || row["new_update"] != i + 1
+                || row["cumulative_model_step"] != parent_step + i + 1
+                || row["optimizer_step"] != parent_step + i + 1
+                || row["schedule_step"] != parent_step + i + 1 - config.budget_start_step
+                || row["lr"]
+                    .as_f64()
+                    .is_none_or(|lr| (lr - config.learning_rate(parent_step + i + 1)).abs() > 1e-15)
+            {
+                return Err(Error::Corrupt("historical actual trace contract".into()));
+            }
+        }
+        let evaluation = read_json(&directory.join("eval-050.json"))?;
+        let scored: Vec<Value> = serde_json::from_value(evaluation["watch_rows"].clone())?;
+        verify_historical_rows(&f.watch, &scored)?;
+        let score = summarize(&scored)?;
+        for k in ["denominator", "exact_matches", "generation_failures"] {
+            if score[k] != evaluation["watch"][k] {
+                return Err(Error::Corrupt("historical watch recount".into()));
+            }
+        }
+        arm_reports.push(json!({"arm":policy["arm"],"trace_hash":file_hash(&directory.join("trace.jsonl"))?,"historical_updates":trace.len(),"watch":score,"fixture_bound":true,"policy_bound":true}));
+    }
+    for (a, b) in traces[0].iter().zip(&traces[1]) {
+        for k in [
+            "indices",
+            "ids",
+            "input_tokens",
+            "target_tokens",
+            "lr",
+            "optimizer_step",
+            "schedule_step",
+        ] {
+            if a[k] != b[k] {
+                return Err(Error::Corrupt("C/W actual trace mismatch".into()));
+            }
+        }
+    }
+    control.check("recount_terminal")?;
+    save(
+        output,
+        &json!({"status":"PASS","binding":binding,"fixture_hash":fixture_hash,"historical":historical,"arms":arm_reports,"data_audit":audit["status"],"label_findings":audit["validation400"]["semantic_findings"],"new_small_optimizer_updates":0,"model_calls":control.generation_calls,"final_heldout":false}),
+    )?;
+    println!("recount PASS: {}", output.display());
+    Ok(())
+}
+fn check_worker(
+    binary: &Path,
+    path: &Path,
+    e: &Episode,
+    direct: &Value,
+    budget: &mut RunControl,
+) -> Result<Value> {
+    let (success, response, error) = worker_receipt(binary, path, &e.request, budget)?;
     let expected_success = direct["error"].is_null()
         && direct["generation"]["finish"] == "stop"
         && direct["actual"].as_str().is_some_and(|s| !s.is_empty());
@@ -1535,7 +2543,9 @@ fn save_arm(
         "CANCELLED" => "CANCELLED",
         "RESOURCE_LIMIT" => "RESOURCE_LIMIT",
         "SCREENING_BUDGET_REACHED" | "TOKEN_BUDGET" | "TIME_BUDGET" => "BUDGET_EXHAUSTED",
-        "QUALITY_GUARD" | "INTEGRITY_FAIL" => "DIAGNOSTIC_COMPLETE",
+        "QUALITY_GUARD" | "INTEGRITY_FAIL" | "RESOURCE_OBSERVATION_FAILED" | "AUDIT_INCOMPLETE" => {
+            "DIAGNOSTIC_COMPLETE"
+        }
         _ => return Err(Error::Invalid("unknown recovery termination".into())),
     }
     .into();
@@ -1543,7 +2553,57 @@ fn save_arm(
     checkpoint::save(output, &l.model, &l.tokenizer, m, &adam.moments)?;
     Ok(())
 }
-fn arm_run(fixture: &Path, arm: &str, source_id: &str, output: &Path) -> Result<()> {
+fn arm_evaluation(
+    l: &Loaded,
+    watch: &[Episode],
+    train: &[Episode],
+    control: &mut RunControl,
+) -> Result<Value> {
+    let rows = evaluate_panel(l, watch, control);
+    let mut score = summarize(&rows)?;
+    add_partial_counts(&mut score, &rows, watch.len(), control);
+    let train_rows = if control.stop.is_none() {
+        evaluate_panel(l, train, control)
+    } else {
+        vec![]
+    };
+    let mut evaluation = json!({"watch":score,"watch_rows":rows,"train_exposure_panel":train_rows});
+    let all: Vec<_> = rows.iter().chain(&train_rows).cloned().collect();
+    add_partial_counts(&mut evaluation, &all, watch.len() + train.len(), control);
+    Ok(evaluation)
+}
+fn finish_arm(
+    control: &mut RunControl,
+    complete: bool,
+    save_checkpoint: impl FnOnce(&str) -> Result<()>,
+) -> Value {
+    let _ = control.check("before_checkpoint_preservation");
+    if control.stop.is_none() && !complete {
+        control.observe(StopReason::IntegrityFail);
+    }
+    let work_elapsed = control.now().duration_since(control.start).as_secs_f64();
+    let cleanup_start = Instant::now();
+    let saved_reason = control
+        .stop
+        .map_or("SCREENING_BUDGET_REACHED", StopReason::name);
+    let saved = save_checkpoint(saved_reason); // Only consistent checkpoint/log preservation is allowed after stop.
+    if let Err(error) = &saved {
+        control.classify_error(error);
+    }
+    let _ = control.check("checkpoint_preserved");
+    let reason = control.terminal_reason(complete && saved.is_ok());
+    json!({"reason":reason,"observed_conditions":control.observed,"checkpoint_saved":saved.is_ok(),"checkpoint_save_status_reason":saved_reason,"save_error":saved.err().map(|e|e.to_string()),
+        "work_elapsed_seconds":work_elapsed,"cleanup_elapsed_seconds":cleanup_start.elapsed().as_secs_f64(),"work_deadline_overrun_seconds":control.now().saturating_duration_since(control.deadline).as_secs_f64(),
+        "final_evaluation_complete":complete,"comparison_eligible":complete&&control.stop.is_none(),"candidate_eligible":false,"cooperative_only":true})
+}
+fn arm_run(
+    fixture: &Path,
+    arm: &str,
+    source_id: &str,
+    output: &Path,
+    control: &mut RunControl,
+) -> Result<()> {
+    control.check("arm_started")?;
     if source_id.len() != 64 || !source_id.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(Error::Invalid("frozen source digest required".into()));
     }
@@ -1552,12 +2612,14 @@ fn arm_run(fixture: &Path, arm: &str, source_id: &str, output: &Path) -> Result<
         return Err(Error::Invalid("frozen training backend mismatch".into()));
     }
     let mut l = checkpoint::load(&f.start, Device::Cpu, true)?;
+    control.check("arm_loaded")?;
     if l.model.weight_hash()? != f.registry["U2_POLICY_START"]["model_content_hash"]
         || file_hash(&f.start)? != f.registry["U2_POLICY_START"]["physical_hash"]
     {
         return Err(Error::Corrupt("arm parent changed".into()));
     }
     let (manifest, episodes, _) = data::load(&f.corpus)?;
+    control.check("arm_corpus_loaded")?;
     if manifest.train.sha256 != f.train_hash || manifest.validation.sha256 != f.validation_hash {
         return Err(Error::Corrupt("arm corpus changed".into()));
     }
@@ -1573,6 +2635,7 @@ fn arm_run(fixture: &Path, arm: &str, source_id: &str, output: &Path) -> Result<
     state.config = c.clone();
     l.manifest.source_id = source_id.into();
     let s = samples(&episodes, &l.tokenizer, c.seq_len)?;
+    control.check("arm_prepared")?;
     let pool: Vec<_> = (0..s.len()).collect();
     let mut rng = neural::transformer::Rng {
         state: state.sampler_state,
@@ -1602,15 +2665,12 @@ fn arm_run(fixture: &Path, arm: &str, source_id: &str, output: &Path) -> Result<
         .write(true)
         .create_new(true)
         .open(output.join("trace.jsonl"))?;
-    let started = Instant::now();
-    let cancelled = std::sync::Arc::new(AtomicBool::new(false));
-    let flag = cancelled.clone();
-    ctrlc::set_handler(move || flag.store(true, Ordering::Relaxed))
-        .map_err(|e| Error::Model(e.to_string()))?;
     let mut base_score = 0;
     let mut base_errors = BTreeSet::new();
     let mut bad_streak = 0;
-    let mut reason = "SCREENING_BUDGET_REACHED";
+    let mut final_evaluation_complete = false;
+    let mut last_evaluation = Value::Null;
+    let train_panel: Vec<_> = selected.iter().map(|&i| episodes[i].clone()).collect();
     let mut exposure = BTreeMap::<usize, usize>::new();
     let outcome = (|| -> Result<()> {
         for (n, entry) in tape
@@ -1619,16 +2679,15 @@ fn arm_run(fixture: &Path, arm: &str, source_id: &str, output: &Path) -> Result<
             .chain(std::iter::once(None))
             .enumerate()
         {
+            control.check("arm_loop")?;
             if [0, 10, 25, 50].contains(&n) {
                 l.manifest.training = Some(state.clone());
                 l.model.refresh_identity()?;
-                let rows: Vec<_> = f
-                    .watch
-                    .iter()
-                    .map(|e| evaluate_one(&l, e, &e.request))
-                    .collect();
-                let score = summarize(&rows)?;
-                let errors: BTreeSet<_> = rows
+                let mut evaluation = arm_evaluation(&l, &f.watch, &train_panel, control)?;
+                let score = &evaluation["watch"];
+                let errors: BTreeSet<_> = evaluation["watch_rows"]
+                    .as_array()
+                    .unwrap()
                     .iter()
                     .filter(|r| !r["error"].is_null() || r["actual"] == "")
                     .map(|r| r["id"].as_str().unwrap().to_string())
@@ -1641,17 +2700,34 @@ fn arm_run(fixture: &Path, arm: &str, source_id: &str, output: &Path) -> Result<
                 let new_errors = errors.difference(&base_errors).count();
                 let bad = base_score.saturating_sub(count) >= 4 || new_errors >= 2;
                 bad_streak = if bad { bad_streak + 1 } else { 0 };
-                let train_rows: Vec<_> = selected
-                    .iter()
-                    .map(|&i| evaluate_one(&l, &episodes[i], &episodes[i].request))
-                    .collect();
-                let evaluation = json!({"new_updates":n,"model_step":state.step,"watch":score,"new_error_cases":new_errors,"bad_streak":bad_streak,"watch_rows":rows,"train_exposure_panel":train_rows,"exposure_counts":selected.iter().map(|i|(episodes[*i].id.clone(),exposure.get(i).copied().unwrap_or(0))).collect::<BTreeMap<_,_>>()});
+                evaluation["new_updates"] = json!(n);
+                evaluation["model_step"] = json!(state.step);
+                evaluation["new_error_cases"] = json!(new_errors);
+                evaluation["bad_streak"] = json!(bad_streak);
+                evaluation["exposure_counts"] = json!(
+                    selected
+                        .iter()
+                        .map(|i| (
+                            episodes[*i].id.clone(),
+                            exposure.get(i).copied().unwrap_or(0)
+                        ))
+                        .collect::<BTreeMap<_, _>>()
+                );
+                let _ = control.check("before_evaluation_record");
+                if control.stop.is_some() {
+                    evaluation["final_evaluation_complete"] = json!(false);
+                    evaluation["comparison_eligible"] = json!(false);
+                    evaluation["terminal_reason"] = json!(control.stop);
+                }
                 save(&output.join(format!("eval-{n:03}.json")), &evaluation)?;
+                last_evaluation = evaluation;
+                control.check("evaluation_recorded")?;
                 println!(
                     "arm={arm} new_updates={n}/50 cumulative_step={} watch={count}/32 new_errors={new_errors} elapsed_s={:.3}",
                     state.step,
-                    started.elapsed().as_secs_f64()
+                    control.start.elapsed().as_secs_f64()
                 );
+                control.check("before_evaluation_checkpoint")?;
                 save_arm(
                     &mut l,
                     &state,
@@ -1659,26 +2735,18 @@ fn arm_run(fixture: &Path, arm: &str, source_id: &str, output: &Path) -> Result<
                     &output.join(format!("step-{n:03}")),
                     "RECOVERY_SCREENING",
                 )?;
+                control.check("evaluation_checkpoint_saved")?;
+                final_evaluation_complete =
+                    n == 50 && last_evaluation["final_evaluation_complete"] == true;
                 if bad_streak >= 2 {
-                    reason = "QUALITY_GUARD";
+                    control.observe(StopReason::QualityGuard);
                     break;
                 }
             }
             let Some((indices, sampler)) = entry else {
                 break;
             };
-            if cancelled.load(Ordering::Relaxed) {
-                reason = "CANCELLED";
-                break;
-            }
-            if started.elapsed().as_secs() >= 900 {
-                reason = "TIME_BUDGET";
-                break;
-            }
-            if rss_kib()? > 16 * 1024 * 1024 {
-                reason = "RESOURCE_LIMIT";
-                break;
-            }
+            control.check("before_training_batch")?;
             let b = batch(&s, indices, &Device::Cpu)?;
             let target_count: usize = indices
                 .iter()
@@ -1687,7 +2755,7 @@ fn arm_run(fixture: &Path, arm: &str, source_id: &str, output: &Path) -> Result<
             if state.consumed_tokens - start_input + b.tokens as u64 > 200000
                 || state.target_tokens - start_targets + target_count as u64 > 50000
             {
-                reason = "TOKEN_BUDGET";
+                control.observe(StopReason::TokenBudget);
                 break;
             }
             let (ce, obj, targets) = response_loss(
@@ -1695,12 +2763,14 @@ fn arm_run(fixture: &Path, arm: &str, source_id: &str, output: &Path) -> Result<
                 &b,
                 c.first_target_weight,
             )?;
+            control.check("training_forward_returned")?;
             let ce = ce.to_scalar::<f32>()?;
             let objective = obj.to_scalar::<f32>()?;
             if !ce.is_finite() || !objective.is_finite() {
                 return Err(Error::Model("nonfinite recovery loss".into()));
             }
             let grads = obj.backward()?;
+            control.check("training_backward_returned")?;
             // Preserve the production accumulation arithmetic even for accumulation=1.
             let gradients = l
                 .model
@@ -1718,6 +2788,7 @@ fn arm_run(fixture: &Path, arm: &str, source_id: &str, output: &Path) -> Result<
                 .collect::<Result<BTreeMap<_, _>>>()?;
             let mut groups: BTreeMap<String, [f64; 3]> = BTreeMap::new();
             let inspect = [1, 5, 20].contains(&(n + 1));
+            control.check("before_optimizer")?;
             let (norm, delta) = adam.step_observed(
                 &l.model.vars,
                 &gradients,
@@ -1753,13 +2824,15 @@ fn arm_run(fixture: &Path, arm: &str, source_id: &str, output: &Path) -> Result<
             state.sampler_state = *sampler;
             state.train_loss = Some(ce as f64);
             state.validation_loss = None;
+            let _ = control.check("optimizer_committed"); // State/clock now describe the entire atomic step.
             for &i in indices {
                 *exposure.entry(i).or_default() += 1;
             }
             let stats: BTreeMap<_,_>=groups.into_iter().map(|(k,v)|(k,json!({"gradient_norm":v[0].sqrt(),"update_norm":v[1].sqrt(),"weight_norm":v[2].sqrt(),"update_to_weight":v[1].sqrt()/v[2].sqrt().max(1e-30)}))).collect();
-            let row = json!({"arm":arm,"new_update":n+1,"cumulative_model_step":state.step,"optimizer_step":state.step,"schedule_step":state.step-c.budget_start_step,"lr":c.learning_rate(state.step),"indices":indices,"ids":indices.iter().map(|&i|&episodes[i].id).collect::<Vec<_>>(),"sampler_state":sampler,"input_tokens":b.tokens,"target_tokens":targets,"ce":ce,"objective":objective,"first_target_weight":c.first_target_weight,"grad_norm":norm,"update_norm":delta,"parameter_groups":stats,"elapsed_seconds":started.elapsed().as_secs_f64(),"rss_kib":rss_kib()?});
+            let row = json!({"arm":arm,"new_update":n+1,"cumulative_model_step":state.step,"optimizer_step":state.step,"schedule_step":state.step-c.budget_start_step,"lr":c.learning_rate(state.step),"indices":indices,"ids":indices.iter().map(|&i|&episodes[i].id).collect::<Vec<_>>(),"sampler_state":sampler,"input_tokens":b.tokens,"target_tokens":targets,"ce":ce,"objective":objective,"first_target_weight":c.first_target_weight,"grad_norm":norm,"update_norm":delta,"parameter_groups":stats,"elapsed_seconds":control.start.elapsed().as_secs_f64(),"rss_kib":control.last_rss_kib});
             writeln!(log, "{row}")?;
             log.flush()?;
+            control.stop_result()?;
             if n + 1 == 20 && arm == "C" {
                 let hash = l.model.weight_hash()?;
                 let expected = &f.registry["U2_AFTER_20"]["model_content_hash"];
@@ -1776,20 +2849,501 @@ fn arm_run(fixture: &Path, arm: &str, source_id: &str, output: &Path) -> Result<
         }
         Ok(())
     })();
-    if outcome.is_err() {
-        reason = "INTEGRITY_FAIL";
+    if let Err(error) = &outcome {
+        control.classify_error(error);
     }
-    save_arm(&mut l, &state, &adam, &output.join("final"), reason)?;
-    let result = json!({"arm":arm,"reason":reason,"new_updates":state.step-start_step,"cumulative_model_step":state.step,"additional_input_tokens":state.consumed_tokens-start_input,"additional_target_tokens":state.target_tokens-start_targets,"model_content_hash":l.model.weight_hash()?,"elapsed_seconds":started.elapsed().as_secs_f64(),"error":outcome.as_ref().err().map(ToString::to_string),"goal1_ready":false});
+    let mut result = finish_arm(control, final_evaluation_complete, |reason| {
+        save_arm(&mut l, &state, &adam, &output.join("final"), reason)
+    });
+    let info = json!({"arm":arm,"new_updates":state.step-start_step,"cumulative_model_step":state.step,"additional_input_tokens":state.consumed_tokens-start_input,"additional_target_tokens":state.target_tokens-start_targets,"model_content_hash":l.model.weight_hash()?,"elapsed_seconds":control.start.elapsed().as_secs_f64(),"error":outcome.as_ref().err().map(ToString::to_string),"goal1_ready":false,"last_evaluation":last_evaluation});
+    result
+        .as_object_mut()
+        .unwrap()
+        .extend(info.as_object().unwrap().clone());
     save(&output.join("result.json"), &result)?;
     log.sync_all()?;
     println!("{result}");
-    outcome
+    outcome.and(control.stop_result())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn repair_control() -> RunControl {
+        RunControl::new(
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(60),
+            u64::MAX,
+        )
+        .unwrap()
+    }
+    fn repair_loaded() -> Loaded {
+        let tok = ByteBpe::train(&[b"abc".to_vec()], &neural::hash(b"fixture"), 264).unwrap();
+        let model =
+            Transformer::init(neural::transformer::Config::tiny(264), 17, Device::Cpu).unwrap();
+        let manifest = checkpoint::initialized(&model, &tok, 17, neural::hash(b"fixture")).unwrap();
+        Loaded {
+            model,
+            tokenizer: tok,
+            manifest,
+            optimizer: BTreeMap::new(),
+        }
+    }
+    fn repair_episode(id: &str) -> Episode {
+        Episode {
+            id: id.into(),
+            category: 0,
+            family: id.into(),
+            binding: id.into(),
+            sequence: id.into(),
+            request: ModelRequest {
+                request_id: id.into(),
+                system: String::new(),
+                input: "abc".into(),
+                evidence: Default::default(),
+                limits: replica_v3::event::GenerationLimits {
+                    context_tokens: 64,
+                    max_tokens: 1,
+                    timeout_ms: 30000,
+                },
+            },
+            answer: "b".into(),
+        }
+    }
+    fn repair_corpus(root: &Path, validation: &[Episode]) -> data::CorpusManifest {
+        std::fs::create_dir_all(root).unwrap();
+        let write = |name: &str, episodes: &[Episode]| {
+            let bytes = serde_json::to_vec(episodes).unwrap();
+            std::fs::write(root.join(name), &bytes).unwrap();
+            data::Split {
+                file: name.into(),
+                sha256: neural::hash(&bytes),
+                bytes: bytes.len(),
+                documents: episodes.len(),
+                tokens: None,
+            }
+        };
+        let m = data::CorpusManifest {
+            version: 1,
+            scope: "test".into(),
+            permission: "synthetic".into(),
+            generator: "independent".into(),
+            seed: 0,
+            split_rule: "distinct".into(),
+            train: write("train.json", &[repair_episode("train/0")]),
+            validation: write("validation.json", validation),
+        };
+        std::fs::write(root.join("manifest.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+        m
+    }
+    fn repair_frozen(root: &Path, validation: &[Episode], l: &Loaded) -> Frozen {
+        let corpus = root.join("corpus");
+        let m = repair_corpus(&corpus, validation);
+        let start = root.join("model");
+        checkpoint::save(
+            &start,
+            &l.model,
+            &l.tokenizer,
+            l.manifest.clone(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        Frozen {
+            version: 1,
+            registry: json!({}),
+            corpus: corpus.clone(),
+            parent_corpus: corpus,
+            start,
+            train_hash: m.train.sha256.clone(),
+            validation_hash: m.validation.sha256,
+            parent_train_hash: m.train.sha256,
+            tokenizer: l.tokenizer.semantic_id(),
+            watch: (0..32)
+                .map(|i| repair_episode(&format!("watch/{i}")))
+                .collect(),
+            failures: vec![repair_episode("failure/0")],
+            previous_parent: vec![],
+            previous_failed: vec![],
+        }
+    }
+    #[test]
+    fn repair_rf01_changed_validation_rejected_before_model_or_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let l = repair_loaded();
+        let mut episodes = vec![
+            repair_episode("validation/0"),
+            repair_episode("validation/1"),
+        ];
+        let f = repair_frozen(dir.path(), &episodes, &l);
+        let fixture = dir.path().join("frozen.json");
+        save(&fixture, &f).unwrap();
+        episodes[0].request.input = "changed same ID".into();
+        repair_corpus(&f.corpus, &episodes); // Updated manifest is valid for the changed bytes.
+        assert!(data::load(&f.corpus).is_ok());
+        let output = dir.path().join("new.jsonl");
+        let mut control = repair_control();
+        let result = replay(
+            &fixture,
+            &f.start,
+            &output,
+            "all",
+            Some(&neural::hash(b"test source")),
+            &mut control,
+            true,
+            None,
+        );
+        assert!(
+            result.is_err(),
+            "same IDs with changed content must reject frozen binding"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("validation binding")
+        );
+        assert!(!output.exists());
+        assert_eq!(control.generation_calls, 0);
+    }
+    #[test]
+    fn repair_rf01_owned_snapshot_panel_content_and_preload_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let l = repair_loaded();
+        let original = vec![
+            repair_episode("validation/0"),
+            repair_episode("validation/1"),
+        ];
+        let f = repair_frozen(dir.path(), &original, &l);
+        let (snapshot, ledger) = replay_cases(&f, "all").unwrap();
+        assert_eq!(ledger["actual_split_hash"], f.validation_hash);
+        assert_eq!(ledger["planned_case_count"], 2);
+        assert_eq!(ledger["evaluated_cases_hash"], digest(&original).unwrap());
+        for mutation in 0..4 {
+            let mut changed = original.clone();
+            match mutation {
+                0 => changed[0].request.input.push('x'),
+                1 => changed[0].answer.push('x'),
+                2 => changed[0].request.evidence.items = independent_request().evidence.items,
+                _ => {
+                    changed.pop();
+                }
+            }
+            repair_corpus(&f.corpus, &changed);
+            assert!(data::load(&f.corpus).is_ok());
+            if mutation < 3 {
+                assert_eq!(
+                    digest(&original.iter().map(|e| &e.id).collect::<Vec<_>>()).unwrap(),
+                    digest(&changed.iter().map(|e| &e.id).collect::<Vec<_>>()).unwrap()
+                );
+            }
+            assert_ne!(digest(&original).unwrap(), digest(&changed).unwrap());
+            let mut model_call_count = 0;
+            let guarded = replay_cases(&f, "all").map(|_| {
+                model_call_count += 1;
+            });
+            assert!(guarded.is_err());
+            assert_eq!(model_call_count, 0);
+            let fixture = dir.path().join(format!("frozen-{mutation}.json"));
+            save(&fixture, &f).unwrap();
+            let existing = dir.path().join("existing.jsonl");
+            std::fs::write(&existing, b"preserve output").unwrap();
+            // Binding error, not a missing-model error, must take precedence even here.
+            let error = replay(
+                &fixture,
+                &dir.path().join("missing-model"),
+                &existing,
+                "all",
+                Some(&neural::hash(b"source")),
+                &mut repair_control(),
+                true,
+                None,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("validation binding"));
+            assert_eq!(std::fs::read(existing).unwrap(), b"preserve output");
+        }
+        assert_eq!(digest(&snapshot).unwrap(), digest(&original).unwrap());
+        let mut manifest = repair_corpus(&f.corpus, &original);
+        manifest.validation.sha256 = neural::hash(b"wrong manifest");
+        std::fs::write(
+            f.corpus.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        assert!(replay_cases(&f, "all").is_err());
+        for (panel, expected) in [("watch", &f.watch), ("failures", &f.failures)] {
+            let (cases, ledger) = replay_cases(&f, panel).unwrap();
+            assert_eq!(digest(&cases).unwrap(), digest(expected).unwrap());
+            assert_eq!(ledger["source_validation_hash"], f.validation_hash);
+            assert!(ledger["actual_split_hash"].is_null());
+            assert_eq!(ledger["evaluated_cases_hash"], digest(expected).unwrap());
+        }
+        assert!(replay_cases(&f, "typo").is_err());
+    }
+    #[test]
+    fn repair_rf01_normal_all_replay_binds_actual_content_before_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let l = repair_loaded();
+        let cases = vec![
+            repair_episode("validation/0"),
+            repair_episode("validation/1"),
+        ];
+        let f = repair_frozen(dir.path(), &cases, &l);
+        let fixture = dir.path().join("frozen.json");
+        save(&fixture, &f).unwrap();
+        let output = dir.path().join("all.jsonl");
+        let mut control = repair_control();
+        replay(
+            &fixture,
+            &f.start,
+            &output,
+            "all",
+            Some(&neural::hash(b"fixture source")),
+            &mut control,
+            true,
+            None,
+        )
+        .unwrap();
+        let (header, rows) = rows(&output).unwrap();
+        assert_eq!(header["actual_split_hash"], f.validation_hash);
+        assert_eq!(header["frozen_expected_validation_hash"], f.validation_hash);
+        assert_eq!(header["evaluated_cases_hash"], digest(&cases).unwrap());
+        assert_eq!(rows.len(), 2);
+        assert_eq!(control.generation_calls, 3);
+        let matched = dir.path().join("matched.jsonl");
+        let mut second = repair_control();
+        replay(
+            &fixture,
+            &f.start,
+            &matched,
+            "all",
+            Some(&neural::hash(b"fixture source")),
+            &mut second,
+            true,
+            Some(&output),
+        )
+        .unwrap();
+        assert_eq!(second.generation_calls, 3);
+        let (_, matched_rows) = super::rows(&matched).unwrap();
+        assert_eq!(matched_rows[0]["raw_tokens"], rows[0]["raw_tokens"]);
+    }
+    #[test]
+    fn repair_rf02_no_evidence_causal_assertion_must_not_pass_scan() {
+        let mut l = repair_loaded();
+        l.model.config.profile = "NATIVE_TRPP_EXPERIMENTAL_V1".into();
+        l.model.config.context = 512; // Tokenization-only fixture, no forward/update.
+        let mut e = repair_episode("semantic/0");
+        e.request.input = "센서31의 사고 원인은 무엇인가?".into();
+        e.request.limits.context_tokens = 512;
+        e.request.limits.max_tokens = 128;
+        e.answer = "우회전이 원인이다.".into();
+        let report = scan(&[e], &l, 1).unwrap();
+        assert!(
+            !report["data_ambiguities"].as_array().unwrap().is_empty(),
+            "no citations must not authorize unsupported causal assertions"
+        );
+    }
+    #[test]
+    fn repair_rf03_pre_cancel_blocks_real_generation_and_teacher() {
+        let l = repair_loaded();
+        let e = repair_episode("cancel/0");
+        let flag = Arc::new(AtomicBool::new(true));
+        let mut control = RunControl::new(flag.clone(), Duration::from_secs(10), u64::MAX).unwrap();
+        assert!(matches!(
+            l.model
+                .generate_observed(&[BOS], 1, 1000, &flag, "cancel", |_| panic!(
+                    "already cancelled"
+                )),
+            Err(Error::Cancelled)
+        ));
+        let row = evaluate_one(&l, &e, &e.request, &mut control);
+        assert!(
+            row["raw_tokens"]
+                .as_array()
+                .is_none_or(|ids| ids.is_empty()),
+            "command's true flag must reach actual evaluation"
+        );
+        assert!(row["teacher_forced_diagnostic_after_generation"].is_null());
+        assert_eq!(control.generation_calls, 0);
+        assert_eq!(control.teacher_calls, 0);
+    }
+    #[test]
+    fn repair_rf03_deadline_precision_priority_and_latched_cleanup() {
+        for (elapsed, expected) in [
+            (Duration::from_nanos(999_999_999), None),
+            (Duration::from_secs(1), Some(StopReason::TimeBudget)),
+            (
+                Duration::from_nanos(1_000_000_001),
+                Some(StopReason::TimeBudget),
+            ),
+        ] {
+            let mut c = RunControl::new(
+                Arc::new(AtomicBool::new(false)),
+                Duration::from_secs(1),
+                100,
+            )
+            .unwrap();
+            let _ = c.check_at(c.start + elapsed, Ok(10));
+            assert_eq!(c.stop, expected);
+        }
+        let mut c = repair_control();
+        c.elapsed_override = Some(Duration::from_millis(59_750));
+        assert_eq!(c.effective_timeout(1000).unwrap(), 250);
+        assert_eq!(c.effective_timeout(100).unwrap(), 100);
+        c.elapsed_override = Some(Duration::from_nanos(59_999_500_000));
+        assert!(c.effective_timeout(1000).is_err());
+        assert_eq!(c.stop, Some(StopReason::TimeBudget));
+        c.classify_error(&Error::Model("timeout".into()));
+        assert_eq!(c.stop, Some(StopReason::TimeBudget));
+        let mut c = repair_control();
+        c.cancel.store(true, Ordering::Relaxed);
+        let _ = c.check_at(c.deadline, Err(Error::Invalid("RSS unavailable".into())));
+        assert_eq!(c.stop, Some(StopReason::Cancelled));
+        assert_eq!(
+            c.observed,
+            vec![
+                StopReason::Cancelled,
+                StopReason::TimeBudget,
+                StopReason::ResourceObservationFailed
+            ]
+        );
+        let report = finish_arm(&mut c, false, |_| Err(Error::Invalid("save failed".into())));
+        assert_eq!(report["reason"], "CANCELLED");
+        assert_eq!(report["checkpoint_saved"], false);
+        assert!(
+            report["save_error"]
+                .as_str()
+                .unwrap()
+                .contains("save failed")
+        );
+        let mut c = repair_control();
+        let _ = c.check_at(c.start, Err(Error::Invalid("RSS unavailable".into())));
+        assert_eq!(c.stop, Some(StopReason::ResourceObservationFailed));
+        let mut c =
+            RunControl::new(Arc::new(AtomicBool::new(false)), Duration::from_secs(1), 10).unwrap();
+        let _ = c.check_at(c.start, Ok(11));
+        assert_eq!(c.stop, Some(StopReason::ResourceLimit));
+    }
+    #[test]
+    fn repair_rf03_actual_token_cancel_preserves_partial_and_skips_followup() {
+        let l = repair_loaded();
+        let cases = vec![repair_episode("cancel/0"), repair_episode("cancel/1")];
+        let mut c = repair_control();
+        c.hook = Some(Box::new(|boundary, flag| {
+            if boundary == "token_generated" {
+                flag.store(true, Ordering::Relaxed);
+            }
+        }));
+        let rows = evaluate_panel(&l, &cases, &mut c);
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0]["raw_tokens"].as_array().unwrap().is_empty());
+        assert_eq!(rows[0]["interruption"], "CANCELLED");
+        assert_eq!(c.generation_calls, 1);
+        assert_eq!(c.teacher_calls, 0);
+        let mut report = summarize(&rows).unwrap();
+        add_partial_counts(&mut report, &rows, 2, &c);
+        assert_eq!(report["planned_case_count"], 2);
+        assert_eq!(report["attempted_case_count"], 1);
+        assert_eq!(report["completed_generation_count"], 0);
+        assert_eq!(report["not_run_count"], 1);
+        assert_eq!(report["interrupted_case_id"], "cancel/0");
+        assert_eq!(report["comparison_eligible"], false);
+        assert_eq!(report["candidate_eligible"], false);
+        let mut updates = 0;
+        if c.check("before_optimizer").is_ok() {
+            updates += 1;
+        }
+        assert_eq!(updates, 0);
+    }
+    #[test]
+    fn repair_rf03_deadline_finalization_and_native_save_failure_preserve_original() {
+        let l = repair_loaded();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("existing");
+        checkpoint::save(
+            &path,
+            &l.model,
+            &l.tokenizer,
+            l.manifest.clone(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let mut c = repair_control();
+        c.elapsed_override = Some(Duration::from_secs(60));
+        let result = finish_arm(&mut c, true, |_| {
+            checkpoint::save(
+                &path,
+                &l.model,
+                &l.tokenizer,
+                l.manifest.clone(),
+                &BTreeMap::new(),
+            )
+            .map(|_| ())
+        });
+        assert_eq!(result["reason"], "TIME_BUDGET");
+        assert_eq!(result["checkpoint_saved"], false);
+        assert!(result["save_error"].is_string());
+        assert_eq!(std::fs::read(path).unwrap(), before);
+        assert_eq!(result["comparison_eligible"], false);
+        assert!(result["cleanup_elapsed_seconds"].as_f64().unwrap() >= 0.);
+    }
+    #[test]
+    fn repair_rf03_final_evaluation_and_terminal_stop_without_training() {
+        let l = repair_loaded();
+        let watch = vec![repair_episode("watch/0")];
+        let train = vec![repair_episode("train/0")];
+        for boundary in [
+            "before_teacher",
+            "teacher_returned",
+            "panel_completed",
+            "checkpoint_preserved",
+            "terminal",
+        ] {
+            let mut c = repair_control();
+            let mut panels = 0;
+            c.hook = Some(Box::new(move |at, flag| {
+                if at == "panel_completed" {
+                    panels += 1;
+                }
+                if at == boundary && (boundary != "panel_completed" || panels == 2) {
+                    flag.store(true, Ordering::Relaxed);
+                }
+            }));
+            // Enter the same final-evaluation/finalization path used at n=50, no optimizer calls.
+            let mut evaluation = arm_evaluation(&l, &watch, &train, &mut c).unwrap();
+            evaluation["new_updates"] = json!(50);
+            let complete = evaluation["final_evaluation_complete"] == true;
+            let mut saves = 0;
+            let report = finish_arm(&mut c, complete, |_| {
+                saves += 1;
+                Ok(())
+            });
+            assert_eq!(saves, 1);
+            assert_eq!(report["reason"], "CANCELLED", "{boundary}");
+            assert_eq!(report["comparison_eligible"], false);
+            assert_eq!(report["candidate_eligible"], false);
+            if boundary == "before_teacher" {
+                assert_eq!(c.teacher_calls, 0);
+                assert_eq!(c.generation_calls, 1);
+            }
+            if boundary == "teacher_returned" {
+                assert_eq!(c.teacher_calls, 1);
+                assert_eq!(c.generation_calls, 1);
+            }
+        }
+        let mut c = repair_control();
+        let evaluation = arm_evaluation(&l, &watch, &train, &mut c).unwrap();
+        assert_eq!(evaluation["not_run_count"], 0);
+        assert_eq!(evaluation["final_evaluation_complete"], true);
+        let result = finish_arm(&mut c, true, |_| Ok(()));
+        assert_eq!(result["reason"], "SCREENING_BUDGET_REACHED");
+        assert_eq!(result["checkpoint_saved"], true);
+        assert_eq!(c.receipt()["terminal_reason"], "COMPLETED");
+        c.cancel.store(true, Ordering::Relaxed);
+        assert!(c.check("after_terminal").is_ok());
+        assert!(c.stop.is_none());
+    }
     #[test]
     fn recovery_generation_never_uses_gold_or_gold_length() {
         let tok = ByteBpe::train(&[b"abc".to_vec()], &neural::hash(b"fixture"), 264).unwrap();
@@ -1822,9 +3376,9 @@ mod tests {
             request,
             answer: "a".into(),
         };
-        let a = evaluate_one(&loaded, &e, &e.request);
+        let a = evaluate_one(&loaded, &e, &e.request, &mut repair_control());
         e.answer = "b".repeat(512); // Deliberately cannot fit teacher forcing; generation is unaffected.
-        let b = evaluate_one(&loaded, &e, &e.request);
+        let b = evaluate_one(&loaded, &e, &e.request, &mut repair_control());
         assert!(
             a["raw_tokens"]
                 .as_array()
@@ -1913,10 +3467,169 @@ mod tests {
             "이후 센서31의 사고가 기록되었다. 원인은 확인되지 않았다.".into();
         assert_eq!(support(&r).unwrap(), vec![23]);
         assert_eq!(chronology_citations(&r), Some(vec![19, 7, 23]));
+        let report = repair_semantic_scan(
+            &r,
+            "지시 [event:19] 뒤 실행 [event:7], 이후 사고 [event:23]가 기록되었습니다. 원인은 확정되지 않았습니다.",
+        );
+        assert_eq!(report["validated"], 1);
+        assert_eq!(audit_status(&[&report], &[]), "CHECKED_BOUNDARIES_PASS");
         r.evidence.items.reverse();
         assert_eq!(chronology_citations(&r), Some(vec![19, 7, 23]));
         r.evidence.items[2].original_excerpt = "센서310의 구역1 이동 지시는 동쪽이다.".into();
         assert!(chronology_citations(&r).is_none());
+    }
+    fn repair_semantic_scan(request: &ModelRequest, answer: &str) -> Value {
+        let mut e = repair_episode("semantic/0");
+        e.request = request.clone();
+        e.request.limits.context_tokens = 512;
+        e.request.limits.max_tokens = 128;
+        e.answer = answer.into();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let tok = ByteBpe::train(
+            &[bytes.clone(), bytes],
+            &neural::hash(b"independent grammar fixture"),
+            512,
+        )
+        .unwrap();
+        let mut config = neural::transformer::Config::tiny(tok.vocab_size());
+        config.profile = "NATIVE_TRPP_EXPERIMENTAL_V1".into();
+        config.context = 512;
+        let model = Transformer::init(config, 17, Device::Cpu).unwrap();
+        let manifest = checkpoint::initialized(&model, &tok, 17, neural::hash(b"fixture")).unwrap();
+        let l = Loaded {
+            model,
+            tokenizer: tok,
+            manifest,
+            optimizer: BTreeMap::new(),
+        };
+        scan(&[e], &l, 1).unwrap()
+    }
+    #[test]
+    fn repair_rf02_scan_audit_positive_negative_and_unknown_grammar() {
+        let mut r = independent_request();
+        let check = |r: &ModelRequest, a: &str, state: &str, status: &str| {
+            let report = repair_semantic_scan(r, a);
+            assert_eq!(report[state], 1, "{a}: {report}");
+            assert_eq!(audit_status(&[&report], &[]), status, "{a}: {report}");
+            assert_eq!(
+                [
+                    "validated",
+                    "contradicted",
+                    "unsupported",
+                    "ambiguous",
+                    "explicitly_out_of_scope"
+                ]
+                .iter()
+                .map(|k| report[*k].as_u64().unwrap())
+                .sum::<u64>(),
+                report["scanned"].as_u64().unwrap()
+            );
+            let mut reversed = r.clone();
+            reversed.evidence.items.reverse();
+            assert_eq!(target_semantics(r, a), target_semantics(&reversed, a));
+        };
+        check(
+            &r,
+            "센서31의 구역1 이동 지시는 동쪽이다. [event:23]",
+            "validated",
+            "CHECKED_BOUNDARIES_PASS",
+        );
+        r.input = "다른 현장과 구분하여 센서31의 구역1 이동 값을 알려줘.".into();
+        check(
+            &r,
+            "센서31의 구역1 이동 지시는 동쪽이다. [event:23]",
+            "validated",
+            "CHECKED_BOUNDARIES_PASS",
+        );
+        for a in [
+            "센서310의 구역1 이동 지시는 동쪽이다. [event:23]",
+            "센서31의 구역10 이동 지시는 동쪽이다. [event:23]",
+            "센서31의 구역1 이동 지시는 남쪽이다. [event:23]",
+        ] {
+            check(&r, a, "contradicted", "INTEGRITY_FAIL");
+        }
+        check(
+            &r,
+            "센서31의 구역1 이동 지시는 동쪽이다. [event:23] 추가 지시도 확정됐다.",
+            "unsupported",
+            "AUDIT_INCOMPLETE",
+        );
+        r.input = "센서31의 사고 원인은 무엇인가?".into();
+        r.evidence.items.clear();
+        check(
+            &r,
+            "근거가 없어 알 수 없습니다.",
+            "validated",
+            "CHECKED_BOUNDARIES_PASS",
+        );
+        r.evidence.items = independent_request().evidence.items[..1].to_vec();
+        r.evidence.items[0].original_excerpt = "센서310의 점검은 끝났지만 사고 자료는 없다.".into();
+        check(
+            &r,
+            "근거가 없어 알 수 없습니다.",
+            "validated",
+            "CHECKED_BOUNDARIES_PASS",
+        );
+        for a in [
+            "우회전이 원인이다.",
+            "이 회전은 원인이 아니다.",
+            "원인은 확인되지 않았다. 하지만 우회전 때문에 사고가 났다.",
+        ] {
+            check(&r, a, "contradicted", "INTEGRITY_FAIL");
+        }
+        check(
+            &r,
+            "원인이 확인되지 않은 것이 아니지 않다.",
+            "unsupported",
+            "AUDIT_INCOMPLETE",
+        );
+        r.evidence = independent_request().evidence;
+        r.evidence.items.truncate(3);
+        r.evidence.items[0].original_excerpt = "센서31의 구역1 이동 지시는 동쪽이다.".into();
+        r.evidence.items[1].original_excerpt = "센서31는 동쪽 지시를 실행했다.".into();
+        r.evidence.items[2].original_excerpt =
+            "이후 센서31의 사고가 기록되었다. 원인은 확인되지 않았다.".into();
+        for (i, e) in r.evidence.items.iter_mut().enumerate() {
+            e.recorded_at = i as i64;
+        }
+        check(
+            &r,
+            "원인은 확정되지 않았습니다. [event:23]",
+            "validated",
+            "CHECKED_BOUNDARIES_PASS",
+        );
+        check(
+            &r,
+            "원인은 확정되었습니다. [event:23]",
+            "contradicted",
+            "INTEGRITY_FAIL",
+        );
+        check(
+            &r,
+            "원인은 확정되지 않았습니다. [event:7]",
+            "contradicted",
+            "INTEGRITY_FAIL",
+        );
+        let positive = "지시 [event:19] 뒤 실행 [event:7], 이후 사고 [event:23]가 기록되었습니다. 원인은 확정되지 않았습니다.";
+        check(&r, positive, "validated", "CHECKED_BOUNDARIES_PASS");
+        for a in [
+            "지시 [event:19] 뒤 실행 [event:7], 이후 사고 [event:23]가 기록되었습니다.",
+            "지시 [event:23] 뒤 실행 [event:7], 이후 사고 [event:19]가 기록되었습니다. 원인은 확정되지 않았습니다.",
+            "센서310의 지시 [event:19] 뒤 실행 [event:7], 이후 사고 [event:23]가 기록되었습니다. 원인은 확정되지 않았습니다.",
+        ] {
+            check(&r, a, "contradicted", "INTEGRITY_FAIL");
+        }
+        r.input =
+            "센서31의 지시부터 실행과 사고까지 확인된 일과 원인의 불확실성을 설명해줘.".into();
+        check(&r, positive, "validated", "CHECKED_BOUNDARIES_PASS");
+        check(
+            &r,
+            "원인은 확정되지 않았습니다. [event:23]",
+            "contradicted",
+            "INTEGRITY_FAIL",
+        );
+        r.evidence.items[2].recorded_at = 0;
+        check(&r, positive, "ambiguous", "AUDIT_INCOMPLETE");
     }
     #[test]
     fn recovery_one_factor_preserves_tape_and_both_existing_clocks() {
