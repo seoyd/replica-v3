@@ -1,6 +1,17 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: R3-H3-STATE-DATA-RESULT-1.0
+## Closed: R3-H3-STATE-DATA-RESULT-1.0
+
+B0–B6 diagnostic scope is verified by the implementer; independent review is pending.
+F/N immutable raw recount agrees with the existing scores, with historical receipt
+binding ABSENT and current raw VERIFIED. F16/N16 fresh-process raw differences are zero.
+N256 post-hoc DEVELOPMENT: dev252/256, CROSS457/512, ordinary161/336, auxiliary57/64;
+only dev meets its gate. New SMALL optimizer0, generations944, same-model teacher944.
+N256 reused its verified dev256 raw and generated CROSS512+ordinary400 once. Original
+failure/stop/resume records, weights, Adam and datasets remain unchanged; seal NOT_OPENED.
+This closes DIAGNOSTIC_BOUNDARIES_VERIFIED, not H3/S4/S5/S6 or Goal1 acceptance.
+No further generation, checkpoint search, budget extension or learning is scheduled.
+The following execution specification is retained as the closed diagnostic scope.
 
 Continue from bf705ad823d132a2f91e3df7323d49c3c23e2ee4. New SMALL optimizer calls are zero;
 the closed C/L and F/N budgets, failed quality gates and resume=false remain immutable.

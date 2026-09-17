@@ -5430,33 +5430,42 @@ fn progress_observe(
     } else {
         vec![]
     };
+    let observation_source = source_commit()?;
     save(
         &dir.join("registration.json"),
         &json!({"kind":kind,"mode":if n==256{"POST_HOC_DIAGNOSTIC"}else{"FRESH_PROCESS_RAW_PARITY"},
         "checkpoint":native,"native_sha256":file_hash(&native)?,"model_hash":l.model.weight_hash()?,"tokenizer":l.tokenizer.semantic_id(),"step":state.step,
         "policy_sha256":file_hash(&root.join(arm).join("policy.json"))?,"verified_inputs":inputs.hashes,
-        "source_sha":source_commit()?,"binary_sha256":file_hash(&std::env::current_exe()?)?,"selection":"first8 exact and first8 incorrect in frozen dev order; fixed before generation; not quality estimate",
+        "source_sha":observation_source,"binary_sha256":file_hash(&std::env::current_exe()?)?,
+        "selection":if n==256{"reuse verified dev256; generate full frozen CROSS512 and ordinary400 once; post-hoc DEVELOPMENT"}else{"first8 exact and first8 incorrect in frozen dev order; fixed before generation; not quality estimate"},
         "indices":indices,"maximum_new_generations":if n==256{912}else{16},"new_small_updates":0,
         "post_hoc_notice":"이 checkpoint는 기존 dev 결과를 본 뒤 선정한 사후 진단 대상이다. 과거 F/N 실험의 사전등록 승자가 아니며, 이번에는 seal·제품 승격·학습 재개를 하지 않는다."}),
     )?;
     let mut report = json!({"kind":kind,"dev":old["dev"],"new_small_updates":0,"seal":"NOT_OPENED","candidate_eligible":false,"resume_allowed":false,
+        "registration_sha256":file_hash(&dir.join("registration.json"))?,"source_sha":observation_source,
+        "reused_dev_sha256":file_hash(&segment.join(format!("eval-{n:04}.json")))?,"panel_receipts":{},
         "evidence_level":"EXECUTED_THIS_RUN","dev_evidence":"DERIVED_FROM_EXISTING_LOGS","generation_budget":if n==256{912}else{16}});
     let outcome = (|| -> Result<()> {
         if n == 512 {
             let selected: Vec<_> = indices.iter().map(|i| inputs.dev[*i].clone()).collect();
             let rows = evaluate_panel(&l, &selected, control);
-            save(&dir.join("raw.json"), &rows)?;
-            control.check("fresh_parity_recorded")?;
             let spec = PanelSpec {
                 id: "dev",
                 cases: &selected,
                 split_hash: inputs.hashes["dev"].as_str().unwrap(),
                 policy_hash: &digest(&p)?,
-                source: "CURRENT_OBSERVATION",
+                source: &observation_source,
                 model: &l.model.weight_hash()?,
                 step: state.step,
             };
-            verify_panel_and_rescore(&spec, &rows, None, &l, true)?;
+            let binding = panel_binding(&spec, &rows, &l)?;
+            record_bound_panel(
+                &dir.join("raw.json"),
+                &json!({"rows":rows,"bindings":{"dev":binding},"new_small_updates":0}),
+                &mut report["panel_receipts"],
+            )?;
+            control.check("fresh_parity_recorded")?;
+            verify_panel_and_rescore(&spec, &rows, Some(&binding), &l, false)?;
             let mut differences = Vec::new();
             for (row, i) in rows.iter().zip(&indices) {
                 for key in [
@@ -5494,14 +5503,15 @@ fn progress_observe(
                     cases,
                     split_hash: hash.as_str().unwrap(),
                     policy_hash: &digest(&p)?,
-                    source: "CURRENT_POST_HOC_OBSERVATION",
+                    source: &observation_source,
                     model: &l.model.weight_hash()?,
                     step: state.step,
                 };
                 let binding = panel_binding(&spec, &rows, &l)?;
-                save(
+                record_bound_panel(
                     &dir.join(format!("{id}.json")),
-                    &json!({"rows":rows,"binding":binding,"new_small_updates":0}),
+                    &json!({"rows":rows,"bindings":{id:binding},"new_small_updates":0}),
+                    &mut report["panel_receipts"],
                 )?;
                 control.check("posthoc_panel_recorded")?;
                 report[id] = verify_panel_and_rescore(&spec, &rows, Some(&binding), &l, false)?;
@@ -8233,6 +8243,68 @@ mod tests {
         }
         println!(
             "T-D01/02/03/05/06/07: actual entry and owned-input fixtures; SMALL/TINY/scalar updates0"
+        );
+    }
+    #[test]
+    fn state_data_observation_stop_preserves_raw_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, pair) = state_fixture(dir.path());
+        // Reuse the TINY fixture's checked lineage; the labels are not optimizer calls.
+        for (kind, arm, raw_file, panel) in [
+            ("F16", "F", "raw.json", "dev"),
+            ("N256", "N", "cross.json", "cross"),
+        ] {
+            std::fs::create_dir(pair.join(arm)).unwrap();
+            std::fs::copy(
+                pair.join("C/policy.json"),
+                pair.join(arm).join("policy.json"),
+            )
+            .unwrap();
+            let output = dir.path().join(kind);
+            std::fs::create_dir(&output).unwrap();
+            save(&output.join("reaudit.json"), &json!({"current_raw_recount":"VERIFIED","mode":"READ_ONLY_REAUDIT",
+                "endpoints":[{"arm":arm,"policy_sha256":file_hash(&pair.join(arm).join("policy.json")).unwrap(),"segment":pair.join("C/segment-00-0000")}]})).unwrap();
+            let mut control = repair_control();
+            control.time_boundary = Some("panel_next_case");
+            assert!(progress_observe(&pair, &output, kind, &mut control).is_err());
+            assert_eq!((control.generation_calls, control.teacher_calls), (0, 0));
+            let observed = output.join(kind);
+            let registration = read_json(&observed.join("registration.json")).unwrap();
+            let result = read_json(&observed.join("result.json")).unwrap();
+            let raw = read_json(&observed.join(raw_file)).unwrap();
+            assert_eq!(result["status"], "FAILED_OR_INCOMPLETE");
+            assert_eq!(result["candidate_eligible"], false);
+            assert_eq!(result["resume_allowed"], false);
+            assert_eq!(result["control"]["terminal_reason"], "TIME_BUDGET");
+            assert_eq!(
+                result["registration_sha256"],
+                file_hash(&observed.join("registration.json")).unwrap()
+            );
+            assert_eq!(
+                result["panel_receipts"][raw_file]["sha256"],
+                file_hash(&observed.join(raw_file)).unwrap()
+            );
+            assert_eq!(raw["rows"], json!([]));
+            assert_eq!(raw["bindings"][panel]["complete"], false);
+            assert_eq!(
+                raw["bindings"][panel]["evaluator_source"],
+                registration["source_sha"]
+            );
+            assert!(!observed.join("ordinary.json").exists());
+            if kind == "N256" {
+                assert_eq!(registration["maximum_new_generations"], 912);
+                assert!(
+                    registration["selection"]
+                        .as_str()
+                        .unwrap()
+                        .contains("full frozen CROSS512 and ordinary400")
+                );
+            }
+            // An incomplete observation cannot be silently retried or overwritten.
+            assert!(progress_observe(&pair, &output, kind, &mut repair_control()).is_err());
+        }
+        println!(
+            "observation metadata/terminal actual path: SMALL/TINY/scalar optimizer0, generation0, teacher0"
         );
     }
     #[test]
