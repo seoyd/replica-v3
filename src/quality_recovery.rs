@@ -1635,7 +1635,19 @@ fn load_verified_inputs(a0: &Path, policy: Option<&Value>) -> Result<VerifiedPro
         }
         load_verified_inputs(&progress_path(&parent, "a0")?, Some(&parent))?;
     }
-    let hashes = json!({"a0":neural::hash(&bytes),"frozen":frozen_hash,"ordinary":f.validation_hash,
+    let parent_binding = if let Some(p) = policy {
+        let native_hash = file_hash(&progress_path(p, "parent")?)?;
+        let receipt_hash = file_hash(&progress_path(p, "parent_receipt")?)?;
+        if p["parent_sha256"] != native_hash || p["parent_receipt_sha256"] != receipt_hash {
+            return Err(Error::Corrupt(
+                "FROZEN_INPUT_MISMATCH: parent native/receipt".into(),
+            ));
+        }
+        json!({"native":native_hash,"receipt":receipt_hash})
+    } else {
+        Value::Null
+    };
+    let hashes = json!({"a0":neural::hash(&bytes),"frozen":frozen_hash,"ordinary":f.validation_hash,"parent":parent_binding,
         "train":manifest.train.sha256,"dev":manifest.validation.sha256,"cross":cross_hash,
         "ordinary_cases":digest(&ordinary)?,"watch_cases":digest(&f.watch)?,"dev_cases":digest(&dev)?,"cross_cases":digest(&cross)?});
     Ok(VerifiedProgressInputs {
@@ -3898,6 +3910,42 @@ fn progress_time_resume(r: &Value) -> bool {
         && r["cleanup_limit_exceeded"] == false
         && r["new_updates"].as_u64().is_some_and(|n| n <= 512)
 }
+fn verify_resume_evaluation_files(p: &Value, previous: &Value, segments: &[PathBuf]) -> Result<()> {
+    let expected = evaluation_identity(p, &previous["last_evaluation"])?;
+    let mut found = false;
+    for segment in segments {
+        let result = read_json(&segment.join("result.json"))?;
+        let receipts = result["panel_receipts"]
+            .as_object()
+            .ok_or_else(|| Error::Corrupt("AMBIGUOUS_GUARD_STATE: missing raw receipts".into()))?;
+        for (name, _) in receipts {
+            if Path::new(name).file_name().and_then(|n| n.to_str()) != Some(name) {
+                return Err(Error::Corrupt(
+                    "INTEGRITY_FAIL: owned panel filename".into(),
+                ));
+            }
+            let path = segment.join(name);
+            let (raw, hash) = read_panel(&path)?;
+            verify_panel_file(&result, &path, &raw, &hash, false)?;
+            if name.starts_with("eval-")
+                && raw["new_updates"] == previous["last_evaluation"]["new_updates"]
+            {
+                if evaluation_identity(p, &raw)? != expected {
+                    return Err(Error::Corrupt(
+                        "INTEGRITY_FAIL: resume/raw evaluation identity".into(),
+                    ));
+                }
+                found = true;
+            }
+        }
+    }
+    if !found {
+        return Err(Error::Corrupt(
+            "AMBIGUOUS_GUARD_STATE: evaluation raw missing".into(),
+        ));
+    }
+    Ok(())
+}
 
 // The same durable evaluation boundary is used by new execution and time resume.
 #[derive(Clone, Serialize, Deserialize)]
@@ -4074,11 +4122,6 @@ fn progress_arm(
     let ledger = progress_ledger(root)?;
     control.deadline = control.start + Duration::from_secs_f64((7200. - ledger.3).min(1800.));
     let parent = progress_path(&p, "parent")?;
-    if p["parent_sha256"] != file_hash(&parent)?
-        || p["parent_receipt_sha256"] != file_hash(&progress_path(&p, "parent_receipt")?)?
-    {
-        return Err(Error::Corrupt("immutable fork parent changed".into()));
-    }
     let a0 = progress_path(&p, "a0")?;
     if p["a0_hash"] != file_hash(&a0.join("summary.json"))?
         || p["cross_hash"] != file_hash(&a0.join("cross-development.json"))?
@@ -4118,6 +4161,7 @@ fn progress_arm(
         {
             return Err(Error::Invalid("only matching clean time stop may resume; closed/failed parent requires explicit fork".into()));
         }
+        verify_resume_evaluation_files(&p, &previous, &dirs)?;
     } else if !dirs.is_empty() {
         return Err(Error::Invalid(
             "arm already started; no budget reset".into(),
@@ -4504,7 +4548,7 @@ fn progress_arm(
         "cumulative_model_step":state.step,"sampler_state":state.sampler_state,"model_content_hash":model_hash,"adam_hash":adam_hash,
         "last_evaluation":last,"evaluation_decision_digest":digest(&last["decision"])?,"panel_receipts":panel_receipts,
         "verified_inputs":inputs.hashes,"cross":cross,"ordinary":ordinary,"guard_streaks":streak,"raw_development_gate":raw_gate&&control.stop.is_none()&&!cleanup,
-        "candidate_eligible":false,"seal":"NOT_OPENED","goal1_ready":false,"cleanup_limit_exceeded":cleanup,
+        "candidate_eligible":raw_gate&&control.stop.is_none()&&!cleanup,"seal":"NOT_OPENED","goal1_ready":false,"cleanup_limit_exceeded":cleanup,
         "resume_allowed":control.reason()==Some("TIME_BUDGET") && control.observed==[StopReason::TimeBudget] && last["final_evaluation_complete"]==true && ledger.3+control.start.elapsed().as_secs_f64()<7200. && !cleanup && result["checkpoint_saved"]==true,
         "error":outcome.as_ref().err().map(ToString::to_string)});
     result
@@ -5275,6 +5319,15 @@ fn progress_close_to(
                     .as_array()
                     .ok_or_else(|| Error::Corrupt("final panel rows".into()))?,
             )?;
+        }
+    }
+    // Pair the verified owned rows before dropping duplicate payloads from the bounded report.
+    // The immutable original files, current byte hashes and complete bindings remain inspectable.
+    for end in &mut ends {
+        for id in ["cross", "ordinary"] {
+            if let Some(panel) = end["current_reaudit"]["panels"][id].as_object_mut() {
+                panel.remove("verified_rows");
+            }
         }
     }
     control.seal_terminal()?;
@@ -7961,6 +8014,8 @@ mod tests {
         let parent = root.join("parent");
         save_arm(&mut l, &state, &adam, &parent, "RECOVERY_SCREENING").unwrap();
         let pair = root.join("pair");
+        let parent_receipt = root.join("parent-result.json");
+        save(&parent_receipt, &json!({"fixture":true})).unwrap();
         std::fs::create_dir(&pair).unwrap();
         let mut hashes = Vec::new();
         for arm in ["C", "L"] {
@@ -7968,7 +8023,8 @@ mod tests {
             std::fs::create_dir(&dir).unwrap();
             let p = json!({"node":"A1","run_id":pair,"contract":PROGRESS_CONTRACT,"arm":arm,"a0":a0,"a0_hash":file_hash(&a0.join("summary.json")).unwrap(),
                 "corpus":corpus,"train_hash":m.train.sha256,"dev_hash":m.validation.sha256,"cross_hash":file_hash(&a0.join("cross-development.json")).unwrap(),
-                "parent":parent,"initial_model_hash":l.model.weight_hash().unwrap(),"initial_adam_hash":optimizer_hash(&adam.moments).unwrap(),"initial_state":state,
+                "parent":parent,"parent_sha256":file_hash(&parent).unwrap(),"parent_receipt":parent_receipt,"parent_receipt_sha256":file_hash(&parent_receipt).unwrap(),
+                "initial_model_hash":l.model.weight_hash().unwrap(),"initial_adam_hash":optimizer_hash(&adam.moments).unwrap(),"initial_state":state,
                 "tokenizer_hash":l.tokenizer.semantic_id(),"source_digest":neural::hash(b"synthetic fixture source"),"lr_policy":arm,"lr_offset":0,
                 "tape":(0..512).map(|_|json!([[0],17])).collect::<Vec<_>>(),"denominators":vec![[1,1];512],"tape_hash":"fixture","denominators_hash":"fixture",
                 "anchor_floor":178,"baseline_dev":0,"baseline_watch":0,"baseline_errors":0});
@@ -8120,7 +8176,10 @@ mod tests {
                 match mutation {
                     0 => cases[0].request.input.push('x'),
                     1 => cases[0].answer.push('x'),
-                    2 => cases[0].request.evidence.truncated = true,
+                    2 => cases[0].request.evidence.items.push(serde_json::from_value(json!({
+                        "event_id":1,"original_excerpt":"changed original evidence","source":"manual","recorded_at":1,"observed_at":1,
+                        "version_status":"current","retrieval_reason":"lexical","relation_path":[],"excerpt_truncated":false
+                    })).unwrap()),
                     _ => {
                         cases[0].family = "copy/changed".into();
                         cases[336].family = "qa/changed".into();
@@ -8210,6 +8269,9 @@ mod tests {
                     if mutation != 9 {
                         let rp = segment.join("result.json");
                         let mut result = read_json(&rp).unwrap();
+                        if mutation == 1 {
+                            result["raw_development_gate"] = json!(true);
+                        }
                         result["panel_receipts"][file] =
                             json!({"sha256":file_hash(&path).unwrap(),"bindings":raw["bindings"]});
                         std::fs::write(rp, serde_json::to_vec(&result).unwrap()).unwrap();
@@ -8283,6 +8345,25 @@ mod tests {
         }
     }
     #[test]
+    fn state_data_resume_binds_immutable_raw_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, pair) = state_fixture(dir.path());
+        let p = read_json(&pair.join("C/policy.json")).unwrap();
+        let segment = pair.join("C/segment-00-0000");
+        let r = read_json(&segment.join("result.json")).unwrap();
+        verify_resume_evaluation_files(&p, &r, std::slice::from_ref(&segment)).unwrap();
+        let path = segment.join("eval-0512.json");
+        let original = std::fs::read(&path).unwrap();
+        let mut raw: Value = serde_json::from_slice(&original).unwrap();
+        raw["dev_rows"][0]["actual"] = json!("changed after checkpoint");
+        std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+        assert!(verify_resume_evaluation_files(&p, &r, std::slice::from_ref(&segment)).is_err());
+        assert_eq!(r["last_evaluation"]["dev_rows"][0]["actual"], "b");
+        let mut changed = p.clone();
+        changed["parent_sha256"] = json!("0".repeat(64));
+        assert!(load_verified_inputs(&progress_path(&p, "a0").unwrap(), Some(&changed)).is_err());
+    }
+    #[test]
     fn state_data_legacy_reaudit_sticky_cancel_and_error_denominator() {
         let dir = tempfile::tempdir().unwrap();
         let (_, pair) = state_fixture(dir.path());
@@ -8320,6 +8401,11 @@ mod tests {
         let out = dir.path().join("reaudit.json");
         progress_close_to(&pair, &out, true, &mut repair_control()).unwrap();
         let report = read_json(&out).unwrap();
+        assert!(
+            report["endpoints"][0]["current_reaudit"]["panels"]["cross"]
+                .get("verified_rows")
+                .is_none()
+        );
         assert_eq!(report["selected_index"], Value::Null);
         assert_eq!(report["historical_receipt_binding"], "ABSENT");
         assert_eq!(report["endpoints"][0]["candidate_eligible"], false);

@@ -1,5 +1,33 @@
 # 진단 및 구현 상태
 
+## 경계 수리 후속 검증 및 B4 진입
+
+2026-09-18. First source publication c7810ee4c896ef616349b7034385c64e926e91b0 matched
+origin/main. The first actual F/N recount verified existing scores and ABSENT historical
+panel bindings, generation/teacher0. Its report duplicated verified raw payloads and grew
+to19,961,942bytes; the following F16 command correctly refused it before model generation
+at the existing16MiB reader boundary. That report and failure log remain immutable.
+The fix keeps the owned rows through paired scoring, then publishes only their original
+file references, hashes and bindings. Resume also verifies the immutable raw files linked
+by prior segment receipts; the common input loader verifies physical parent/receipt hashes.
+Newly written development-candidate eligibility is derived from complete safe quality gates;
+historical false eligibility and all seal/Goal1 restrictions remain unchanged.
+
+Final full quick-bound:47 passing executions,0 failed/ignored, source unchanged at
+a3d4df39357e10a23bb3fbe5d62b2d85a4ce574651093d997b05484526ae6463.
+Subsequent small changes (derived eligibility, evidence-text/high-gate negatives) passed
+all8 direct state_data regressions plus final fmt/clippy and release builds. The final
+source digest is e41f53941abc1db93e8b7aa6364b1b2276175e7adf7e9040156080fd44cbfcae;
+do not label the earlier quick receipt as identical to this later source.
+Actual TINY optimizer total82: direct continuity3+3, four quick runs each19.
+Scalar0, SMALL0. Repeated checks followed concrete fixes; their counts are executions,
+not distinct tests or model-quality measurements. Final binary
+`artifacts/state-data-result-20260917/repair-train-bound` has SHA
+a2f4020b9312b822dcfff0d4296fa2f94e493d3856ed92e693fcdbd5987afeb7.
+Final dynamic dependencies remain existing system/Foundation/Accelerate/iconv libraries.
+The new output directory for B4/B5 is `artifacts/state-data-result-20260917/reaudit-bound`;
+no failed output or original experiment is overwritten.
+
 ## 현재: 상태·자료·raw 판정 경계 수리 — B0/B1/B2/B3 검증 종료
 
 2026-09-18 / R3-H3-STATE-DATA-RESULT-1.0 / IMPLEMENTER_REPORT, INDEPENDENT_PENDING.
