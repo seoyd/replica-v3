@@ -1,5 +1,30 @@
 # 진단 및 구현 상태
 
+## G1 — 최종 모델과 저장된 stop 경계 검증
+
+2026-09-18 / EXECUTED_THIS_RUN. CL-01/CL-02 RED→GREEN, CODE_CLOSE=VERIFIED.
+실제 같은 shape/tokenizer/step의 B weight 한 값을 바꾸고 정상 native 저장한 뒤
+B CROSS를 A terminal에 연결하면 기준 source는 정상 comparison을 발행했다.
+다른 회귀의 실제 child는2 TINY updates 후 모든 panel을 생성하고 cleanup 취소
+terminal만 durable하게 저장한 뒤 exit91했다. close-stop이 없는 새 process의
+기준 close도 정상 comparison을 발행했다. 기존 F/N에 발생했다는 주장은 아니다.
+
+수정은 공통 close에서 실제 terminal과 모든 final panel의 weights/tokenizer/equation/
+numeric-policy/step을 대조하고 검증된 ancestry의 저장된 stop을 정상 close 전에
+거부한다. 합법적인 중간 TimeBudget-only 재개와 정상 오답 close는 유지한다.
+평가 참조는 inference 전용 파일도 허용하며 학습 재개의 Adam 검사는 유지한다.
+같은 weights를 다른 metadata/physical hash의 RESUME 및 INFERENCE로 저장한 positive도
+통과했다. 기존 semantic architecture ID는 numeric policy까지 포함한다(SOURCE_READ).
+
+직접 unit7 PASS, inference positive 포함 추가1 PASS, process2 PASS.
+기존 raw/checkpoint/final 시간 분할의 model/Adam/tape/guard/f64 bits 동일성을 유지했다.
+신규 SMALL0/TINY14/scalar0, generation40/자체 teacher40: RED process2updates/6calls,
+GREEN 기존process10/28과 저장취소process2/6. 이전에 검증한 bootstrap을 읽기 전용으로
+재사용해 새 bootstrap 학습0이다. 구성 native/row fixture는 optimizer/generation0.
+증거: `artifacts/native-storage-quality-20260918/g1-{red-model,red-cancel,green-unit,green-process,inference-positive}.log`.
+하네스는 기존 binary test filter에 저장취소 process 회귀를 함께 실행하도록 수정했다.
+MODEL_PAIR=NOT_RUN; 저장 경계 수리가 모델 품질의 개선을 뜻하지 않는다. NEXT=G2.
+
 ## G0 — native storage/quality 시작 상태
 
 2026-09-18 / R3-NATIVE-STORAGE-QUALITY-1.0 / EXECUTED_THIS_RUN.

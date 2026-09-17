@@ -2093,7 +2093,7 @@ fn payload(root: &Path, s: &RunSnapshot, r: &EvaluationRef) -> Result<(EvalPaylo
         .native
         .as_ref()
         .ok_or_else(|| bad("PendingNativeBinding"))?;
-    let l = resolve_native(root, s, n, true)?;
+    let l = resolve_native(root, s, n, false)?;
     if e.step != n.step
         || e.model != n.model
         || e.tokenizer != n.tokenizer
@@ -2313,12 +2313,22 @@ fn close_native_inner(
     let s = read_inputs(root)?;
     let last = reference(root, terminal)?;
     let chain = lineage(root, &s, &last)?;
+    for (i, (_, stored)) in chain.iter().enumerate() {
+        let continued_time_stop = i + 1 < chain.len()
+            && stored.resume
+            && !stored.complete
+            && stored.stop == [StopReason::TimeBudget];
+        if !stored.stop.is_empty() && !continued_time_stop {
+            return Err(bad("stored terminal stop forbids normal close"));
+        }
+    }
     let h = verified_history(root, &s, &chain)?;
     let t = &chain.last().ok_or_else(|| bad("empty lineage"))?.1;
     if !t.complete || t.resume || t.save_error.is_some() {
         return Err(bad("incomplete final terminal"));
     }
-    let step = t.native.as_ref().unwrap().step;
+    let final_native = t.native.as_ref().unwrap();
+    let step = final_native.step;
     if !s.historical && !h.decisions.contains_key(&step) {
         return Err(bad("final guard decision pending"));
     }
@@ -2335,6 +2345,13 @@ fn close_native_inner(
             .get(&(step, kind))
             .ok_or_else(|| bad("missing final panel"))?;
         let (e, l) = payload(root, &s, r)?;
+        if e.model != final_native.model
+            || e.tokenizer != final_native.tokenizer
+            || e.architecture != final_native.architecture
+            || e.step != final_native.step
+        {
+            return Err(bad("final panel model/tokenizer/equation/step mismatch"));
+        }
         scores.push((kind, rescore(&s, &e, &l, true)?));
     }
     let stops: Vec<_> = chain
@@ -2638,6 +2655,14 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
     if let Err(e) = &outcome {
         control.classify_error(e);
     }
+    #[cfg(feature = "test-support")]
+    let crash_after_cancelled_terminal = s.tiny_spec
+        && complete
+        && std::env::var("R3ER_TEST_STOP").as_deref() == Ok("stored-cleanup-cancel");
+    #[cfg(feature = "test-support")]
+    if crash_after_cancelled_terminal {
+        control.cancel.store(true, Ordering::Relaxed);
+    }
     let _ = control.check("binary_before_preservation");
     let cleanup = Instant::now();
     let reason = control
@@ -2706,6 +2731,10 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
         t.resume,
         t.complete
     );
+    #[cfg(feature = "test-support")]
+    if crash_after_cancelled_terminal {
+        std::process::exit(91);
+    }
     if t.complete {
         close_native(root, &format!("{name}/terminal.r3er"), control)?;
     }
@@ -3910,10 +3939,23 @@ mod binary_tests_close {
     use super::*;
     #[test]
     fn writer_reader_actual_close_rejects_missing_ambiguous_and_tampered_panels() {
+        check_close_modes(0..10);
+    }
+    #[test]
+    fn final_native_model_must_match_all_panels() {
+        check_close_modes([10, 11, 12, 13, 18]);
+    }
+    #[test]
+    fn stored_terminal_stop_blocks_fresh_close_without_sidecar() {
+        check_close_modes(14..18);
+    }
+    fn check_close_modes(modes: impl IntoIterator<Item = usize>) {
         let directory = tempfile::tempdir().unwrap();
         let seed = directory.path().join("seed");
         fixture(&seed).unwrap();
-        for mode in 0..10 {
+        let mut count = 0;
+        for mode in modes {
+            count += 1;
             let root = directory.path().join(format!("case-{mode}"));
             std::fs::create_dir(&root).unwrap();
             std::fs::copy(seed.join("parent.r3m"), root.join("parent.r3m")).unwrap();
@@ -3922,6 +3964,45 @@ mod binary_tests_close {
             s.eval_steps = vec![0];
             publish(&root, "inputs.r3er", &Record::Inputs(Box::new(s.clone()))).unwrap();
             let l = resolve_native(&root, &s, &s.parent, true).unwrap();
+            let alternate = if (10..14).contains(&mode) || mode == 18 {
+                let mut other =
+                    checkpoint::load(&root.join("parent.r3m"), Device::Cpu, true).unwrap();
+                if mode != 13 && mode != 18 {
+                    let var = other.model.vars.values().next().unwrap();
+                    let mut values = var.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+                    values[0] += 0.25;
+                    var.set(&Tensor::from_vec(values, var.dims(), &Device::Cpu).unwrap())
+                        .unwrap();
+                }
+                let state = other.manifest.training.clone().unwrap();
+                let adam = Adam {
+                    moments: std::mem::take(&mut other.optimizer),
+                };
+                if mode == 18 {
+                    neural::artifact::export_inference(&root.join("alternate.r3m"), &other)
+                        .unwrap();
+                } else {
+                    save_arm(
+                        &mut other,
+                        &state,
+                        &adam,
+                        &root.join("alternate.r3m"),
+                        "SCREENING_BUDGET_REACHED",
+                    )
+                    .unwrap();
+                }
+                let loaded =
+                    checkpoint::load(&root.join("alternate.r3m"), Device::Cpu, mode != 18).unwrap();
+                let n = native_reference(&root, "alternate.r3m", &s, &loaded, 0).unwrap();
+                assert_ne!(n.file.digest, s.parent.file.digest);
+                assert_eq!(n.step, s.parent.step);
+                assert_eq!(n.tokenizer, s.parent.tokenizer);
+                assert_eq!(n.architecture, s.parent.architecture);
+                assert_eq!(n.model == s.parent.model, mode == 13 || mode == 18);
+                Some((n, loaded))
+            } else {
+                None
+            };
             let mut refs = vec![];
             let mut payloads = vec![];
             for kind in [
@@ -3987,6 +4068,18 @@ mod binary_tests_close {
                 if mode == 3 && kind == PanelKind::Ordinary {
                     payload.rows[0].case[0] ^= 1;
                 }
+                let use_alternate = mode == 13
+                    || mode == 18
+                    || mode == 10 && kind == PanelKind::Cross
+                    || mode == 11 && kind == PanelKind::Ordinary
+                    || mode == 12 && matches!(kind, PanelKind::Dev | PanelKind::Watch);
+                let native = if use_alternate {
+                    let (n, _) = alternate.as_ref().unwrap();
+                    payload.model = n.model;
+                    n.clone()
+                } else {
+                    s.parent.clone()
+                };
                 let reference = publish(
                     &root,
                     &format!("{}.r3er", kind.name()),
@@ -3995,13 +4088,31 @@ mod binary_tests_close {
                 .unwrap();
                 refs.push(EvaluationRef {
                     payload: reference,
-                    native: Some(s.parent.clone()),
+                    native: Some(native),
                 });
+                // The alternate file and its panel are valid on their own.
+                if (10..14).contains(&mode) || mode == 18 {
+                    super::payload(&root, &s, refs.last().unwrap()).unwrap();
+                }
                 payloads.push(payload);
             }
             let dr = Record::identity(&std::fs::read(root.join("dev.r3er")).unwrap()).unwrap();
             let wr = Record::identity(&std::fs::read(root.join("watch.r3er")).unwrap()).unwrap();
-            let mut d = decision_for(&s, &payloads[0], &payloads[1], [0; 3], dr, wr, &l).unwrap();
+            let decision_model = if mode == 12 {
+                &alternate.as_ref().unwrap().1
+            } else {
+                &l
+            };
+            let mut d = decision_for(
+                &s,
+                &payloads[0],
+                &payloads[1],
+                [0; 3],
+                dr,
+                wr,
+                decision_model,
+            )
+            .unwrap();
             if mode == 5 {
                 d.after[0] = 1;
             }
@@ -4025,7 +4136,13 @@ mod binary_tests_close {
                 evaluations: refs,
                 decisions: if mode == 4 { vec![] } else { vec![decision] },
                 guard: [0; 3],
-                stop: vec![],
+                stop: match mode {
+                    14 => vec![StopReason::Cancelled],
+                    15 => vec![StopReason::QualityGuard],
+                    16 => vec![StopReason::IntegrityFail],
+                    17 => vec![StopReason::AuditIncomplete],
+                    _ => vec![],
+                },
                 complete: true,
                 resume: false,
                 candidate: false,
@@ -4060,20 +4177,28 @@ mod binary_tests_close {
                 control.deadline = Instant::now();
             }
             let result = close_native(&root, "terminal.r3er", &mut control);
-            if mode <= 1 {
+            if mode <= 1 || mode == 13 || mode == 18 {
                 let comparison = result.unwrap();
                 assert!(!comparison.candidate);
                 assert!(
                     comparison
                         .panels
                         .iter()
-                        .all(|(_, p)| p.exact == u64::from(mode == 0))
+                        .all(|(_, p)| p.exact == u64::from(mode != 1))
                 );
             } else {
                 assert!(result.is_err(), "mode{mode}");
+                if (10..13).contains(&mode) {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .to_string()
+                            .contains("final panel model")
+                    );
+                }
                 assert!(!root.join("comparison.r3er").exists());
             }
         }
-        println!("CONSTRUCTED_CLOSE_FIXTURES=10 ACTUAL_OPTIMIZER_UPDATES=0 GENERATIONS=0");
+        println!("CONSTRUCTED_CLOSE_FIXTURES={count} ACTUAL_OPTIMIZER_UPDATES=0 GENERATIONS=0");
     }
 }

@@ -294,6 +294,12 @@ architecture, absolute step, optional Adam digest and input/target/sampler count
 Absence of Adam denotes an inference-only reference and cannot resume. The resolver
 loads the actual native file, checks these identities and reads its physical hash again.
 Root escape and symlink escape are rejected; there is no filename or JSON fallback.
+Normal close compares every final panel's resolved model/tokenizer/equation/numeric
+policy/absolute step to the resolved terminal endpoint. Physical file differences and
+inference versus resume packaging do not imply different evaluation models. Adam is
+required for resume, not inference-only evaluation references. Stored stop reasons in
+the verified terminal ancestry block normal close independently of close-stop files;
+only a proven resumed intermediate TimeBudget-only stop is allowed.
 Original segment final and later segment step files can have different physical hashes
 while binding the same evaluation model/step. Explicit lineage permits that re-reference.
 

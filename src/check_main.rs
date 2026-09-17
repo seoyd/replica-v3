@@ -428,7 +428,7 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                 ("native", "legacy_checkpoint_import_roundtrip"),
                 ("runtime", "rv02_whole_evidence"),
                 ("store", "lifecycle_restart"),
-                ("experiment_record", "binary_real_process_resume_and_close"),
+                ("experiment_record", "binary_"),
             ] {
                 r.cargo(
                     "test",

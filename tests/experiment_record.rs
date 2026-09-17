@@ -31,6 +31,74 @@ fn p(p: &Path) -> &str {
     p.to_str().unwrap()
 }
 #[test]
+fn binary_stored_cleanup_cancel_fresh_process_close() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = std::env::var_os("R3ER_CANCEL_TEST_OUTPUT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| temporary.path().join("cancel"));
+    fs::create_dir(&root).unwrap();
+    let bootstrap = if let Some(path) = std::env::var_os("R3ER_TEST_BOOTSTRAP") {
+        PathBuf::from(path)
+    } else {
+        let path = root.join("bootstrap");
+        call(
+            &["fixture", "--output", p(&path)],
+            None,
+            true,
+            &root.join("fixture.log"),
+        );
+        call(
+            &["run", "--root", p(&path)],
+            None,
+            true,
+            &root.join("bootstrap.log"),
+        );
+        path
+    };
+    let run = root.join("run");
+    call(
+        &["fixture-fork", "--from", p(&bootstrap), "--output", p(&run)],
+        None,
+        true,
+        &root.join("fork.log"),
+    );
+    let out = call(
+        &["run", "--root", p(&run)],
+        Some("stored-cleanup-cancel"),
+        false,
+        &root.join("cancel.log"),
+    );
+    assert_eq!(out.status.code(), Some(91));
+    let output = String::from_utf8_lossy(&out.stdout);
+    assert!(output.contains("NEW_TINY_UPDATES=2"));
+    assert!(output.contains("Cancelled"));
+    assert!(output.contains("complete=true"));
+    assert!(!run.join("close-stop.r3er").exists());
+    assert!(!run.join("comparison.r3er").exists());
+    let terminal = fs::read(run.join("segment-00/terminal.r3er")).unwrap();
+    call(
+        &[
+            "close",
+            "--root",
+            p(&run),
+            "--terminal",
+            "segment-00/terminal.r3er",
+        ],
+        None,
+        false,
+        &root.join("fresh-close.log"),
+    );
+    assert!(!run.join("comparison.r3er").exists());
+    assert_eq!(
+        terminal,
+        fs::read(run.join("segment-00/terminal.r3er")).unwrap()
+    );
+    assert!(!run.join("segment-01").exists());
+    println!(
+        "STORED_CANCEL_TINY_UPDATES=2 (plus bootstrap24 only when generated) GENERATIONS=6 TEACHERS=6 FRESH_CLOSE_UPDATES=0"
+    );
+}
+#[test]
 fn binary_real_process_resume_and_close() {
     let temporary = tempfile::tempdir().unwrap();
     let root = std::env::var_os("R3ER_TEST_OUTPUT")
