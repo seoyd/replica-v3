@@ -209,6 +209,23 @@ impl RunControl {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// A0 only: immutable H3 parent replay, ordinary QA, token/QK/exposure and crossed development.
+    ProgressBaseline {
+        #[arg(long)]
+        baseline: PathBuf,
+        #[arg(long)]
+        run: PathBuf,
+        #[arg(long)]
+        inference: PathBuf,
+        #[arg(long)]
+        corpus: PathBuf,
+        #[arg(long)]
+        harness: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        seed: u64,
+    },
     /// Recount preserved skill rows without loading or calling a model; never promotes a candidate.
     SkillRecount {
         #[arg(long)]
@@ -576,8 +593,25 @@ pub fn run(command: Command) -> Result<()> {
         &command,
         Command::Arm { .. } | Command::SkillRun { .. }
     ))?;
+    if matches!(&command, Command::ProgressBaseline { .. }) {
+        budget.deadline = budget.start + Duration::from_secs(1800);
+    }
     budget.check("command_started")?;
     let outcome = match command {
+        Command::ProgressBaseline {
+            baseline,
+            run,
+            inference,
+            corpus,
+            harness,
+            output,
+            seed,
+        } => progress_baseline(
+            [&baseline, &run, &inference, &corpus, &harness],
+            &output,
+            seed,
+            &mut budget,
+        ),
         Command::SkillRecount { evaluation, output } => {
             let recorded = read_json(&evaluation)?;
             let dev = recorded["dev_rows"]
@@ -3218,6 +3252,682 @@ fn skill_run(
     }
     outcome.and(control.stop_result())
 }
+const PROGRESS_CONTRACT: &str = "R3-H3-CONTROLLED-PROGRESS-1.0";
+
+fn optimizer_hash(tensors: &BTreeMap<String, Tensor>) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    for (name, t) in tensors {
+        h.update(name.as_bytes());
+        h.update([0]);
+        for &d in t.dims() {
+            h.update((d as u64).to_le_bytes());
+        }
+        for x in t.flatten_all()?.to_vec1::<f32>()? {
+            h.update(x.to_le_bytes());
+        }
+    }
+    Ok(format!("{:x}", h.finalize()))
+}
+fn progress_copy_score(rows: &[Value], expected: usize) -> Result<Value> {
+    let mut score = skill_score(rows)?;
+    score["skill_pass"] = json!(
+        expected > 0
+            && rows.len() == expected
+            && score["exact_matches"].as_u64().unwrap_or(0) >= (expected * 95).div_ceil(100) as u64
+            && score["entity_correct"].as_u64().unwrap_or(0)
+                >= (expected * 99).div_ceil(100) as u64
+            && score["event_id_correct"].as_u64().unwrap_or(0)
+                >= (expected * 99).div_ceil(100) as u64
+            && score["generation_error_cases"] == 0
+    );
+    let mut strata = BTreeMap::<String, [usize; 2]>::new();
+    for row in rows {
+        for part in row["family"]
+            .as_str()
+            .unwrap_or_default()
+            .split('/')
+            .filter(|p| p.starts_with("pattern-") || p.starts_with("kind-"))
+        {
+            let count = strata.entry(part.to_owned()).or_default();
+            count[0] += usize::from(row["exact_match"] == true);
+            count[1] += 1;
+        }
+    }
+    score["cross_strata"] = json!(strata);
+    score["generation_policy"] = json!("normal_greedy_v1");
+    Ok(score)
+}
+fn verify_cross_development(cases: &[Episode], prior: &[Episode], l: &Loaded) -> Result<Value> {
+    if cases.len() != 512 {
+        return Err(Error::Invalid(
+            "CROSS denominator; never shrink capacity failures".into(),
+        ));
+    }
+    let seen: BTreeSet<_> = prior
+        .iter()
+        .flat_map(|e| e.request.evidence.items.iter())
+        .filter_map(|r| exact_fact(&r.original_excerpt).map(|f| f.0.to_owned()))
+        .collect();
+    let prior_bindings: BTreeSet<_> = prior.iter().map(|e| e.binding.as_str()).collect();
+    let prior_text: BTreeSet<_> = prior
+        .iter()
+        .flat_map(|e| {
+            e.request
+                .evidence
+                .items
+                .iter()
+                .map(|r| r.original_excerpt.as_str())
+        })
+        .collect();
+    let mut bases = BTreeSet::new();
+    let mut strata = BTreeMap::<String, usize>::new();
+    let mut identities = BTreeSet::new();
+    let mut bindings = BTreeSet::new();
+    for group in cases.as_chunks::<4>().0 {
+        if !bases.insert(scene(&group[0])) || group.iter().any(|e| scene(e) != scene(&group[0])) {
+            return Err(Error::Invalid("CROSS base/view identity".into()));
+        }
+        let mut facts = Vec::new();
+        for (view, e) in group.iter().enumerate() {
+            if e.category != 0
+                || e.request.evidence.items.len() != 1
+                || e.request.request_id != e.id
+            {
+                return Err(Error::Invalid("CROSS request".into()));
+            }
+            let r = &e.request.evidence.items[0];
+            let (entity, context, value) = exact_fact(&r.original_excerpt)
+                .ok_or_else(|| Error::Invalid("CROSS unsupported serialized fact".into()))?;
+            let digits = entity.trim_start_matches(|c: char| !c.is_ascii_digit());
+            let prefix = &entity[..entity.len() - digits.len()];
+            let question = if view == 3 {
+                "제공된 유일한 기록의 원문을 빠짐없이 쓰고 그 사건을 인용해줘.".to_owned()
+            } else {
+                format!(
+                    "{entity}의 {context}에서 현재 유효한 사건의 원문을 빠짐없이 쓰고 그 사건을 인용해줘."
+                )
+            };
+            if !["장치", "설비", "센서", "장비"].contains(&prefix)
+                || !(1..=8).contains(&digits.len())
+                || !digits.bytes().all(|b| b.is_ascii_digit())
+                || seen.contains(entity)
+                || usize::from_str_radix(&neural::hash(entity.as_bytes())[..8], 16).unwrap() % 3
+                    == 2
+                || r.version_status != "current"
+                || r.excerpt_truncated
+                || r.event_id <= 0
+                || e.request.input != question
+                || e.answer != format!("{} [event:{}]", r.original_excerpt, r.event_id)
+                || e.binding != format!("{entity}/{context}/{value}")
+                || prior_bindings.contains(e.binding.as_str())
+                || prior_text.contains(r.original_excerpt.as_str())
+            {
+                return Err(Error::Invalid(
+                    "CROSS ambiguity/seen entity/namespace/target".into(),
+                ));
+            }
+            identities.insert(entity);
+            bindings.insert(&e.binding);
+            facts.push((entity, context, value, r.event_id, r.recorded_at));
+            *strata
+                .entry(format!(
+                    "digits-{}/{}",
+                    digits.len(),
+                    if value.starts_with("경로") {
+                        "short-value"
+                    } else {
+                        "direction"
+                    }
+                ))
+                .or_default() += 1;
+        }
+        let a = facts[0];
+        if a.0 == facts[1].0
+            || a.1 != facts[1].1
+            || a.2 != facts[1].2
+            || a.0 != facts[2].0
+            || a.1 != facts[2].1
+            || a.2 == facts[2].2
+            || a != facts[3]
+            || facts.iter().any(|f| f.3 != a.3 || f.4 != a.4)
+        {
+            return Err(Error::Invalid("CROSS contrast semantics".into()));
+        }
+    }
+    if bases.len() != 128 || strata.len() != 16 || strata.values().any(|&n| n != 32) {
+        return Err(Error::Invalid("CROSS balanced length/value strata".into()));
+    }
+    let framed = samples(cases, &l.tokenizer, 512)?;
+    Ok(
+        json!({"status":"SERIALIZED_INPUT_VERIFIED","bases":bases.len(),"views":cases.len(),
+        "unique_entities":identities.len(),"unique_bindings":bindings.len(),"strata":strata,
+        "max_tokens":framed.iter().map(|s|s.tokens.len()).max(),"gold_source":"serialized single current record; no chosen_index"}),
+    )
+}
+fn progress_teacher_relation(rows: &[Value]) -> Value {
+    let mut table = [[0usize; 2]; 2];
+    let mut missing = 0;
+    let mut lengths = BTreeMap::<u64, usize>::new();
+    for row in rows {
+        let t = &row["teacher_forced_diagnostic_after_generation"];
+        if let (Some(correct), Some(total)) = (
+            t["teacher_forced_correct_tokens"].as_u64(),
+            t["target_tokens_including_eos"].as_u64(),
+        ) {
+            table[usize::from(correct == total)][usize::from(row["exact_match"] == true)] += 1;
+            *lengths.entry(total).or_default() += 1;
+        } else {
+            missing += 1;
+        }
+    }
+    json!({"derived_from":"recorded per-case argmax counts, not p^mean_length","teacher_all_correct_by_free_exact_false_true":table,
+        "target_length_histogram":lengths,"missing_teacher_cases":missing,"denominator":rows.len()})
+}
+fn progress_tokenizer(
+    l: &Loaded,
+    train: &[Episode],
+    dev: &[Episode],
+    control: &mut RunControl,
+) -> Result<Value> {
+    let mut kinds = Vec::new();
+    let mut groups = BTreeMap::<String, BTreeMap<String, usize>>::new();
+    let mut fragments = BTreeMap::<u32, Value>::new();
+    for id in 0..l.tokenizer.vocab_size() as u32 {
+        let kind = if id < 8 {
+            "reserved"
+        } else {
+            let b = l.tokenizer.decode_bytes(&[id])?;
+            match std::str::from_utf8(&b) {
+                Ok(_) => "standalone_valid",
+                Err(e) if e.error_len().is_none() => "incomplete_prefix",
+                Err(_) => "invalid_standalone",
+            }
+        };
+        let group = if id < 8 {
+            "reserved8"
+        } else if id < 264 {
+            "base256"
+        } else {
+            "learned"
+        };
+        *groups
+            .entry(group.into())
+            .or_default()
+            .entry(kind.into())
+            .or_default() += 1;
+        kinds.push(kind);
+        if id >= 8 && kind != "standalone_valid" {
+            fragments.insert(id,json!({"classification":kind,"bytes":l.tokenizer.decode_bytes(&[id])?,"train":[0,0],"dev":[0,0],"neighbors_train":{},"neighbors_dev":{}}));
+        }
+    }
+    for (split, cases) in [("train", train), ("dev", dev)] {
+        for e in cases {
+            control.check("progress_tokenizer_case")?;
+            let framed = samples(std::slice::from_ref(e), &l.tokenizer, 512)?;
+            let s = &framed[0];
+            let gold = l.tokenizer.encode(e.answer.as_bytes())?;
+            if l.tokenizer.decode(&gold)? != e.answer {
+                return Err(Error::Corrupt("gold tokenizer roundtrip".into()));
+            }
+            for (i, &id) in s.tokens.iter().enumerate() {
+                if let Some(f) = fragments.get_mut(&id) {
+                    let region = usize::from(i >= s.response_start);
+                    f[split][region] = json!(f[split][region].as_u64().unwrap() + 1);
+                    let key = format!(
+                        "{}:{}",
+                        i.checked_sub(1)
+                            .map(|j| s.tokens[j].to_string())
+                            .unwrap_or_else(|| "BOS".into()),
+                        s.tokens
+                            .get(i + 1)
+                            .map(u32::to_string)
+                            .unwrap_or_else(|| "END".into())
+                    );
+                    let field = format!("neighbors_{split}");
+                    let count = f[&field][&key].as_u64().unwrap_or(0) + 1;
+                    f[&field][&key] = json!(count);
+                }
+            }
+        }
+    }
+    Ok(
+        json!({"vocab":l.tokenizer.vocab_size(),"groups":groups,"fragments":fragments,
+        "occurrence_regions":["prompt","response_including_eos"],"roundtrip_cases":train.len()+dev.len(),
+        "interpretation":"standalone invalid/incomplete bytes are not a codec defect; arbitrary concatenations may fail UTF-8"}),
+    )
+}
+fn progress_exposure(
+    run: &Path,
+    train: &[Episode],
+    l: &Loaded,
+    control: &mut RunControl,
+) -> Result<Value> {
+    let policy = read_json(&run.parent().unwrap().join("policy.json"))?;
+    let tape: Vec<(Vec<usize>, u64)> = serde_json::from_value(policy["tape"].clone())?;
+    let framed = samples(train, &l.tokenizer, 512)?;
+    let mut rows = BTreeMap::<usize, Value>::new();
+    let mut path = run.to_owned();
+    for depth in 0..4 {
+        control.check("progress_exposure_segment")?;
+        let receipt = read_json(&path.join("result.json"))?;
+        let p = read_json(&path.parent().unwrap().join("policy.json"))?;
+        if receipt["policy_sha256"] != file_hash(&path.parent().unwrap().join("policy.json"))?
+            || receipt["checkpoint_file_sha256"] != file_hash(&path.join("final"))?
+            || p["tape"] != policy["tape"]
+        {
+            return Err(Error::Corrupt("progress trace provenance".into()));
+        }
+        for line in std::fs::read_to_string(path.join("trace.jsonl"))?.lines() {
+            let row: Value = serde_json::from_str(line)?;
+            let n = row["new_update"]
+                .as_u64()
+                .filter(|n| *n > 0 && *n <= 1024)
+                .ok_or_else(|| Error::Corrupt("progress update index".into()))?
+                as usize;
+            if rows.insert(n, row).is_some() {
+                return Err(Error::Corrupt("duplicate consumed update".into()));
+            }
+        }
+        if let Some(parent) = p["renewal"]["original_checkpoint"].as_str() {
+            if depth == 3 {
+                return Err(Error::Corrupt("progress lineage depth".into()));
+            }
+            path = Path::new(parent)
+                .parent()
+                .ok_or_else(|| Error::Corrupt("progress parent".into()))?
+                .into();
+        } else {
+            break;
+        }
+    }
+    let mut exposure = vec![0usize; train.len()];
+    let (mut inputs, mut targets) = (0u64, 0u64);
+    let mut sum_lr = 0.;
+    let mut decay_product = 1.;
+    for n in 1..=1024 {
+        let row = rows
+            .get(&n)
+            .ok_or_else(|| Error::Corrupt("missing consumed update".into()))?;
+        let (indices, rng) = tape
+            .get(n - 1)
+            .ok_or_else(|| Error::Corrupt("short frozen tape".into()))?;
+        if indices.len() != 8 || indices.iter().any(|&i| i >= framed.len()) {
+            return Err(Error::Corrupt("progress tape sample bounds".into()));
+        }
+        let input = indices
+            .iter()
+            .map(|&i| framed[i].tokens.len() - 1)
+            .sum::<usize>();
+        let target = indices
+            .iter()
+            .map(|&i| framed[i].tokens.len() - framed[i].response_start)
+            .sum::<usize>();
+        if row["indices"] != json!(indices)
+            || row["ids"] != json!(indices.iter().map(|&i| &train[i].id).collect::<Vec<_>>())
+            || row["sampler_state"] != *rng
+            || row["input_tokens"] != input
+            || row["target_tokens"] != target
+        {
+            return Err(Error::Corrupt(
+                "progress actual exposure/token mismatch".into(),
+            ));
+        }
+        for &i in indices {
+            exposure[i] += 1;
+        }
+        inputs += input as u64;
+        targets += target as u64;
+        let lr = row["lr"]
+            .as_f64()
+            .filter(|r| r.is_finite() && *r > 0.)
+            .ok_or_else(|| Error::Corrupt("trace LR".into()))?;
+        sum_lr += lr;
+        decay_product *= 1. - lr * l.manifest.training.as_ref().unwrap().config.weight_decay;
+    }
+    let pool = |range: std::ops::Range<usize>| {
+        json!({"available_views":range.len(),
+        "available_bases":range.clone().map(|i|scene(&train[i])).collect::<BTreeSet<_>>().len(),
+        "available_input_tokens":range.clone().map(|i|framed[i].tokens.len()-1).sum::<usize>(),
+        "available_target_tokens":range.clone().map(|i|framed[i].tokens.len()-framed[i].response_start).sum::<usize>(),
+        "actual_draws":range.clone().map(|i|exposure[i]).sum::<usize>(),
+        "unique_consumed_views":range.clone().filter(|&i|exposure[i]>0).count(),
+        "min_exposure":range.clone().map(|i|exposure[i]).min(),"max_exposure":range.map(|i|exposure[i]).max()})
+    };
+    Ok(
+        json!({"evidence_level":"DERIVED_FROM_LOGS","updates":rows.len(),"input_tokens":inputs,"target_tokens":targets,
+        "anchor":pool(0..2048),"focus":pool(2048..4096),"actual_lr_sum":sum_lr,
+        "decay_only_product":decay_product,"scope":"this H3 branch only; prior history and gradient updates excluded"}),
+    )
+}
+fn progress_qk(
+    l: &Loaded,
+    cases: &[Episode],
+    rows: &[Value],
+    control: &mut RunControl,
+) -> Result<Value> {
+    let mut picked = Vec::new();
+    if let Some(pair) = cases
+        .iter()
+        .zip(rows)
+        .find(|(_, r)| r["exact_match"] == true)
+    {
+        picked.push(pair);
+    }
+    if let Some(pair) = cases
+        .iter()
+        .zip(rows)
+        .find(|(_, r)| r["error_class"] == "strict_utf8")
+    {
+        picked.push(pair);
+    }
+    let mut observations = Vec::new();
+    for (e, row) in picked {
+        control.check("progress_qk_case")?;
+        let prepared = l.tokenizer.prepare(
+            &e.request,
+            l.model.config.context as u32,
+            &l.model.config.id()?,
+        )?;
+        let raw: Vec<u32> = serde_json::from_value(row["raw_tokens"].clone())?;
+        let pos = row["teacher_forced_diagnostic_after_generation"]["first_difference"]["index"]
+            .as_u64()
+            .map_or(0, |n| n as usize);
+        if pos > raw.len() {
+            return Err(Error::Corrupt("QK recorded prefix".into()));
+        }
+        let mut prefix = prepared.token_ids;
+        prefix.extend(&raw[..pos]);
+        let mut heads = Vec::new();
+        let scalar_stats = |xs: &[f32]| {
+            json!({"min":xs.iter().copied().fold(f32::INFINITY,f32::min),
+            "max":xs.iter().copied().fold(f32::NEG_INFINITY,f32::max),
+            "rms":(xs.iter().map(|&x|f64::from(x).powi(2)).sum::<f64>()/xs.len() as f64).sqrt()})
+        };
+        let mut observer = |layer: usize, q: &Tensor, k: &Tensor, mask: &Tensor| -> Result<()> {
+            control.check("progress_qk_layer")?;
+            let (_, h, t, d) = q.dims4()?;
+            let qlast = q.narrow(2, t - 1, 1)?;
+            let logits = (qlast.contiguous()?.matmul(
+                &neural::transformer::repeat_kv(k, h)?
+                    .transpose(2, 3)?
+                    .contiguous()?,
+            )? / (d as f64).sqrt())?
+            .squeeze(0)?
+            .squeeze(1)?
+            .to_vec2::<f32>()?;
+            let allowed = mask.narrow(2, t - 1, 1)?.flatten_all()?.to_vec1::<f32>()?;
+            let qv = qlast.squeeze(0)?.squeeze(1)?.to_vec2::<f32>()?;
+            let kv = k.squeeze(0)?.to_vec3::<f32>()?;
+            let qg = l.model.vars[&format!("layer.{layer}.q_norm")]
+                .squeeze(1)?
+                .to_vec2::<f32>()?;
+            let kg = l.model.vars[&format!("layer.{layer}.k_norm")]
+                .squeeze(1)?
+                .to_vec2::<f32>()?;
+            for head in 0..h {
+                let kh = head / (h / kv.len());
+                let mut entries: Vec<_> = logits[head]
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .filter(|(i, _)| allowed[*i] > 0.)
+                    .collect();
+                if entries.len() < 2 || entries.iter().any(|(_, x)| !x.is_finite()) {
+                    return Err(Error::Model(
+                        "nonfinite/insufficient QK observations".into(),
+                    ));
+                }
+                entries.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+                let max = f64::from(entries[0].1);
+                let z = entries
+                    .iter()
+                    .map(|(_, x)| (f64::from(*x) - max).exp())
+                    .sum::<f64>();
+                let entropy = -entries
+                    .iter()
+                    .map(|(_, x)| {
+                        let p = (f64::from(*x) - max).exp() / z;
+                        p * p.ln()
+                    })
+                    .filter(|x| x.is_finite())
+                    .sum::<f64>();
+                let kn: Vec<f32> = entries
+                    .iter()
+                    .map(|(i, _)| kv[kh][*i].iter().map(|x| x * x).sum::<f32>().sqrt())
+                    .collect();
+                let inf = |v: &[f32]| v.iter().map(|x| f64::from(x.abs())).fold(0., f64::max);
+                heads.push(json!({"layer":layer,"head":head,"kv_head":kh,"query_position":prefix.len()-1,
+                    "q_gain":scalar_stats(&qg[head]),"k_gain":scalar_stats(&kg[kh]),
+                    "q_post_rope_l2":qv[head].iter().map(|x|f64::from(*x).powi(2)).sum::<f64>().sqrt(),
+                    "k_post_rope_l2":scalar_stats(&kn),"allowed_keys":entries.len(),
+                    "finite_unmasked_min":entries.last().unwrap().1,"finite_unmasked_max":entries[0].1,
+                    "top1_top2_gap":entries[0].1-entries[1].1,"entropy":entropy,
+                    "conservative_abs_bound":(d as f64).sqrt()*inf(&qg[head])*inf(&kg[kh]),
+                    "top_keys":entries.iter().take(5).map(|(i,x)|json!({"position":i,"token_id":prefix[*i],"logit":x})).collect::<Vec<_>>() }));
+            }
+            Ok(())
+        };
+        let input = Tensor::new(prefix.as_slice(), &Device::Cpu)?.unsqueeze(0)?;
+        let observed = l.model.forward_observed(&input, None, &mut observer)?;
+        control.check("progress_qk_returned")?;
+        let reference = l.model.forward(&input, None)?;
+        let parity = compare(&observed, &reference)?;
+        observations.push(json!({"id":e.id,"raw_prefix_position":pos,"observed_forward_parity":parity,"heads":heads}));
+    }
+    Ok(
+        json!({"scope":"last query of one successful and one invalid recorded free-running prefix; observational, not causal",
+        "cases":observations,"mask_bias_excluded":true,"parameter_changes":false,"temperature_changes":false}),
+    )
+}
+fn progress_baseline(
+    paths: [&Path; 5],
+    output: &Path,
+    seed: u64,
+    control: &mut RunControl,
+) -> Result<()> {
+    let [baseline, run, inference, corpus, harness] = paths;
+    control.check("progress_a0_start")?;
+    let checked = verified_harness(harness)?;
+    let frozen = load(&baseline.join("frozen.json"))?;
+    let receipt = read_json(&run.join("result.json"))?;
+    let policy_path = run
+        .parent()
+        .ok_or_else(|| Error::Invalid("parent run".into()))?
+        .join("policy.json");
+    let policy = read_json(&policy_path)?;
+    let parent = run.join("final");
+    let l = checkpoint::load(&parent, Device::Cpu, true)?;
+    let inference_model = checkpoint::load(inference, Device::Cpu, false)?;
+    let state = l
+        .manifest
+        .training
+        .as_ref()
+        .ok_or_else(|| Error::Invalid("native resume/Adam required".into()))?;
+    let (manifest, train, dev) = data::load(corpus)?;
+    if receipt["reason"] != "SCREENING_BUDGET_REACHED"
+        || receipt["new_updates"] != 1024
+        || receipt["resume_allowed"] != false
+        || receipt["candidate_eligible"] != false
+        || receipt["checkpoint_saved"] != true
+        || receipt["control"]["terminal_reason"] != "COMPLETED"
+        || receipt["save_error"] != Value::Null
+        || receipt["checkpoint_file_sha256"] != file_hash(&parent)?
+        || receipt["policy_sha256"] != file_hash(&policy_path)?
+        || receipt["model_content_hash"] != l.model.weight_hash()?
+        || receipt["cumulative_model_step"] != state.step
+        || receipt["sampler_state"] != state.sampler_state
+        || policy["train_hash"] != manifest.train.sha256
+        || policy["dev_hash"] != manifest.validation.sha256
+        || state.corpus_hash != manifest.train.sha256
+        || train.len() != 4096
+        || dev.len() != 256
+        || l.optimizer.is_empty()
+        || inference_model.manifest.training.is_some()
+        || inference_model.model.weight_hash()? != l.model.weight_hash()?
+        || inference_model.tokenizer.semantic_id() != l.tokenizer.semantic_id()
+        || inference_model.model.config != l.model.config
+    {
+        return Err(Error::Corrupt(
+            "A0 parent native/policy/data identity".into(),
+        ));
+    }
+    drop(inference_model);
+    std::fs::create_dir(output)?;
+    let mut report = json!({"contract":PROGRESS_CONTRACT,"node":"A0","source_commit":source_commit()?,"source_digest":checked["source_digest"],
+        "binary_hash":file_hash(&std::env::current_exe()?)?,"parent":parent,"parent_file_sha256":file_hash(&parent)?,
+        "inference_path":inference,"inference_sha256":file_hash(inference)?,"model_hash":l.model.weight_hash()?,
+        "optimizer_hash":optimizer_hash(&l.optimizer)?,"tokenizer_hash":l.tokenizer.semantic_id(),"state":state,
+        "policy_sha256":file_hash(&policy_path)?,"corpus":corpus,"train_hash":manifest.train.sha256,"dev_hash":manifest.validation.sha256,
+        "baseline":baseline,"baseline_hash":file_hash(&baseline.join("frozen.json"))?,
+        "normal_policy":"normal_greedy_v1","actual_new_updates":0,"seal":"NOT_OPENED","a0_pass":false,"goal1_ready":false});
+    let outcome = (|| -> Result<()> {
+        let prior = receipt["last_evaluation"]["dev_rows"]
+            .as_array()
+            .ok_or_else(|| Error::Corrupt("parent raw rows".into()))?;
+        verify_historical_rows(&dev, prior)?;
+        report["recorded_dev"] = progress_copy_score(prior, 256)?;
+        report["teacher_relation"] = progress_teacher_relation(prior);
+        report["exposure"] = progress_exposure(run, &train, &l, control)?;
+        report["tokenizer"] = progress_tokenizer(&l, &train, &dev, control)?;
+        save(&output.join("identity-tokenizer-exposure.json"), &report)?;
+        let actual = evaluate_panel(&l, &dev, control);
+        save(
+            &output.join("normal-dev.json"),
+            &json!({"policy":"normal_greedy_v1","model_hash":report["model_hash"],"score":progress_copy_score(&actual,256)?,"rows":actual}),
+        )?;
+        control.check("progress_dev_saved")?;
+        if actual.len() != prior.len() {
+            return Err(Error::Corrupt("A0 replay denominator".into()));
+        }
+        let mut differences = Vec::new();
+        for (a, b) in actual.iter().zip(prior) {
+            for field in [
+                "id",
+                "question",
+                "evidence",
+                "expected",
+                "raw_tokens",
+                "actual",
+                "prompt_digest",
+                "provided",
+                "excluded",
+                "finish_reason",
+                "eos_index",
+                "error_class",
+                "exact_match",
+            ] {
+                if a[field] != b[field] {
+                    differences.push(json!({"id":a["id"],"field":field}));
+                }
+            }
+        }
+        report["replay_differences"] = json!(differences);
+        report["old_dev"] = progress_copy_score(&actual, 256)?;
+        if !differences.is_empty() {
+            return Err(Error::Corrupt("A0 normal replay changed".into()));
+        }
+        let (_, ordinary_train, ordinary) = data::load(&frozen.corpus)?;
+        let original = evaluate_panel(&l, &ordinary, control);
+        report["ordinary_parent"] = summarize(&original)?;
+        save(
+            &output.join("ordinary400.json"),
+            &json!({"policy":"normal_greedy_v1","model_hash":report["model_hash"],"score":report["ordinary_parent"],"rows":original}),
+        )?;
+        control.check("progress_ordinary_saved")?;
+        if original.len() != 400 {
+            return Err(Error::Corrupt("A0 ordinary denominator".into()));
+        }
+        let watch: Vec<_> = frozen
+            .watch
+            .iter()
+            .map(|e| {
+                original
+                    .iter()
+                    .find(|r| r["id"] == e.id)
+                    .cloned()
+                    .ok_or_else(|| Error::Corrupt("A0 watch membership".into()))
+            })
+            .collect::<Result<_>>()?;
+        report["watch"] = summarize(&watch)?;
+        save(
+            &output.join("watch32.json"),
+            &json!({"rows":watch,"score":report["watch"],"derived_from":"same-process ordinary400 subset"}),
+        )?;
+        let mut parity = Vec::new();
+        for (e, row) in dev
+            .iter()
+            .zip(&actual)
+            .filter(|(_, r)| r["error_class"] == "strict_utf8")
+        {
+            let p = recorded_prefix_parity(&l, e, row, control)?;
+            if p["recorded_prefix_reproduced"] != true || p["raw_bytes_hash_matches"] != true {
+                return Err(Error::Corrupt("A0 prefix parity".into()));
+            }
+            parity.push(p);
+        }
+        report["final_utf8_prefix_parity"] = json!(parity);
+        save(
+            &output.join("final-prefix-parity.json"),
+            &report["final_utf8_prefix_parity"],
+        )?;
+        report["qk"] = progress_qk(&l, &dev, &actual, control)?;
+        save(&output.join("qk-observations.json"), &report["qk"])?;
+        let mut reservations = train.clone();
+        reservations.extend(dev.clone());
+        reservations.extend(ordinary_train);
+        reservations.extend(ordinary);
+        let (cross, mut cross_meta) = data::crossed_copy_development(&reservations, seed)?;
+        save(&output.join("cross-development.json"), &cross)?;
+        if cross_meta["status"] == "CAPACITY" {
+            report["cross"] = cross_meta;
+            control.observe(StopReason::AuditIncomplete);
+            return Err(Error::Invalid(
+                "CROSS_CAPACITY; no seen IDs or reduced gate substituted".into(),
+            ));
+        }
+        cross_meta["validation"] = verify_cross_development(&cross, &reservations, &l)?;
+        cross_meta["file_sha256"] = json!(file_hash(&output.join("cross-development.json"))?);
+        save(&output.join("cross-manifest.json"), &cross_meta)?;
+        let cross_rows = evaluate_panel(&l, &cross, control);
+        report["cross"] = cross_meta;
+        report["cross_parent"] = progress_copy_score(&cross_rows, 512)?;
+        save(
+            &output.join("cross-parent.json"),
+            &json!({"policy":"normal_greedy_v1","score":report["cross_parent"],"rows":cross_rows}),
+        )?;
+        control.check("progress_cross_saved")?;
+        if cross_rows.len() != 512 {
+            return Err(Error::Corrupt("CROSS incomplete".into()));
+        }
+        Ok(())
+    })();
+    if let Err(e) = &outcome {
+        control.classify_error(e);
+    }
+    if report["parent_file_sha256"] != file_hash(&parent)?
+        || report["inference_sha256"] != file_hash(inference)?
+        || report["optimizer_hash"] != optimizer_hash(&l.optimizer)?
+        || report["model_hash"] != l.model.weight_hash()?
+    {
+        control.observe(StopReason::IntegrityFail);
+    }
+    let sealed = control.seal_terminal();
+    report["control"] = control.receipt();
+    report["a0_pass"] = json!(outcome.is_ok() && sealed.is_ok());
+    report["error"] = json!(outcome.as_ref().err().map(ToString::to_string));
+    save(&output.join("summary.json"), &report)?;
+    println!(
+        "NODE=A0 pass={} old_dev={} ordinary={} cross={} updates=0 reason={}",
+        report["a0_pass"],
+        report["old_dev"]["exact_matches"],
+        report["ordinary_parent"]["qa"],
+        report["cross_parent"]["exact_matches"],
+        report["control"]["terminal_reason"]
+    );
+    outcome.and(sealed)
+}
+
 fn skill_probe_indices(
     episodes: &[Episode],
     seen: &BTreeSet<usize>,
@@ -3378,63 +4088,7 @@ fn skill_diagnose(
             .iter()
             .find(|r| r["id"] == *id)
             .ok_or_else(|| Error::Corrupt("error row absent".into()))?;
-        if row["question"] != e.request.input
-            || row["evidence"] != serde_json::to_value(&e.request.evidence)?
-            || row["expected"] != e.answer
-        {
-            return Err(Error::Corrupt("error row content".into()));
-        }
-        let raw: Vec<u32> = serde_json::from_value(row["raw_tokens"].clone())?;
-        let prompt = l.tokenizer.prepare(
-            &e.request,
-            l.model.config.context as u32,
-            &l.model.config.id()?,
-        )?;
-        if row["prompt_digest"] != digest(&prompt.token_ids)? || raw.is_empty() || raw.len() > 128 {
-            return Err(Error::Corrupt("error prompt/raw bounds".into()));
-        }
-        let scope = "skill-diagnostic-prefix";
-        let mut cache = l.model.cache(scope);
-        let mut prefix = prompt.token_ids.clone();
-        let mut cached = l.model.forward_cached(
-            &Tensor::new(prefix.as_slice(), &Device::Cpu)?.unsqueeze(0)?,
-            &mut cache,
-            scope,
-        )?;
-        let mut positions = Vec::new();
-        for (position, &token) in raw.iter().enumerate() {
-            control.check("skill_diagnostic_cache_prefix")?;
-            let full = l
-                .model
-                .forward(
-                    &Tensor::new(prefix.as_slice(), &Device::Cpu)?.unsqueeze(0)?,
-                    None,
-                )?
-                .narrow(1, prefix.len() - 1, 1)?;
-            let cached_last = cached.narrow(1, cached.dim(1)? - 1, 1)?;
-            let numeric = compare(&full, &cached_last)?;
-            let full_token = full.argmax(2)?.flatten_all()?.to_vec1::<u32>()?[0];
-            let cached_token = cached_last.argmax(2)?.flatten_all()?.to_vec1::<u32>()?[0];
-            positions.push(json!({"position":position,"prefix_tokens":prefix.len(),"recorded":token,"cached":cached_token,"full":full_token,"numeric":numeric}));
-            if position + 1 < raw.len() {
-                prefix.push(token);
-                cached = l.model.forward_cached(
-                    &Tensor::new(&[token], &Device::Cpu)?.unsqueeze(0)?,
-                    &mut cache,
-                    scope,
-                )?;
-            }
-        }
-        let bytes = l.tokenizer.decode_bytes(
-            &raw.iter()
-                .copied()
-                .take_while(|t| *t >= neural::SPECIALS as u32)
-                .collect::<Vec<_>>(),
-        )?;
-        let utf8 = std::str::from_utf8(&bytes);
-        parity.push(json!({"id":e.id,"positions":positions,"recorded_prefix_reproduced":positions.iter().all(|p|p["recorded"]==p["cached"]&&p["recorded"]==p["full"]),
-            "raw_bytes":row["raw_bytes"],"strict_utf8_error":utf8.err().map(|e|e.to_string()),"raw_bytes_hash_matches":row["raw_bytes"]["sha256"]==neural::hash(&bytes),
-            "scope":"recorded free-running prefix; no gold fed into forward"}));
+        parity.push(recorded_prefix_parity(&l, e, row, control)?);
     }
     let mut fields = BTreeMap::<String, usize>::new();
     for row in rows {
@@ -3457,6 +4111,71 @@ fn skill_diagnose(
         "terminal":control.receipt(),"candidate_eligible":false,"seal":"NOT_OPENED","data_hash":manifest.train.sha256}),
     )?;
     Ok(())
+}
+fn recorded_prefix_parity(
+    l: &Loaded,
+    e: &Episode,
+    row: &Value,
+    control: &mut RunControl,
+) -> Result<Value> {
+    if row["question"] != e.request.input
+        || row["evidence"] != serde_json::to_value(&e.request.evidence)?
+        || row["expected"] != e.answer
+    {
+        return Err(Error::Corrupt("error row content".into()));
+    }
+    let raw: Vec<u32> = serde_json::from_value(row["raw_tokens"].clone())?;
+    let prompt = l.tokenizer.prepare(
+        &e.request,
+        l.model.config.context as u32,
+        &l.model.config.id()?,
+    )?;
+    if row["prompt_digest"] != digest(&prompt.token_ids)? || raw.is_empty() || raw.len() > 128 {
+        return Err(Error::Corrupt("error prompt/raw bounds".into()));
+    }
+    let scope = "skill-diagnostic-prefix";
+    let mut cache = l.model.cache(scope);
+    let mut prefix = prompt.token_ids.clone();
+    let mut cached = l.model.forward_cached(
+        &Tensor::new(prefix.as_slice(), &Device::Cpu)?.unsqueeze(0)?,
+        &mut cache,
+        scope,
+    )?;
+    let mut positions = Vec::new();
+    for (position, &token) in raw.iter().enumerate() {
+        control.check("skill_diagnostic_cache_prefix")?;
+        let full = l
+            .model
+            .forward(
+                &Tensor::new(prefix.as_slice(), &Device::Cpu)?.unsqueeze(0)?,
+                None,
+            )?
+            .narrow(1, prefix.len() - 1, 1)?;
+        let cached_last = cached.narrow(1, cached.dim(1)? - 1, 1)?;
+        let numeric = compare(&full, &cached_last)?;
+        let full_token = full.argmax(2)?.flatten_all()?.to_vec1::<u32>()?[0];
+        let cached_token = cached_last.argmax(2)?.flatten_all()?.to_vec1::<u32>()?[0];
+        positions.push(json!({"position":position,"prefix_tokens":prefix.len(),"recorded":token,"cached":cached_token,"full":full_token,"numeric":numeric}));
+        if position + 1 < raw.len() {
+            prefix.push(token);
+            cached = l.model.forward_cached(
+                &Tensor::new(&[token], &Device::Cpu)?.unsqueeze(0)?,
+                &mut cache,
+                scope,
+            )?;
+        }
+    }
+    let bytes = l.tokenizer.decode_bytes(
+        &raw.iter()
+            .copied()
+            .take_while(|t| *t >= neural::SPECIALS as u32)
+            .collect::<Vec<_>>(),
+    )?;
+    Ok(json!({"id":e.id,"positions":positions,
+        "recorded_prefix_reproduced":positions.iter().all(|p|p["recorded"]==p["cached"]&&p["recorded"]==p["full"]),
+        "raw_bytes":row["raw_bytes"],"strict_utf8_error":std::str::from_utf8(&bytes).err().map(|e|e.to_string()),
+        "raw_bytes_hash_matches":row["raw_bytes"]["sha256"]==neural::hash(&bytes),
+        "scope":"recorded free-running prefix; no gold fed into forward"}))
 }
 fn compare(a: &Tensor, b: &Tensor) -> Result<Value> {
     if a.dims() != b.dims() {
@@ -4971,6 +5690,83 @@ mod tests {
             manifest,
             optimizer: BTreeMap::new(),
         }
+    }
+    #[test]
+    fn progress_cross_capacity_and_independent_serialized_validation() {
+        let (cases, meta) = data::crossed_copy_development(&[], 971031).unwrap();
+        assert_eq!(cases.len(), 512);
+        assert_eq!(meta["bases"], 128);
+        let mut l = repair_loaded();
+        let docs: Vec<_> = cases
+            .iter()
+            .map(|e| serde_json::to_vec(e).unwrap())
+            .collect();
+        l.tokenizer = ByteBpe::train(&docs, &neural::hash(b"cross test only"), 801).unwrap();
+        assert_eq!(
+            verify_cross_development(&cases, &[], &l).unwrap()["status"],
+            "SERIALIZED_INPUT_VERIFIED"
+        );
+        let again = data::crossed_copy_development(&[], 971031).unwrap().0;
+        assert_eq!(digest(&cases).unwrap(), digest(&again).unwrap());
+        for change in 0..4 {
+            let mut bad = cases.clone();
+            match change {
+                0 => bad[0].answer = "invented answer".into(),
+                1 => bad[0].request.evidence.items[0].version_status = "historical".into(),
+                2 => bad[0].request.input = "다른 대상".into(),
+                _ => {
+                    let additional = bad[1].request.evidence.items[0].clone();
+                    bad[0].request.evidence.items.push(additional);
+                }
+            }
+            assert!(verify_cross_development(&bad, &[], &l).is_err());
+        }
+        assert!(verify_cross_development(&cases, &cases[..1], &l).is_err());
+        let mut used = Vec::new();
+        for prefix in ["장치", "설비", "센서", "장비"] {
+            for digit in 0..10 {
+                let mut e = cases[0].clone();
+                e.binding = format!("{prefix}{digit}/구역1/직진");
+                used.push(e);
+            }
+        }
+        let (none, capacity) = data::crossed_copy_development(&used, 971031).unwrap();
+        assert!(none.is_empty());
+        assert_eq!(capacity["status"], "CAPACITY");
+        assert_eq!(capacity["one_digit_unseen_unreserved"], json!([]));
+    }
+    #[test]
+    fn progress_metric_denominator_teacher_and_precancel() {
+        let row = json!({"id":"fixture/0","scene":"fixture","family":"cross/H3/digits-1/kind-0/pattern-0/view-0",
+            "actual":"센서1의 구역1 이동 지시는 직진이다. [event:1]","expected":"센서1의 구역1 이동 지시는 직진이다. [event:1]",
+            "exact_match":true,"error":null,"generation_completed":true,"generation":{"finish":"stop","generated":10},"finish_reason":"stop","eos_index":9,"interruption":null,
+            "components":{"entity":true,"citation_exact":true},"teacher_forced_diagnostic_after_generation":{"teacher_forced_correct_tokens":10,"target_tokens_including_eos":10}});
+        let mut rows = vec![row; 512];
+        for (i, row) in rows.iter_mut().enumerate() {
+            row["id"] = json!(format!("fixture/{}/{i}", i / 4));
+            row["scene"] = json!(format!("fixture/{}", i / 4));
+        }
+        assert_eq!(progress_copy_score(&rows, 512).unwrap()["skill_pass"], true);
+        assert_eq!(
+            progress_copy_score(&rows[..511], 512).unwrap()["skill_pass"],
+            false
+        );
+        rows[0]["error"] = json!("UTF-8");
+        rows[0]["exact_match"] = json!(false);
+        let score = progress_copy_score(&rows, 512).unwrap();
+        assert_eq!(score["denominator"], 512);
+        assert_eq!(score["skill_pass"], false);
+        assert_eq!(
+            progress_teacher_relation(&rows)["teacher_all_correct_by_free_exact_false_true"],
+            json!([[0, 0], [1, 511]])
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("unused");
+        let mut c = repair_control();
+        c.cancel.store(true, Ordering::Relaxed);
+        assert!(progress_baseline([dir.path(); 5], &out, 1, &mut c).is_err());
+        assert!(!out.exists());
+        assert_eq!(c.generation_calls, 0);
     }
     #[test]
     fn skill_explicit_renewal_preserves_stop_and_rejects_other_terminal() {

@@ -39,6 +39,14 @@ bindings. Missing legacy fields are unverified; fresh replay cannot cure a prior
 
 ## Bounded copy curriculum continuation
 
+`replica-train recovery progress-baseline` is the no-update A0 entry for controlled H3
+progress. Explicit inputs are the H2 baseline, stopped1024 segment directory, native inference
+file, H3 corpus, exact-source passing quick receipt, new output and fixed development seed.
+It replays olddev once, measures original400, verifies final failing prefixes, records
+tokenizer/QK/exposure measurements and freezes/evaluates CROSS-DEV. It never opens the old
+seal or edits parent receipts. A0 `a0_pass` is input/measurement readiness, not model quality.
+Use `--help`; the active plan defines separate new experiment forks and their bounds.
+
 `replica-train recovery baseline`, `skill-prepare` and `skill-run` reuse the native trainer,
 corpus and control paths. Inspect their `--help` for explicit paths; use only audited frozen
 inputs and a passing quick summary for the exact current source. The run freezes checkpoint,

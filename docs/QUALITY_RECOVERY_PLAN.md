@@ -1,6 +1,40 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: R3-HARNESS-TO-GOAL1-1.0
+## Active: R3-H3-CONTROLLED-PROGRESS-1.0
+
+Start at report HEAD be6e2b7a7f59e444ffa25d8bae9e1af34d418d66, code d31e53eda459af447eed10d87617e4ee4d11ead3.
+Preserve the1024-update H3 native/Adam and its failed quality/closed budget/resume=false receipts.
+A0 performs no updates: verify native lineage, recount raw256 and token exposure, reproduce
+normal dev256 once, measure original ordinary336/aux64 once, compare both final invalid
+prefixes cached/full, inspect byte fragments and bounded actual QK/decay measurements.
+Freeze one balanced DEVELOPMENT CROSS panel128bases×4views; report bounded ID capacity
+and split collisions honestly. No sealed generation or independent-final selection in A0.
+
+After A0 passes, new explicit EXPERIMENT_FORK C/L share parent weights/Adam/RNG, data and
+draw tape. C constant3e-5; L ramps by j/64 from3e-5 to1e-4, then holds. Each≤512new updates,
+2Minput/500Ktarget. Evaluate olddev/watch at0/128/256/512; final CROSS512/original400.
+Only safe finite improving endpoints permit the conditional F/N comparison: identical
+balanced focus distribution/anchor/LR/Adam, fixed512views versus fresh2048views, each≤512.
+No Adam reset, topology/tokenizer/decay/temperature/storage/kernel changes. U prefix-safe
+decoding is optional, diagnostic-only and cannot replace NORMAL_GREEDY acceptance.
+
+New H3 total≤2048updates/8Minput/2Mtarget/120min, command≤1800s plus cleanup≤120s,
+training16GiB/inference12GiB. Freeze source/binary during each run; one heavy process.
+Cancel/nonfinite/data/hash/cache/leakage/resource/budget failures stop cooperatively.
+Two consecutive olddev drops≥26, watch drops≥4, error increases≥6, or single error rate≥20%
+stop that arm. All thresholds are relative to its registered parent. Final errors still0.
+Comparison uses common exposure prefixes; unequal endpoints cannot establish LR superiority.
+
+A3 requires normal olddev full244/entity254/event254 of256, CROSS ceil95%/99%/99%, errors0,
+ordinary≥max(175,A0 parent), fresh-process raw parity, then once-only sealed256 acceptance.
+Only actual A3 PASS continues H4→H5→H6/S4→H7/S5→H8/S6 under their existing contracts below.
+No automatic budget renewal; failed stages preserve evidence and block dependents.
+Closed A0: normal dev208/256 reproduces every raw/prompt/finish field; ordinary178/336,
+aux63/64; crossed development210/512. Parent/model/Adam/raw/corpus preserved, final two
+invalid prefixes reproduce cached/full, bounded QK and tokenizer/exposure diagnostics saved.
+Quick34/direct4 and release pass; SMALL/TINY/scalar updates0. NEXT=A1 independent C/L forks.
+
+## Previous: R3-HARNESS-TO-GOAL1-1.0
 
 Renewed continuation after publication f964a2a0308dd64852fd3d33e83e8e431373ab17:
 the user again requests H4–H8 and S4/S5/S6/Goal1. First inspect the actual stopped H3

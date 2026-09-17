@@ -346,6 +346,9 @@ pub fn attention_mask(
         device,
     )?)
 }
+/// Read-only diagnostic hook; receives the actual post-RoPE Q/K and explicit mask.
+pub type AttentionObserver<'a> = dyn FnMut(usize, &Tensor, &Tensor, &Tensor) -> Result<()> + 'a;
+
 pub fn rms_norm(x: &Tensor, weight: &Tensor, eps: f64) -> candle_core::Result<Tensor> {
     x.broadcast_div(&(x.sqr()?.mean_keepdim(D::Minus1)? + eps)?.sqrt()?)?
         .broadcast_mul(weight)
@@ -583,10 +586,18 @@ impl Transformer {
         }
     }
     pub fn forward(&self, ids: &Tensor, padding: Option<&[bool]>) -> Result<Tensor> {
-        self.forward_inner(ids, padding, None, "", None)
+        self.forward_inner(ids, padding, None, "", None, None)
+    }
+    pub fn forward_observed(
+        &self,
+        ids: &Tensor,
+        padding: Option<&[bool]>,
+        observe: &mut AttentionObserver<'_>,
+    ) -> Result<Tensor> {
+        self.forward_inner(ids, padding, None, "", None, Some(observe))
     }
     pub fn forward_cached(&self, ids: &Tensor, cache: &mut Cache, scope: &str) -> Result<Tensor> {
-        self.forward_inner(ids, None, Some(cache), scope, None)
+        self.forward_inner(ids, None, Some(cache), scope, None, None)
     }
     pub fn forward_profiled(
         &self,
@@ -595,7 +606,7 @@ impl Transformer {
         scope: &str,
         timings: &mut ForwardTimings,
     ) -> Result<Tensor> {
-        self.forward_inner(ids, None, Some(cache), scope, Some(timings))
+        self.forward_inner(ids, None, Some(cache), scope, Some(timings), None)
     }
     fn forward_inner(
         &self,
@@ -604,6 +615,7 @@ impl Transformer {
         mut cache: Option<&mut Cache>,
         scope: &str,
         mut profile: Option<&mut ForwardTimings>,
+        mut observe: Option<&mut AttentionObserver<'_>>,
     ) -> Result<Tensor> {
         let (batch, len) = ids.dims2()?;
         // A forward used for training always retains the reference autograd graph.
@@ -672,6 +684,9 @@ impl Transformer {
                 batch,
                 &self.device,
             )?;
+            if let Some(observer) = &mut observe {
+                observer(i, &q, &k, &allowed)?;
+            }
             let attention = gqa_attention(&q, &k, &v, &allowed)?
                 .transpose(1, 2)?
                 .contiguous()?

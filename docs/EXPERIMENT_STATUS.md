@@ -1,10 +1,74 @@
 # 진단 및 구현 상태
 
-현재 작업: R3-HARNESS-TO-GOAL1-1.0의 H0~H8 조건부 계속 구현.
+현재 작업: R3-H3-CONTROLLED-PROGRESS-1.0의 A0→C/L→조건부 F/N→품질 수용.
 2026-09-17. 이전 R3-CUSTOMIZE-AND-DIAGNOSE-1.0 실행 이력은 아래 보존한다.
 모든 성공 표시는 구현자 확인이며 INDEPENDENT_PENDING이다.
 
-## 현재: H3 1,024updates 종료 — 개선 관측, 품질 미달 / PARTIAL
+## 현재: A0 기준점 검증 완료, C/L 실행 전
+
+2026-09-17, EXECUTED_THIS_RUN. 시작 HEAD=be6e2b7a7f59e444ffa25d8bae9e1af34d418d66,
+추적 파일 clean, 기존 untracked487개 보존. rustc/cargo1.98.1, locked/offline,
+CPU/Accelerate/F32, VECLIB_MAXIMUM_THREADS=1/RAYON_NUM_THREADS=1. 아래 이전1024 품질
+실패와 예산 종료/resume=false는 그대로다. 이번 새 SMALL/TINY/scalar updates는 모두0이다.
+
+A0는 정상 H3 dev256을 새 프로세스에서208/256으로 재현했다. 이전 raw와 ID/질문/근거/
+expected/raw token/prompt/provided/excluded/finish/EOS/error/EM 차이0건이다.
+같은1024 parent의 원래 ordinary는178/336, auxiliary63/64, 범주별23/68·28/68·9/68·56/68·62/64다.
+ordinary watch는 같은400 결과의 고정 subset18/32다. 이후 anchor 보존 하한은max(175,178)=178이다.
+새 normal CROSS-DEV는210/512, entity262/context365/value463/event492, UTF-8 1/오류1,
+base4/4=38/128이다. 이 패널은 DEVELOPMENT이며 봉인/최종 시험이 아니다.
+전체 H3 품질 PASS는 아직 없고 C/L·F/N·S4/S5/S6는 이 A0 기록에서 NOT_RUN이다.
+
+자료: CROSS는128base×4views, 길이1~8×방향/경로 각32views로 한 번 동결했다.
+seed917260317, SHA c27bc3e35343c3c046fa2b9c944aae0601912f086fa2a739ed7900f0a6dbf28a.
+기존 train/dev 전체 entity를 제외하고 과거 seal의 hash namespace 전체를 예약해 사례는 열지 않았다.
+1자리 잔여 공간은3개 ID, 같은 접두어의 재명명 쌍을 만들 수 있는 것은2개였다. 이를 서로 다른
+context/value의 base들에서 재사용했다. 전체 unique entities207/bindings384이며512독립 ID가 아니다.
+1자리 패턴들은 서로 겹친다. pattern은 원형 base 분류이며 ID 재명명 view에서 모양이 달라질 수 있다.
+독립 검사기는 직렬화된 유일 current 원문과 질문에서 답/인용을 도출하고 split·대조·빈/모호 입력을
+검사한다. 전체 field가 같아서 맞힐 수 있는 자료로 대체하지 않았다. 생성기 status와 별도로
+cross-manifest의 validation.status=SERIALIZED_INPUT_VERIFIED이며 A0 실제 종료도 COMPLETED다.
+
+보고 주장 재검산(DERIVED_FROM_LOGS): focus pool512base/2048views, 실제4096draws,
+각view2회; anchor2048base/2048views, 실제4096draws, 각view2회. 총 input2,451,742/
+target277,330,1024updates다. focus 한 pool의 available input584,031/target76,277과
+실제 두 epoch 소비량은 구분한다. 기록된 LR 합0.03071999999999948,
+decay-only product0.9996928471350713이며 과거 이력/gradient 효과를 포함한 측정은 아니다.
+
+tokenizer801=reserved8+base256+learned537. learned 중 standalone valid383,
+incomplete prefix66, invalid standalone88로 단독 UTF-8이 아닌 조각154개가 확인됐다.
+base256은 valid128/incomplete51/invalid77. train/dev4352문항 gold roundtrip을 검사하고
+조각별 prompt/target 빈도와 전후 token 분포를 기록했다. 임의 생성 연결의 실패와 codec 결함은 다르다.
+보존된 문항별 teacher count와 자유 생성 교차표는 teacher-all-correct208/free-correct208,
+teacher-not-all-correct48/free-wrong48, 불일치0이다. 평균 정확도의 거듭제곱을 원인 증거로 쓰지 않았다.
+
+최종 UTF-8 실패53/0·53/1의 모든57/54 raw prefix를 실제 cached/full로 대조했다.
+허용오차 위반0, 기록된 argmax/token/byte hash 일치, byte46 invalid_sequence를 각각 재현했다.
+M은 성공1건과 반복숫자 오류1건의 선택된 실제 prefix에서 각6층×8heads의 gain 원소 min/max/RMS,
+post-RoPE Q/K L2, mask 제외 finite logits/gap/entropy/top5 key를 기록했다.
+예를 들어 첫 사례 layer0/head0의 q gain max1.265428/k gain max1.290802이며 보수적
+상한은11.316647이다. RMS로±7 고정 상한을 만들지 않는다. 관찰한 attention은 원인 확정이 아니다.
+U는 선택적 실험으로 NOT_RUN, 기본 decoding 변경0이다.
+
+검증: 신규 직접 회귀3개와 관련 기존1개 통과; quick 총34회 테스트 실행(기존1개 중복 호출 포함),
+fmt/check/clippy 통과. 관찰 hook off/on forward·gradient bit parity와 cached parity를 확인했다.
+테스트 fixture 작성 중 compile 오류 및 부정확한 EM fixture 실패 로그도 보존했고 수정 후 통과했다.
+실제 A0 generation1168/own-teacher1168, 추가 cache/QK forward는 별도이며 optimizer0.
+wall167.74s, maximum RSS1,067,630,592B, 별도 peak memory footprint961,889,672B.
+command1800s 내 COMPLETED, 중단 조건0, 기존 model/Adam/정책/corpus/봉인 bytes 보존 확인.
+
+증거 루트=artifacts/h3-controlled-20260917. a0/{summary.json,identity-tokenizer-exposure.json,
+normal-dev.json,ordinary400.json,watch32.json,final-prefix-parity.json,qk-observations.json,
+cross-development.json,cross-manifest.json,cross-parent.json}, a0.log, quick-a0/summary.json,
+a0-direct-tests*.log, a0-product-build.log, preserved.sha256를 보존했다.
+실행 binary=a0-train-frozen SHA df45a04bf660b7b3df1db6f880f4b78d21525d7c84424ae3cc5603798c9fe652.
+source digest=bf19a01b13f07f83b3d775909fd1ce9328dd71f480b75ae49e3b35270862457d.
+parent physical48480b5f7fb740b7a7163d298372e957d931dcc0138dbdca1de9ef8e6ff479a7,
+model f5d875bae16494a24ad7628f1628706f9e800abb1eddc03b9425ba1f55a8182d,
+Adam tensor hash028e81b5d62283b83c566994e68a612f81d95eddac00030e72355e9a32650964.
+SOURCE_VERIFIED/CODE_VERIFIED는 모델 품질과 별개이며 독립 수용은 PENDING이다.
+
+## 이전: H3 1,024updates 종료 — 개선 관측, 품질 미달 / PARTIAL
 
 2026-09-17, EXECUTED_THIS_RUN. 사용자가 승인한 마지막512회를 실행해 H3 누적1,024회에서
 종료했다. 전체 답변은512회의0/256에서768회123/256,1,024회208/256(81.25%)으로

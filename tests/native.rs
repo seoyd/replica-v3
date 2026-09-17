@@ -15,6 +15,87 @@ fn tokenizer() -> ByteBpe {
     ByteBpe::train(&docs, &hash(b"independent training fixture"), 512).unwrap()
 }
 #[test]
+fn progress_attention_observer_preserves_forward_gradient_and_cache() {
+    use candle_core::{Device, Tensor};
+    use transformer::{Config, Transformer};
+    let model = Transformer::init(Config::tiny(264), 93, Device::Cpu).unwrap();
+    let ids = Tensor::new(&[[8u32, 9, 10, 11]], &Device::Cpu).unwrap();
+    let ordinary = model.forward(&ids, None).unwrap();
+    let mut seen = Vec::new();
+    let observed = model
+        .forward_observed(&ids, None, &mut |layer, q, k, allowed| {
+            seen.push(layer);
+            assert_eq!(q.dims(), &[1, 4, 4, 8]);
+            assert_eq!(k.dims(), &[1, 2, 4, 8]);
+            assert_eq!(allowed.dims(), &[1, 1, 4, 4]);
+            assert_eq!(
+                allowed.flatten_all().unwrap().to_vec1::<f32>().unwrap()[1],
+                0.
+            );
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(seen, vec![0, 1]);
+    assert_eq!(
+        ordinary.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+        observed.flatten_all().unwrap().to_vec1::<f32>().unwrap()
+    );
+    let a = ordinary
+        .sqr()
+        .unwrap()
+        .sum_all()
+        .unwrap()
+        .backward()
+        .unwrap();
+    let b = observed
+        .sqr()
+        .unwrap()
+        .sum_all()
+        .unwrap()
+        .backward()
+        .unwrap();
+    for var in model.vars.values() {
+        assert_eq!(
+            a.get(var)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap(),
+            b.get(var)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap()
+        );
+    }
+    let mut cache = model.cache("progress-parity");
+    let cached = model
+        .forward_cached(&ids, &mut cache, "progress-parity")
+        .unwrap();
+    assert_eq!(
+        ordinary.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+        cached.flatten_all().unwrap().to_vec1::<f32>().unwrap()
+    );
+    let next = Tensor::new(&[[12u32]], &Device::Cpu).unwrap();
+    let incremental = model
+        .forward_cached(&next, &mut cache, "progress-parity")
+        .unwrap();
+    let all = Tensor::new(&[[8u32, 9, 10, 11, 12]], &Device::Cpu).unwrap();
+    let full = model.forward(&all, None).unwrap().narrow(1, 4, 1).unwrap();
+    for (a, b) in incremental
+        .flatten_all()
+        .unwrap()
+        .to_vec1::<f32>()
+        .unwrap()
+        .iter()
+        .zip(full.flatten_all().unwrap().to_vec1::<f32>().unwrap())
+    {
+        assert!((a - b).abs() < 1e-5);
+    }
+}
+#[test]
 fn semantic_identity_and_bounded_experimental_configuration() {
     use transformer::{Config, MIXER, Transformer};
     let tiny = Config::tiny(264);

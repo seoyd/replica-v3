@@ -2204,6 +2204,180 @@ pub fn copy_curriculum(source: &Path, output: &Path, seed: u64) -> Result<()> {
     );
     Ok(())
 }
+/// One development-only crossed panel. Does not read or evaluate the sealed corpus.
+pub fn crossed_copy_development(
+    prior: &[Episode],
+    seed: u64,
+) -> Result<(Vec<Episode>, serde_json::Value)> {
+    use replica_v3::neural::transformer::Rng;
+    use serde_json::json;
+    let prefixes = ["장치", "설비", "센서", "장비"];
+    let mut seen = BTreeSet::new();
+    for e in prior {
+        seen.insert(e.binding.split('/').next().unwrap_or_default().to_owned());
+        for item in &e.request.evidence.items {
+            if let Some((entity, _)) = item.original_excerpt.split_once("의 ") {
+                seen.insert(entity.to_owned());
+            }
+        }
+    }
+    // Reserve the old seal's entire ID partition without reading its cases or answers.
+    let available = |entity: &str| {
+        !seen.contains(entity)
+            && usize::from_str_radix(&hash(entity.as_bytes())[..8], 16).unwrap() % 3 != 2
+    };
+    let one_digit: Vec<_> = prefixes
+        .iter()
+        .flat_map(|p| (0..10).map(move |n| format!("{p}{n}")))
+        .filter(|e| available(e))
+        .collect();
+    let mut meta = json!({"role":"DEVELOPMENT_ONLY","generator":"cross-copy-v1","seed":seed,
+        "planned_bases":128,"planned_views":512,"one_digit_unseen_unreserved":one_digit,
+        "reserved_old_seal":"entire hash partition2; cases unopened","max_attempts_per_base":10000,
+        "one_digit_patterns":"general/repeated/alternating/adjacent coincide; not independent conditions",
+        "split_scope":"full entity absent from supplied train/development; old seal namespace reserved",
+        "status":"CAPACITY","optimizer_updates":0});
+    let directions = [
+        "오른쪽",
+        "왼쪽",
+        "직진",
+        "대기",
+        "북쪽",
+        "남쪽",
+        "동쪽",
+        "서쪽",
+    ];
+    let mut rng = Rng::new(seed);
+    let mut out = Vec::new();
+    for base in 0..128 {
+        let digits = base / 16 + 1;
+        let kind = (base / 8) % 2;
+        let pattern = (base / 2) % 4;
+        let mut pair = None;
+        for _ in 0..10_000 {
+            let prefix = prefixes[(rng.next_u64() % 4) as usize];
+            let mut number: Vec<u8> = (0..digits)
+                .map(|_| b'0' + (rng.next_u64() % 10) as u8)
+                .collect();
+            let first = number[0];
+            match pattern {
+                1 => number.fill(first),
+                2 => {
+                    let second = b'0' + ((first - b'0' + 1 + (rng.next_u64() % 9) as u8) % 10);
+                    for (i, n) in number.iter_mut().enumerate() {
+                        *n = if i % 2 == 0 { first } else { second };
+                    }
+                }
+                3 if digits > 1 => {
+                    number[1] = first;
+                }
+                _ => {}
+            }
+            if pattern == 0 && digits > 1 && base % 2 == 0 {
+                number[0] = b'0';
+            }
+            let entity = format!("{prefix}{}", std::str::from_utf8(&number).unwrap());
+            if !available(&entity) {
+                continue;
+            }
+            for delta in 1..10 {
+                let mut near = number.clone();
+                near[digits - 1] = b'0' + (near[digits - 1] - b'0' + delta) % 10;
+                let renamed = format!("{prefix}{}", std::str::from_utf8(&near).unwrap());
+                if available(&renamed) {
+                    pair = Some((entity.clone(), renamed));
+                    break;
+                }
+            }
+            if pair.is_some() {
+                break;
+            }
+        }
+        let Some((entity, renamed)) = pair else {
+            meta["failed_stratum"] =
+                json!({"digits":digits,"kind":kind,"pattern":pattern,"base":base});
+            meta["constructed_views_not_a_gate"] = json!(out.len());
+            // Never silently shrink the requested panel or count seen IDs as unseen.
+            return Ok((Vec::new(), meta));
+        };
+        let context = format!("구역{}", 1 + rng.next_u64() % 999_999);
+        let event_id = (1 + rng.next_u64() % 999_999) as i64;
+        let recorded_at = (rng.next_u64() % 1_000_000_000) as i64;
+        let value = if kind == 0 {
+            directions[(rng.next_u64() % 8) as usize].to_owned()
+        } else {
+            format!("경로{}", rng.next_u64() % 100_000)
+        };
+        let changed = if kind == 0 {
+            let offset = 1 + (rng.next_u64() % 7) as usize;
+            directions[(directions.iter().position(|v| *v == value).unwrap() + offset) % 8]
+                .to_owned()
+        } else {
+            format!(
+                "경로{}",
+                (value.strip_prefix("경로").unwrap().parse::<u64>().unwrap()
+                    + 1
+                    + rng.next_u64() % 99_999)
+                    % 100_000
+            )
+        };
+        for view in 0..4 {
+            let name = if view == 1 { &renamed } else { &entity };
+            let val = if view == 2 { &changed } else { &value };
+            let original = format!("{name}의 {context} 이동 지시는 {val}이다.");
+            let mut item = evidence(event_id, original.clone(), "current");
+            item.recorded_at = recorded_at;
+            let id = format!("cross-H3/development/{seed}/{base}/{view}");
+            let input = if view == 3 {
+                "제공된 유일한 기록의 원문을 빠짐없이 쓰고 그 사건을 인용해줘.".into()
+            } else {
+                format!(
+                    "{name}의 {context}에서 현재 유효한 사건의 원문을 빠짐없이 쓰고 그 사건을 인용해줘."
+                )
+            };
+            let request = ModelRequest {
+                request_id: id.clone(),
+                system: SYSTEM.into(),
+                input,
+                evidence: EvidenceBundle {
+                    items: vec![item],
+                    ..Default::default()
+                },
+                limits: GenerationLimits {
+                    context_tokens: 2048,
+                    max_tokens: 128,
+                    timeout_ms: 120000,
+                },
+            };
+            out.push(Episode {
+                id,
+                category: 0,
+                family: format!(
+                    "cross/H3/digits-{digits}/kind-{kind}/pattern-{pattern}/replica-{}/view-{view}",
+                    base % 2
+                ),
+                binding: format!("{name}/{context}/{val}"),
+                sequence: hash(&serde_json::to_vec(&(
+                    &request.input,
+                    &request.evidence.items,
+                ))?),
+                request,
+                answer: format!("{original} [event:{event_id}]"),
+            });
+        }
+    }
+    check_split(prior, &out)?;
+    meta["status"] = json!("MATERIALIZED_NOT_VALIDATED");
+    meta["bases"] = json!(128);
+    meta["views"] = json!(out.len());
+    meta["unique_entities"] = json!(
+        out.iter()
+            .map(|e| e.binding.split('/').next().unwrap())
+            .collect::<BTreeSet<_>>()
+            .len()
+    );
+    Ok((out, meta))
+}
 pub fn tokenizer(root: &Path, output: &Path, vocab: usize) -> Result<()> {
     let (mut manifest, train, validation) = load(root)?;
     let docs: Vec<Vec<u8>> = train

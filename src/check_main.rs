@@ -411,6 +411,7 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                 ("replica-train", "harness_m"),
                 ("replica-train", "repair_rf"),
                 ("replica-train", "skill_"),
+                ("replica-train", "progress_"),
             ] {
                 r.cargo(
                     "test",
@@ -421,6 +422,7 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
             for (target, filter) in [
                 ("training", "harness_m"),
                 ("native", "native_numeric_references"),
+                ("native", "progress_attention_observer"),
                 ("native", "legacy_checkpoint_import_roundtrip"),
                 ("runtime", "rv02_whole_evidence"),
                 ("store", "lifecycle_restart"),
