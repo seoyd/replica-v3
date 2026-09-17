@@ -13,6 +13,83 @@ use std::{
 };
 const MAX_CORPUS: usize = 64 * 1024 * 1024;
 pub const GENERATOR_REVISION: &str = "educational-korean-v1";
+#[cfg(test)]
+mod harness_tests {
+    use super::*;
+    #[test]
+    #[ignore = "isolated by bounded parent to avoid an in-process non-progress loop"]
+    fn empty_key_child() {
+        let value = replace_training_literals("가", &[(String::new(), String::new())]);
+        assert!(
+            format!("{value:?}").starts_with("Err("),
+            "empty key accepted"
+        );
+    }
+    #[test]
+    fn harness_m01_empty_key_is_bounded_error() {
+        use std::{
+            process::{Command, Stdio},
+            time::{Duration, Instant},
+        };
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "data::harness_tests::empty_key_child",
+                "--ignored",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let start = Instant::now();
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success());
+                break;
+            }
+            if start.elapsed() > Duration::from_secs(2) {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!(
+                    "empty replacement did not consume input or return an error within watchdog"
+                );
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    #[test]
+    fn harness_m01_literal_progress_unicode_prefix_conflict_and_bound() {
+        let pairs = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            replace_training_literals(
+                "구역1 구역10 😀가",
+                &pairs(&[("구역1", "구역10"), ("구역10", "구역1"), ("가", "나")])
+            )
+            .unwrap(),
+            "구역10 구역1 😀나"
+        );
+        assert_eq!(
+            replace_training_literals(
+                "가나다",
+                &pairs(&[("가", "가"), ("가", "가"), ("나", "다"), ("다", "나")])
+            )
+            .unwrap(),
+            "가다나"
+        );
+        assert!(replace_training_literals("", &pairs(&[("", "x")])).is_err());
+        assert!(replace_training_literals("가", &pairs(&[("가", "나"), ("가", "다")])).is_err());
+        assert!(replace_training_literals("xx", &[("x".into(), "x".repeat(256 * 1024))]).is_err());
+        assert_eq!(
+            replace_training_literals("😀가", &pairs(&[("가", "")])).unwrap(),
+            "😀"
+        );
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Episode {
@@ -897,27 +974,52 @@ fn grounding(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
 }
 // One-pass replacement avoids cascading label/ID substitutions. Training-only;
 // neither the inference library nor the independent final renderer calls this.
-pub(crate) fn replace_training_literals(text: &str, replacements: &[(String, String)]) -> String {
+pub(crate) fn replace_training_literals(
+    text: &str,
+    replacements: &[(String, String)],
+) -> Result<String> {
+    // A request-sized upper bound, checked before every append including identity replacements.
+    const MAX_REPLACED_BYTES: usize = 256 * 1024;
+    let mut keys = std::collections::BTreeMap::new();
+    for (old, new) in replacements {
+        if old.is_empty() || keys.insert(old, new).is_some_and(|prior| prior != new) {
+            return Err(Error::Invalid(
+                "empty or conflicting training replacement key".into(),
+            ));
+        }
+    }
+    if text.len() > MAX_REPLACED_BYTES {
+        return Err(Error::Invalid("training replacement output bound".into()));
+    }
+    let mut ordered: Vec<_> = keys.into_iter().collect();
+    ordered.sort_by_key(|(old, _)| std::cmp::Reverse(old.len()));
     let mut result = String::with_capacity(text.len());
     let mut remaining = text;
     while !remaining.is_empty() {
-        if let Some((old, new)) = replacements
+        let (consumed, replacement) = if let Some((old, new)) = ordered
             .iter()
-            .find(|(old, _)| remaining.starts_with(old))
+            .find(|(old, _)| remaining.starts_with(old.as_str()))
         {
-            result.push_str(new);
-            remaining = &remaining[old.len()..];
+            (old.len(), new.as_str())
         } else {
             let next = remaining.chars().next().expect("nonempty text");
-            result.push(next);
-            remaining = &remaining[next.len_utf8()..];
+            (next.len_utf8(), &remaining[..next.len_utf8()])
+        };
+        if result
+            .len()
+            .checked_add(replacement.len())
+            .is_none_or(|n| n > MAX_REPLACED_BYTES)
+        {
+            return Err(Error::Invalid("training replacement output bound".into()));
         }
+        result.push_str(replacement);
+        remaining = &remaining[consumed..]; // Keys are nonempty; unmatched UTF-8 consumes one character.
     }
-    result
+    Ok(result)
 }
 // Four different evidence bindings per base scene discourage question-only
 // memorization. Every variant is still a real, explicitly stored training episode.
-fn counterfactual(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
+fn counterfactual(count: usize, seed: u64, validation: bool) -> Result<Vec<Episode>> {
     use replica_v3::neural::transformer::Rng;
     let values = [
         "오른쪽",
@@ -981,7 +1083,7 @@ fn counterfactual(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
             let offset = (rng.next_u64() % 100_000_000) as i64;
             for item in &mut episode.request.evidence.items {
                 item.original_excerpt =
-                    replace_training_literals(&item.original_excerpt, &replacements);
+                    replace_training_literals(&item.original_excerpt, &replacements)?;
                 item.event_id = ids[&item.event_id];
                 item.recorded_at += offset;
                 item.observed_at = item.observed_at.map(|t| t + offset);
@@ -990,11 +1092,11 @@ fn counterfactual(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
             episode.answer = if let Ok(id) = episode.answer.parse::<i64>() {
                 ids[&id].to_string()
             } else {
-                replace_training_literals(&episode.answer, &replacements)
+                replace_training_literals(&episode.answer, &replacements)?
             };
             episode.request.input =
-                replace_training_literals(&episode.request.input, &replacements);
-            episode.binding = replace_training_literals(&episode.binding, &replacements);
+                replace_training_literals(&episode.request.input, &replacements)?;
+            episode.binding = replace_training_literals(&episode.binding, &replacements)?;
             let items = &mut episode.request.evidence.items;
             for index in (1..items.len()).rev() {
                 items.swap(index, (rng.next_u64() % (index + 1) as u64) as usize);
@@ -1008,12 +1110,12 @@ fn counterfactual(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
             out.push(episode);
         }
     }
-    out
+    Ok(out)
 }
 // Training-only factorization: generate the supporting event before its value.
 // The product decoder still predicts every token; there is no output formatter.
-fn evidence_first(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
-    let mut episodes = counterfactual(count, seed, validation);
+fn evidence_first(count: usize, seed: u64, validation: bool) -> Result<Vec<Episode>> {
+    let mut episodes = counterfactual(count, seed, validation)?;
     for episode in &mut episodes {
         if episode.category < 4 && !episode.family.starts_with("copy/") {
             let (value, citation) = episode
@@ -1023,12 +1125,12 @@ fn evidence_first(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
             episode.answer = format!("기록 {citation}의 방향은 {value}입니다.");
         }
     }
-    episodes
+    Ok(episodes)
 }
 // Whole-record targets keep entity, context and value together before the citation.
 // These are supervised training targets, never a product answer formatter.
-fn record_copy(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
-    let mut episodes = evidence_first(count, seed, validation);
+fn record_copy(count: usize, seed: u64, validation: bool) -> Result<Vec<Episode>> {
+    let mut episodes = evidence_first(count, seed, validation)?;
     for (index, episode) in episodes.iter_mut().enumerate() {
         let mut fields = episode.binding.split('/');
         let entity = fields.next().expect("own entity binding");
@@ -1079,13 +1181,13 @@ fn record_copy(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
                 .expect("synthetic record-copy episode"),
         );
     }
-    episodes
+    Ok(episodes)
 }
 // Short auxiliary supervision for the first context-dependent token. Ordinary QA
 // is unchanged, and the product decoder cannot call this training-only renderer.
-fn entity_cue(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
+fn entity_cue(count: usize, seed: u64, validation: bool) -> Result<Vec<Episode>> {
     use replica_v3::neural::transformer::Rng;
-    let mut episodes = record_copy(count, seed, validation);
+    let mut episodes = record_copy(count, seed, validation)?;
     let names = ["장치", "설비", "센서", "장비"];
     let mut rng = Rng::new(seed ^ if validation { 0x42c14be7 } else { 0x7160d351 });
     let mut offset = 0;
@@ -1105,9 +1207,9 @@ fn entity_cue(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
         let replacements = [(old_name, name.to_owned())];
         for item in &mut episode.request.evidence.items {
             item.original_excerpt =
-                replace_training_literals(&item.original_excerpt, &replacements);
+                replace_training_literals(&item.original_excerpt, &replacements)?;
         }
-        episode.binding = replace_training_literals(&episode.binding, &replacements);
+        episode.binding = replace_training_literals(&episode.binding, &replacements)?;
         episode.request.input = if validation {
             "이 자료가 부르는 대상의 종류 이름만 적어줘."
         } else {
@@ -1121,11 +1223,11 @@ fn entity_cue(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
                 .expect("synthetic entity-cue episode"),
         );
     }
-    episodes
+    Ok(episodes)
 }
 // Direct supervision of source fields; ordinary QA and product inference stay unchanged.
-fn field_cue(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
-    let mut episodes = entity_cue(count, seed, validation);
+fn field_cue(count: usize, seed: u64, validation: bool) -> Result<Vec<Episode>> {
+    let mut episodes = entity_cue(count, seed, validation)?;
     let mut auxiliary = 0;
     for episode in &mut episodes {
         if !episode.family.starts_with("copy/") {
@@ -1216,13 +1318,13 @@ fn field_cue(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
                 .expect("synthetic field-cue episode"),
         );
     }
-    episodes
+    Ok(episodes)
 }
 // Training-only wording diversity and controlled value changes. A value quartet
 // shares the complete background and changes only its current supporting value.
-fn field_pairs(count: usize, seed: u64) -> Vec<Episode> {
+fn field_pairs(count: usize, seed: u64) -> Result<Vec<Episode>> {
     use replica_v3::neural::transformer::Rng;
-    let mut episodes = field_cue(count, seed, false);
+    let mut episodes = field_cue(count, seed, false)?;
     let mut rng = Rng::new(seed ^ 0x312bc745);
     for group in episodes.chunks_mut(4) {
         if !group[0].family.starts_with("copy/") {
@@ -1322,12 +1424,12 @@ fn field_pairs(count: usize, seed: u64) -> Vec<Episode> {
             );
         }
     }
-    episodes
+    Ok(episodes)
 }
 // A two-by-two counterfactual: same evidence, two requested targets; then swap
 // only the two source values. Correct generation must use both question and evidence.
-fn query_pairs(count: usize, seed: u64) -> Vec<Episode> {
-    let mut episodes = field_pairs(count, seed);
+fn query_pairs(count: usize, seed: u64) -> Result<Vec<Episode>> {
+    let mut episodes = field_pairs(count, seed)?;
     for group in episodes.chunks_mut(4) {
         if !group[0].family.starts_with("copy/") || !group[0].family.ends_with("/value") {
             continue;
@@ -1377,7 +1479,7 @@ fn query_pairs(count: usize, seed: u64) -> Vec<Episode> {
                 ("지금".into(), "예전에".into()),
             ]);
         }
-        let other_question = replace_training_literals(&base.request.input, &replacements);
+        let other_question = replace_training_literals(&base.request.input, &replacements)?;
         assert_ne!(
             other_question, base.request.input,
             "own distinct requested targets"
@@ -1414,7 +1516,7 @@ fn query_pairs(count: usize, seed: u64) -> Vec<Episode> {
             );
         }
     }
-    episodes
+    Ok(episodes)
 }
 pub fn prepare(
     root: &Path,
@@ -1448,38 +1550,38 @@ pub fn prepare(
             "educational-korean-grounding-v4",
         ),
         "counterfactual" => (
-            counterfactual(documents, seed, false),
-            counterfactual((documents / 10).clamp(50, 400), seed, true),
+            counterfactual(documents, seed, false)?,
+            counterfactual((documents / 10).clamp(50, 400), seed, true)?,
             "educational-korean-counterfactual-v5",
         ),
         "evidence-first" => (
-            evidence_first(documents, seed, false),
-            evidence_first((documents / 10).clamp(50, 400), seed, true),
+            evidence_first(documents, seed, false)?,
+            evidence_first((documents / 10).clamp(50, 400), seed, true)?,
             "educational-korean-evidence-first-v6",
         ),
         "record-copy" => (
-            record_copy(documents, seed, false),
-            record_copy((documents / 10).clamp(50, 400), seed, true),
+            record_copy(documents, seed, false)?,
+            record_copy((documents / 10).clamp(50, 400), seed, true)?,
             "educational-korean-record-copy-v8",
         ),
         "entity-cue" => (
-            entity_cue(documents, seed, false),
-            entity_cue((documents / 10).clamp(50, 400), seed, true),
+            entity_cue(documents, seed, false)?,
+            entity_cue((documents / 10).clamp(50, 400), seed, true)?,
             "educational-korean-entity-cue-v9",
         ),
         "field-cue" => (
-            field_cue(documents, seed, false),
-            field_cue((documents / 10).clamp(50, 400), seed, true),
+            field_cue(documents, seed, false)?,
+            field_cue((documents / 10).clamp(50, 400), seed, true)?,
             "educational-korean-field-cue-v10",
         ),
         "field-pairs" => (
-            field_pairs(documents, seed),
-            field_cue((documents / 10).clamp(50, 400), seed, true),
+            field_pairs(documents, seed)?,
+            field_cue((documents / 10).clamp(50, 400), seed, true)?,
             "educational-korean-field-pairs-v11",
         ),
         "query-pairs" => (
-            query_pairs(documents, seed),
-            field_cue((documents / 10).clamp(50, 400), seed, true),
+            query_pairs(documents, seed)?,
+            field_cue((documents / 10).clamp(50, 400), seed, true)?,
             "educational-korean-query-pairs-v12",
         ),
         _ => return Err(Error::Invalid("corpus profile".into())),
@@ -1578,6 +1680,15 @@ pub fn binding_pairs(source: &Path, output: &Path) -> Result<()> {
                     .ok_or_else(|| Error::Invalid("binding pair source grammar".into()))
             })
             .collect::<Result<_>>()?;
+        if parsed.iter().any(|(entity, context, value)| {
+            [*entity, *context, *value]
+                .iter()
+                .any(|field| field.is_empty() || !field.chars().all(char::is_alphanumeric))
+        }) {
+            return Err(Error::Invalid(
+                "binding pair empty or malformed fact atom".into(),
+            ));
+        }
         let cited = replica_v3::app::citations(&base.answer)?;
         let target = base
             .request
@@ -1617,7 +1728,7 @@ pub fn binding_pairs(source: &Path, output: &Path) -> Result<()> {
         }
         // Longest-first prevents context1 from matching the prefix of context10.
         replacements.sort_by_key(|(old, _)| std::cmp::Reverse(old.len()));
-        let other_question = replace_training_literals(&base.request.input, &replacements);
+        let other_question = replace_training_literals(&base.request.input, &replacements)?;
         if other_question == base.request.input {
             return Err(Error::Invalid("binding pair questions must differ".into()));
         }

@@ -326,18 +326,47 @@ pub enum FieldAblation {
     QuestionAndRecord,
     QaRecord,
 }
+#[derive(Clone, Copy)]
+enum RecordTargetMode {
+    ExactEntity,
+    ExplicitNumericField,
+}
 // Oracle evidence-selection diagnostic, never retrieval or product inference.
 // Selection reads only the explicit identifiers and current status, not gold values.
 fn isolate_current_record(
     request: &mut replica_v3::model::ModelRequest,
     entity: &str,
     context: &str,
+    mode: RecordTargetMode,
 ) -> Result<()> {
     let number = entity.trim_start_matches(|c: char| !c.is_ascii_digit());
-    let full_name = mentions_target(&request.input, entity);
-    if !mentions_target(&request.input, number) || !mentions_target(&request.input, context) {
+    let target = match mode {
+        RecordTargetMode::ExactEntity => entity,
+        RecordTargetMode::ExplicitNumericField => number,
+    };
+    let exact_mention = |atom: &str| {
+        mentions_target(&request.input, atom)
+            && request.input.match_indices(atom).any(|(start, _)| {
+                request.input[..start]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|c| !c.is_alphanumeric())
+                    && request.input[start + atom.len()..]
+                        .chars()
+                        .next()
+                        .is_none_or(|c| !c.is_ascii_digit())
+            })
+    };
+    if entity.is_empty()
+        || context.is_empty()
+        || number.is_empty()
+        || !number.bytes().all(|b| b.is_ascii_digit())
+        || !mentions_target(&request.input, target)
+        || !exact_mention(context)
+        || (matches!(mode, RecordTargetMode::ExactEntity) && !exact_mention(entity))
+    {
         return Err(Error::Invalid(
-            "record ablation target must be explicit in the question".into(),
+            "INVALID_DIAGNOSTIC_INPUT: record target must be explicit in the question".into(),
         ));
     }
     let matches: Vec<_> = request
@@ -350,15 +379,17 @@ fn isolate_current_record(
                     .split_once("의 ")
                     .is_some_and(|(name, text)| {
                         name.trim_start_matches(|c: char| !c.is_ascii_digit()) == number
-                            && (!full_name || name == entity)
+                            && (matches!(mode, RecordTargetMode::ExplicitNumericField)
+                                || name == entity)
                             && text.starts_with(&format!("{context} 이동 지시는 "))
                     })
+                && !e.excerpt_truncated
         })
         .cloned()
         .collect();
     if matches.len() != 1 {
         return Err(Error::Invalid(
-            "record ablation requires exactly one current match".into(),
+            "INVALID_DIAGNOSTIC_INPUT: record ablation requires exactly one current match".into(),
         ));
     }
     request.evidence.items = matches;
@@ -418,6 +449,38 @@ pub fn evaluate_corpus(
     if limit == 0 || limit > episodes.len() {
         return Err(Error::Invalid("diagnostic generation count".into()));
     }
+    // Validate every requested diagnostic transformation before loading a model or publishing rows.
+    let mut requests = Vec::with_capacity(limit);
+    for episode in episodes.iter().take(limit) {
+        let mut request = episode.request.clone();
+        let mut fields = episode.binding.split('/');
+        let entity = fields.next().unwrap_or_default();
+        let context = fields.next().unwrap_or_default();
+        if single_record {
+            isolate_current_record(
+                &mut request,
+                entity,
+                context,
+                if qa_record {
+                    RecordTargetMode::ExactEntity
+                } else {
+                    RecordTargetMode::ExplicitNumericField
+                },
+            )?;
+        }
+        if rephrase {
+            request.input = known_question_form(episode.category, &request.input, entity, context)?;
+        }
+        if rephrase_field {
+            request.input = known_field_question_form(
+                &request.input,
+                episode.family.rsplit('/').next().unwrap_or_default(),
+                entity,
+                context,
+            )?;
+        }
+        requests.push(request);
+    }
     let loaded = checkpoint::load(checkpoint, Device::Cpu, false)?;
     control.check("evaluate_model_loaded")?;
     if let Some(state) = &loaded.manifest.training
@@ -439,38 +502,11 @@ pub fn evaluate_corpus(
     let mut failed = 0;
     let mut groups: BTreeMap<String, [usize; 2]> = BTreeMap::new();
     let mut evaluated = Vec::new();
-    for episode in episodes.iter().take(limit) {
+    for (episode, request) in episodes.iter().take(limit).zip(&requests) {
         if control.check("evaluate_next_case").is_err() {
             break;
         }
-        let mut request = episode.request.clone();
-        if single_record {
-            let mut fields = episode.binding.split('/');
-            isolate_current_record(
-                &mut request,
-                fields.next().unwrap_or_default(),
-                fields.next().unwrap_or_default(),
-            )?;
-        }
-        if rephrase {
-            let mut fields = episode.binding.split('/');
-            request.input = known_question_form(
-                episode.category,
-                &request.input,
-                fields.next().unwrap_or_default(),
-                fields.next().unwrap_or_default(),
-            )?;
-        }
-        if rephrase_field {
-            let mut fields = episode.binding.split('/');
-            request.input = known_field_question_form(
-                &request.input,
-                episode.family.rsplit('/').next().unwrap_or_default(),
-                fields.next().unwrap_or_default(),
-                fields.next().unwrap_or_default(),
-            )?;
-        }
-        let row = recovery::evaluate_one(&loaded, episode, &request, &mut control);
+        let row = recovery::evaluate_one(&loaded, episode, request, &mut control);
         let matched = row["exact_match"] == true;
         failed += usize::from(!row["error"].is_null());
         exact += usize::from(matched);
@@ -1286,7 +1322,13 @@ mod tests {
             },
         };
         let mut isolated = request.clone();
-        isolate_current_record(&mut isolated, "센서531904", "구역8").unwrap();
+        isolate_current_record(
+            &mut isolated,
+            "센서531904",
+            "구역8",
+            RecordTargetMode::ExplicitNumericField,
+        )
+        .unwrap();
         assert_eq!(isolated.evidence.items.len(), 1);
         assert_eq!(
             serde_json::to_value(&isolated.evidence.items[0]).unwrap(),
@@ -1296,7 +1338,13 @@ mod tests {
         let mut changed = request.clone();
         changed.evidence.items[3].original_excerpt =
             "센서531904의 구역8 이동 지시는 대기이다.".into();
-        isolate_current_record(&mut changed, "센서531904", "구역8").unwrap();
+        isolate_current_record(
+            &mut changed,
+            "센서531904",
+            "구역8",
+            RecordTargetMode::ExplicitNumericField,
+        )
+        .unwrap();
         assert_eq!(changed.evidence.items[0].event_id, 14);
         assert!(
             changed.evidence.items[0]
@@ -1305,7 +1353,15 @@ mod tests {
         );
         for (entity, context) in [("센서53190", "구역8"), ("센서531904", "구역80")] {
             let mut invalid = request.clone();
-            assert!(isolate_current_record(&mut invalid, entity, context).is_err());
+            assert!(
+                isolate_current_record(
+                    &mut invalid,
+                    entity,
+                    context,
+                    RecordTargetMode::ExplicitNumericField
+                )
+                .is_err()
+            );
             assert_eq!(invalid.evidence.items.len(), 4);
         }
         for duplicate in [false, true] {
@@ -1319,7 +1375,15 @@ mod tests {
                 invalid.evidence.items.pop();
             }
             let before = serde_json::to_value(&invalid).unwrap();
-            assert!(isolate_current_record(&mut invalid, "센서531904", "구역8").is_err());
+            assert!(
+                isolate_current_record(
+                    &mut invalid,
+                    "센서531904",
+                    "구역8",
+                    RecordTargetMode::ExplicitNumericField
+                )
+                .is_err()
+            );
             assert_eq!(serde_json::to_value(&invalid).unwrap(), before);
         }
         let mut qa = request.clone();
@@ -1327,12 +1391,127 @@ mod tests {
         qa.evidence
             .items
             .push(record(77, "장비531904", "구역8", "대기", "current"));
-        isolate_current_record(&mut qa, "센서531904", "구역8").unwrap();
+        isolate_current_record(
+            &mut qa,
+            "센서531904",
+            "구역8",
+            RecordTargetMode::ExactEntity,
+        )
+        .unwrap();
         assert_eq!(qa.evidence.items[0].event_id, 14);
         qa.evidence.items[0].original_excerpt = "장비531904의 구역8 이동 지시는 서쪽이다.".into();
         let before = serde_json::to_value(&qa).unwrap();
-        assert!(isolate_current_record(&mut qa, "센서531904", "구역8").is_err());
+        assert!(
+            isolate_current_record(
+                &mut qa,
+                "센서531904",
+                "구역8",
+                RecordTargetMode::ExactEntity
+            )
+            .is_err()
+        );
         assert_eq!(serde_json::to_value(&qa).unwrap(), before);
+    }
+    #[test]
+    fn harness_m02_qa_wrong_full_name_rejected_before_mutation() {
+        let mut request = replica_v3::model::ModelRequest {
+            request_id: "independent-target-mismatch".into(),
+            system: String::new(),
+            input: "장비31의 구역1 이동 지시와 근거는?".into(),
+            limits: Default::default(),
+            evidence: replica_v3::retrieval::EvidenceBundle {
+                items: vec![replica_v3::retrieval::Evidence {
+                    event_id: 23,
+                    original_excerpt: "센서31의 구역1 이동 지시는 동쪽이다.".into(),
+                    excerpt_truncated: false,
+                    source: "fixture".into(),
+                    recorded_at: 1,
+                    observed_at: None,
+                    version_status: "current".into(),
+                    retrieval_reason: "fixture".into(),
+                    relation_path: vec![],
+                }],
+                ..Default::default()
+            },
+        };
+        let before = serde_json::to_value(&request).unwrap();
+        assert!(
+            isolate_current_record(
+                &mut request,
+                "센서31",
+                "구역1",
+                RecordTargetMode::ExactEntity
+            )
+            .is_err()
+        );
+        assert_eq!(serde_json::to_value(&request).unwrap(), before);
+        for input in [
+            "센서310의 구역1 지시는?",
+            "센서31의 구역10 지시는?",
+            "구역1 지시는?",
+            "다른센서31의 구역1 지시는?",
+        ] {
+            request.input = input.into();
+            let before = serde_json::to_value(&request).unwrap();
+            assert!(
+                isolate_current_record(
+                    &mut request,
+                    "센서31",
+                    "구역1",
+                    RecordTargetMode::ExactEntity
+                )
+                .is_err()
+            );
+            assert_eq!(serde_json::to_value(&request).unwrap(), before);
+        }
+        request.input = "센서31의 구역1 지시는?".into();
+        isolate_current_record(
+            &mut request,
+            "센서31",
+            "구역1",
+            RecordTargetMode::ExactEntity,
+        )
+        .unwrap();
+        request.input = "번호 31 대상의 구역1 방향만 복사해줘.".into();
+        assert!(
+            isolate_current_record(
+                &mut request,
+                "센서31",
+                "구역1",
+                RecordTargetMode::ExactEntity
+            )
+            .is_err()
+        );
+        isolate_current_record(
+            &mut request,
+            "센서31",
+            "구역1",
+            RecordTargetMode::ExplicitNumericField,
+        )
+        .unwrap();
+        let mut other = request.evidence.items[0].clone();
+        other.event_id = 51;
+        other.original_excerpt = "장비31의 구역1 이동 지시는 서쪽이다.".into();
+        request.evidence.items.push(other);
+        for _ in 0..2 {
+            let before = serde_json::to_value(&request).unwrap();
+            assert!(
+                isolate_current_record(
+                    &mut request,
+                    "센서31",
+                    "구역1",
+                    RecordTargetMode::ExplicitNumericField
+                )
+                .is_err()
+            );
+            assert_eq!(serde_json::to_value(&request).unwrap(), before);
+            let mut qa = request.clone();
+            qa.input = "센서31의 구역1 지시는?".into();
+            isolate_current_record(&mut qa, "센서31", "구역1", RecordTargetMode::ExactEntity)
+                .unwrap();
+            assert_eq!(qa.evidence.items[0].event_id, 23);
+            request.evidence.items.reverse();
+        }
     }
     #[test]
     fn grouped_sampling_preserves_default_draws_and_complete_blocks() {

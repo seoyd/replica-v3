@@ -172,18 +172,18 @@ fn prepare_heldout(train: &[Episode], max_id: i64) -> Result<Vec<Episode>> {
             let mut e = original.clone();
             e.id = format!("contrast-heldout/{HELDOUT_SEED}/{group}/{variant}");
             e.family = format!("contrast-heldout/{group}");
-            e.request.input = data::replace_training_literals(&e.request.input, &replacements);
+            e.request.input = data::replace_training_literals(&e.request.input, &replacements)?;
             for r in &mut e.request.evidence.items {
                 r.event_id = id_map[&r.event_id];
                 r.original_excerpt =
-                    data::replace_training_literals(&r.original_excerpt, &replacements);
+                    data::replace_training_literals(&r.original_excerpt, &replacements)?;
             }
             // Same reversal for every member of a group: order is a heldout change,
             // never an answer-dependent permutation.
             if group % 2 == 0 {
                 e.request.evidence.items.reverse();
             }
-            e.answer = data::replace_training_literals(&e.answer, &replacements);
+            e.answer = data::replace_training_literals(&e.answer, &replacements)?;
             e.binding = hash(&serde_json::to_vec(&(group, &replacements))?);
             e.sequence = hash(&serde_json::to_vec(&e.request)?);
             out.push(e);
@@ -671,11 +671,11 @@ fn transfer_cases(train: &[Episode], factor: &str) -> Result<Vec<Episode>> {
         let mut replacements: Vec<_> = replacements.into_iter().collect();
         replacements.sort_by_key(|(old, _)| std::cmp::Reverse(old.len()));
         for e in quartet {
-            e.request.input = data::replace_training_literals(&e.request.input, &replacements);
-            e.answer = data::replace_training_literals(&e.answer, &replacements);
+            e.request.input = data::replace_training_literals(&e.request.input, &replacements)?;
+            e.answer = data::replace_training_literals(&e.answer, &replacements)?;
             for record in &mut e.request.evidence.items {
                 record.original_excerpt =
-                    data::replace_training_literals(&record.original_excerpt, &replacements);
+                    data::replace_training_literals(&record.original_excerpt, &replacements)?;
                 if factor == "record_ids" {
                     record.event_id = record
                         .event_id

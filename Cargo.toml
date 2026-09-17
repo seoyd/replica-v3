@@ -36,3 +36,7 @@ required-features = ["test-support"]
 [[bin]]
 name = "replica-train"
 path = "src/train_main.rs"
+
+[[bin]]
+name = "replica-check"
+path = "src/check_main.rs"

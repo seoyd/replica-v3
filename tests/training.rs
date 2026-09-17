@@ -1,5 +1,203 @@
 use std::process::Command;
 #[test]
+fn harness_m04_cli_close_reports_stopped_arm_before_any_replay() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["C", "W"] {
+        let path = dir.path().join(name);
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("result.json"), br#"{"reason":"CANCELLED","comparison_eligible":false,"final_evaluation_complete":false}"#).unwrap();
+    }
+    let output = dir.path().join("closed");
+    let result = Command::new(env!("CARGO_BIN_EXE_replica-train"))
+        .args([
+            "recovery",
+            "close",
+            "--fixture",
+            "absent-fixture",
+            "--control",
+            dir.path().join("C").to_str().unwrap(),
+            "--treatment",
+            dir.path().join("W").to_str().unwrap(),
+            "--legacy-tokenizer",
+            "absent-tokenizer",
+            "--worker-binary",
+            "absent-worker",
+            "--source-id",
+            &"1".repeat(64),
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8(result.stderr)
+            .unwrap()
+            .contains("INELIGIBLE_OR_UNVERIFIED_ARM")
+    );
+    let summary: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(output.join("summary.json")).unwrap()).unwrap();
+    assert_eq!(summary["comparison_eligible"], false);
+    assert_eq!(summary["candidate_eligible"], false);
+    assert_eq!(summary["model_calls"], 0);
+    assert_eq!(summary["arm_terminals"][0]["reason"], "CANCELLED");
+}
+#[test]
+fn harness_m01_m02_malformed_cli_rejects_before_output_or_model_load() {
+    use serde_json::{Value, json};
+    use std::{
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source");
+    let prepared = Command::new(env!("CARGO_BIN_EXE_replica-train"))
+        .args([
+            "corpus",
+            "prepare",
+            "--profile",
+            "entity-cue",
+            "--documents",
+            "240",
+            "--seed",
+            "317",
+            "--output",
+            source.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(prepared.status.success());
+    let original_train = std::fs::read(source.join("train.json")).unwrap();
+    let original_validation = std::fs::read(source.join("validation.json")).unwrap();
+    let original_manifest: Value =
+        serde_json::from_slice(&std::fs::read(source.join("manifest.json")).unwrap()).unwrap();
+    for (case, entity, context, value) in [
+        ("entity", "", "구역1", "동쪽"),
+        ("context", "센서31", "", "동쪽"),
+        ("value", "센서31", "구역1", ""),
+        ("space", "  ", "구역1", "동쪽"),
+        ("delimiter", "센서/31", "구역1", "동쪽"),
+        ("qa-name", "센서31", "구역1", "동쪽"),
+    ] {
+        let corpus = dir.path().join(case);
+        std::fs::create_dir(&corpus).unwrap();
+        let qa = case == "qa-name";
+        let mut rows: Vec<Value> = serde_json::from_slice(if qa {
+            &original_validation
+        } else {
+            &original_train
+        })
+        .unwrap();
+        let start = rows
+            .iter()
+            .position(|e| e["category"] == 0 && !e["family"].as_str().unwrap().starts_with("copy/"))
+            .unwrap();
+        for row in &mut rows[start..start + if qa { 1 } else { 4 }] {
+            row["request"]["input"] = json!(format!(
+                "{}의 {context} 이동 지시와 근거는?",
+                if qa { "장비31" } else { entity }
+            ));
+            row["binding"] = json!(format!("{entity}/{context}/{value}"));
+            let records = row["request"]["evidence"]["items"].as_array_mut().unwrap();
+            records.truncate(2);
+            records[0]["original_excerpt"] =
+                json!(format!("{entity}의 {context} 이동 지시는 {value}이다."));
+            records[0]["version_status"] = json!("current");
+            records[1]["original_excerpt"] = json!("장비32의 구역2 이동 지시는 서쪽이다.");
+            records[1]["version_status"] = json!("current");
+            let answer = format!(
+                "{} [event:{}]",
+                records[0]["original_excerpt"].as_str().unwrap(),
+                records[0]["event_id"]
+            );
+            row["answer"] = json!(answer);
+        }
+        let changed = serde_json::to_vec(&rows).unwrap();
+        let split = if qa { "validation" } else { "train" };
+        let mut manifest = original_manifest.clone();
+        manifest[split]["sha256"] = json!(replica_v3::neural::hash(&changed));
+        manifest[split]["bytes"] = json!(changed.len());
+        std::fs::write(
+            corpus.join("train.json"),
+            if qa { &original_train } else { &changed },
+        )
+        .unwrap();
+        std::fs::write(
+            corpus.join("validation.json"),
+            if qa { &changed } else { &original_validation },
+        )
+        .unwrap();
+        std::fs::write(
+            corpus.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        let output = dir.path().join(format!("{case}-output"));
+        let err_path = dir.path().join(format!("{case}.stderr"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_replica-train"));
+        if qa {
+            command.args([
+                "evaluate",
+                "--checkpoint",
+                "nonexistent-model-must-not-be-read",
+                "--corpus",
+                corpus.to_str().unwrap(),
+                "--single-qa-record",
+                "--limit",
+                "1",
+            ]);
+        } else {
+            command.args([
+                "corpus",
+                "binding-pairs",
+                "--source",
+                corpus.to_str().unwrap(),
+            ]);
+        }
+        let mut child = command
+            .args(["--output", output.to_str().unwrap()])
+            .stdout(Stdio::null())
+            .stderr(std::fs::File::create(&err_path).unwrap())
+            .spawn()
+            .unwrap();
+        let began = Instant::now();
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if began.elapsed() > Duration::from_secs(5) {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("unbounded malformed CLI: {case}");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(!status.success(), "{case}");
+        let error = std::fs::read_to_string(err_path).unwrap();
+        assert!(
+            error.contains(if qa {
+                "INVALID_DIAGNOSTIC_INPUT"
+            } else {
+                "empty or malformed fact atom"
+            }),
+            "{case}: {error}"
+        );
+        assert!(!output.exists(), "malformed input published output");
+        assert_eq!(
+            std::fs::read(corpus.join(format!("{split}.json"))).unwrap(),
+            changed
+        );
+    }
+    assert_eq!(
+        std::fs::read(source.join("train.json")).unwrap(),
+        original_train
+    );
+    assert_eq!(
+        std::fs::read(source.join("validation.json")).unwrap(),
+        original_validation
+    );
+}
+#[test]
 fn ordinary_qa_ablation_cli_keeps_gold_and_distinguishes_question_from_record() {
     use replica_v3::neural::{
         ByteBpe, checkpoint, hash,

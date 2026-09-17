@@ -1,10 +1,56 @@
 # 진단 및 구현 상태
 
-현재 작업: 사용자 학습 제한 갱신에 따른 GOAL1-NATIVE-TRPP-1.0의 S4~S6 계속 구현.
+현재 작업: R3-HARNESS-TO-GOAL1-1.0의 H0~H8 조건부 계속 구현.
 2026-09-17. 이전 R3-CUSTOMIZE-AND-DIAGNOSE-1.0 실행 이력은 아래 보존한다.
 모든 성공 표시는 구현자 확인이며 INDEPENDENT_PENDING이다.
 
-## 현재: S4 V1000 종료, 품질 미달 — 2026-09-17
+## 현재: H0 하네스 / H1 네 경계 수정 — 2026-09-17
+
+BASE_SHA=5879a3c6642211e78a0d19a91679babba5f8a6c1, main,
+origin=https://github.com/seoyd/replica-v3.git. 시작 local/remote SHA 일치 직접 확인.
+시작 tracked clean, 기존 untracked487개와 corpus/checkpoint/raw 실패 기록 보존.
+사용자가 설치한 stable rustc1.98.1(48a229cea)/cargo1.98.1(797e8a9bc)을 직접 확인하고
+저장소의1.98.0 고정을 installed stable로 변경했다. 설치/의존성 업데이트 없음.
+실제장치 Apple M4/25,769,803,776bytes, CPU/Accelerate/F32,
+VECLIB_MAXIMUM_THREADS=1/RAYON_NUM_THREADS=1. 운영 DB 사용 없음.
+
+NODE=H0/H1, STATE=EXECUTED_THIS_RUN, SCOPE=code/diagnostic boundaries,
+ACTUAL_UPDATES: SMALL0/TINY0/scalar0; learning INPUT/TARGET_TOKENS=0/0.
+현재 baseline 모델은 과거 V1000이며 이전175/336 수치는 아직 DERIVED다.
+아래 실험 이력의 품질 실패는 변경하지 않는다.
+
+- M01: empty/conflicting replacement key 거부, longest-first/비연쇄/UTF-8 소비,
+  출력256KiB 상한/checked length, binding atom 문법 검사, 모든 호출자 Result 전파.
+- M02: ExactEntity/ExplicitNumericField 모드, 질문·근거 전체 대상/맥락 검증,
+  숫자 충돌 거부, INVALID_DIAGNOSTIC_INPUT을 모델 로드·출력 생성 전에 반환.
+- M03: 관련 사고 원문 전체의 제한 문법 분류 및 사례/사건 ID별 분류 기록;
+  supported+unsupported 혼합, 관련성 미상, 복수/동률 근거를 승인하지 않음.
+- M04: arm terminal→평가→native checkpoint→close gate의 부적격 상태 보존.
+  완료 watch32/train16, source/fixture/tape/clock/artifact/evaluation hash 결합.
+  누락된 legacy 필드는 UNKNOWN_UNVERIFIED. 취소·save error·불일치 파일은 승격 불가.
+
+직접 red4: 수정 전 실제4실패, bounded child2초로 빈 키 무진행 재현(OOM 없음).
+green: checker quick의26회귀 통과(하네스3, M01~04 7, 기존RF10, malformed/close CLI2,
+기존 numeric/checkpoint/prompt/memory 각1), fmt/check/clippy 및 release 빌드 통과.
+정상 full-population binding 변환/원본·validation 보존과 native QA ablation CLI의 기존
+통합2개도 통과(각0.92s/3.08s). 최종 명령별 기록은 quick-h1-final에 보존했다.
+M04의50clock은 명시적인 테스트 상태 fixture이며50학습을 수행한 것이 아니다.
+실제 TINY logits/teacher 경계 회귀와 테스트용 native checkpoint 저장·로드를 사용했다.
+새 검사기 첫 실행의 clap global 인자 구성 실패, 새 checkpoint fixture의 corpus lineage
+거부 및 Result 호출자 연결 컴파일 실패도 로컬 실패 로그에 보존했다.
+
+로컬 근거: artifacts/harness-goal1-20260917/ (baseline/preserved hashes, red/green,
+quick 명령별 로그). quick-h1-final은 source digest를 기록하며 실패/0-test를 숨기지 않는다.
+HARNESS_VERDICT=QUICK_VERIFIED; model/release 품질 증거는 아직 NOT_RUN.
+H2=NEXT: V1000 resume/export content, 원본/변환 corpus 감사와400재집계/watch32.
+H3~H8=NOT_RUN_PREREQUISITE. S4/S5/S6=NO, GOAL1_IMPLEMENTER_READY=NO,
+ROOT_CAUSE_CLAIM=CONFIRMED_AT_BOUNDARY_ONLY(과거 모델 붕괴 원인은 UNRESOLVED),
+INDEPENDENT_REVIEW=PENDING, GOAL1_ACCEPTED=NO.
+
+NEW_FILES: AGENTS.md, src/check_main.rs. Native/core/storage/tokenizer 변경 없음.
+단계 publication 및 H2 결과는 검증 후 이 절에 추가한다.
+
+## 이전: S4 V1000 종료, 품질 미달 — 2026-09-17
 
 사용자가 S4 품질과 Goal1 전체 완료를 다시 명시했다. 기존 제한 진단 완료를 최종 완료로
 대체하지 않는다. 새 V의 실행 전 계획은 QUALITY_RECOVERY_PLAN의 S4 completion V에

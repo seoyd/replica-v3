@@ -1,9 +1,41 @@
 # Replica v3 B0 runbook
 
 This project is Rust only. The user's later instructions override the MLX suggestion
-in the implementation instruction: use installed Rust 1.98.0, no Python bridge, no external inference API,
+in the implementation instruction: use the installed stable Rust (verified 1.98.1), no Python bridge, no external inference API,
 no canned product answers, and defer model/runtime installation until a later task.
 Only Cargo build dependencies were fetched. No model or runtime installer was run.
+
+## Offline development harness
+
+`AGENTS.md` maps the existing source and permanent contracts. The checker uses the
+existing Cargo targets with `accelerate,test-support`; the product release does not
+enable test-support. The user-updated installed stable toolchain is used without
+installing tools or changing Cargo.lock. SQLite/Accelerate native dependencies remain.
+
+```sh
+cargo build --locked --offline --features accelerate --bin replica-check
+VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 target/debug/replica-check quick --output NEW_CHECK_DIRECTORY
+target/debug/replica-check model --help
+target/debug/replica-check release --help
+```
+
+Each output directory must be new. Command argv, stdout/stderr, test counts,
+failure/skip status, source digest and deadlines are retained there. Zero executed
+tests, child failure, cancellation, timeout or source changes fail the check.
+The structural/module/dependency scan is a heuristic, not a whole-program proof.
+Quick runs direct boundary/numeric/checkpoint/prompt/memory regressions and never
+starts SMALL training or evaluates model quality. Model checks require explicit
+checkpoint, original corpus, transfer corpus and split; they generate in separate
+fresh processes and retain all rows, including errors. Missing input is BLOCKED.
+Release additionally requires actual artifact-bound S4/S5/S6 evidence; unavailable
+or not-yet-verifiable downstream evidence cannot yield a release PASS. Quick PASS
+does not grant model quality or independent Goal1 acceptance.
+
+Diagnostic QA support ablation now requires the full entity/context in the original
+question. Numeric-only auxiliary tasks use an explicit separate mode. Malformed
+diagnostic input fails before model load/output creation. C/W close requires both
+original terminal receipts, complete watch/train panels and native artifact/clock
+bindings. Missing legacy fields are unverified; fresh replay cannot cure a prior stop.
 
 ## Build and targeted verification
 

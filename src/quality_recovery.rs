@@ -565,11 +565,11 @@ pub fn run(command: Command) -> Result<()> {
             if let Err(error) = &outcome {
                 budget.classify_error(error);
                 if !output_existed && output.is_dir() {
-                    let planned = load(&fixture)?.watch.len() * 2 + 6;
+                    let planned = load(&fixture).ok().map(|f| f.watch.len() * 2 + 6);
                     let mut partial = budget.receipt();
                     partial["planned_case_count"] = json!(planned);
                     partial["not_run_count"] =
-                        json!(planned.saturating_sub(budget.attempted_case_count));
+                        json!(planned.map(|n| n.saturating_sub(budget.attempted_case_count)));
                     partial["final_evaluation_complete"] = json!(false);
                     partial["comparison_eligible"] = json!(false);
                     partial["candidate_eligible"] = json!(false);
@@ -1382,6 +1382,46 @@ fn accident_entity(text: &str) -> Option<&str> {
         .strip_suffix("의 사고가 기록되었다. 원인은 확인되지 않았다.")
         .filter(|s| !s.is_empty() && !s.chars().any(char::is_whitespace))
 }
+// Restricted corpus grammar only. An unparsed record is never assumed irrelevant.
+fn causal_record_state<'a>(
+    q: &str,
+    record: &'a replica_v3::retrieval::Evidence,
+) -> (&'static str, Option<&'a str>) {
+    let text = record.original_excerpt.as_str();
+    let atom = |s: &str| !s.is_empty() && s.chars().all(char::is_alphanumeric);
+    let (state, entity) = if let Some(entity) = accident_entity(text).filter(|s| atom(s)) {
+        ("SUPPORTED", entity)
+    } else if let Some(entity) = text
+        .strip_suffix("의 점검은 끝났지만 사고 자료는 없다.")
+        .filter(|s| atom(s))
+    {
+        ("EXPLICIT_NO_EVIDENCE", entity)
+    } else if let Some((entity, _, _)) = exact_fact(text) {
+        ("CONTEXT", entity)
+    } else if let Some((entity, value)) = text
+        .strip_suffix(" 지시를 실행했다.")
+        .and_then(|s| s.split_once("는 "))
+        && atom(entity)
+        && atom(value)
+    {
+        ("CONTEXT", entity)
+    } else if let Some((entity, rest)) = text.split_once("의 ")
+        && atom(entity)
+        && (rest.starts_with("사고") || rest.starts_with("원인"))
+    {
+        ("UNSUPPORTED", entity)
+    } else {
+        return ("AMBIGUOUS_RELEVANCE", None);
+    };
+    if record.excerpt_truncated {
+        return ("AMBIGUOUS_TRUNCATED", Some(entity));
+    }
+    if mentions_target(q, entity) {
+        (state, Some(entity))
+    } else {
+        ("IRRELEVANT_EXPLICIT_OTHER_ENTITY", Some(entity))
+    }
+}
 fn derive_obligation(
     request: &ModelRequest,
 ) -> std::result::Result<Obligation<'_>, (SemanticState, &'static str)> {
@@ -1409,6 +1449,30 @@ fn derive_obligation(
                 "unsupported causal question grammar",
             ));
         }
+        let classified: Vec<_> = request
+            .evidence
+            .items
+            .iter()
+            .map(|r| (r, causal_record_state(q, r)))
+            .collect();
+        if classified
+            .iter()
+            .any(|(_, (state, _))| *state == "UNSUPPORTED")
+        {
+            return Err((
+                SemanticState::UnsupportedForm,
+                "additional related causal record outside supported grammar",
+            ));
+        }
+        if classified
+            .iter()
+            .any(|(_, (state, _))| state.starts_with("AMBIGUOUS"))
+        {
+            return Err((
+                SemanticState::AmbiguousEvidence,
+                "causal record relevance or truncation unresolved",
+            ));
+        }
         let records: Vec<_> = request
             .evidence
             .items
@@ -1419,28 +1483,16 @@ fn derive_obligation(
                     .map(|entity| (r, entity))
             })
             .collect();
-        if records.len() > 1 || records.iter().any(|(r, _)| r.excerpt_truncated) {
-            return Err((
-                SemanticState::AmbiguousEvidence,
-                "multiple/truncated accident records",
-            ));
-        }
-        // Unparsed accident evidence cannot be treated as proof of absence.
-        if records.is_empty()
-            && request.evidence.items.iter().any(|r| {
-                r.original_excerpt.contains("사고")
-                    && r.original_excerpt
-                        .strip_suffix("의 점검은 끝났지만 사고 자료는 없다.")
-                        .is_none_or(|entity| {
-                            entity.is_empty()
-                                || entity.chars().any(char::is_whitespace)
-                                || r.excerpt_truncated
-                        })
-            })
+        if records.len() > 1
+            || records.iter().any(|(r, _)| r.excerpt_truncated)
+            || (!records.is_empty()
+                && classified
+                    .iter()
+                    .any(|(_, (s, _))| *s == "EXPLICIT_NO_EVIDENCE"))
         {
             return Err((
                 SemanticState::AmbiguousEvidence,
-                "accident evidence outside supported record grammar or target",
+                "multiple/truncated accident records",
             ));
         }
         let require_chronology = q.contains("함께")
@@ -1662,6 +1714,7 @@ fn scan(episodes: &[Episode], l: &Loaded, limit: usize) -> Result<Value> {
     let mut entity_digit_lengths = BTreeMap::new();
     let mut orders = BTreeSet::new();
     let mut semantic_counts = [0usize; 5];
+    let mut causal_records = Vec::new();
     let (
         mut checked,
         mut auxiliary,
@@ -1672,6 +1725,12 @@ fn scan(episodes: &[Episode], l: &Loaded, limit: usize) -> Result<Value> {
     ) = (0, 0, 0, 0, 0, 0);
     for e in episodes.iter().take(limit) {
         *categories.entry(e.category).or_default() += 1;
+        if e.request.input.contains("원인") || e.request.input.contains("인과관계") {
+            for r in &e.request.evidence.items {
+                let (state, entity) = causal_record_state(&e.request.input, r);
+                causal_records.push(json!({"id":e.id,"event_id":r.event_id,"classification":state,"parsed_entity":entity}));
+            }
+        }
         let (semantic, reason) = if e.family.starts_with("copy/") {
             (SemanticState::OutOfScope, "predeclared auxiliary task")
         } else {
@@ -1794,6 +1853,7 @@ fn scan(episodes: &[Episode], l: &Loaded, limit: usize) -> Result<Value> {
     }
     report["ordinary_in_scope"] = json!(checked);
     report["semantic_findings"] = report["data_ambiguities"].clone();
+    report["causal_record_classifications"] = json!(causal_records);
     report["status"] = json!(audit_status(&[&report], &[]));
     Ok(report)
 }
@@ -2411,6 +2471,136 @@ fn worker_receipt(
     };
     Ok((status.success(), response, error))
 }
+fn arm_terminal_eligible(result: &Value) -> bool {
+    result["reason"] == "SCREENING_BUDGET_REACHED"
+        && result["checkpoint_save_status_reason"] == "SCREENING_BUDGET_REACHED"
+        && result["checkpoint_saved"] == true
+        && result["final_evaluation_complete"] == true
+        && result["comparison_eligible"] == true
+        && result.get("save_error").is_some_and(Value::is_null)
+        && result.get("error").is_some_and(Value::is_null)
+        && result["observed_conditions"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+        && result["control"]["terminal_reason"] == "COMPLETED"
+}
+fn verify_arm_receipt(
+    directory: &Path,
+    policy: &Value,
+    trace: &[Value],
+    result: &Value,
+    fixture_hash: &str,
+) -> Result<Value> {
+    let invalid = || Error::Corrupt("UNVERIFIED arm completion/provenance".into());
+    if !arm_terminal_eligible(result)
+        || trace.len() != 50
+        || policy["fixture_hash"] != fixture_hash
+        || result["new_updates"] != trace.len()
+        || result["policy_sha256"] != file_hash(&directory.join("policy.json"))?
+        || result["checkpoint_file_sha256"] != file_hash(&directory.join("final"))?
+        || result["final_evaluation_sha256"] != file_hash(&directory.join("eval-050.json"))?
+        || result["cumulative_model_step"]
+            != trace.last().ok_or_else(invalid)?["cumulative_model_step"]
+        || policy["tape_hash"] != digest(&policy["tape"])?
+        || policy["source_id"].as_str().is_none_or(|s| s.len() != 64)
+        || policy["binary_hash"].as_str().is_none_or(|s| s.len() != 64)
+    {
+        return Err(invalid());
+    }
+    let evaluation = read_json(&directory.join("eval-050.json"))?;
+    let watch = evaluation["watch_rows"].as_array().ok_or_else(invalid)?;
+    let train = evaluation["train_exposure_panel"]
+        .as_array()
+        .ok_or_else(invalid)?;
+    if watch.len() != 32
+        || train.len() != 16
+        || evaluation["final_evaluation_complete"] != true
+        || evaluation["comparison_eligible"] != true
+        || evaluation["not_run_count"] != 0
+        || evaluation["attempted_case_count"] != 48
+        || evaluation["completed_generation_count"] != 48
+        || evaluation["planned_case_count"] != 48
+        || evaluation
+            .get("terminal_reason")
+            .is_none_or(|v| !v.is_null() && v != "COMPLETED")
+        || evaluation["model_step"] != result["cumulative_model_step"]
+        || evaluation["model_content_hash"] != result["model_content_hash"]
+        || result["last_evaluation"] != evaluation
+        || watch
+            .iter()
+            .chain(train)
+            .any(|r| r["generation_completed"] != true || !r["interruption"].is_null())
+    {
+        return Err(invalid());
+    }
+    let loaded = checkpoint::load(&directory.join("final"), Device::Cpu, false)?;
+    let state = loaded.manifest.training.as_ref().ok_or_else(invalid)?;
+    if loaded.model.weight_hash()? != result["model_content_hash"]
+        || loaded.manifest.source_id != policy["source_id"]
+        || json!(state.step) != result["cumulative_model_step"]
+        || serde_json::to_value(&state.config)? != policy["config"]
+    {
+        return Err(invalid());
+    }
+    let parent_step = policy["parent"]["manifest"]["training"]["step"]
+        .as_u64()
+        .ok_or_else(invalid)?;
+    let tape = policy["tape"].as_array().ok_or_else(invalid)?;
+    if tape.len() != trace.len() {
+        return Err(invalid());
+    }
+    for (i, row) in trace.iter().enumerate() {
+        let step = parent_step.checked_add(i as u64 + 1).ok_or_else(invalid)?;
+        if row["new_update"] != i + 1
+            || row["optimizer_step"] != step
+            || row["cumulative_model_step"] != step
+            || row["schedule_step"]
+                != step
+                    .checked_sub(state.config.budget_start_step as u64)
+                    .ok_or_else(invalid)?
+            || row["lr"].as_f64() != Some(state.config.learning_rate(step as usize))
+            || row["indices"] != tape[i][0]
+            || row["sampler_state"] != tape[i][1]
+            || row["ids"]
+                .as_array()
+                .is_none_or(|v| v.len() != state.config.microbatch)
+            || row["input_tokens"].as_u64().is_none_or(|n| n == 0)
+            || row["target_tokens"].as_u64().is_none_or(|n| n == 0)
+        {
+            return Err(invalid());
+        }
+    }
+    Ok(
+        json!({"verified":true,"checkpoint_file_sha256":result["checkpoint_file_sha256"],"policy_sha256":result["policy_sha256"],"final_evaluation_sha256":result["final_evaluation_sha256"]}),
+    )
+}
+fn finish_close(
+    output: &Path,
+    mut summary: Value,
+    arms: &[Value],
+    provenance_verified: bool,
+    budget: &mut RunControl,
+) -> Result<()> {
+    let sealed = budget.seal_terminal();
+    let eligible = sealed.is_ok()
+        && provenance_verified
+        && arms.len() == 2
+        && arms.iter().all(arm_terminal_eligible);
+    summary["arm_terminals"] = json!(arms);
+    summary["provenance_verified"] = json!(provenance_verified);
+    summary["final_evaluation_complete"] = json!(eligible);
+    summary["comparison_eligible"] = json!(eligible);
+    summary["candidate_eligible"] = json!(eligible && summary["candidate_eligible"] == true);
+    summary["control"] = budget.receipt();
+    save(&output.join("summary.json"), &summary)?;
+    sealed?;
+    if !eligible {
+        return Err(Error::Invalid(
+            "INELIGIBLE_OR_UNVERIFIED_ARM: original termination retained".into(),
+        ));
+    }
+    Ok(())
+}
 #[allow(clippy::too_many_arguments)] // Existing CLI inputs plus the shared command budget.
 fn close(
     fixture: &Path,
@@ -2423,6 +2613,24 @@ fn close(
     budget: &mut RunControl,
 ) -> Result<()> {
     budget.check("close_started")?;
+    let arms: Vec<_> = [control, treatment]
+        .iter()
+        .map(|dir| {
+            read_json(&dir.join("result.json")).unwrap_or_else(
+                |e| json!({"reason":"UNKNOWN_UNVERIFIED","read_error":e.to_string()}),
+            )
+        })
+        .collect();
+    if !arms.iter().all(arm_terminal_eligible) {
+        std::fs::create_dir(output)?;
+        return finish_close(
+            output,
+            json!({"stage":"close_preflight","candidate_eligible":false,"model_calls":0,"status":"INELIGIBLE_OR_UNVERIFIED_ARM"}),
+            &arms,
+            false,
+            budget,
+        );
+    }
     let f = load(fixture)?;
     let cp = read_json(&control.join("policy.json"))?;
     let wp = read_json(&treatment.join("policy.json"))?;
@@ -2432,6 +2640,7 @@ fn close(
     config["first_target_weight"] = json!(1.);
     if config != wp["config"]
         || cp["parent"] != wp["parent"]
+        || cp["parent"] != f.registry["U2_POLICY_START"]
         || cp["tape"] != wp["tape"]
         || cp["source_id"] != wp["source_id"]
         || cp["binary_hash"] != wp["binary_hash"]
@@ -2464,6 +2673,23 @@ fn close(
         }
     }
     std::fs::create_dir(output)?;
+    let provenance = (|| -> Result<_> {
+        let fixture_hash = file_hash(fixture)?;
+        Ok([
+            verify_arm_receipt(control, &cp, &c, &arms[0], &fixture_hash)?,
+            verify_arm_receipt(treatment, &wp, &w, &arms[1], &fixture_hash)?,
+        ])
+    })();
+    if let Err(error) = &provenance {
+        return finish_close(
+            output,
+            json!({"stage":"close_provenance","candidate_eligible":false,"model_calls":0,"error":error.to_string()}),
+            &arms,
+            false,
+            budget,
+        );
+    }
+    budget.check("close_provenance_verified")?;
     let tok = ByteBpe::load(legacy)?;
     let mut reports = Vec::new();
     let mut worker_checks = Vec::new();
@@ -2604,14 +2830,8 @@ fn close(
     let mut summary = json!({"one_factor_actual_trace_verified":true,"optimizer_updates_small":c.len()+w.len(),"same_sample_multiset_and_order":true,"same_clocks_and_lr":true,"reports":reports,"product_worker":worker_checks,"tokenizer_native_legacy_mapping":"PASS","candidate_eligible":eligible,"confirmation":if eligible{"REQUIRED_NOT_RUN"}else{"NOT_RUN_NO_SCREENING_EFFECT"},"regression_within_50":if regression{"REPRODUCED_ON_WATCH"}else{"NOT_REPRODUCED_WITHIN_BUDGET"},"s4_quality":"NOT_EVALUATED_HERE","goal1_ready":false});
     budget.check("close_before_terminal")?;
     save(&output.join("evaluations.json"), &summary)?;
-    let sealed = budget.seal_terminal();
-    summary["final_evaluation_complete"] = json!(sealed.is_ok());
-    summary["comparison_eligible"] = json!(sealed.is_ok());
-    summary["control"] = budget.receipt();
-    if sealed.is_err() {
-        summary["candidate_eligible"] = json!(false);
-    }
-    save(&output.join("summary.json"), &summary)?;
+    summary["arm_provenance"] = json!(provenance?);
+    let sealed = finish_close(output, summary, &arms, true, budget);
     println!(
         "closure report={} SMALL_updates={}",
         output.display(),
@@ -2889,7 +3109,7 @@ fn finish_arm(
     let reason = control.terminal_reason(complete && saved.is_ok());
     json!({"reason":reason,"observed_conditions":control.observed,"checkpoint_saved":saved.is_ok(),"checkpoint_save_status_reason":saved_reason,"save_error":saved.err().map(|e|e.to_string()),
         "work_elapsed_seconds":work_elapsed,"cleanup_elapsed_seconds":cleanup_start.elapsed().as_secs_f64(),"work_deadline_overrun_seconds":control.now().saturating_duration_since(control.deadline).as_secs_f64(),
-        "final_evaluation_complete":complete,"comparison_eligible":complete&&control.stop.is_none(),"candidate_eligible":false,"cooperative_only":true})
+        "final_evaluation_complete":complete,"comparison_eligible":complete&&control.stop.is_none(),"candidate_eligible":false,"cooperative_only":true,"control":control.receipt()})
 }
 fn arm_run(
     fixture: &Path,
@@ -3037,6 +3257,7 @@ fn arm_run(
                 bad_streak = if bad { bad_streak + 1 } else { 0 };
                 evaluation["new_updates"] = json!(n);
                 evaluation["model_step"] = json!(state.step);
+                evaluation["model_content_hash"] = json!(l.model.weight_hash()?);
                 evaluation["new_error_cases"] = json!(new_errors);
                 evaluation["bad_streak"] = json!(bad_streak);
                 evaluation["exposure_counts"] = json!(
@@ -3195,6 +3416,14 @@ fn arm_run(
         .as_object_mut()
         .unwrap()
         .extend(info.as_object().unwrap().clone());
+    result["policy_sha256"] = json!(file_hash(&output.join("policy.json"))?);
+    if result["checkpoint_saved"] == true {
+        result["checkpoint_file_sha256"] = json!(file_hash(&output.join("final"))?);
+    }
+    let final_eval = output.join(format!("eval-{:03}.json", state.step - start_step));
+    if final_eval.is_file() {
+        result["final_evaluation_sha256"] = json!(file_hash(&final_eval)?);
+    }
     save(&output.join("result.json"), &result)?;
     log.sync_all()?;
     println!("{result}");
@@ -4054,6 +4283,301 @@ mod tests {
             optimizer: BTreeMap::new(),
         };
         scan(&[e], &l, 1).unwrap()
+    }
+    #[test]
+    fn harness_m03_mixed_related_causal_records_fail_actual_scan() {
+        let mut request = independent_request();
+        request.input = "센서31의 사고 원인은 무엇인가?".into();
+        request.evidence.items.truncate(2);
+        request.evidence.items[0].original_excerpt =
+            "이후 센서31의 사고가 기록되었다. 원인은 확인되지 않았다.".into();
+        request.evidence.items[1].original_excerpt = "센서31의 사고 원인은 충돌이다.".into();
+        let answer = format!(
+            "원인은 확정되지 않았습니다. [event:{}]",
+            request.evidence.items[0].event_id
+        );
+        for _ in 0..2 {
+            let report = repair_semantic_scan(&request, &answer);
+            assert_eq!(report["validated"], 0, "{report}");
+            assert_eq!(audit_status(&[&report], &[]), "AUDIT_INCOMPLETE");
+            assert_eq!(report["contradicted"], 0);
+            request.evidence.items.reverse();
+        }
+        request.evidence.items.truncate(1);
+        let positive = repair_semantic_scan(&request, &answer);
+        assert_eq!(positive["validated"], 1);
+        let mut other = request.evidence.items[0].clone();
+        other.event_id += 100;
+        other.original_excerpt = "센서310의 사고 원인은 충돌이다.".into();
+        request.evidence.items.push(other);
+        let unrelated = repair_semantic_scan(&request, &answer);
+        assert_eq!(unrelated["validated"], 1);
+        assert_eq!(
+            unrelated["causal_record_classifications"][1]["classification"],
+            "IRRELEVANT_EXPLICIT_OTHER_ENTITY"
+        );
+        request.evidence.items[1].original_excerpt =
+            "추가 사고의 원인에 관한 별도 조사 결과가 있다.".into();
+        let unknown = repair_semantic_scan(&request, &answer);
+        assert_eq!(unknown["ambiguous"], 1);
+        assert_eq!(audit_status(&[&unknown], &[]), "AUDIT_INCOMPLETE");
+        request.evidence.items[1].original_excerpt =
+            request.evidence.items[0].original_excerpt.clone();
+        request.evidence.items[1].recorded_at = request.evidence.items[0].recorded_at;
+        let multiple = repair_semantic_scan(&request, &answer);
+        assert_eq!(multiple["ambiguous"], 1);
+        request.evidence.items.truncate(1);
+        let wrong = format!(
+            "원인은 확정되었습니다. [event:{}]",
+            request.evidence.items[0].event_id
+        );
+        let contradiction = repair_semantic_scan(&request, &wrong);
+        assert_eq!(contradiction["contradicted"], 1);
+    }
+    #[test]
+    fn harness_m04_close_preserves_cancel_before_missing_model_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = dir.path().join("C");
+        let w = dir.path().join("W");
+        std::fs::create_dir(&c).unwrap();
+        std::fs::create_dir(&w).unwrap();
+        let mut arm_control = repair_control();
+        arm_control.observe(StopReason::Cancelled);
+        let result = finish_arm(&mut arm_control, false, |_| Ok(()));
+        for arm in [&c, &w] {
+            save(&arm.join("result.json"), &result).unwrap();
+        }
+        let mut budget = repair_control();
+        let out = dir.path().join("close");
+        assert!(
+            close(
+                &dir.path().join("unused-fixture"),
+                &c,
+                &w,
+                &dir.path().join("unused-tokenizer"),
+                &dir.path().join("unused-worker"),
+                &"0".repeat(64),
+                &out,
+                &mut budget
+            )
+            .is_err()
+        );
+        assert_eq!(budget.generation_calls, 0);
+        let summary = read_json(&out.join("summary.json"))
+            .expect("close must retain the actual arm disqualification");
+        assert_eq!(summary["comparison_eligible"], false);
+        assert_eq!(summary["candidate_eligible"], false);
+        assert!(summary.to_string().contains("CANCELLED"));
+    }
+    #[test]
+    fn harness_m04_finish_arm_to_close_terminal_positive_and_negative() {
+        let l = repair_loaded();
+        let watch = vec![repair_episode("watch/0")];
+        let train = vec![repair_episode("train/0")];
+        for boundary in [
+            "complete",
+            "panel_completed",
+            "before_teacher",
+            "terminal",
+            "explicit_false",
+            "missing",
+            "save_error",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut c = repair_control();
+            if matches!(boundary, "panel_completed" | "before_teacher" | "terminal") {
+                let mut seen = 0;
+                c.hook = Some(Box::new(move |at, flag| {
+                    if at == "panel_completed" {
+                        seen += 1;
+                    }
+                    // Stop after watch, or inside the final train teacher/finalization boundary.
+                    if at == boundary && (boundary != "before_teacher" || seen == 1) {
+                        flag.store(true, Ordering::Relaxed);
+                    }
+                }));
+            }
+            let evaluation = arm_evaluation(&l, &watch, &train, &mut c).unwrap();
+            let mut arm = finish_arm(
+                &mut c,
+                evaluation["final_evaluation_complete"] == true,
+                |_| {
+                    if boundary == "save_error" {
+                        Err(Error::Invalid("independent save failure".into()))
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
+            arm["error"] = Value::Null;
+            if boundary == "explicit_false" {
+                arm["comparison_eligible"] = json!(false);
+            }
+            if boundary == "missing" {
+                arm.as_object_mut()
+                    .unwrap()
+                    .remove("final_evaluation_complete");
+            }
+            let mut close_control = repair_control();
+            let result = finish_close(
+                dir.path(),
+                json!({"candidate_eligible":true}),
+                &[arm.clone(), arm],
+                true,
+                &mut close_control,
+            );
+            let report = read_json(&dir.path().join("summary.json")).unwrap();
+            assert_eq!(
+                result.is_ok(),
+                boundary == "complete",
+                "{boundary}: {report}"
+            );
+            assert_eq!(report["comparison_eligible"], boundary == "complete");
+            assert_eq!(report["candidate_eligible"], boundary == "complete");
+            assert_eq!(close_control.generation_calls, 0);
+        }
+        let mut c = repair_control();
+        let mut arm = finish_arm(&mut c, true, |_| Ok(()));
+        arm["error"] = Value::Null;
+        for failure in [
+            "TIME_BUDGET",
+            "RESOURCE_LIMIT",
+            "QUALITY_GUARD",
+            "INTEGRITY_FAIL",
+        ] {
+            let mut stopped = arm.clone();
+            stopped["reason"] = json!(failure);
+            assert!(!arm_terminal_eligible(&stopped));
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut final_cancel = repair_control();
+        final_cancel.cancel.store(true, Ordering::Relaxed);
+        assert!(
+            finish_close(
+                dir.path(),
+                json!({"candidate_eligible":true}),
+                &[arm.clone(), arm],
+                true,
+                &mut final_cancel
+            )
+            .is_err()
+        );
+        assert_eq!(
+            read_json(&dir.path().join("summary.json")).unwrap()["candidate_eligible"],
+            false
+        );
+    }
+    #[test]
+    fn harness_m04_native_checkpoint_and_eval_binding_before_close_gate() {
+        // State/receipt fixture only: fifty historical clocks, ZERO optimizer updates.
+        let dir = tempfile::tempdir().unwrap();
+        let mut l = repair_loaded();
+        let config = TrainConfig {
+            seq_len: 32,
+            max_steps: 100,
+            warmup: 0,
+            accumulation: 1,
+            ..Default::default()
+        };
+        l.manifest.training = Some(TrainingState {
+            contrast16: false,
+            parent_checkpoint_hash: Some("1".repeat(64)),
+            config: config.clone(),
+            step: 50,
+            consumed_tokens: 100,
+            target_tokens: 50,
+            sampler_state: 50,
+            corpus_hash: l.tokenizer.train_hash.clone(),
+            validation_hash: "3".repeat(64),
+            previous_corpora: vec![],
+            initial_weight_hash: l.manifest.initial_weight_hash.clone(),
+            train_loss: None,
+            validation_loss: None,
+        });
+        l.manifest.status = "BUDGET_EXHAUSTED".into();
+        l.optimizer = Adam::new(&l.model.vars).unwrap().moments;
+        checkpoint::save(
+            &dir.path().join("final"),
+            &l.model,
+            &l.tokenizer,
+            l.manifest.clone(),
+            &l.optimizer,
+        )
+        .unwrap();
+        let tape: Vec<_> = (1..=50).map(|i| json!([[i], i])).collect();
+        let policy = json!({"fixture_hash":"4".repeat(64),"source_id":l.manifest.source_id,"binary_hash":"5".repeat(64),"config":config,"parent":{"manifest":{"training":{"step":0}}},"tape":tape,"tape_hash":digest(&tape).unwrap()});
+        save(&dir.path().join("policy.json"), &policy).unwrap();
+        let trace: Vec<_> = (1..=50).map(|i|json!({"new_update":i,"cumulative_model_step":i,"optimizer_step":i,"schedule_step":i,"lr":config.learning_rate(i),"indices":[i],"ids":[format!("fixture-{i}")],"sampler_state":i,"input_tokens":2,"target_tokens":1})).collect();
+        let row = json!({"generation_completed":true,"interruption":null});
+        let eval = json!({"watch_rows":vec![row.clone();32],"train_exposure_panel":vec![row;16],"final_evaluation_complete":true,"comparison_eligible":true,"not_run_count":0,"attempted_case_count":48,"completed_generation_count":48,"planned_case_count":48,"terminal_reason":null,"model_step":50,"model_content_hash":l.model.weight_hash().unwrap()});
+        save(&dir.path().join("eval-050.json"), &eval).unwrap();
+        let mut control = repair_control();
+        let mut arm = finish_arm(&mut control, true, |_| Ok(()));
+        for (key, value) in [
+            ("error", Value::Null),
+            ("new_updates", json!(50)),
+            ("cumulative_model_step", json!(50)),
+            (
+                "policy_sha256",
+                json!(file_hash(&dir.path().join("policy.json")).unwrap()),
+            ),
+            (
+                "checkpoint_file_sha256",
+                json!(file_hash(&dir.path().join("final")).unwrap()),
+            ),
+            (
+                "final_evaluation_sha256",
+                json!(file_hash(&dir.path().join("eval-050.json")).unwrap()),
+            ),
+            ("last_evaluation", eval.clone()),
+            ("model_content_hash", json!(l.model.weight_hash().unwrap())),
+        ] {
+            arm[key] = value;
+        }
+        let verified =
+            verify_arm_receipt(dir.path(), &policy, &trace, &arm, &"4".repeat(64)).unwrap();
+        assert_eq!(verified["verified"], true);
+        let good = dir.path().join("good-close");
+        std::fs::create_dir(&good).unwrap();
+        finish_close(
+            &good,
+            json!({"candidate_eligible":true}),
+            &[arm.clone(), arm.clone()],
+            true,
+            &mut repair_control(),
+        )
+        .unwrap();
+        for key in [
+            "checkpoint_file_sha256",
+            "model_content_hash",
+            "final_evaluation_sha256",
+            "policy_sha256",
+        ] {
+            let mut bad = arm.clone();
+            bad[key] = json!("f".repeat(64));
+            assert!(
+                verify_arm_receipt(dir.path(), &policy, &trace, &bad, &"4".repeat(64)).is_err(),
+                "{key}"
+            );
+        }
+        let mut bad_clock = trace.clone();
+        bad_clock[49]["optimizer_step"] = json!(49);
+        assert!(
+            verify_arm_receipt(dir.path(), &policy, &bad_clock, &arm, &"4".repeat(64)).is_err()
+        );
+        let mut partial = eval;
+        partial["train_exposure_panel"] = json!([]);
+        partial["final_evaluation_complete"] = json!(false);
+        std::fs::write(
+            dir.path().join("eval-050.json"),
+            serde_json::to_vec(&partial).unwrap(),
+        )
+        .unwrap();
+        arm["final_evaluation_sha256"] =
+            json!(file_hash(&dir.path().join("eval-050.json")).unwrap());
+        arm["last_evaluation"] = partial;
+        assert!(verify_arm_receipt(dir.path(), &policy, &trace, &arm, &"4".repeat(64)).is_err());
+        assert_eq!(control.generation_calls, 0);
     }
     #[test]
     fn repair_rf02_scan_audit_positive_negative_and_unknown_grammar() {

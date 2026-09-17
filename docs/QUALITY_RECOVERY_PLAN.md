@@ -1,5 +1,46 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: R3-HARNESS-TO-GOAL1-1.0
+
+Baseline5879a3c6642211e78a0d19a91679babba5f8a6c1; tracked clean at entry. The current
+user authorizes H0 harness → H1 four boundary repairs → H2 frozen V1000 baseline →
+H3 copy → H4 selection → H5 paraphrase → H6 normal QA/final S4 → H7 memory S5 → H8 INT4 S6.
+Actual prerequisite PASS advances without another permission request. A failed skill gate,
+exhausted budget, invalid data or cancellation preserves evidence and stops dependent stages.
+Code verification, model quality and independent acceptance are separate.
+
+H0–H2 SMALL updates0. H3–H6 each512 updates; a second512 is allowed only when dev primary
+improves≥4/256 and all preservation guards hold. Stage caps1024updates/6Minput/1.5Mtarget/
+60minutes; aggregate4096updates/24Minput/6Mtarget/180minutes including training/evaluation.
+Commands≤900s plus≤120s cleanup, training16GiB/inference12GiB; one owned heavy process.
+Keep tokenizer/SMALL/F32/backend/first-target weight and inherited Adam/cumulative clock.
+New constant LR=min(V1000 actual next LR,3e-5), with no warmup/schedule rise or optimizer reset.
+Materialized focus2048 plus original ordinary QA anchor2048, batch8/acc1=4+4 distinct bases;
+without-replacement epoch/tape with exact index/RNG/pool/exposure records. No silent truncation.
+Evaluate dev256/watch32/previous-skill32 at0/128/256/512 and conditionally768/1024.
+Two consecutive watch drops≥3 or prior-skill drops≥2 stop; new UTF-8/control/empty stops.
+New data have disjoint identifiers/bindings/base-scene lineage across train/dev/seal; dev/seal
+each64bases×4views. Seal256 is opened once after development passes. Preserve original QA400
+and require ordinary≥V1000 before promoting a specialised parent. No final-test selection.
+
+H1: reject non-progressing/ambiguous/oversized literal replacement and malformed fact atoms;
+use explicit exact-entity versus numeric-field ablation modes; account for every relevant
+causal record before semantic acceptance; propagate arm incompleteness/provenance through
+close and candidate gates. Reuse existing helpers/tests/RunControl and native formats.
+H2: verify V1000 resume/inference content, original and binding corpus bytes, recount original
+400 and replay fixed ordinary32; audit semantics and final-test exposure without retraining.
+H3 gates dev/seal full-answer≥95%, entity/event-ID≥99%, malformed0 and original QA retention.
+H4 adds support≥95% and whole-group≥90%; H5 adds group/new-expression-strata≥90%.
+H6 retains normal ordinary≥95%, each category≥90%, invalid citation acceptance0, then
+independent final≥200 with40/category and unchanged95%/90% gates. H7/H8 use fresh saved facts,
+restart/fault paths, then grouped INT4 W4A16 and actual M4 measurements,≤90min each.
+No product pointer promotion or independent acceptance is implied by these checks.
+
+H0/H1: direct red4 → green boundary/integration checks; quick26 and two existing positive
+CLI regressions pass, as do fmt/check/clippy/release. SMALL/TINY/scalar updates0.
+Current: H2 actual V1000/corpus audit and bounded baseline; H3 learning NOT_RUN_PREREQUISITE.
+Historical plans/results below remain preserved and are not new execution evidence.
+
 ## S4 completion continuation V — authorized 2026-09-17
 
 User again explicitly requires S4 quality and Goal1 completion. Baseline52aaccdab8153ea34d14db5026fad810f8dcdf26.
