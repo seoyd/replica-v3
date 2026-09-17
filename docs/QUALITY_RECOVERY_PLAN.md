@@ -38,7 +38,12 @@ No product pointer promotion or independent acceptance is implied by these check
 
 H0/H1: direct red4 → green boundary/integration checks; quick26 and two existing positive
 CLI regressions pass, as do fmt/check/clippy/release. SMALL/TINY/scalar updates0.
-Current: H2 actual V1000/corpus audit and bounded baseline; H3 learning NOT_RUN_PREREQUISITE.
+H2: both full training corpora/validation audited; original400 re-counted175/336+64/64;
+watch32=16/32 with zero raw/output differences (33calls including ABA). H3 train/dev/seal
+materialized and independently checked before learning. Old final artifacts are exposure-unknown
+or already inspected; preserve them as development history. Freeze one fresh independent200
+only after H6 dev passes, exclude actual train/dev scenes/identifiers, never tune on that final.
+Current: H3 constant-rate continuation/sampler/resume implementation; learning NOT_RUN.
 Historical plans/results below remain preserved and are not new execution evidence.
 
 ## S4 completion continuation V — authorized 2026-09-17

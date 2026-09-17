@@ -6,6 +6,42 @@
 
 ## 현재: H0 하네스 / H1 네 경계 수정 — 2026-09-17
 
+H0/H1 publication: c04c695ecafab0ee65cba090fdb8c7f54dc5a348,
+정상 push 뒤 실제 origin/main SHA 일치 확인.
+
+H2 EXECUTED_THIS_RUN: baseline command12.52s, RSS977,059,840bytes(time -l).
+V1000 native resume115,285,120B와 inference38,432,768B를 실제 로드해 같은 model content
+f93483799d3cc2bfa80d55708ed758eb9f13dae6536cf1c42676dc346eabb89d 확인.
+resume SHA bce08fe79cccdfa44ec8fbc0abc7c27f6248611cabbac4b1a92c20bfe8221cc0,
+inference SHA f498afc20e3b3af192c55c8a69bede346735963a73c849a11a14c5131cf8c094.
+step21750, 원래 Adam/RNG 보존. 실제 next LR0.00004751892132506239;
+H3 고정 설계 LR0.00003. 아직 새 optimizer update0.
+원본/변환 train 각20,000(ordinary16,668/aux3,332), validation400(336/64)을 전체 감사:
+contradicted/unsupported/ambiguous0; 보조 과제는 감사 OUT_OF_SCOPE로 별도 표시.
+기존 로그400 재집계 ordinary175/336, aux64/64; 범주25/68,24/68,10/68,54/68,62/64.
+fixed ordinary watch32 실제16/32, 기존 raw/output/prompt/evidence receipt 차이0건.
+새 generation33회(watch32+기존 A-B-A cache 회귀1), teacher33회, weights 변화 없음.
+명령/registry/raw/감사: artifacts/harness-goal1-20260917/h2-baseline 및 h2-baseline.log.
+
+H2 split 동결: h3-corpus, seed917260311, train4096=anchor2048+focus2048,
+dev256/seal256(각64base×4). anchor 분류410/410/410/409/409, 모두 다른 기존 base.
+완전한 entity 문자열 hash partition 및 기존 corpus 식별자 제외, split 간 identifier/
+binding/base 교차0. 정답은 각 단일 원문 전체+실제citation이며 ID부재의 원문복사 질문도 포함.
+원문/대상 변경, 값 변경, ID없는 질문의 대조를 독립 validator가 확인.
+학습 최대426tokens(EOS포함), 1epoch 계획input1,225,871/target138,665(아직 소비0).
+train hash b246c2508c6af4141416a17fcd6b6ee222e4bca6a9a3f5331c5913f87760430a,
+dev hash ca5c86f91b4defe471bf1c6c2931bcc97ac0b88e084bd5506b65b0101ebccd89.
+seal은 구조 감사만 실행, 모델 생성/점수/선택에 미사용. 원본 자료 변경 없음.
+직접 구조 회귀1 통과(잘못된 정답·split 유출·추가 근거 거부, optimizer0).
+
+최종 평가 노출: 기존 final200의 과거1/200 실패 및 rubric 보정/검토가 이미 공개 이력에
+남아 있어 독립 최종 자료로 재사용하지 않는다. 현재 goal1-final-heldout 파일 SHA는
+1a0a41758064ebc01d13cd4f983f26a167e2af992bb5a956c546994bf8dcda8c이고,
+이번에는 hash만 확인했으며 사례 내용은 열지 않았다. 미노출 보장은 할 수 없으므로 폐기하지
+않고 개발 이력으로 보존한다. H6 dev gate 통과 후 기존 independent v2 renderer와 OS seed로
+새200을 단 한 번 동결하고 실제 train/dev identifier·장면 중복을 검사한다. 그 final 실패 뒤
+동일 세트 재튜닝/seed 재추첨은 없다. 지금 final 생성/평가 NOT_RUN_PREREQUISITE.
+
 BASE_SHA=5879a3c6642211e78a0d19a91679babba5f8a6c1, main,
 origin=https://github.com/seoyd/replica-v3.git. 시작 local/remote SHA 일치 직접 확인.
 시작 tracked clean, 기존 untracked487개와 corpus/checkpoint/raw 실패 기록 보존.
@@ -42,7 +78,7 @@ M04의50clock은 명시적인 테스트 상태 fixture이며50학습을 수행�
 로컬 근거: artifacts/harness-goal1-20260917/ (baseline/preserved hashes, red/green,
 quick 명령별 로그). quick-h1-final은 source digest를 기록하며 실패/0-test를 숨기지 않는다.
 HARNESS_VERDICT=QUICK_VERIFIED; model/release 품질 증거는 아직 NOT_RUN.
-H2=NEXT: V1000 resume/export content, 원본/변환 corpus 감사와400재집계/watch32.
+H2=VERIFIED: V1000 resume/export content, 원본/변환 corpus 감사와400재집계/watch32 및 split 동결.
 H3~H8=NOT_RUN_PREREQUISITE. S4/S5/S6=NO, GOAL1_IMPLEMENTER_READY=NO,
 ROOT_CAUSE_CLAIM=CONFIRMED_AT_BOUNDARY_ONLY(과거 모델 붕괴 원인은 UNRESOLVED),
 INDEPENDENT_REVIEW=PENDING, GOAL1_ACCEPTED=NO.

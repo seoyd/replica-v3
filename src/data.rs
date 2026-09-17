@@ -1981,6 +1981,229 @@ pub fn qa_subset(source: &Path, output: &Path, count: usize) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(&manifest)?);
     Ok(())
 }
+/// Materialized H3 education, isolated from inference. Reuses the existing corpus format.
+pub fn copy_curriculum(source: &Path, output: &Path, seed: u64) -> Result<()> {
+    use replica_v3::neural::transformer::Rng;
+    let (parent, original, validation) = load(source)?;
+    let mut rng = Rng::new(seed);
+    let shuffle = |indices: &mut Vec<usize>, rng: &mut Rng| {
+        for i in (1..indices.len()).rev() {
+            indices.swap(i, (rng.next_u64() % (i + 1) as u64) as usize);
+        }
+    };
+    let mut anchors = Vec::new();
+    let mut bases = BTreeSet::new();
+    for (category, count) in [410, 410, 410, 409, 409].into_iter().enumerate() {
+        let mut indices: Vec<_> = original
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.category == category && !e.family.starts_with("copy/"))
+            .map(|(i, _)| i)
+            .collect();
+        shuffle(&mut indices, &mut rng);
+        let selected: Vec<_> = indices
+            .into_iter()
+            .filter(|i| {
+                bases.insert(
+                    original[*i]
+                        .id
+                        .rsplit_once('/')
+                        .map_or(original[*i].id.as_str(), |(base, _)| base)
+                        .to_owned(),
+                )
+            })
+            .take(count)
+            .collect();
+        if selected.len() != count {
+            return Err(Error::Invalid(
+                "distinct ordinary anchor bases unavailable".into(),
+            ));
+        }
+        anchors.extend(selected.into_iter().map(|i| original[i].clone()));
+    }
+    let original_entities: BTreeSet<_> = original
+        .iter()
+        .chain(&validation)
+        .flat_map(|e| e.request.evidence.items.iter())
+        .filter_map(|r| {
+            r.original_excerpt
+                .split_once("의 ")
+                .map(|(entity, _)| entity.to_owned())
+        })
+        .collect();
+    let prefixes = ["장치", "설비", "센서", "장비"];
+    let directions = [
+        "오른쪽",
+        "왼쪽",
+        "직진",
+        "대기",
+        "북쪽",
+        "남쪽",
+        "동쪽",
+        "서쪽",
+    ];
+    let bucket = |entity: &str| -> usize {
+        usize::from_str_radix(&hash(entity.as_bytes())[..8], 16).expect("hex digest") % 3
+    };
+    let mut splits = Vec::new();
+    for (split_index, (split, base_count)) in [("train", 512), ("dev", 64), ("seal", 64)]
+        .into_iter()
+        .enumerate()
+    {
+        let mut episodes = Vec::new();
+        for base in 0..base_count {
+            let digits = base % 8 + 1;
+            let shape = (base / 8) % 4;
+            let mut pair = None;
+            for _ in 0..10_000 {
+                let prefix = prefixes[(rng.next_u64() % 4) as usize];
+                let mut number: Vec<u8> = (0..digits)
+                    .map(|_| b'0' + (rng.next_u64() % 10) as u8)
+                    .collect();
+                if shape == 1 && digits > 1 {
+                    number[0] = b'0';
+                }
+                if shape == 2 {
+                    let d = number[0];
+                    number.fill(d);
+                }
+                let entity = format!("{prefix}{}", std::str::from_utf8(&number).expect("digits"));
+                if bucket(&entity) != split_index || original_entities.contains(&entity) {
+                    continue;
+                }
+                for difference in 1..10 {
+                    let mut near = number.clone();
+                    near[digits - 1] = b'0' + (number[digits - 1] - b'0' + difference) % 10;
+                    let other = format!("{prefix}{}", std::str::from_utf8(&near).expect("digits"));
+                    if bucket(&other) == split_index && !original_entities.contains(&other) {
+                        pair = Some((entity.clone(), other));
+                        break;
+                    }
+                }
+                if pair.is_some() {
+                    break;
+                }
+            }
+            let (entity, renamed) =
+                pair.ok_or_else(|| Error::Invalid("copy identifier allocation exhausted".into()))?;
+            let context = format!("구역{}", 1 + rng.next_u64() % 999_999);
+            let event_id = (1 + rng.next_u64() % 999_999) as i64;
+            let recorded_at = (rng.next_u64() % 1_000_000_000) as i64;
+            let kind = if base.is_multiple_of(2) {
+                "direction"
+            } else {
+                "short-value"
+            };
+            let value = if kind == "direction" {
+                directions[(rng.next_u64() % 8) as usize].to_string()
+            } else {
+                format!("경로{}", rng.next_u64() % 100_000)
+            };
+            let mut changed = if kind == "direction" {
+                directions[(rng.next_u64() % 8) as usize].to_string()
+            } else {
+                format!("경로{}", rng.next_u64() % 100_000)
+            };
+            if changed == value {
+                changed = if kind == "direction" {
+                    directions[(directions.iter().position(|v| *v == value).unwrap() + 1) % 8]
+                        .into()
+                } else {
+                    format!("경로{}", 100_000 + rng.next_u64() % 100_000)
+                };
+            }
+            for view in 0..4 {
+                let entity = if view == 1 { &renamed } else { &entity };
+                let value = if view == 2 { &changed } else { &value };
+                let record = format!("{entity}의 {context} 이동 지시는 {value}이다.");
+                let id = format!("skill-H3/{split}/{seed}/{base}/{view}");
+                let mut item = evidence(event_id, record.clone(), "current");
+                item.recorded_at = recorded_at;
+                let question = if view == 3 {
+                    "제공된 유일한 기록의 원문을 빠짐없이 쓰고 그 사건을 인용해줘.".into()
+                } else {
+                    format!(
+                        "{entity}의 {context}에서 현재 유효한 사건의 원문을 빠짐없이 쓰고 그 사건을 인용해줘."
+                    )
+                };
+                let request = ModelRequest {
+                    request_id: id.clone(),
+                    system: SYSTEM.into(),
+                    input: question,
+                    evidence: EvidenceBundle {
+                        items: vec![item],
+                        ..Default::default()
+                    },
+                    limits: GenerationLimits {
+                        context_tokens: 2048,
+                        max_tokens: 128,
+                        timeout_ms: 120000,
+                    },
+                };
+                episodes.push(Episode {
+                    id,
+                    category: 0,
+                    family: format!(
+                        "skill/H3/{split}/digits-{digits}/{kind}/shape-{shape}/view-{view}"
+                    ),
+                    binding: format!("{entity}/{context}/{value}"),
+                    sequence: hash(&serde_json::to_vec(&(
+                        &request.input,
+                        &request.evidence.items,
+                    ))?),
+                    request,
+                    answer: format!("{record} [event:{event_id}]"),
+                });
+            }
+        }
+        splits.push(episodes);
+    }
+    for a in 0..3 {
+        for b in a + 1..3 {
+            check_split(&splits[a], &splits[b])?;
+        }
+    }
+    // Identifier partition is independent of values/context and applies to every view.
+    for (index, episodes) in splits.iter().enumerate() {
+        if episodes
+            .iter()
+            .any(|e| bucket(e.binding.split('/').next().unwrap_or_default()) != index)
+        {
+            return Err(Error::Corrupt("copy identifier split".into()));
+        }
+    }
+    let mut train = anchors;
+    train.extend(splits[0].clone());
+    check_split(&train, &splits[1])?;
+    check_split(&train, &splits[2])?;
+    std::fs::create_dir(output)?;
+    let manifest = CorpusManifest {
+        version: 1,
+        scope: "SYNTHETIC_ONLY".into(),
+        permission: "project-generated H3 and explicitly retained ordinary anchors".into(),
+        generator: "educational-copy-H3-v1".into(),
+        seed,
+        split_rule: format!(
+            "anchor first2048 (categories410/410/410/409/409), focus last2048; dev/seal64 bases x4; hash-partitioned complete entity strings; parent={}",
+            parent.train.sha256
+        ),
+        train: save_split(output, "train", &train)?,
+        validation: save_split(output, "validation", &splits[1])?,
+    };
+    let seal = save_split(output, "seal", &splits[2])?;
+    write_new(
+        &output.join("seal-manifest.json"),
+        &serde_json::to_vec_pretty(&seal)?,
+    )?;
+    write_new(
+        &output.join("manifest.json"),
+        &serde_json::to_vec_pretty(&manifest)?,
+    )?;
+    println!(
+        "H3_materialized anchors=2048 focus=2048 dev=256 seal=256 seed={seed} optimizer_updates=0"
+    );
+    Ok(())
+}
 pub fn tokenizer(root: &Path, output: &Path, vocab: usize) -> Result<()> {
     let (mut manifest, train, validation) = load(root)?;
     let docs: Vec<Vec<u8>> = train

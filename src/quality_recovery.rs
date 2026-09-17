@@ -209,6 +209,32 @@ impl RunControl {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Freeze H3 train/dev/seal only after a verified parent/data baseline; no learning.
+    SkillPrepare {
+        #[arg(long)]
+        baseline: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        seed: u64,
+    },
+    /// Freeze actual parent/data identities, audit all ordinary data and replay a fixed watch32.
+    Baseline {
+        #[arg(long)]
+        checkpoint: PathBuf,
+        #[arg(long)]
+        inference: PathBuf,
+        #[arg(long)]
+        corpus: PathBuf,
+        #[arg(long)]
+        original_corpus: PathBuf,
+        #[arg(long)]
+        previous_log: PathBuf,
+        #[arg(long)]
+        source_id: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Compare completed or stopped schedule/group runs from their actual records.
     ScheduleReport {
         #[arg(long)]
@@ -513,6 +539,59 @@ pub fn run(command: Command) -> Result<()> {
     let mut budget = RunControl::command(matches!(&command, Command::Arm { .. }))?;
     budget.check("command_started")?;
     let outcome = match command {
+        Command::SkillPrepare {
+            baseline,
+            output,
+            seed,
+        } => {
+            let report = read_json(&baseline.join("summary.json"))?;
+            let f = load(&baseline.join("frozen.json"))?;
+            if report["baseline_verified"] != true
+                || report["data_audit_status"] != "CHECKED_BOUNDARIES_PASS"
+                || report["parent"]["physical_hash"] != file_hash(&f.start)?
+                || report["original_manifest"]["train"]["sha256"] != f.parent_train_hash
+            {
+                return Err(Error::Invalid("H2 verified baseline required".into()));
+            }
+            data::copy_curriculum(&f.parent_corpus, &output, seed)?;
+            let (manifest, train, dev) = data::load(&output)?;
+            let seal_descriptor: data::Split =
+                serde_json::from_value(read_json(&output.join("seal-manifest.json"))?)?;
+            let seal = data::load_split(&output, &seal_descriptor)?;
+            let l = checkpoint::load(&f.start, Device::Cpu, false)?;
+            let checked = verify_copy_curriculum(&train, &dev, &seal, &l)?;
+            let anchors = scan_controlled(&train[..2048], &l, 2048, Some(&mut budget))?;
+            if anchors["status"] != "CHECKED_BOUNDARIES_PASS" {
+                return Err(Error::Invalid("unverified QA anchors".into()));
+            }
+            save(
+                &output.join("prepared.json"),
+                &json!({"stage":"H3","status":"PRETRAIN_STRUCTURE_VERIFIED","baseline_summary_hash":file_hash(&baseline.join("summary.json"))?,
+                "manifest_hash":file_hash(&output.join("manifest.json"))?,"train_hash":manifest.train.sha256,"dev_hash":manifest.validation.sha256,"seal":seal_descriptor,
+                "checks":checked,"anchors":anchors,"seed":seed,"seal_exposure":"structural validation only; no model evaluation or selection","optimizer_updates":0}),
+            )?;
+            Ok(())
+        }
+        Command::Baseline {
+            checkpoint,
+            inference,
+            corpus,
+            original_corpus,
+            previous_log,
+            source_id,
+            output,
+        } => baseline(
+            [
+                &checkpoint,
+                &inference,
+                &corpus,
+                &original_corpus,
+                &previous_log,
+            ],
+            &output,
+            &source_id,
+            &mut budget,
+        ),
         Command::ScheduleReport {
             fixture,
             control,
@@ -1697,6 +1776,14 @@ fn audit_status(reports: &[&Value], overlap: &[String]) -> &'static str {
     }
 }
 fn scan(episodes: &[Episode], l: &Loaded, limit: usize) -> Result<Value> {
+    scan_controlled(episodes, l, limit, None)
+}
+fn scan_controlled(
+    episodes: &[Episode],
+    l: &Loaded,
+    limit: usize,
+    mut control: Option<&mut RunControl>,
+) -> Result<Value> {
     let mut prompts: BTreeMap<String, (String, String)> = BTreeMap::new();
     let mut collisions = Vec::new();
     let mut invalid = Vec::new();
@@ -1723,7 +1810,12 @@ fn scan(episodes: &[Episode], l: &Loaded, limit: usize) -> Result<Value> {
         mut over_window,
         mut target_count,
     ) = (0, 0, 0, 0, 0, 0);
-    for e in episodes.iter().take(limit) {
+    for (index, e) in episodes.iter().take(limit).enumerate() {
+        if index.is_multiple_of(128)
+            && let Some(control) = control.as_deref_mut()
+        {
+            control.check("semantic_scan_batch")?;
+        }
         *categories.entry(e.category).or_default() += 1;
         if e.request.input.contains("원인") || e.request.input.contains("인과관계") {
             for r in &e.request.evidence.items {
@@ -1938,6 +2030,321 @@ fn audit(fixture: &Path, output: &Path, control: &mut RunControl) -> Result<()> 
     } else {
         Ok(())
     }
+}
+fn baseline(
+    paths: [&Path; 5],
+    output: &Path,
+    source_id: &str,
+    control: &mut RunControl,
+) -> Result<()> {
+    let [resume, inference, corpus, original, previous_log] = paths;
+    if source_id.len() != 64 || !source_id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(Error::Invalid("source digest required".into()));
+    }
+    control.check("baseline_start")?;
+    let parent = registry(resume)?;
+    let loaded = checkpoint::load(resume, Device::Cpu, false)?;
+    let exported = checkpoint::load(inference, Device::Cpu, false)?;
+    let inference_hash = file_hash(inference)?;
+    let weight_hash = loaded.model.weight_hash()?;
+    let state = loaded
+        .manifest
+        .training
+        .as_ref()
+        .ok_or_else(|| Error::Invalid("resume state required".into()))?;
+    if exported.manifest.training.is_some()
+        || exported.model.weight_hash()? != weight_hash
+        || exported.tokenizer.semantic_id() != loaded.tokenizer.semantic_id()
+        || exported.model.config != loaded.model.config
+    {
+        return Err(Error::Corrupt("resume/inference content mismatch".into()));
+    }
+    let next_lr = state.config.learning_rate(
+        state
+            .step
+            .checked_add(1)
+            .ok_or_else(|| Error::Corrupt("optimizer clock overflow".into()))?,
+    );
+    if !next_lr.is_finite() || next_lr <= 0. {
+        return Err(Error::Corrupt("parent next LR".into()));
+    }
+    let (manifest, train, validation) = data::load(corpus)?;
+    let (original_manifest, original_train, original_validation) = data::load(original)?;
+    if state.corpus_hash != manifest.train.sha256
+        || state.validation_hash != manifest.validation.sha256
+        || manifest.validation.sha256 != original_manifest.validation.sha256
+        || digest(&validation)? != digest(&original_validation)?
+    {
+        return Err(Error::Corrupt(
+            "baseline corpus lineage/validation mismatch".into(),
+        ));
+    }
+    let (header, historical) = rows(previous_log)?;
+    verify_historical_rows(&validation, &historical)?;
+    if header["checkpoint_sha256"] != loaded.manifest.weights_sha256
+        || header["split_sha256"] != manifest.validation.sha256
+        || [
+            "oracle_question_ablation",
+            "oracle_field_task_label",
+            "oracle_record_selection",
+        ]
+        .iter()
+        .any(|k| header[*k] == true)
+    {
+        return Err(Error::Corrupt(
+            "baseline log/artifact/normal decoding mismatch".into(),
+        ));
+    }
+    std::fs::create_dir(output)?;
+    let ordinary = |cases: &[Episode]| {
+        cases
+            .iter()
+            .filter(|e| !e.family.starts_with("copy/"))
+            .count()
+    };
+    let mut report = json!({"stage":"H2","source_commit":source_commit()?,"source_digest":source_id,"binary_hash":file_hash(&std::env::current_exe()?)?,
+        "parent":parent,"inference":{"path":inference,"physical_hash":inference_hash,"model_content_hash":weight_hash,"same_content":true},
+        "train_manifest":manifest,"original_manifest":original_manifest,"train_ordinary":ordinary(&train),"original_train_ordinary":ordinary(&original_train),
+        "validation_ordinary":ordinary(&validation),"validation_auxiliary":validation.len()-ordinary(&validation),"previous_log_sha256":file_hash(previous_log)?,
+        "recount":summarize(&historical)?,"next_parent_lr":next_lr,"proposed_constant_lr":next_lr.min(3e-5),"new_small_updates":0,"new_input_tokens":0,"new_target_tokens":0,"goal1_ready":false});
+    save(&output.join("identity-recount.json"), &report)?;
+    let training_audit = scan_controlled(&train, &loaded, train.len(), Some(control))?;
+    save(&output.join("binding-train-audit.json"), &training_audit)?;
+    let original_audit = scan_controlled(
+        &original_train,
+        &loaded,
+        original_train.len(),
+        Some(control),
+    )?;
+    save(&output.join("original-train-audit.json"), &original_audit)?;
+    let validation_audit = scan_controlled(&validation, &loaded, validation.len(), Some(control))?;
+    save(&output.join("validation-audit.json"), &validation_audit)?;
+    let status = audit_status(&[&training_audit, &original_audit, &validation_audit], &[]);
+    report["data_audit_status"] = json!(status);
+    let mut watch = Vec::new();
+    let mut used = BTreeSet::new();
+    for (category, count) in [7, 7, 6, 6, 6].into_iter().enumerate() {
+        let selected: Vec<_> = validation
+            .iter()
+            .filter(|e| {
+                e.category == category
+                    && !e.family.starts_with("copy/")
+                    && used.insert(scene(e).to_owned())
+            })
+            .take(count)
+            .cloned()
+            .collect();
+        if selected.len() != count {
+            return Err(Error::Corrupt("watch coverage".into()));
+        }
+        watch.extend(selected);
+    }
+    let frozen = Frozen {
+        version: 1,
+        registry: json!({"V1000":parent,"source_id":source_id,"binary_hash":file_hash(&std::env::current_exe()?)?}),
+        corpus: corpus.into(),
+        parent_corpus: original.into(),
+        start: resume.into(),
+        train_hash: manifest.train.sha256,
+        validation_hash: manifest.validation.sha256,
+        parent_train_hash: original_manifest.train.sha256,
+        tokenizer: loaded.tokenizer.semantic_id(),
+        watch,
+        failures: vec![],
+        previous_parent: historical.clone(),
+        previous_failed: vec![],
+    };
+    let fixture = output.join("frozen.json");
+    save(&fixture, &frozen)?;
+    // Only the frozen ordinary32 are regenerated; the known400 denominator is re-counted above.
+    replay(
+        &fixture,
+        inference,
+        &output.join("watch32.jsonl"),
+        "watch",
+        Some(source_id),
+        control,
+        false,
+        None,
+    )?;
+    let (_, actual) = rows(&output.join("watch32.jsonl"))?;
+    let mut differences = Vec::new();
+    for row in &actual {
+        let prior = historical
+            .iter()
+            .find(|v| v["id"] == row["id"])
+            .ok_or_else(|| Error::Corrupt("watch baseline ID".into()))?;
+        for key in [
+            "raw_tokens",
+            "actual",
+            "error",
+            "exact_match",
+            "prompt_digest",
+            "provided",
+            "excluded",
+        ] {
+            if row[key] != prior[key] {
+                differences.push(json!({"id":row["id"],"field":key}));
+            }
+        }
+    }
+    report["watch"] = summarize(&actual)?;
+    report["watch_differences"] = json!(differences);
+    report["generation_calls"] = json!(control.generation_calls);
+    report["artifacts_unchanged"] = json!(
+        file_hash(resume)? == parent["physical_hash"] && file_hash(inference)? == inference_hash
+    );
+    if status != "CHECKED_BOUNDARIES_PASS" {
+        control.observe(if status == "AUDIT_INCOMPLETE" {
+            StopReason::AuditIncomplete
+        } else {
+            StopReason::IntegrityFail
+        });
+    }
+    if !differences.is_empty() || report["artifacts_unchanged"] != true {
+        control.observe(StopReason::IntegrityFail);
+    }
+    let sealed = control.seal_terminal();
+    report["control"] = control.receipt();
+    report["baseline_verified"] = json!(sealed.is_ok());
+    report["h2_split_materialization"] = json!("NEXT_IF_BASELINE_VERIFIED");
+    save(&output.join("summary.json"), &report)?;
+    println!(
+        "H2 audit={status} watch={}/32 new_updates=0 generation_calls={}",
+        report["watch"]["exact_matches"], control.generation_calls
+    );
+    sealed
+}
+fn verify_copy_curriculum(
+    train: &[Episode],
+    dev: &[Episode],
+    seal: &[Episode],
+    l: &Loaded,
+) -> Result<Value> {
+    let invalid = || Error::Invalid("INVALID_SKILL_DATA: copy grammar/contrast/split".into());
+    if train.len() != 4096 || dev.len() != 256 || seal.len() != 256 {
+        return Err(invalid());
+    }
+    let mut identifiers = Vec::new();
+    let mut scene_sets = Vec::new();
+    let mut binding_sets = Vec::new();
+    let mut strata = BTreeMap::<String, usize>::new();
+    for (split, all) in [train, dev, seal].into_iter().enumerate() {
+        let mut ids = BTreeSet::new();
+        let mut scenes = BTreeSet::new();
+        let mut bindings = BTreeSet::new();
+        for e in all {
+            for record in &e.request.evidence.items {
+                if let Some((entity, _, _)) = exact_fact(&record.original_excerpt) {
+                    ids.insert(entity.to_string());
+                }
+            }
+            scenes.insert(scene(e).to_string());
+            bindings.insert(e.binding.clone());
+        }
+        let focus = if split == 0 { &all[2048..] } else { all };
+        for group in focus.as_chunks::<4>().0 {
+            if group.iter().any(|e| scene(e) != scene(&group[0])) {
+                return Err(invalid());
+            }
+            for (view, e) in group.iter().enumerate() {
+                if e.request.evidence.items.len() != 1
+                    || e.category != 0
+                    || e.request.request_id != e.id
+                {
+                    return Err(invalid());
+                }
+                let record = &e.request.evidence.items[0];
+                let (entity, context, value) =
+                    exact_fact(&record.original_excerpt).ok_or_else(invalid)?;
+                let digits = entity.trim_start_matches(|c: char| !c.is_ascii_digit());
+                let prefix = &entity[..entity.len() - digits.len()];
+                if !["장치", "설비", "센서", "장비"].contains(&prefix)
+                    || !(1..=8).contains(&digits.len())
+                    || !digits.bytes().all(|b| b.is_ascii_digit())
+                    || record.version_status != "current"
+                    || record.excerpt_truncated
+                    || record.event_id <= 0
+                    || e.binding != format!("{entity}/{context}/{value}")
+                {
+                    return Err(invalid());
+                }
+                if view == 3 {
+                    if e.request.input
+                        != "제공된 유일한 기록의 원문을 빠짐없이 쓰고 그 사건을 인용해줘."
+                    {
+                        return Err(invalid());
+                    }
+                } else if !mentions_target(&e.request.input, entity)
+                    || !mentions_target(&e.request.input, context)
+                {
+                    return Err(invalid());
+                }
+                let (prose, citation) = e.answer.rsplit_once(' ').ok_or_else(invalid)?;
+                if prose != record.original_excerpt
+                    || citation_literal(citation) != Some(record.event_id)
+                {
+                    return Err(invalid());
+                }
+                *strata
+                    .entry(format!("split-{split}/digits-{}", digits.len()))
+                    .or_default() += 1;
+                *strata
+                    .entry(format!(
+                        "split-{split}/{}",
+                        if value.starts_with("경로") {
+                            "short-value"
+                        } else {
+                            "direction"
+                        }
+                    ))
+                    .or_default() += 1;
+            }
+            let records: Vec<_> = group.iter().map(|e| &e.request.evidence.items[0]).collect();
+            let facts: Vec<_> = records
+                .iter()
+                .map(|r| exact_fact(&r.original_excerpt).unwrap())
+                .collect();
+            if facts[0].0 == facts[1].0
+                || facts[0].1 != facts[1].1
+                || facts[0].2 != facts[1].2
+                || facts[0].0 != facts[2].0
+                || facts[0].1 != facts[2].1
+                || facts[0].2 == facts[2].2
+                || serde_json::to_value(records[0])? != serde_json::to_value(records[3])?
+                || records.iter().any(|r| {
+                    r.event_id != records[0].event_id || r.recorded_at != records[0].recorded_at
+                })
+                || group[0].answer != group[3].answer
+            {
+                return Err(invalid());
+            }
+        }
+        identifiers.push(ids);
+        scene_sets.push(scenes);
+        binding_sets.push(bindings);
+    }
+    for a in 0..3 {
+        for b in a + 1..3 {
+            if !identifiers[a].is_disjoint(&identifiers[b])
+                || !scene_sets[a].is_disjoint(&scene_sets[b])
+                || !binding_sets[a].is_disjoint(&binding_sets[b])
+            {
+                return Err(invalid());
+            }
+        }
+    }
+    let framed = samples(train, &l.tokenizer, 512)?;
+    if framed.len() != train.len() || framed.iter().any(|s| s.tokens.len() > 513) {
+        return Err(Error::Invalid(
+            "skill training length; no truncation".into(),
+        ));
+    }
+    Ok(
+        json!({"train":4096,"anchors":2048,"focus":2048,"dev":256,"seal":256,"strata":strata,"identifier_sets":identifiers.iter().map(BTreeSet::len).collect::<Vec<_>>(),
+        "base_scene_counts":scene_sets.iter().map(BTreeSet::len).collect::<Vec<_>>(),"max_train_tokens_including_eos":framed.iter().map(|s|s.tokens.len()).max(),
+        "input_target_training_tokens_planned_one_epoch":[framed.iter().map(|s|s.tokens.len()-1).sum::<usize>(),framed.iter().map(|s|s.tokens.len()-s.response_start).sum::<usize>()],"model_calls":0,"eos_is_supervised":true}),
+    )
 }
 fn compare(a: &Tensor, b: &Tensor) -> Result<Value> {
     if a.dims() != b.dims() {
@@ -3452,6 +3859,54 @@ mod tests {
             manifest,
             optimizer: BTreeMap::new(),
         }
+    }
+    #[test]
+    fn harness_h2_copy_materialization_independent_grammar_and_split_rejection() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let output = dir.path().join("copy");
+        data::prepare(&source, 317, 20_000, &[], "entity-cue").unwrap();
+        let source_hash = file_hash(&source.join("train.json")).unwrap();
+        data::copy_curriculum(&source, &output, 917_260_311).unwrap();
+        let (_, train, dev) = data::load(&output).unwrap();
+        let seal_descriptor: data::Split =
+            serde_json::from_value(read_json(&output.join("seal-manifest.json")).unwrap()).unwrap();
+        let seal = data::load_split(&output, &seal_descriptor).unwrap();
+        let tok_path = dir.path().join("tokenizer");
+        data::tokenizer(&output, &tok_path, 4096).unwrap();
+        let tok = ByteBpe::load(&tok_path).unwrap();
+        let mut config = neural::transformer::Config::tiny(tok.vocab_size());
+        config.profile = "NATIVE_TRPP_EXPERIMENTAL_V1".into();
+        config.context = 2048;
+        let model = Transformer::init(config, 17, Device::Cpu).unwrap();
+        let manifest = checkpoint::initialized(
+            &model,
+            &tok,
+            17,
+            neural::hash(b"independent structure test"),
+        )
+        .unwrap();
+        let l = Loaded {
+            model,
+            tokenizer: tok,
+            manifest,
+            optimizer: BTreeMap::new(),
+        };
+        assert_eq!(
+            verify_copy_curriculum(&train, &dev, &seal, &l).unwrap()["model_calls"],
+            0
+        );
+        let mut bad = dev.clone();
+        bad[0].answer = bad[2].answer.clone();
+        assert!(verify_copy_curriculum(&train, &bad, &seal, &l).is_err());
+        let mut leaking = dev.clone();
+        leaking[..4].clone_from_slice(&train[2048..2052]);
+        assert!(verify_copy_curriculum(&train, &leaking, &seal, &l).is_err());
+        let mut duplicate = seal;
+        let extra = duplicate[0].request.evidence.items[0].clone();
+        duplicate[0].request.evidence.items.push(extra);
+        assert!(verify_copy_curriculum(&train, &dev, &duplicate, &l).is_err());
+        assert_eq!(file_hash(&source.join("train.json")).unwrap(), source_hash);
     }
     fn training_run<'a>(checkpoint: &'a Path, output: &'a Path) -> Run<'a> {
         Run {
