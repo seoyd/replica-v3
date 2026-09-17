@@ -1,5 +1,158 @@
 use std::process::Command;
 #[test]
+fn ordinary_qa_ablation_cli_keeps_gold_and_distinguishes_question_from_record() {
+    use replica_v3::neural::{
+        ByteBpe, checkpoint, hash,
+        transformer::{Config, Transformer},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let corpus = dir.path().join("corpus");
+    let tokenizer = dir.path().join("tokenizer");
+    let artifact = dir.path().join("random-native");
+    let run = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_replica-train"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out
+    };
+    run(&[
+        "corpus",
+        "prepare",
+        "--profile",
+        "entity-cue",
+        "--documents",
+        "240",
+        "--seed",
+        "317",
+        "--output",
+        corpus.to_str().unwrap(),
+    ]);
+    run(&[
+        "tokenizer",
+        "train",
+        "--corpus",
+        corpus.to_str().unwrap(),
+        "--output",
+        tokenizer.to_str().unwrap(),
+    ]);
+    let tok = ByteBpe::load(&tokenizer).unwrap();
+    // Use the real native forward path with small test tensors and a full prompt.
+    // Quality is evaluated separately with the unchanged trained SMALL artifact.
+    let mut config = Config::tiny(tok.vocab_size());
+    config.profile = "NATIVE_TRPP_EXPERIMENTAL_V1".into();
+    config.context = 2048;
+    let model = Transformer::init(config, 73, candle_core::Device::Cpu).unwrap();
+    checkpoint::save(
+        &artifact,
+        &model,
+        &tok,
+        checkpoint::initialized(&model, &tok, 73, hash(b"ablation regression")).unwrap(),
+        &Default::default(),
+    )
+    .unwrap();
+    let artifact_hash = hash(&std::fs::read(&artifact).unwrap());
+    let validation_bytes = std::fs::read(corpus.join("validation.json")).unwrap();
+    let validation: Vec<serde_json::Value> = serde_json::from_slice(&validation_bytes).unwrap();
+    let cases: Vec<_> = validation
+        .iter()
+        .filter(|r| {
+            matches!(r["category"].as_u64(), Some(0 | 2))
+                && !r["family"].as_str().unwrap().starts_with("copy/")
+        })
+        .take(8)
+        .collect();
+    assert!(cases.iter().any(|r| r["category"] == 2));
+    for (name, question, record) in [
+        ("question", true, false),
+        ("record", false, true),
+        ("both", true, true),
+    ] {
+        let output = dir.path().join(name);
+        let mut args = vec![
+            "evaluate",
+            "--checkpoint",
+            artifact.to_str().unwrap(),
+            "--corpus",
+            corpus.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+            "--limit",
+            "8",
+        ];
+        if question {
+            args.push("--known-question-form");
+        }
+        if record {
+            args.push("--single-qa-record");
+        }
+        run(&args);
+        let rows: Vec<serde_json::Value> = std::fs::read_to_string(output)
+            .unwrap()
+            .lines()
+            .map(|s| serde_json::from_str(s).unwrap())
+            .collect();
+        assert_eq!(rows[0]["oracle_question_ablation"], question);
+        assert_eq!(rows[0]["oracle_record_selection"], record);
+        assert_eq!(rows[0]["oracle_field_task_label"], false);
+        assert_eq!(rows.last().unwrap()["terminal_reason"], "COMPLETED");
+        assert_eq!(rows.last().unwrap()["candidate_eligible"], false);
+        let generated: Vec<_> = rows.iter().filter(|r| r.get("id").is_some()).collect();
+        assert_eq!(generated.len(), cases.len());
+        for (case, row) in cases.iter().zip(generated) {
+            assert_eq!(row["id"], case["id"]);
+            assert_eq!(row["expected"], case["answer"]);
+            assert_eq!(row["question"], case["request"]["input"]);
+            assert_eq!(row["evidence"], case["request"]["evidence"]);
+            assert_eq!(row["generation_started"], true);
+            assert_eq!(row["generated_question"] != row["question"], question);
+            if record {
+                let selected = row["generated_evidence"]["items"].as_array().unwrap();
+                assert_eq!(selected.len(), 1);
+                let cited = replica_v3::app::citations(case["answer"].as_str().unwrap()).unwrap();
+                let expected_record = case["request"]["evidence"]["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|r| r["event_id"] == cited[0])
+                    .unwrap();
+                assert_eq!(&selected[0], expected_record);
+            } else {
+                assert_eq!(row["generated_evidence"], row["evidence"]);
+            }
+        }
+    }
+    for incompatible in ["--single-current-record", "--known-field-question-form"] {
+        let rejected = dir.path().join("rejected");
+        let out = Command::new(env!("CARGO_BIN_EXE_replica-train"))
+            .args([
+                "evaluate",
+                "--checkpoint",
+                artifact.to_str().unwrap(),
+                "--corpus",
+                corpus.to_str().unwrap(),
+                "--output",
+                rejected.to_str().unwrap(),
+                "--single-qa-record",
+                incompatible,
+            ])
+            .output()
+            .unwrap();
+        assert!(!out.status.success());
+        assert!(!rejected.exists());
+    }
+    assert_eq!(
+        validation_bytes,
+        std::fs::read(corpus.join("validation.json")).unwrap()
+    );
+    assert_eq!(artifact_hash, hash(&std::fs::read(artifact).unwrap()));
+}
+#[test]
 fn full_population_binding_pairs_require_question_and_value_without_split_growth() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source");

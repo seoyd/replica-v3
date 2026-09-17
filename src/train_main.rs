@@ -54,6 +54,9 @@ enum Commands {
         /// Oracle value-task evidence selection diagnostic, never a task score.
         #[arg(long, conflicts_with = "known_question_form")]
         single_current_record: bool,
+        /// Oracle support-only diagnostic on ordinary QA0/QA2; never a task score.
+        #[arg(long, conflicts_with_all = ["known_field_question_form", "single_current_record"])]
+        single_qa_record: bool,
     },
     Model {
         #[command(subcommand)]
@@ -360,6 +363,7 @@ fn run() -> Result<()> {
             known_question_form,
             known_field_question_form,
             single_current_record,
+            single_qa_record,
         } => training::evaluate_corpus(
             &checkpoint,
             &corpus,
@@ -368,6 +372,7 @@ fn run() -> Result<()> {
             &split,
             known_question_form,
             match (known_field_question_form, single_current_record) {
+                (false, false) if single_qa_record => training::FieldAblation::QaRecord,
                 (false, false) => training::FieldAblation::None,
                 (true, false) => training::FieldAblation::Question,
                 (false, true) => training::FieldAblation::Record,

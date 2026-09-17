@@ -65,6 +65,61 @@ GOAL1_READY=NO, INDEPENDENT_PENDING이다. final200과 운영 모델은 변경�
 직접 CLI 회귀1개와 fmt/check/clippy/release가 통과했다. 실행 소스29개와 원본17개,
 기존 P/T checkpoints8개의 보존 해시를 재확인했다. 새 영구 파일/의존성은0이다.
 실행자료는 artifacts/s4-completion-20260917에 남으며 소스·테스트·작은 상태 문서만 게시한다.
+V 소스·검증 기록 commitffcf698930fec454f415738078945a0a1358da90를 정상 push했고,
+origin/main의 동일 full SHA를 직접 확인했다.
+
+### V1000 가중치 고정: 질문 표현과 근거 선택 분리
+
+기존 보조 value-task의 oracle selector를 일반 QA0/QA2에도 적용할 수 있도록 기존
+evaluate CLI에 --single-qa-record를 추가했다. 기존 질문 치환과 조합할 수 있으며,
+원문/생성용 질문·근거를 구분해 기록한다. 정답 내용은 모델 입력이나 selector에 넣지 않는다.
+full entity가 질문에 있으면 숫자가 같아도 다른 분류명의 원문은 선택하지 않는다.
+product worker/retrieval/모델 수식·tokenizer·prompt 기본 형식에는 변경이 없다.
+동일 evaluate_one/RunControl을 사용하며 oracle 결과는 후보·최종 품질로 승인하지 않는다.
+
+| 같은 QA136의 조건 | QA0 /68 | QA2 /68 | 전체 /136 |
+|---|---:|---:|---:|
+| 원래 질문·두 근거 — 기존 V1000 로그 재사용 | 25 | 10 | 35 |
+| 익숙한 질문 표현만 | 24 | 40 | 64 |
+| 정답 근거 하나만 | 57 | 29 | 86 |
+| 두 변경을 함께 적용 | 56 | 59 | 115 |
+
+새 생성은 사전 범위408건이고 모두 완료, 생성/UTF-8/빈 응답 오류0, optimizer updates0이다.
+세 command wall17.61/14.89/14.68s, 최대 RSS612,401,152bytes다. 별도 Rust 집계가 동일
+weights/split/ID/원래 질문·근거/정답, 선택된 원문 bytes, 질문·근거 변경의 독립성을 검산했다.
+둘을 적용하고도 남은21개 오답의 첫 차이는 entity19/format2였다. 예를 들어 원문의
+장치690440을 장치690540으로 생성했다. 이미 학습된 모델이 새로운 식별자를 정확히
+복사하지 못하는 사례다. 모든 오답이 이것만으로 설명된다는 주장은 하지 않는다.
+
+관측 해석: QA0은 방해 근거 제거에, QA2는 질문 표현과 방해 근거 모두에 민감하다.
+지원 근거만 남기면 길이/위치도 달라지므로 attention 또는 데이터 한 원인을 확정하지 않는다.
+115/136은 oracle-assisted 진단이며 S4 점수175/336을 대체하지 않는다. 이후 학습은 자동
+재개하지 않는다. 다음 방향은 기존 실패 원문을 기준으로 새 식별자의 정확한 복사, 질문에
+따른 근거 선택, 질문 표현 전이를 분리한 학습 설계이며, 고정16/32 재암기나 같은 LR/step
+연장은 아니다. 세 요인을 한꺼번에 바꾸거나 최종 heldout를 학습에 사용하지 않는다.
+
+직접 CLI 회귀1개와 기존 ablation helper3개, fmt/check/clippy/release가 통과했다.
+초기 CLI 회귀는 random SMALL로 실행해 오래 걸려218.34s에 소유 child에 SIGINT로 중단했다.
+이 FAILED 로그는 실제 수정 전 결함 재현으로 세지 않는다. 최종 회귀는 기존 bounded
+experimental config의 작은 native tensor/context2048로24회 생성해3.22s에 통과했다.
+테스트는 실제 native 연산이며 FakeModel을 쓰지 않았고 optimizer 호출은0이다.
+실제 품질 분리는 동일한 학습 완료 SMALL V1000에서만 실행했다.
+
+진단 source manifest digest42b9115b17c6f5e039b5595bd80dc73c1927912bf8e8a9fe4df1f6b2d01bd012,
+binary6910b44af8a079adb953174581b2db81656619bf3d00feed74aaab93f9042bf9다.
+훈련 소스 digest9158a9c와 혼동하지 않는다. 소스29개 및 V artifacts2개의 보존 해시도 일치했다.
+
+기존 native exporter로 V1000 추론용 파일을 별도로 생성·재로드했다. resume115,285,120B,
+inference38,432,768B이며 후자는 training=null/Adam 없음/trained_steps21750이다.
+양쪽 actual model weight hash는f93483799d3cc2bfa80d55708ed758eb9f13dae6536cf1c42676dc346eabb89d로
+같다. 추론 파일 physical SHA256은f498afc20e3b3af192c55c8a69bede346735963a73c849a11a14c5131cf8c094,
+경로는 artifacts/s4-completion-20260917/binding-v1000-inference.r3m이다.
+native tensor-body manifest hash는 Adam 유무에 따라 다르며 실제 model weight hash와 구분한다.
+diagnostic_only=true를 유지했고 운영 모델 채택/INT4 구현/S5 합격으로 표시하지 않는다.
+
+최종 상태: 도구 구현·자료 변환/무학습 비교 검증 완료, 개발 QA의 제한된 개선 관측,
+기존 U2 붕괴의 단일 원인 UNRESOLVED, S4/S5/S6/Goal1 미완, 독립 검토 PENDING.
+새 영구 파일0. checkpoint/corpus/원문 로그/임시 입력은 로컬에 보존한다.
 
 ## 이전: 일반 학습 경로의 취소·종료 보완 — 2026-09-17
 

@@ -53,6 +53,29 @@ evaluations. V1000 has a small development gain; QA2 remains10/68, so the origin
 fails. V1500/V2000 were not run under the early closure decision recorded above. Preserve
 both native artifacts and raw failures; no final test, memorization retest or new optimizer run.
 
+Missing no-update comparison: existing record-only ablation handles auxiliary value tasks,
+not ordinary QA0/QA2. Extend that same evaluator/selector for these two categories, with
+explicit oracle metadata and the existing shared cancellation/deadline. At frozen V1000,
+reuse the original136 answers from validation400, then run known-question, record-only,
+and their combination once each (408 additional generations maximum;900s/12GiB each).
+Keep gold and selected record bytes fixed; selecting support also changes input length and
+distractor count, so the difference is not proof of a sole attention cause. No training,
+new scenes, final-test use, product selector, or quality promotion from oracle scores.
+Verify CLI category filtering, exact original/modified request receipts, flag conflicts,
+full entity/context matching and source/checkpoint preservation before the real comparison.
+
+Observed no-update closure: ordinary QA0/QA2 original35/136; known-question64/136;
+support-only86/136; both115/136. QA0 counts25/24/57/56, QA2 counts10/40/29/59, denominator68
+each. All408 new generations completed without generation/UTF-8/empty errors, total47.18s.
+Separate Rust row checks confirm identical original input/gold/weights and unchanged selected
+record bytes. The remaining21 first errors are19entity/2format. Oracle intervention identifies
+sensitivities, not a sole root cause or accepted model. No more learning is launched here.
+Next direction: design for unseen identifier copying and question-conditioned record selection,
+then language-expression transfer with independent train/evaluation bindings. Do not repeat
+fixed tiny memorization, silently expand data, or substitute the oracle in product inference.
+Any future learning must declare its one intervention, bounded comparison and stop conditions
+before running. Goal1 acceptance thresholds remain unchanged and incomplete.
+
 Current: ordinary trainer cancellation follow-through verified; C/L/B/P/T/V learning runs
 remain CLOSED, NOT_RUNNING. S4 quality and Goal1 remain incomplete. T closed after three
 consecutive evaluations without a new best and its2000-update cap. No automatic extension

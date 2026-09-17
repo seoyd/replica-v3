@@ -324,6 +324,7 @@ pub enum FieldAblation {
     Question,
     Record,
     QuestionAndRecord,
+    QaRecord,
 }
 // Oracle evidence-selection diagnostic, never retrieval or product inference.
 // Selection reads only the explicit identifiers and current status, not gold values.
@@ -333,6 +334,7 @@ fn isolate_current_record(
     context: &str,
 ) -> Result<()> {
     let number = entity.trim_start_matches(|c: char| !c.is_ascii_digit());
+    let full_name = mentions_target(&request.input, entity);
     if !mentions_target(&request.input, number) || !mentions_target(&request.input, context) {
         return Err(Error::Invalid(
             "record ablation target must be explicit in the question".into(),
@@ -348,6 +350,7 @@ fn isolate_current_record(
                     .split_once("의 ")
                     .is_some_and(|(name, text)| {
                         name.trim_start_matches(|c: char| !c.is_ascii_digit()) == number
+                            && (!full_name || name == entity)
                             && text.starts_with(&format!("{context} 이동 지시는 "))
                     })
         })
@@ -378,9 +381,10 @@ pub fn evaluate_corpus(
         field_ablation,
         FieldAblation::Question | FieldAblation::QuestionAndRecord
     );
+    let qa_record = matches!(field_ablation, FieldAblation::QaRecord);
     let single_record = matches!(
         field_ablation,
-        FieldAblation::Record | FieldAblation::QuestionAndRecord
+        FieldAblation::Record | FieldAblation::QuestionAndRecord | FieldAblation::QaRecord
     );
     let (manifest, train, validation) = data::load(corpus)?;
     control.check("evaluate_corpus_loaded")?;
@@ -390,7 +394,7 @@ pub fn evaluate_corpus(
         _ => return Err(Error::Invalid("diagnostic split".into())),
     };
     if ((rephrase || rephrase_field || single_record) && split != "validation")
-        || (rephrase && (rephrase_field || single_record))
+        || (rephrase && (rephrase_field || (single_record && !qa_record)))
     {
         return Err(Error::Invalid(
             "question-form ablation requires validation".into(),
@@ -399,7 +403,9 @@ pub fn evaluate_corpus(
     let episodes: Vec<_> = episodes
         .iter()
         .filter(|episode| {
-            if single_record {
+            if qa_record {
+                matches!(episode.category, 0 | 2) && !episode.family.starts_with("copy/")
+            } else if single_record {
                 episode.family.starts_with("copy/") && episode.family.ends_with("/value")
             } else if rephrase_field {
                 episode.family.starts_with("copy/")
@@ -427,7 +433,7 @@ pub fn evaluate_corpus(
     writeln!(
         log,
         "{}",
-        serde_json::json!({"header":true,"split":split,"checkpoint_sha256":loaded.manifest.weights_sha256,"split_sha256":split_hash,"limit":limit,"final_heldout":false,"oracle_question_ablation":rephrase || rephrase_field,"oracle_field_task_label":rephrase_field || single_record,"oracle_record_selection":single_record,"eligible_episodes":episodes.len()})
+        serde_json::json!({"header":true,"split":split,"checkpoint_sha256":loaded.manifest.weights_sha256,"split_sha256":split_hash,"limit":limit,"final_heldout":false,"oracle_question_ablation":rephrase || rephrase_field,"oracle_field_task_label":rephrase_field || (single_record && !qa_record),"oracle_record_selection":single_record,"eligible_episodes":episodes.len()})
     )?;
     let mut exact = 0;
     let mut failed = 0;
@@ -488,7 +494,7 @@ pub fn evaluate_corpus(
         }
     }
     let _ = control.check("evaluate_summary");
-    let mut summary = serde_json::json!({"summary":true,"split":split,"exact_matches":exact,"denominator":evaluated.len(),"generation_failures":failed,"groups_correct_total":groups,"final_heldout":false,"oracle_question_ablation":rephrase || rephrase_field,"oracle_field_task_label":rephrase_field || single_record,"oracle_record_selection":single_record});
+    let mut summary = serde_json::json!({"summary":true,"split":split,"exact_matches":exact,"denominator":evaluated.len(),"generation_failures":failed,"groups_correct_total":groups,"final_heldout":false,"oracle_question_ablation":rephrase || rephrase_field,"oracle_field_task_label":rephrase_field || (single_record && !qa_record),"oracle_record_selection":single_record});
     summary["diagnostic_score"] = recovery::summarize(&evaluated)?;
     recovery::add_partial_counts(&mut summary, &evaluated, limit, &control);
     writeln!(log, "{summary}")?;
@@ -1316,6 +1322,17 @@ mod tests {
             assert!(isolate_current_record(&mut invalid, "센서531904", "구역8").is_err());
             assert_eq!(serde_json::to_value(&invalid).unwrap(), before);
         }
+        let mut qa = request.clone();
+        qa.input = "센서531904의 구역8 이동 지시와 근거는?".into();
+        qa.evidence
+            .items
+            .push(record(77, "장비531904", "구역8", "대기", "current"));
+        isolate_current_record(&mut qa, "센서531904", "구역8").unwrap();
+        assert_eq!(qa.evidence.items[0].event_id, 14);
+        qa.evidence.items[0].original_excerpt = "장비531904의 구역8 이동 지시는 서쪽이다.".into();
+        let before = serde_json::to_value(&qa).unwrap();
+        assert!(isolate_current_record(&mut qa, "센서531904", "구역8").is_err());
+        assert_eq!(serde_json::to_value(&qa).unwrap(), before);
     }
     #[test]
     fn grouped_sampling_preserves_default_draws_and_complete_blocks() {
