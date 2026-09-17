@@ -4,7 +4,63 @@
 2026-09-17. 이전 R3-CUSTOMIZE-AND-DIAGNOSE-1.0 실행 이력은 아래 보존한다.
 모든 성공 표시는 구현자 확인이며 INDEPENDENT_PENDING이다.
 
-## 현재: Goal1 재개 — 2026-09-17
+## 현재: 일반 학습 경로의 취소·종료 보완 — 2026-09-17
+
+**일반 trainer의 중단 경계를 추가 수정했다. S4·Goal1 전체 판정은 PARTIAL이다.**
+출발 SHA는32a633200950c820c22d50508b65c814bbd2837c이며 원격 일치와 tracked clean을
+확인했다. 기존 RF-01~03은 진단 경로에 구현돼 있었지만, 재개한 일반 `train`은 최초/주기/
+최종 validation에서 공통 제어를 쓰지 않았다. 이미 취소된 경우도 validation을 실행했고,
+마지막 저장 이후 취소를 성공 종료로 놓칠 수 있었다. 기존 품질 하락과의 인과는 UNKNOWN이다.
+
+- 구현: 기존 RunControl에 CLI의 실제 Arc 취소 flag와900초 deadline을 연결했다.
+  validation teacher 전후, microbatch, optimizer 원자 경계 전후, 저장과 terminal까지
+  확인한다. stop 뒤에는 추가 평가 없이 native checkpoint 보존만 수행한다.
+- 중단 상태: 완료 update의 weights/Adam/sampler를 보존한다. 실제 완료한 gradient 계산의
+  입력 토큰은 취소되더라도 소비 예산에 남긴다. 새 weights에서 validation을 완료하지
+  못하면 이전 step의 CE를 현재 값으로 저장하지 않는다. --no-rss도 명시적으로 유지한다.
+- 보고: TRAIN_CONTROL에 첫 사유/관측 조건, teacher 호출 수, 실제 실행 입력량, 최종 평가
+  완료 여부, 저장 성공/실패, work/cleanup/overrun을 기록한다. 저장 후 관측된 취소는
+  native 파일을 다시 쓰지 않고 최종 receipt와 실패 exit로 표시한다. 동기 tensor/fsync를
+  강제 중단하는 hard deadline은 아니다. 기존 status vocabulary와 binary 형식은 불변이다.
+- 범위: src/training.rs, src/train_main.rs, src/quality_recovery.rs, tests/training.rs 및
+  기존 상태/계획 문서만 수정했다. 새 소스·fixture 파일·의존성·framework는 없다.
+
+수정 전 실제 테스트4개 실패를 red.txt에 보존했다. 그중 취소 전/teacher 중/최종 종료
+누락3개는 유효한 결함 재현이다. 나머지의 소비 토큰0 기대는 실제 실행 예산을 지우는
+잘못된 assertion이므로 철회했다. 이 초기 판단을 원래 코드의 토큰 계수 결함으로 보고하지
+않는다. 최종 accumulation 회귀는 실제 소비량 보존과 weights/Adam/RNG 불변을 함께 검사한다.
+
+새 회귀5개와 기존 RF 회귀10개, gold independence/causal positive/tape-clock/분모4개,
+실제 CLI 취소·새 process exact-resume2개, 총21distinct tests가 통과했다. 일반 학습
+positive와 native 저장→재로드를 포함한다. 최종 검산 로그는 artifacts/training-stop-20260917에
+보존한다. 원래 RF01/RF02 감사 parser나 데이터는 수정하지 않았으며 아래 R4의4496자료
+감사/기존400 재집계/66생성 parity는 이전 실행 결과로 유지한다.
+
+이번 SMALL optimizer updates는0이다. TINY는35updates다: 수정 전 teacher-cancel 실패
+재현1 + exact-resume16×2회 + 실제 SIGINT 중단1×2회다. 그 외 새5회귀/RF/gold/집계
+시험의 optimizer 호출은0이다. 재실행은 테스트 개수에 중복 합산하지 않고 실제 update에는
+합산했다. 기존3700SMALL 학습을 이번 실행으로 중복 계산하지 않는다.
+원본 corpus/checkpoint/실패로그와 운영 DB는 그대로 보존하고, 모델 배포를 바꾸지 않았다.
+
+최종 fmt/check/clippy(-D warnings)/release는 Rust1.98.0, offline/locked/accelerate에서
+전부 통과했다. 원본17파일과 추가 P/T8체크포인트의 SHA256이 기존 manifest와 일치했고,
+487untracked 파일을 보존했다. source manifest29항목의 digest는
+4983c44575e8113b9848bee1566193648e35ca2a2a8adb07c0147bcc63b58503,
+실제 release trainer SHA256은
+850d69d653bc796de717fe98f908511f8607780d05185e0b63c30fe4d99d1415다.
+검증된 소스·테스트·두 상태 문서만 출판 대상으로 삼는다. 원자료/모델/실행 로그는 로컬에
+보존한다. 새 영구 파일은0이며 이 증거 디렉터리의 로컬 로그만 추가됐다.
+
+| 구분 | 판정 |
+|---|---|
+| 진단 도구 RF-01~03 / 일반 trainer stop | 구현자 검증 PASS / PASS |
+| 데이터 감사 | 이전 CHECKED_BOUNDARIES_PASS의4496/4092범위 유지; 새 감사 아님 |
+| 모델 성능 복구 / 원인 | NOT_ESTABLISHED / UNRESOLVED |
+| S4 최종 품질 | NO — 이전 최고 개발 QA169/336; final heldout 미실행 |
+| S5 새 사실·재시작 최종 수용 / S6 | NOT_RUN_PREREQUISITE / NOT_RUN_PREREQUISITE |
+| Goal1 완료 / 독립 검토 | NO / PENDING |
+
+## 이전: Goal1 재개 — 2026-09-17
 
 **현재 실행은 종료됐다. RESULT=PARTIAL, S4·Goal1은 미완료다.** 갱신 승인 후 실제
 SMALL3700updates/TINY16을 실행했다. 같은 원래 validation의 최고 일반 QA는

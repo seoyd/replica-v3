@@ -228,11 +228,17 @@ fn response_loss(logits: &Tensor, batch: &Batch, weight: f64) -> Result<(Tensor,
     };
     Ok((ce, objective, n))
 }
-pub fn validation_loss(model: &Transformer, samples: &[Sample]) -> Result<f64> {
+fn validation_loss(
+    model: &Transformer,
+    samples: &[Sample],
+    control: &mut recovery::RunControl,
+) -> Result<f64> {
     let mut total = 0f64;
     let mut targets = 0;
     for index in 0..samples.len() {
+        control.check("before_validation_teacher")?;
         let b = batch(samples, &[index], &model.device)?;
+        control.teacher_calls += 1;
         let (loss, n) = masked_loss(
             &model.forward(&b.input, Some(&b.valid))?,
             &b.target,
@@ -240,6 +246,7 @@ pub fn validation_loss(model: &Transformer, samples: &[Sample]) -> Result<f64> {
         )?;
         total += f64::from(loss.to_scalar::<f32>()?) * n as f64;
         targets += n;
+        control.check("validation_teacher_returned")?;
     }
     let loss = total / targets as f64;
     if !loss.is_finite() {
@@ -630,7 +637,17 @@ pub struct Run<'a> {
     pub source_id: Option<String>,
     pub replace_corpus: bool,
 }
-pub fn train(run: Run<'_>, cancel: &AtomicBool) -> Result<()> {
+pub fn train(run: Run<'_>, cancel: std::sync::Arc<AtomicBool>) -> Result<()> {
+    let mut control = recovery::RunControl::new(
+        cancel,
+        std::time::Duration::from_secs(900),
+        16 * 1024 * 1024,
+    )?;
+    train_controlled(run, &mut control)
+}
+fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<()> {
+    control.measure_rss = run.measure_rss;
+    control.check("training_started")?;
     if run.extend_steps.is_none()
         && (run.extend_microbatch.is_some()
             || run.extend_sample_group_size.is_some()
@@ -650,6 +667,7 @@ pub fn train(run: Run<'_>, cancel: &AtomicBool) -> Result<()> {
     }
     let started = Instant::now();
     let mut loaded = checkpoint::load(run.checkpoint, Device::Cpu, run.resume)?;
+    control.check("training_loaded")?;
     let mut config = if run.resume {
         loaded
             .manifest
@@ -872,6 +890,7 @@ pub fn train(run: Run<'_>, cancel: &AtomicBool) -> Result<()> {
             "trained checkpoint requires --resume".into(),
         ));
     }
+    control.check("training_prepared")?;
     std::fs::create_dir(run.output)?;
     if let Some(mut manifest) = corpus_manifest {
         manifest.train.tokens = Some(train.iter().map(|s| s.tokens.len()).sum());
@@ -885,197 +904,230 @@ pub fn train(run: Run<'_>, cancel: &AtomicBool) -> Result<()> {
             }))?,
         )?;
     }
-    let observe = || -> Result<Option<u64>> {
-        if run.measure_rss {
-            rss_kib().map(Some)
-        } else {
-            Ok(None)
-        }
-    };
-    let mut peak = observe()?;
+    let mut peak = control.last_rss_kib;
     let mut rng = Rng::new(state.sampler_state);
-    let initial_loss = validation_loss(&loaded.model, &validation)?;
-    println!(
-        "backend={} dtype=F32 profile={} parameters={} train_samples={} validation_samples={} initial_validation_loss={initial_loss:.8} numeric_overfit_only={} loaded_weight_hash={} random_initial_weight_hash={} peak_sampled_rss_KiB={peak:?}",
-        neural::cpu_backend(),
-        loaded.model.config.profile,
-        loaded.model.config.parameters(),
-        train.len(),
-        validation.len(),
-        run.numeric_probe,
-        loaded.model.weight_hash()?,
-        loaded.manifest.initial_weight_hash
-    );
-    let mut best = state.validation_loss.unwrap_or(initial_loss);
-    state.validation_loss = Some(initial_loss);
-    let mut initial = loaded.manifest.clone();
-    initial.training = Some(state.clone());
-    initial.status = "TRAINING".into();
-    checkpoint::save(
-        &run.output.join("start"),
-        &loaded.model,
-        &loaded.tokenizer,
-        initial,
-        &adam.moments,
-    )?;
-    let mut last_saved = usize::MAX;
     let mut reason = "BUDGET_REACHED";
-    while state.step < config.max_steps {
-        if cancel.load(Ordering::Relaxed) {
-            reason = "CANCELLED";
-            break;
-        }
-        if run.stop_after.is_some_and(|n| state.step >= n) {
-            reason = "TRAINING";
-            break;
-        }
-        let sampler_before = rng.state;
-        let mut gradients: BTreeMap<String, Tensor> = BTreeMap::new();
-        let mut loss_sum = 0f64;
-        let mut objective_sum = 0f64;
-        let mut targets = 0usize;
-        let mut step_tokens = 0;
-        let mut aborted = false;
-        for _ in 0..config.accumulation {
-            let pool = if state.step < config.curriculum_steps {
-                &copy_indices
-            } else {
-                &all_indices
-            };
-            let indices = draw_indices(pool, &config, &mut rng)?;
-            let b = batch(&train, &indices, &loaded.model.device)?;
-            if state
-                .consumed_tokens
-                .checked_add(b.tokens as u64)
-                .is_none_or(|n| n > config.max_tokens)
-                || cancel.load(Ordering::Relaxed)
-            {
-                aborted = true;
+    let mut last_validated = None;
+    let mut executed_input_tokens = 0u64;
+    let outcome = (|| -> Result<()> {
+        let initial_loss = validation_loss(&loaded.model, &validation, control)?;
+        last_validated = Some(state.step);
+        println!(
+            "backend={} dtype=F32 profile={} parameters={} train_samples={} validation_samples={} initial_validation_loss={initial_loss:.8} numeric_overfit_only={} loaded_weight_hash={} random_initial_weight_hash={} peak_sampled_rss_KiB={peak:?}",
+            neural::cpu_backend(),
+            loaded.model.config.profile,
+            loaded.model.config.parameters(),
+            train.len(),
+            validation.len(),
+            run.numeric_probe,
+            loaded.model.weight_hash()?,
+            loaded.manifest.initial_weight_hash
+        );
+        let mut best = state.validation_loss.unwrap_or(initial_loss);
+        state.validation_loss = Some(initial_loss);
+        let mut initial = loaded.manifest.clone();
+        initial.training = Some(state.clone());
+        initial.status = "TRAINING".into();
+        control.check("before_training_start_checkpoint")?;
+        checkpoint::save(
+            &run.output.join("start"),
+            &loaded.model,
+            &loaded.tokenizer,
+            initial,
+            &adam.moments,
+        )?;
+        control.check("training_start_checkpoint_saved")?;
+        let mut token_budget_reached = false;
+        while state.step < config.max_steps {
+            control.check("training_step")?;
+            if run.stop_after.is_some_and(|n| state.step >= n) {
+                reason = "TRAINING";
                 break;
             }
-            let (loss, objective, n) = response_loss(
-                &loaded.model.forward(&b.input, Some(&b.valid))?,
-                &b,
-                config.first_target_weight,
-            )?;
-            let value = f64::from(loss.to_scalar::<f32>()?);
-            let objective_value = f64::from(objective.to_scalar::<f32>()?);
-            if !value.is_finite() || !objective_value.is_finite() {
-                return Err(Error::Model(
-                    "nonfinite training loss; previous checkpoint retained".into(),
-                ));
-            }
-            let grads = objective.backward()?;
-            state.consumed_tokens += b.tokens as u64;
-            step_tokens += b.tokens;
-            loss_sum += value * n as f64;
-            objective_sum += objective_value * n as f64;
-            targets += n;
-            for (name, var) in &loaded.model.vars {
-                let g = grads
-                    .get(var)
-                    .ok_or_else(|| Error::Model(format!("missing gradient {name}")))?;
-                let weighted = (g * n as f64)?.detach();
-                let accumulated = match gradients.remove(name) {
-                    Some(old) => (old + weighted)?,
-                    None => weighted,
+            let sampler_before = rng.state;
+            let mut gradients: BTreeMap<String, Tensor> = BTreeMap::new();
+            let mut loss_sum = 0f64;
+            let mut objective_sum = 0f64;
+            let mut targets = 0usize;
+            let mut step_tokens = 0;
+            let mut aborted = false;
+            for _ in 0..config.accumulation {
+                control.check("before_training_microbatch")?;
+                let pool = if state.step < config.curriculum_steps {
+                    &copy_indices
+                } else {
+                    &all_indices
                 };
-                gradients.insert(name.clone(), accumulated.detach());
-            }
-        }
-        if aborted {
-            rng.state = sampler_before;
-            if cancel.load(Ordering::Relaxed) {
-                reason = "CANCELLED";
-            }
-            break;
-        }
-        for gradient in gradients.values_mut() {
-            *gradient = (&*gradient / targets as f64)?;
-        }
-        let (grad_norm, delta) =
-            adam.step(&loaded.model.vars, &gradients, &config, state.step + 1)?;
-        state.step += 1;
-        state.target_tokens += targets as u64;
-        state.sampler_state = rng.state;
-        state.train_loss = Some(loss_sum / targets as f64);
-        let rss = observe()?;
-        peak = peak.max(rss);
-        println!(
-            "step={} loss={:.8} objective={:.8} first_target_weight={} grad_norm={grad_norm:.8} weight_delta_l2={delta:.8} lr={:.8} consumed_tokens={} target_tokens={} step_tokens={step_tokens} elapsed_s={:.3} rss_KiB={rss:?} peak_sampled_rss_KiB={peak:?}",
-            state.step,
-            state.train_loss.expect("observed"),
-            objective_sum / targets as f64,
-            config.first_target_weight,
-            config.learning_rate(state.step),
-            state.consumed_tokens,
-            state.target_tokens,
-            started.elapsed().as_secs_f64()
-        );
-        if state.step == 1 {
-            println!(
-                "after_first_update_weight_hash={}",
-                loaded.model.weight_hash()?
-            );
-        }
-        if rss.is_some_and(|n| n > 16 * 1024 * 1024) {
-            reason = "RESOURCE_LIMIT";
-            eprintln!("RESOURCE_LIMIT: sampled RSS exceeded 16 GiB");
-            break;
-        }
-        if state.step.is_multiple_of(config.validate_every) || state.step == config.max_steps {
-            let value = validation_loss(&loaded.model, &validation)?;
-            state.validation_loss = Some(value);
-            println!(
-                "validation step={} loss={value:.8} samples={} selection=VALIDATION_ONLY",
-                state.step,
-                validation.len()
-            );
-            let improved = value < best;
-            best = best.min(value);
-            loaded.model.refresh_identity()?;
-            let mut manifest = loaded.manifest.clone();
-            manifest.training = Some(state.clone());
-            manifest.status = "TRAINING".into();
-            let path = run.output.join(format!("step-{:06}", state.step));
-            let m = checkpoint::save(
-                &path,
-                &loaded.model,
-                &loaded.tokenizer,
-                manifest,
-                &adam.moments,
-            )?;
-            println!(
-                "checkpoint={} sha256={} best_validation={improved}",
-                path.display(),
-                m.weights_sha256
-            );
-            last_saved = state.step;
-            if improved {
-                let record = serde_json::json!({"checkpoint":path.file_name(),"validation_loss":value,"step":state.step});
-                neural::write_new(
-                    &run.output.join(format!("best-{:06}.json", state.step)),
-                    &serde_json::to_vec(&record)?,
+                let indices = draw_indices(pool, &config, &mut rng)?;
+                let b = batch(&train, &indices, &loaded.model.device)?;
+                if state
+                    .consumed_tokens
+                    .checked_add(b.tokens as u64)
+                    .is_none_or(|n| n > config.max_tokens)
+                {
+                    aborted = true;
+                    break;
+                }
+                let (loss, objective, n) = response_loss(
+                    &loaded.model.forward(&b.input, Some(&b.valid))?,
+                    &b,
+                    config.first_target_weight,
                 )?;
+                let value = f64::from(loss.to_scalar::<f32>()?);
+                let objective_value = f64::from(objective.to_scalar::<f32>()?);
+                if !value.is_finite() || !objective_value.is_finite() {
+                    return Err(Error::Model(
+                        "nonfinite training loss; previous checkpoint retained".into(),
+                    ));
+                }
+                let grads = objective.backward()?;
+                // Work already executed counts against the budget even if this
+                // accumulation is cancelled before the atomic optimizer update.
+                state.consumed_tokens += b.tokens as u64;
+                executed_input_tokens += b.tokens as u64;
+                step_tokens += b.tokens;
+                loss_sum += value * n as f64;
+                objective_sum += objective_value * n as f64;
+                targets += n;
+                for (name, var) in &loaded.model.vars {
+                    let g = grads
+                        .get(var)
+                        .ok_or_else(|| Error::Model(format!("missing gradient {name}")))?;
+                    let weighted = (g * n as f64)?.detach();
+                    let accumulated = match gradients.remove(name) {
+                        Some(old) => (old + weighted)?,
+                        None => weighted,
+                    };
+                    gradients.insert(name.clone(), accumulated.detach());
+                }
+                control.check("training_microbatch_returned")?;
+            }
+            if aborted {
+                rng.state = sampler_before;
+                token_budget_reached = true;
+                break;
+            }
+            for gradient in gradients.values_mut() {
+                *gradient = (&*gradient / targets as f64)?;
+            }
+            control.check("before_training_optimizer")?;
+            let (grad_norm, delta) =
+                adam.step(&loaded.model.vars, &gradients, &config, state.step + 1)?;
+            state.step += 1;
+            state.target_tokens += targets as u64;
+            state.sampler_state = rng.state;
+            state.train_loss = Some(loss_sum / targets as f64);
+            state.validation_loss = None;
+            control.check("training_optimizer_returned")?;
+            let rss = control.last_rss_kib;
+            peak = peak.max(rss);
+            println!(
+                "step={} loss={:.8} objective={:.8} first_target_weight={} grad_norm={grad_norm:.8} weight_delta_l2={delta:.8} lr={:.8} consumed_tokens={} target_tokens={} step_tokens={step_tokens} elapsed_s={:.3} rss_KiB={rss:?} peak_sampled_rss_KiB={peak:?}",
+                state.step,
+                state.train_loss.expect("observed"),
+                objective_sum / targets as f64,
+                config.first_target_weight,
+                config.learning_rate(state.step),
+                state.consumed_tokens,
+                state.target_tokens,
+                started.elapsed().as_secs_f64()
+            );
+            if state.step == 1 {
+                println!(
+                    "after_first_update_weight_hash={}",
+                    loaded.model.weight_hash()?
+                );
+            }
+            if state.step.is_multiple_of(config.validate_every) || state.step == config.max_steps {
+                let value = validation_loss(&loaded.model, &validation, control)?;
+                last_validated = Some(state.step);
+                state.validation_loss = Some(value);
+                println!(
+                    "validation step={} loss={value:.8} samples={} selection=VALIDATION_ONLY",
+                    state.step,
+                    validation.len()
+                );
+                let improved = value < best;
+                best = best.min(value);
+                loaded.model.refresh_identity()?;
+                let mut manifest = loaded.manifest.clone();
+                manifest.training = Some(state.clone());
+                manifest.status = "TRAINING".into();
+                let path = run.output.join(format!("step-{:06}", state.step));
+                control.check("before_training_checkpoint")?;
+                let m = checkpoint::save(
+                    &path,
+                    &loaded.model,
+                    &loaded.tokenizer,
+                    manifest,
+                    &adam.moments,
+                )?;
+                control.check("training_checkpoint_saved")?;
+                println!(
+                    "checkpoint={} sha256={} best_validation={improved}",
+                    path.display(),
+                    m.weights_sha256
+                );
+                if improved {
+                    let record = serde_json::json!({"checkpoint":path.file_name(),"validation_loss":value,"step":state.step});
+                    neural::write_new(
+                        &run.output.join(format!("best-{:06}.json", state.step)),
+                        &serde_json::to_vec(&record)?,
+                    )?;
+                }
             }
         }
+        if !token_budget_reached && last_validated != Some(state.step) {
+            state.validation_loss = Some(validation_loss(&loaded.model, &validation, control)?);
+            last_validated = Some(state.step);
+        }
+        Ok(())
+    })();
+    if let Err(error) = &outcome {
+        control.classify_error(error);
     }
-    state.sampler_state = rng.state;
-    if state.validation_loss.is_none() || last_saved != state.step {
-        state.validation_loss = Some(validation_loss(&loaded.model, &validation)?);
-    }
-    loaded.model.refresh_identity()?;
+    let _ = control.check("before_training_preservation");
+    let work_elapsed = started.elapsed().as_secs_f64();
+    let cleanup = Instant::now();
+    let saved_reason = control.reason().unwrap_or(reason);
     let mut manifest = loaded.manifest;
     manifest.training = Some(state.clone());
-    manifest.status = reason.into();
+    manifest.status = match saved_reason {
+        "CANCELLED" | "RESOURCE_LIMIT" => saved_reason,
+        "TIME_BUDGET" => "BUDGET_EXHAUSTED",
+        "INTEGRITY_FAIL" | "RESOURCE_OBSERVATION_FAILED" => "TRAINING",
+        _ => reason,
+    }
+    .into();
     let path = run.output.join("final");
-    let saved = checkpoint::save(
-        &path,
-        &loaded.model,
-        &loaded.tokenizer,
-        manifest,
-        &adam.moments,
-    )?;
+    let saved = loaded.model.refresh_identity().and_then(|_| {
+        checkpoint::save(
+            &path,
+            &loaded.model,
+            &loaded.tokenizer,
+            manifest,
+            &adam.moments,
+        )
+    });
+    if let Err(error) = &saved {
+        control.classify_error(error);
+    }
+    let _ = control.check("training_checkpoint_preserved");
+    let _ = control.seal_terminal();
+    reason = control.reason().unwrap_or(reason);
+    let mut receipt = control.receipt();
+    receipt["reason"] = serde_json::json!(reason);
+    receipt["checkpoint_saved"] = serde_json::json!(saved.is_ok());
+    receipt["checkpoint_save_status_reason"] = serde_json::json!(saved_reason);
+    receipt["save_error"] = serde_json::json!(saved.as_ref().err().map(ToString::to_string));
+    receipt["work_error"] = serde_json::json!(outcome.as_ref().err().map(ToString::to_string));
+    receipt["work_elapsed_seconds"] = serde_json::json!(work_elapsed);
+    receipt["cleanup_elapsed_seconds"] = serde_json::json!(cleanup.elapsed().as_secs_f64());
+    receipt["final_evaluation_complete"] = serde_json::json!(last_validated == Some(state.step));
+    receipt["executed_input_tokens_including_uncommitted"] =
+        serde_json::json!(executed_input_tokens);
+    receipt["candidate_eligible"] = serde_json::json!(false);
+    println!("TRAIN_CONTROL {receipt}");
     println!(
         "TRAIN_END reason={reason} steps={} consumed_tokens={} target_tokens={} train_loss={:?} validation_loss={:?} elapsed_s={:.3} peak_sampled_rss_KiB={peak:?} checkpoint={} sha256={} exact_resume=optimizer_boundary task_quality=NOT_EVALUATED",
         state.step,
@@ -1085,15 +1137,11 @@ pub fn train(run: Run<'_>, cancel: &AtomicBool) -> Result<()> {
         state.validation_loss,
         started.elapsed().as_secs_f64(),
         path.display(),
-        saved.weights_sha256
+        saved
+            .as_ref()
+            .map_or("NOT_SAVED", |m| m.weights_sha256.as_str())
     );
-    match reason {
-        "CANCELLED" => Err(Error::Cancelled),
-        "RESOURCE_LIMIT" => Err(Error::Model(
-            "training RSS limit; boundary checkpoint saved".into(),
-        )),
-        _ => Ok(()),
-    }
+    control.stop_result().and(outcome).and(saved.map(|_| ()))
 }
 
 #[cfg(test)]

@@ -2014,12 +2014,15 @@ fn native_training_cancel_keeps_optimizer_boundary_checkpoint() {
     let reader = child.stdout.take().unwrap();
     let (send, receive) = std::sync::mpsc::channel();
     let observer = std::thread::spawn(move || {
+        let mut lines = Vec::new();
         for line in BufReader::new(reader).lines() {
             let line = line.unwrap();
             if line.starts_with("step=") {
                 let _ = send.send(());
             }
+            lines.push(line);
         }
+        lines
     });
     if receive.recv_timeout(Duration::from_secs(10)).is_err() {
         child.kill().unwrap();
@@ -2034,12 +2037,36 @@ fn native_training_cancel_keeps_optimizer_boundary_checkpoint() {
             .success()
     );
     let result = child.wait_with_output().unwrap();
-    observer.join().unwrap();
+    let lines = observer.join().unwrap();
     assert!(!result.status.success());
     assert!(String::from_utf8_lossy(&result.stderr).contains("cancelled"));
     let restored = checkpoint::load(&output.join("final"), Device::Cpu, true).unwrap();
     assert_eq!(restored.manifest.status, "CANCELLED");
-    assert!(restored.manifest.training.unwrap().step >= 1);
+    let state = restored.manifest.training.unwrap();
+    assert!(state.step >= 1);
+    eprintln!(
+        "cancel integration actual TINY optimizer updates={}",
+        state.step
+    );
+    let receipt: serde_json::Value = serde_json::from_str(
+        lines
+            .iter()
+            .find_map(|line| line.strip_prefix("TRAIN_CONTROL "))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(receipt["reason"], "CANCELLED");
+    assert_eq!(receipt["checkpoint_saved"], true);
+    assert_eq!(receipt["work_budget_seconds"], 900.);
+    assert_eq!(
+        receipt["teacher_calls"], 2,
+        "cancel must not launch final validation"
+    );
+    assert_eq!(receipt["final_evaluation_complete"], false);
+    assert_eq!(
+        state.validation_loss, None,
+        "previous-step CE must not label new weights"
+    );
     assert!(!restored.optimizer.is_empty());
 }
 

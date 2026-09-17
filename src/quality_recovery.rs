@@ -38,7 +38,8 @@ pub(super) struct RunControl {
     start: Instant,
     deadline: Instant,
     max_rss_kib: u64,
-    last_rss_kib: Option<u64>,
+    pub(super) last_rss_kib: Option<u64>,
+    pub(super) measure_rss: bool,
     stop: Option<StopReason>,
     observed: Vec<StopReason>,
     terminal: bool,
@@ -46,7 +47,7 @@ pub(super) struct RunControl {
     completed_generation_count: usize,
     attempted_case_count: usize,
     interrupted_case_id: Option<String>,
-    teacher_calls: usize,
+    pub(super) teacher_calls: usize,
     #[cfg(test)]
     elapsed_override: Option<Duration>,
     #[cfg(test)]
@@ -54,7 +55,11 @@ pub(super) struct RunControl {
     hook: Option<Box<dyn FnMut(&str, &Arc<AtomicBool>)>>,
 }
 impl RunControl {
-    fn new(cancel: Arc<AtomicBool>, duration: Duration, max_rss_kib: u64) -> Result<Self> {
+    pub(super) fn new(
+        cancel: Arc<AtomicBool>,
+        duration: Duration,
+        max_rss_kib: u64,
+    ) -> Result<Self> {
         let start = Instant::now();
         let deadline = start
             .checked_add(duration)
@@ -65,6 +70,7 @@ impl RunControl {
             deadline,
             max_rss_kib,
             last_rss_kib: None,
+            measure_rss: true,
             stop: None,
             observed: vec![],
             terminal: false,
@@ -114,10 +120,7 @@ impl RunControl {
             Some(r) => Err(Error::Model(r.name().into())),
         }
     }
-    fn check_at(&mut self, now: Instant, rss: Result<u64>) -> Result<()> {
-        if self.terminal {
-            return self.stop_result();
-        }
+    fn check_time(&mut self, now: Instant) {
         // Simultaneous observation priority: user cancel, deadline, RSS failure, RSS limit.
         if self.cancel.load(Ordering::Relaxed) {
             self.observe(StopReason::Cancelled);
@@ -125,6 +128,12 @@ impl RunControl {
         if now >= self.deadline {
             self.observe(StopReason::TimeBudget);
         }
+    }
+    fn check_at(&mut self, now: Instant, rss: Result<u64>) -> Result<()> {
+        if self.terminal {
+            return self.stop_result();
+        }
+        self.check_time(now);
         self.last_rss_kib = rss.as_ref().ok().copied();
         match rss {
             Err(_) => self.observe(StopReason::ResourceObservationFailed),
@@ -140,8 +149,15 @@ impl RunControl {
         }
         #[cfg(not(test))]
         let _ = boundary;
-        let rss = rss_kib();
-        self.check_at(self.now(), rss)
+        if self.measure_rss {
+            let rss = rss_kib();
+            self.check_at(self.now(), rss)
+        } else {
+            if !self.terminal {
+                self.check_time(self.now());
+            }
+            self.stop_result()
+        }
     }
     fn effective_timeout(&mut self, original: u64) -> Result<u64> {
         self.check("generation_budget")?;
@@ -160,7 +176,7 @@ impl RunControl {
         }
         Ok(original.min(remaining))
     }
-    fn classify_error(&mut self, e: &Error) {
+    pub(super) fn classify_error(&mut self, e: &Error) {
         if matches!(e, Error::Cancelled) {
             self.observe(StopReason::Cancelled);
         } else if self.stop.is_none() {
@@ -181,10 +197,13 @@ impl RunControl {
         self.terminal = true;
         result
     }
-    fn receipt(&self) -> Value {
+    pub(super) fn reason(&self) -> Option<&'static str> {
+        self.stop.map(StopReason::name)
+    }
+    pub(super) fn receipt(&self) -> Value {
         json!({"terminal_reason":self.stop.map(StopReason::name).or_else(||self.terminal.then_some("COMPLETED")),"observed_conditions":self.observed,"generation_calls":self.generation_calls,"teacher_calls":self.teacher_calls,"completed_generation_count":self.completed_generation_count,"attempted_case_count":self.attempted_case_count,"interrupted_case_id":self.interrupted_case_id,
             "elapsed_seconds":self.now().duration_since(self.start).as_secs_f64(),"work_budget_seconds":self.deadline.duration_since(self.start).as_secs_f64(),
-            "work_deadline_overrun_seconds":self.now().saturating_duration_since(self.deadline).as_secs_f64(),"cooperative_only":true})
+            "work_deadline_overrun_seconds":self.now().saturating_duration_since(self.deadline).as_secs_f64(),"rss_observation_enabled":self.measure_rss,"cooperative_only":true})
     }
 }
 
@@ -3203,6 +3222,222 @@ mod tests {
             tokenizer: tok,
             manifest,
             optimizer: BTreeMap::new(),
+        }
+    }
+    fn training_run<'a>(checkpoint: &'a Path, output: &'a Path) -> Run<'a> {
+        Run {
+            checkpoint,
+            corpus: None,
+            output,
+            resume: false,
+            numeric_probe: true,
+            config: TrainConfig {
+                max_steps: 1,
+                warmup: 0,
+                seq_len: 64,
+                accumulation: 2,
+                ..TrainConfig::default()
+            },
+            stop_after: None,
+            measure_rss: true,
+            extend_steps: None,
+            extend_microbatch: None,
+            extend_sample_group_size: None,
+            extend_curriculum_steps: None,
+            extend_first_target_weight: None,
+            extend_lr: None,
+            extend_warmup: None,
+            source_id: None,
+            replace_corpus: false,
+        }
+    }
+    fn training_initial(path: &Path) -> Loaded {
+        let l = repair_loaded();
+        checkpoint::save(
+            path,
+            &l.model,
+            &l.tokenizer,
+            l.manifest.clone(),
+            &l.optimizer,
+        )
+        .unwrap();
+        l
+    }
+    #[test]
+    fn repair_training_precancel_and_deadline_do_no_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let initial = dir.path().join("initial");
+        training_initial(&initial);
+        for expired in [false, true] {
+            let output = dir.path().join(format!("stopped-{expired}"));
+            let mut c = repair_control();
+            if expired {
+                c.elapsed_override = Some(Duration::from_secs(60));
+            } else {
+                c.cancel.store(true, Ordering::Relaxed);
+            }
+            let result = train_controlled(training_run(&initial, &output), &mut c);
+            assert!(result.is_err());
+            assert_eq!(c.teacher_calls, 0);
+            assert!(
+                !output.exists(),
+                "pre-stopped command must not start validation/save"
+            );
+        }
+    }
+    #[test]
+    fn repair_training_teacher_cancel_saves_without_more_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        let initial = dir.path().join("initial");
+        let output = dir.path().join("cancelled");
+        let l = training_initial(&initial);
+        let mut c = repair_control();
+        c.hook = Some(Box::new(|boundary, flag| {
+            if boundary == "validation_teacher_returned" {
+                flag.store(true, Ordering::Relaxed);
+            }
+        }));
+        assert!(matches!(
+            train_controlled(training_run(&initial, &output), &mut c),
+            Err(Error::Cancelled)
+        ));
+        assert_eq!(c.teacher_calls, 1);
+        let saved = checkpoint::load(&output.join("final"), Device::Cpu, true).unwrap();
+        assert_eq!(saved.manifest.status, "CANCELLED");
+        assert_eq!(
+            saved.model.weight_hash().unwrap(),
+            l.model.weight_hash().unwrap()
+        );
+        let state = saved.manifest.training.unwrap();
+        assert_eq!(state.step, 0);
+        assert_eq!(
+            state.validation_loss, None,
+            "partial CE is not a complete validation"
+        );
+    }
+    #[test]
+    fn repair_training_aborted_accumulation_keeps_weights_rng_and_token_accounting() {
+        let dir = tempfile::tempdir().unwrap();
+        let initial = dir.path().join("initial");
+        let l = training_initial(&initial);
+        for cancellation in [false, true] {
+            let output = dir.path().join(format!("abort-{cancellation}"));
+            let mut run = training_run(&initial, &output);
+            let mut c = repair_control();
+            let samples = numeric_samples(&l.tokenizer).unwrap();
+            let pool: Vec<_> = (0..samples.len()).collect();
+            let mut rng = Rng::new(run.config.seed);
+            let first_indices = draw_indices(&pool, &run.config, &mut rng).unwrap();
+            let first_input = batch(&samples, &first_indices, &Device::Cpu)
+                .unwrap()
+                .tokens as u64;
+            if cancellation {
+                c.hook = Some(Box::new(|boundary, flag| {
+                    if boundary == "training_microbatch_returned" {
+                        flag.store(true, Ordering::Relaxed);
+                    }
+                }));
+            } else {
+                let second_indices = draw_indices(&pool, &run.config, &mut rng).unwrap();
+                let second_input = batch(&samples, &second_indices, &Device::Cpu)
+                    .unwrap()
+                    .tokens as u64;
+                run.config.max_tokens = first_input + second_input - 1;
+            }
+            let seed = run.config.seed;
+            let result = train_controlled(run, &mut c);
+            if cancellation {
+                assert!(matches!(result, Err(Error::Cancelled)));
+            } else {
+                result.unwrap();
+            }
+            let saved = checkpoint::load(&output.join("final"), Device::Cpu, true).unwrap();
+            let state = saved.manifest.training.unwrap();
+            assert_eq!(state.step, 0);
+            assert_eq!(
+                state.consumed_tokens, first_input,
+                "aborted computation must still consume budget"
+            );
+            assert_eq!(state.target_tokens, 0);
+            assert_eq!(state.sampler_state, seed);
+            assert_eq!(
+                saved.model.weight_hash().unwrap(),
+                l.model.weight_hash().unwrap()
+            );
+            for moment in saved.optimizer.values() {
+                assert!(
+                    moment
+                        .flatten_all()
+                        .unwrap()
+                        .to_vec1::<f32>()
+                        .unwrap()
+                        .iter()
+                        .all(|v| *v == 0.)
+                );
+            }
+            assert_eq!(
+                c.teacher_calls, 2,
+                "no final re-evaluation after an aborted update"
+            );
+        }
+    }
+    #[test]
+    fn repair_training_save_failure_keeps_cancel_and_existing_artifact() {
+        let dir = tempfile::tempdir().unwrap();
+        let initial = dir.path().join("initial");
+        let output = dir.path().join("cancelled");
+        training_initial(&initial);
+        let final_path = output.join("final");
+        let existing = final_path.clone();
+        let mut c = repair_control();
+        c.hook = Some(Box::new(move |boundary, flag| {
+            if boundary == "validation_teacher_returned" {
+                std::fs::write(&existing, b"existing artifact must survive").unwrap();
+                flag.store(true, Ordering::Relaxed);
+            }
+        }));
+        assert!(matches!(
+            train_controlled(training_run(&initial, &output), &mut c),
+            Err(Error::Cancelled)
+        ));
+        assert_eq!(c.reason(), Some("CANCELLED"));
+        assert_eq!(c.teacher_calls, 1);
+        assert_eq!(
+            std::fs::read(final_path).unwrap(),
+            b"existing artifact must survive"
+        );
+    }
+    #[test]
+    fn repair_training_terminal_cancel_and_positive_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        let initial = dir.path().join("initial");
+        training_initial(&initial);
+        for boundary in ["training_checkpoint_preserved", "terminal", "never"] {
+            let output = dir.path().join(boundary);
+            let mut c = repair_control();
+            c.hook = Some(Box::new(move |at, flag| {
+                if at == boundary {
+                    flag.store(true, Ordering::Relaxed);
+                }
+            }));
+            let mut run = training_run(&initial, &output);
+            run.stop_after = Some(0); // Exercise finalization without optimizer work.
+            run.measure_rss = boundary != "never";
+            let result = train_controlled(run, &mut c);
+            if boundary == "never" {
+                result.unwrap();
+                assert_eq!(c.receipt()["terminal_reason"], "COMPLETED");
+                assert_eq!(c.receipt()["rss_observation_enabled"], false);
+                assert_eq!(c.last_rss_kib, None);
+                c.cancel.store(true, Ordering::Relaxed);
+                c.check("after_terminal").unwrap();
+            } else {
+                assert!(matches!(result, Err(Error::Cancelled)), "{boundary}");
+                assert_eq!(c.receipt()["terminal_reason"], "CANCELLED");
+            }
+            assert_eq!(c.teacher_calls, 2);
+            let saved = checkpoint::load(&output.join("final"), Device::Cpu, true).unwrap();
+            assert_eq!(saved.manifest.training.unwrap().step, 0);
         }
     }
     fn repair_episode(id: &str) -> Episode {

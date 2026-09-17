@@ -1,8 +1,55 @@
 # Diagnostic repair and bounded quality recovery
 
-Current: renewed C/L/B/P/T runs CLOSED, NOT_RUNNING. Implementation and actual training
-verified; S4 quality and Goal1 remain incomplete. T closed after three consecutive evaluations
-without a new best and its2000-update cap. No automatic extension of this negative closure.
+Current: ordinary trainer cancellation follow-through verified; C/L/B/P/T learning runs
+remain CLOSED, NOT_RUNNING. S4 quality and Goal1 remain incomplete. T closed after three
+consecutive evaluations without a new best and its2000-update cap. No automatic extension
+of this negative closure.
+
+## Ordinary trainer stop boundary — 2026-09-17
+
+Baseline32a633200950c820c22d50508b65c814bbd2837c. On continuation, inspection of the actual
+`train` caller found that RF-03's existing diagnostic RunControl was not used by ordinary
+training validation/finalization. An already-set flag still allowed initial validation,
+teacher validation had no intermediate cancellation/deadline check, and final validation
+could run after cancellation. This is a control defect; no evidence links it to the prior
+QA regression. Scope: reuse the same RunControl in this caller, preserve training arithmetic,
+schedule/Adam/tokenizer/corpus/native schema and all original artifacts, no SMALL learning.
+
+The CLI passes its actual Arc flag. A900-second command deadline covers load/preparation,
+validation teacher calls, microbatches, the atomic optimizer boundary, checkpoint save and
+terminal emission. The existing --no-rss opt-out remains explicit in the receipt; it does
+not turn observation failure into a zero measurement. Stop skips subsequent validation and
+updates, preserves the consistent native state, and reports the first reason independently
+of cleanup/save errors. Ordinary successful resume retains exact weights/Adam/RNG/loss.
+
+Track the step of the last completed validation so stale CE is not attached to newly updated
+weights after interruption. Keep actual consumed input tokens, including completed gradient
+work in an aborted accumulation, while weights/Adam/sampler remain at the completed update.
+The initial proposed zero-consumption assertion was incorrect and withdrawn; the raw failed
+test is preserved. This is not reported as an original token-accounting defect. Receipts show
+executed inputs including uncommitted work, final-validation completeness, save/error details,
+and work/cleanup/overrun time. Native status vocabulary is unchanged; cancellation observed
+after publication is reported by TRAIN_CONTROL/exit status without rewriting that artifact.
+
+Verification: pre-cancel/deadline, interrupted real TINY teacher, aborted accumulation budget
+accounting, final-save/terminal cancellation, cleanup collision, normal completion/no-rss,
+actual CLI SIGINT, and fresh-process exact resume. Test-only hooks reuse the existing private
+control; no alternate model or scheduler. Recheck the existing RF/gold-independence/ledger/
+tape-clock cases and pinned offline fmt/check/clippy/release. Only directly related tests run.
+Original R4 audit/recount/66-generation parity are historical completed evidence, not rerun or
+counted as new results. Preserve source/test logs under artifacts/training-stop-20260917.
+
+S4 remains below the unchanged95%/90% gates. No new corpus, memorization retest, C/W repeat,
+SMALL update, final heldout, S5 acceptance or S6 work is added by this control repair. Existing
+training authorization remains recorded; the exhausted negative T run is not automatically
+extended. Repair completion, data-audit scope, quality recovery and Goal1 are separate verdicts.
+
+Observed closure:21distinct directly related tests passed, plus pinned offline fmt/check/
+clippy/release. SMALL updates0; TINY35 including one failed-red optimizer update and two
+16-update exact-resume/one-update SIGINT test executions. Original17files and P/T8native
+checkpoints match their preserved SHA256 manifests; existing487untracked files remain.
+No new source/dependency/fixture file. Source manifest digest:
+4983c44575e8113b9848bee1566193648e35ca2a2a8adb07c0147bcc63b58503.
 
 ## Renewed Goal 1 continuation — authorized 2026-09-17
 

@@ -520,7 +520,7 @@ fn run() -> Result<()> {
                     source_id,
                     replace_corpus,
                 },
-                &cancel,
+                cancel,
             )
         }
         Commands::Tokenizer {
