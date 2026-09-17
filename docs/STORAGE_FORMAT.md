@@ -335,3 +335,29 @@ is a schema-deduplication-and-codec comparison. Full input snapshot4006623B also
 unused training/other panels. All existing diagnostic fields are retained. Encode,
 verification and durable write were not uniformly faster; EXPERIMENT_STATUS records
 the exact workload, timing table and RSS limitations. Benchmark JSON is noncanonical.
+
+R3ER kind6 is an explicitly authorized anchor-pair input snapshot. Existing kind1
+bytes and readers remain unchanged; older readers reject kind6. Its body is the
+existing input body followed by pair/baseline/expected-parent SHA256s, anchor count
+u8 and two bounded vectors of training ordinals. Its input identity has the separate
+`R3ER-anchor-input-v1` domain. The approved purpose is R3-NATIVE-STORAGE-QUALITY-1.0,
+F512 step23798 with Adam, C50(4/4) or A75(6/2),512 updates,2M input/500K target tokens.
+Preparation verifies exact original anchor contents and frozen pool membership before
+publishing both registrations. Corpus provenance uses explicit read-only legacy import;
+run/evaluation/resume/close consume the owned binary input only. Source and executable
+hashes must match registration before training. Historical imports still cannot resume.
+
+Pool shuffles are deterministic training-only master streams, separately seeded from
+the inherited sampler. Both ratios use the same per-pool sequence and reset to that
+pool's original order before each reshuffle cycle. The immutable full tape records
+every batch ordinal, actual input/target denominator and continuation cursor. Different
+ratios imply different draw/token totals; no padding or token-equality claim is made.
+Dev/CROSS/ordinary are evaluated together at256/512 with normal greedy and no teacher;
+watch rows are the exact registered ordinary subset. The same existing trainer/loss/
+Adam retains absolute clock and the inherited constant1e-4 LR.
+
+Each command publishes an additional immutable segment-shaped `command.r3er` after
+close/stop, recording elapsed command time through that boundary. It does not replace
+the original terminal. Pair budget counts these records across both arms; an unclosed
+command blocks automatic retry. Pair caps are1024 updates,7500 generations and7200s;
+segment1800s with bounded120s cleanup. A terminal's clean time resume cannot reset them.

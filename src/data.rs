@@ -179,7 +179,7 @@ pub fn load(root: &Path) -> Result<(CorpusManifest, Vec<Episode>, Vec<Episode>)>
     check_split(&train, &validation)?;
     Ok((manifest, train, validation))
 }
-fn check_split(train: &[Episode], validation: &[Episode]) -> Result<()> {
+pub(crate) fn check_split(train: &[Episode], validation: &[Episode]) -> Result<()> {
     for field in [0, 1, 2, 3] {
         let value = |e: &Episode| match field {
             0 => e.id.clone(),

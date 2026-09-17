@@ -224,7 +224,7 @@ fn validate<'a>(
     }
     Ok(tensors)
 }
-pub(super) fn validate_metadata(m: &Manifest, tok: &ByteBpe) -> Result<()> {
+pub fn validate_metadata(m: &Manifest, tok: &ByteBpe) -> Result<()> {
     m.architecture.validate()?;
     if m.version != 1
         || m.dtype != "F32"

@@ -16,6 +16,7 @@ const MAX_ROWS: usize = 512;
 const MAX_TOKENS: usize = 2048;
 const MAX_TEXT: usize = 262144;
 const CONTRACT: &str = "R3-BINARY-EVAL-RESUME-1.0";
+const ANCHOR_CONTRACT: &str = "R3-NATIVE-STORAGE-QUALITY-1.0";
 
 fn bad(s: &str) -> Error {
     Error::Corrupt(format!("R3ER: {s}"))
@@ -283,6 +284,37 @@ struct Draw {
     target: u64,
 }
 #[derive(Clone, Debug, Serialize)]
+struct AnchorAuthorization {
+    pair: Hash,
+    baseline: Hash,
+    expected_parent: Hash,
+    anchors: u8,
+    pools: [Vec<u32>; 2],
+}
+impl AnchorAuthorization {
+    fn encode(&self, b: &mut Vec<u8>) {
+        for h in [self.pair, self.baseline, self.expected_parent] {
+            b.extend(h);
+        }
+        b.push(self.anchors);
+        for pool in &self.pools {
+            integers(b, pool);
+        }
+    }
+    fn decode(r: &mut Reader<'_>) -> Result<Self> {
+        Ok(Self {
+            pair: digest_read(r)?,
+            baseline: digest_read(r)?,
+            expected_parent: digest_read(r)?,
+            anchors: r.byte()?,
+            pools: [integers_read(r, MAX_CASES)?, integers_read(r, MAX_CASES)?],
+        })
+    }
+    fn name(&self) -> &'static str {
+        if self.anchors == 4 { "C50" } else { "A75" }
+    }
+}
+#[derive(Clone, Debug, Serialize)]
 struct RunSnapshot {
     contract: String,
     run: Hash,
@@ -302,6 +334,7 @@ struct RunSnapshot {
     lr_offset: u64,
     baseline: [u64; 3],
     anchor_floor: u64,
+    authorization: Option<AnchorAuthorization>,
 }
 
 fn episode_encode(e: &Episode, b: &mut Vec<u8>) {
@@ -476,9 +509,16 @@ impl RunSnapshot {
             put_varint(b, n);
         }
         put_varint(b, self.anchor_floor);
+        if let Some(a) = &self.authorization {
+            a.encode(b);
+        }
     }
     fn binding(&self) -> Hash {
-        let mut b = b"R3ER-input-binding-v1\0".to_vec();
+        let mut b = if self.authorization.is_some() {
+            b"R3ER-anchor-input-v1\0".to_vec()
+        } else {
+            b"R3ER-input-binding-v1\0".to_vec()
+        };
         string(&mut b, &self.contract);
         for h in [
             self.run,
@@ -501,7 +541,7 @@ impl RunSnapshot {
         self.content(&mut b);
         hash(&b)
     }
-    fn decode(r: &mut Reader<'_>) -> Result<Self> {
+    fn decode(r: &mut Reader<'_>, authorized: bool) -> Result<Self> {
         let contract = text(r)?;
         let run = digest_read(r)?;
         let policy = digest_read(r)?;
@@ -542,6 +582,11 @@ impl RunSnapshot {
         let lr_offset = r.var()?;
         let baseline = [r.var()?, r.var()?, r.var()?];
         let anchor_floor = r.var()?;
+        let authorization = if authorized {
+            Some(AnchorAuthorization::decode(r)?)
+        } else {
+            None
+        };
         let s = Self {
             contract,
             run,
@@ -561,12 +606,18 @@ impl RunSnapshot {
             lr_offset,
             baseline,
             anchor_floor,
+            authorization,
         };
         s.validate()?;
         Ok(s)
     }
     fn validate(&self) -> Result<()> {
-        if self.contract != CONTRACT
+        if self.contract
+            != if self.authorization.is_some() {
+                ANCHOR_CONTRACT
+            } else {
+                CONTRACT
+            }
             || self.parent.run != self.run
             || self.cases.is_empty()
             || self.lr_policy > 1
@@ -610,6 +661,49 @@ impl RunSnapshot {
         for d in &self.tape {
             if d.indices.is_empty() || d.indices.iter().any(|n| *n as usize >= self.train.len()) {
                 return Err(bad("draw membership"));
+            }
+        }
+        if let Some(a) = &self.authorization {
+            let all: BTreeSet<_> = a.pools.iter().flatten().copied().collect();
+            if self.historical
+                || self.tiny_spec
+                || !matches!(a.anchors, 4 | 6)
+                || self.parent.step != 23798
+                || self.parent.adam.is_none()
+                || self.parent.file.digest != a.expected_parent
+                || self.lr_policy != 1
+                || self.lr_offset != 1024
+                || self.anchor_floor != 178
+                || self.train.len() != 2560
+                || a.pools[0].len() != 2048
+                || a.pools[1].len() != 512
+                || all != (0..2560).collect()
+                || self.tape.len() != 512
+                || self.eval_steps != [256, 512]
+                || self.tape.iter().map(|d| d.input).sum::<u64>() > 2_000_000
+                || self.tape.iter().map(|d| d.target).sum::<u64>() > 500_000
+            {
+                return Err(bad("anchor experiment authorization/pools/budget"));
+            }
+            let anchor: BTreeSet<_> = a.pools[0].iter().copied().collect();
+            if self.tape.iter().any(|d| {
+                d.indices.len() != 8
+                    || d.indices.iter().filter(|i| anchor.contains(i)).count()
+                        != usize::from(a.anchors)
+            }) {
+                return Err(bad("anchor ratio differs from authorized batch"));
+            }
+            let ordinary: BTreeSet<_> = panel(self, PanelKind::Ordinary)?
+                .cases
+                .iter()
+                .copied()
+                .collect();
+            if panel(self, PanelKind::Watch)?
+                .cases
+                .iter()
+                .any(|i| !ordinary.contains(i))
+            {
+                return Err(bad("watch is not ordinary subset"));
             }
         }
         Ok(())
@@ -1274,7 +1368,7 @@ impl Record {
         let kind = match self {
             Self::Inputs(v) => {
                 v.encode(&mut body);
-                1
+                if v.authorization.is_some() { 6 } else { 1 }
             }
             Self::Evaluation(v) => {
                 v.encode(&mut body);
@@ -1332,7 +1426,7 @@ impl Record {
         }
         let mut r = Reader::new(&bytes[HEADER..]);
         let record = match kind {
-            1 => Self::Inputs(Box::new(RunSnapshot::decode(&mut r)?)),
+            1 | 6 => Self::Inputs(Box::new(RunSnapshot::decode(&mut r, kind == 6)?)),
             2 => Self::Evaluation(EvalPayload::decode(&mut r)?),
             3 => Self::Decision(EvalDecision::decode(&mut r)?),
             4 => Self::Segment(SegmentReceipt::decode(&mut r)?),
@@ -1616,7 +1710,12 @@ fn evaluate(
 ) -> Result<EvalPayload> {
     let spec = panel(s, kind)?;
     let mut rows = Vec::new();
+    let mut heartbeat = Instant::now();
     for ordinal in &spec.cases {
+        if control.generation_calls >= control.generation_limit {
+            control.observe(StopReason::ResourceLimit);
+            break;
+        }
         if control.check("panel_next_case").is_err() {
             break;
         }
@@ -1636,6 +1735,17 @@ fn evaluate(
             row
         };
         rows.push(row);
+        if heartbeat.elapsed() >= Duration::from_secs(15) {
+            println!(
+                "NODE=G2 STATE=EVALUATING panel={} model_step={step} completed={}/{} generations={} elapsed_s={:.3}",
+                kind.name(),
+                rows.len(),
+                spec.cases.len(),
+                control.generation_calls,
+                control.start.elapsed().as_secs_f64()
+            );
+            heartbeat = Instant::now();
+        }
         if control.check("panel_case_returned").is_err() {
             break;
         }
@@ -1881,6 +1991,22 @@ fn resolve_native(root: &Path, s: &RunSnapshot, n: &CheckpointRef, resume: bool)
 
 #[derive(Subcommand)]
 pub enum Action {
+    /// Register the explicitly authorized F512 anchor-ratio pair; no optimizer calls.
+    AnchorPrepare {
+        #[arg(long)]
+        baseline: PathBuf,
+        #[arg(long)]
+        policy: PathBuf,
+        #[arg(long)]
+        expected_parent: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Independently recount the registered pair endpoints; never extend its budget.
+    AnchorReport {
+        #[arg(long)]
+        root: PathBuf,
+    },
     /// Continue an owned binary experiment; historical imports cannot train or resume.
     Run {
         #[arg(long)]
@@ -1947,10 +2073,48 @@ pub enum Action {
     },
 }
 pub(super) fn command(action: Action) -> Result<()> {
-    let mut control = RunControl::command(false)?;
+    let mut control = RunControl::command(matches!(action, Action::Run { .. }))?;
     control.deadline = control.start + Duration::from_secs(1800);
     match action {
-        Action::Run { root, resume } => run_native(&root, resume.as_deref(), &mut control),
+        Action::AnchorPrepare {
+            baseline,
+            policy,
+            expected_parent,
+            output,
+        } => anchor_prepare(&baseline, &policy, &expected_parent, &output, &mut control),
+        Action::AnchorReport { root } => anchor_report(&root, &mut control),
+        Action::Run { root, resume } => {
+            let outcome = run_native(&root, resume.as_deref(), &mut control);
+            // Account for verification/close as well as training in the cumulative command budget.
+            if let Ok(s) = read_inputs(&root)
+                && s.authorization.is_some()
+            {
+                let mut segments = std::fs::read_dir(&root)?
+                    .filter_map(|v| v.ok())
+                    .filter(|e| e.file_name().to_string_lossy().starts_with("segment-"))
+                    .map(|e| e.path())
+                    .collect::<Vec<_>>();
+                segments.sort();
+                if let Some(dir) = segments.last()
+                    && dir.join("terminal.r3er").is_file()
+                    && !dir.join("command.r3er").exists()
+                {
+                    let prefix = dir.file_name().unwrap().to_string_lossy();
+                    let mut t = segment(
+                        &root,
+                        &reference(&root, &format!("{prefix}/terminal.r3er"))?,
+                        &s,
+                    )?;
+                    t.elapsed = Scalar::F64(control.start.elapsed().as_secs_f64());
+                    publish(
+                        &root,
+                        &format!("{prefix}/command.r3er"),
+                        &Record::Segment(t),
+                    )?;
+                }
+            }
+            outcome
+        }
         Action::Close { root, terminal } => {
             close_native(&root, &terminal, &mut control).map(|_| ())
         }
@@ -2281,7 +2445,7 @@ fn close_native(
     if root.join("close-stop.r3er").exists() {
         return Err(bad("sticky previous close failure"));
     }
-    let result = close_native_inner(root, terminal, control);
+    let result = close_native_inner(root, terminal, control, true);
     if let Err(error) = &result {
         control.classify_error(error);
         if let Ok(s) = read_inputs(root)
@@ -2308,6 +2472,7 @@ fn close_native_inner(
     root: &Path,
     terminal: &str,
     control: &mut RunControl,
+    publish_result: bool,
 ) -> Result<ComparisonReceipt> {
     control.check("binary_close_start")?;
     let s = read_inputs(root)?;
@@ -2372,7 +2537,9 @@ fn close_native_inner(
         historical: s.historical,
     };
     control.check("binary_close_publish")?;
-    publish(root, "comparison.r3er", &Record::Comparison(result.clone()))?;
+    if publish_result {
+        publish(root, "comparison.r3er", &Record::Comparison(result.clone()))?;
+    }
     for (kind, score) in &result.panels {
         println!(
             "PANEL={} full={}/{} entity={} event={} QA={}/{} aux={}/{} errors={}",
@@ -2426,12 +2593,692 @@ fn save_native(
     let durable = checkpoint::load(&path, Device::Cpu, true)?;
     native_reference(root, name, s, &durable, index)
 }
+
+// Fork budget metadata is local to the new run; parent bytes and Adam clock stay intact.
+fn fork_budget(
+    state: &mut TrainingState,
+    parent_step: u64,
+    parent_tokens: u64,
+    updates: usize,
+    tokens: u64,
+) -> Result<()> {
+    state.config.budget_start_step = usize::try_from(parent_step).map_err(|_| bad("fork step"))?;
+    state.config.budget_start_tokens = parent_tokens;
+    state.config.max_steps = state
+        .config
+        .budget_start_step
+        .checked_add(updates)
+        .ok_or_else(|| bad("fork step overflow"))?;
+    state.config.max_tokens = parent_tokens
+        .checked_add(tokens)
+        .ok_or_else(|| bad("fork tokens overflow"))?;
+    Ok(())
+}
+
+fn anchor_prepare(
+    baseline: &Path,
+    policy: &Path,
+    expected_parent: &str,
+    output: &Path,
+    control: &mut RunControl,
+) -> Result<()> {
+    control.check("anchor_registration")?;
+    let base = read_inputs(baseline)?;
+    let observed = close_native_inner(baseline, "terminal.r3er", control, false)?;
+    let expected_parent = unhex(expected_parent)?;
+    let l = resolve_native(baseline, &base, &base.parent, true)?;
+    let state = l
+        .manifest
+        .training
+        .as_ref()
+        .ok_or_else(|| bad("anchor parent Adam"))?;
+    if !base.historical
+        || base.tiny_spec
+        || base.parent.file.digest != expected_parent
+        || state.step != 23798
+        || l.tokenizer.vocab_size() != 801
+        || l.model.config.profile != "NATIVE_TRPP_G1_SMALL"
+    {
+        return Err(bad("authorized F512 parent/profile/clock"));
+    }
+    let (p, policy_ref) = read_legacy_owned(policy)?;
+    if p["node"] != "A2"
+        || p["arm"] != "F"
+        || p["lr_policy"] != "L"
+        || p["lr_offset"] != 512
+        || base.policy != policy_ref.digest
+        || progress_lr("L", 1024)? != 1e-4
+    {
+        return Err(bad("F512 policy/constant LR lineage"));
+    }
+    let verified = load_verified_inputs(&progress_path(&p, "a0")?, Some(&p))?;
+    if base.frozen
+        != unhex(
+            verified.hashes["frozen"]
+                .as_str()
+                .ok_or_else(|| bad("frozen hash"))?,
+        )?
+        || base.train.len() != verified.train.len()
+        || base
+            .train
+            .iter()
+            .zip(&verified.train)
+            .any(|(i, e)| case_hash(&base.cases[*i as usize]) != case_hash(e))
+    {
+        return Err(bad("anchor owned corpus differs from frozen F corpus"));
+    }
+    let (original_manifest, original, _) = data::load(&verified.frozen.parent_corpus)?;
+    if original_manifest.train.sha256 != verified.frozen.parent_train_hash {
+        return Err(bad("anchor original training provenance"));
+    }
+    let original: BTreeMap<_, _> = original
+        .iter()
+        .map(|e| (e.id.as_str(), case_hash(e)))
+        .collect();
+    let mut pools = [Vec::new(), Vec::new()];
+    for (i, e) in verified.train.iter().enumerate() {
+        match original.get(e.id.as_str()) {
+            Some(h) if *h == case_hash(e) && !e.family.starts_with("copy/") => {
+                pools[0].push(i as u32)
+            }
+            None if e.family.starts_with("renewal/H3/train/") => pools[1].push(i as u32),
+            _ => return Err(bad("unproven anchor/focus source or changed original case")),
+        }
+    }
+    if pools[0].len() != 2048 || pools[1].len() != 512 {
+        return Err(bad("anchor pool counts"));
+    }
+    data::check_split(&verified.train, &verified.dev)?;
+    data::check_split(&verified.train, &verified.ordinary)?;
+    data::check_split(&verified.train, &verified.cross)?;
+    let heldout: BTreeSet<_> = verified
+        .dev
+        .iter()
+        .chain(&verified.ordinary)
+        .chain(&verified.cross)
+        .map(case_hash)
+        .collect();
+    if verified
+        .train
+        .iter()
+        .any(|e| heldout.contains(&case_hash(e)))
+    {
+        return Err(bad("training/evaluation overlap"));
+    }
+    let framed = samples(&verified.train, &l.tokenizer, state.config.seq_len)?;
+    let baseline_ref = reference(baseline, "comparison.r3er")?;
+    let mut material = b"R3-anchor-ratio-pair-v1\0".to_vec();
+    material.extend(base.binding());
+    material.extend(expected_parent);
+    material.extend(baseline_ref.digest);
+    for pool in &pools {
+        integers(&mut material, pool);
+    }
+    let pair = hash(&material);
+    let stats = |kind| {
+        observed
+            .panels
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .map(|(_, v)| v)
+            .ok_or_else(|| bad("baseline panel"))
+    };
+    let dev = stats(PanelKind::Dev)?;
+    let watch = stats(PanelKind::Watch)?;
+    let ordinary_set: BTreeSet<_> = panel(&base, PanelKind::Ordinary)?
+        .cases
+        .iter()
+        .copied()
+        .collect();
+    if panel(&base, PanelKind::Watch)?
+        .cases
+        .iter()
+        .any(|i| !ordinary_set.contains(i))
+    {
+        return Err(bad("watch not identical ordinary cases"));
+    }
+    let mut registrations = Vec::new();
+    for anchors in [4u8, 6] {
+        let mut s = base.clone();
+        let authorization = AnchorAuthorization {
+            pair,
+            baseline: baseline_ref.digest,
+            expected_parent,
+            anchors,
+            pools: pools.clone(),
+        };
+        s.contract = ANCHOR_CONTRACT.into();
+        s.historical = false;
+        s.source = evaluator_source();
+        let mut identity = material.clone();
+        identity.push(anchors);
+        s.run = hash(&identity);
+        s.parent.run = s.run;
+        s.parent.segment = 0;
+        s.policy = hash(&identity);
+        s.lr_policy = 1;
+        s.lr_offset = 1024;
+        s.baseline = [dev.exact, watch.exact, dev.errors + watch.errors];
+        s.anchor_floor = 178;
+        s.eval_steps = vec![256, 512];
+        s.origins.push(Origin {
+            role: "verified-parent-baseline-read-only".into(),
+            original: FileRef {
+                locator: baseline
+                    .canonicalize()?
+                    .join("comparison.r3er")
+                    .display()
+                    .to_string(),
+                digest: baseline_ref.digest,
+            },
+        });
+        s.origins.push(Origin {
+            role: "anchor-original-train".into(),
+            original: FileRef {
+                locator: verified
+                    .frozen
+                    .parent_corpus
+                    .join(&original_manifest.train.file)
+                    .canonicalize()?
+                    .display()
+                    .to_string(),
+                digest: unhex(&original_manifest.train.sha256)?,
+            },
+        });
+        s.origins.push(Origin {
+            role: "execution-binary".into(),
+            original: FileRef {
+                locator: std::env::current_exe()?.display().to_string(),
+                digest: unhex(&file_hash(&std::env::current_exe()?)?)?,
+            },
+        });
+        let (tape, _) = anchor_tape(&pools, anchors, state.sampler_state, &framed)?;
+        s.tape = tape;
+        s.authorization = Some(authorization);
+        s.validate()?;
+        // Validate the furthest registered save before publishing authorization or doing work.
+        let mut end = state.clone();
+        fork_budget(
+            &mut end,
+            s.parent.step,
+            s.parent.counters[0],
+            s.tape.len(),
+            2_000_000,
+        )?;
+        end.step += s.tape.len();
+        end.consumed_tokens += s.tape.iter().map(|d| d.input).sum::<u64>();
+        end.target_tokens += s.tape.iter().map(|d| d.target).sum::<u64>();
+        let mut manifest = l.manifest.clone();
+        manifest.training = Some(end);
+        checkpoint::validate_metadata(&manifest, &l.tokenizer)?;
+        registrations.push(s);
+    }
+    control.check("anchor_before_publication")?;
+    std::fs::create_dir(output)?;
+    for s in registrations {
+        let a = s.authorization.as_ref().unwrap();
+        let root = output.join(a.name());
+        std::fs::create_dir(&root)?;
+        publish_new(&root.join("parent.r3m"), |file, _| {
+            std::io::copy(
+                &mut std::fs::File::open(owned_path(baseline, &base.parent.file.locator, true)?)?,
+                file,
+            )?;
+            Ok(())
+        })?;
+        resolve_native(&root, &s, &s.parent, true)?;
+        publish(&root, "inputs.r3er", &Record::Inputs(Box::new(s.clone())))?;
+        println!(
+            "NODE=G2 ARM={} STATE=REGISTERED parent={} model={} Adam={} step={} LR=0.0001 updates=512 input={} target={} anchor_draws={} focus_draws={} baseline={}/{}/{} source={} binary={} optimizer_calls=0",
+            a.name(),
+            hex(&expected_parent),
+            hex(&s.parent.model),
+            hex(&s.parent.adam.unwrap()),
+            s.parent.step,
+            s.tape.iter().map(|d| d.input).sum::<u64>(),
+            s.tape.iter().map(|d| d.target).sum::<u64>(),
+            usize::from(anchors_for(&s)) * 512,
+            (8 - usize::from(anchors_for(&s))) * 512,
+            dev.exact,
+            stats(PanelKind::Cross)?.exact,
+            stats(PanelKind::Ordinary)?.qa[0],
+            hex(&s.source),
+            file_hash(&std::env::current_exe()?)?
+        );
+    }
+    Ok(())
+}
+fn anchors_for(s: &RunSnapshot) -> u8 {
+    s.authorization.as_ref().map_or(0, |a| a.anchors)
+}
+fn anchor_tape(
+    pools: &[Vec<u32>; 2],
+    anchors: u8,
+    seed: u64,
+    framed: &[Sample],
+) -> Result<(Vec<Draw>, [u64; 2])> {
+    let mut streams = pools.clone();
+    let mut rngs = [
+        Rng {
+            state: seed ^ 0xa11ce,
+        },
+        Rng {
+            state: seed ^ 0xf0c05,
+        },
+    ];
+    let mut cursors = [streams[0].len(), streams[1].len()];
+    let mut tape = Vec::new();
+    let mut pool_targets = [0; 2];
+    for step in 0..512 {
+        let mut indices = Vec::new();
+        for (pool, count) in [usize::from(anchors), 8 - usize::from(anchors)]
+            .into_iter()
+            .enumerate()
+        {
+            for _ in 0..count {
+                if cursors[pool] == streams[pool].len() {
+                    // Restart from the same pool before each deterministic cycle shuffle.
+                    streams[pool].clone_from(&pools[pool]);
+                    for i in (1..streams[pool].len()).rev() {
+                        let j = (rngs[pool].next_u64() % (i + 1) as u64) as usize;
+                        streams[pool].swap(i, j);
+                    }
+                    cursors[pool] = 0;
+                }
+                let i = streams[pool][cursors[pool]];
+                cursors[pool] += 1;
+                pool_targets[pool] +=
+                    (framed[i as usize].tokens.len() - framed[i as usize].response_start) as u64;
+                indices.push(i);
+            }
+        }
+        tape.push(Draw {
+            input: indices
+                .iter()
+                .map(|i| (framed[*i as usize].tokens.len() - 1) as u64)
+                .sum(),
+            target: indices
+                .iter()
+                .map(|i| {
+                    (framed[*i as usize].tokens.len() - framed[*i as usize].response_start) as u64
+                })
+                .sum(),
+            indices,
+            sampler: seed
+                .checked_add(step + 1)
+                .ok_or_else(|| bad("sampler clock overflow"))?,
+        });
+    }
+    Ok((tape, pool_targets))
+}
+
+fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
+    let a = s
+        .authorization
+        .as_ref()
+        .ok_or_else(|| bad("missing anchor authorization"))?;
+    if root.file_name().and_then(|v| v.to_str()) != Some(a.name()) {
+        return Err(bad("pair arm locator"));
+    }
+    let parent = root.parent().ok_or_else(|| bad("pair root"))?;
+    let mut updates = 0;
+    let mut generations = 0;
+    let mut seconds = 0.;
+    for arm in ["C50", "A75"] {
+        let arm_root = parent.join(arm);
+        let other = read_inputs(&arm_root)?;
+        let other_a = other
+            .authorization
+            .as_ref()
+            .ok_or_else(|| bad("pair authorization missing"))?;
+        if other_a.pair != a.pair
+            || other_a.name() != arm
+            || other.parent.model != s.parent.model
+            || other.parent.adam != s.parent.adam
+        {
+            return Err(bad("pair parent/policy mismatch"));
+        }
+        for entry in std::fs::read_dir(&arm_root)? {
+            let entry = entry?;
+            if !entry.file_name().to_string_lossy().starts_with("segment-") {
+                continue;
+            }
+            let terminal = entry.path().join("command.r3er");
+            if !terminal.is_file() {
+                return Err(bad("unclosed segment blocks retry/budget reset"));
+            }
+            let relative = terminal
+                .strip_prefix(&arm_root)
+                .map_err(|_| bad("segment path"))?
+                .to_string_lossy()
+                .to_string();
+            let t = segment(&arm_root, &reference(&arm_root, &relative)?, &other)?;
+            if t.save_error.is_some()
+                || t.stop.iter().any(|s| {
+                    matches!(
+                        s,
+                        StopReason::Cancelled
+                            | StopReason::IntegrityFail
+                            | StopReason::AuditIncomplete
+                    )
+                })
+            {
+                return Err(bad(
+                    "pair stopped: durable cancellation/integrity/incomplete/save failure",
+                ));
+            }
+            updates += t.draws.len() as u64;
+            generations += t.generations as usize;
+            seconds += t.elapsed.finite()?;
+        }
+    }
+    if updates > 1024 || generations > 7500 || seconds >= 7200. {
+        return Err(bad("anchor pair budget exhausted"));
+    }
+    Ok((updates, generations, seconds))
+}
+fn print_anchor_panel(s: &RunSnapshot, e: &EvalPayload, l: &Loaded) -> Result<()> {
+    let score = rescore(s, e, l, true)?;
+    let mut context = 0;
+    let mut value = 0;
+    let mut empty = 0;
+    let mut eos = 0;
+    let mut wrong_citation = 0;
+    let mut strata: BTreeMap<String, [u64; 2]> = BTreeMap::new();
+    for row in &e.rows {
+        let case = &s.cases[row.ordinal as usize];
+        let (actual, _) = row_output(row, l)?;
+        let a = actual.as_deref().unwrap_or("");
+        let exact = strict_answer_match(
+            actual.as_deref(),
+            &case.answer,
+            row.finish == Finish::Eos,
+            row.error.is_some(),
+        ) && row.completed
+            && row.interruption.is_none();
+        empty += usize::from(a.is_empty());
+        eos += usize::from(row.finish == Finish::Eos);
+        wrong_citation += usize::from(citations(a).ok() != citations(&case.answer).ok());
+        if let (Some(a), Some(g)) = (fields(a), fields(&case.answer)) {
+            context += usize::from(a.1 == g.1);
+            value += usize::from(a.2 == g.2);
+        }
+        for key in [
+            format!("category/{}", case.category),
+            format!("input-bytes/{}", case.request.input.len() / 32),
+            format!(
+                "family/{}",
+                case.family
+                    .split("/replica-")
+                    .next()
+                    .unwrap_or(&case.family)
+                    .split("/view-")
+                    .next()
+                    .unwrap_or(&case.family)
+            ),
+        ] {
+            let v = strata.entry(key).or_default();
+            v[0] += u64::from(exact);
+            v[1] += 1;
+        }
+    }
+    println!(
+        "NODE=G2 ARM={} PANEL={} step={} updates={} model={} full={}/{} entity={} context={context} value={value} event={} errors={} empty={empty} EOS={eos} wrong_citation={wrong_citation} base4={}/{} QA={}/{} AUX={}/{}",
+        s.authorization.as_ref().map_or("BASELINE", |a| a.name()),
+        e.kind.name(),
+        e.step,
+        e.new_updates,
+        hex(&e.model),
+        score.exact,
+        score.planned,
+        score.entity,
+        score.event,
+        score.errors,
+        score.base[0],
+        score.base[1],
+        score.qa[0],
+        score.qa[1],
+        score.aux[0],
+        score.aux[1]
+    );
+    for (key, v) in strata {
+        println!(
+            "STRATUM panel={} {key} exact={}/{}",
+            e.kind.name(),
+            v[0],
+            v[1]
+        );
+    }
+    Ok(())
+}
+fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
+    let mut incomplete = false;
+    for arm in ["C50", "A75"] {
+        let dir = root.join(arm);
+        let s = read_inputs(&dir)?;
+        let mut paths = std::fs::read_dir(&dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("segment-"))
+            .map(|e| e.path().join("terminal.r3er"))
+            .collect::<Vec<_>>();
+        paths.sort();
+        let Some(path) = paths.last() else {
+            println!("NODE=G2 ARM={arm} STATE=NOT_RUN updates=0 generations=0");
+            incomplete = true;
+            continue;
+        };
+        let name = path
+            .strip_prefix(&dir)
+            .map_err(|_| bad("report path"))?
+            .to_string_lossy();
+        let t = segment(&dir, &reference(&dir, &name)?, &s)?;
+        if !t.complete || !t.stop.is_empty() || t.save_error.is_some() {
+            incomplete = true;
+            println!(
+                "NODE=G2 ARM={arm} STATE=INCOMPLETE updates={} generations={} teachers={} elapsed_s={} native_present={} save_error={:?} STOP={:?}",
+                t.updates,
+                t.generations,
+                t.teachers,
+                t.elapsed.finite()?,
+                t.native.is_some(),
+                t.save_error,
+                t.stop
+            );
+            let (input, target) = t
+                .draws
+                .iter()
+                .fold((0, 0), |(i, t), d| (i + d.input, t + d.target));
+            println!("ACTUAL_INPUT_TOKENS={input} ACTUAL_TARGET_TOKENS={target}");
+            for r in &t.evaluations {
+                let Record::Evaluation(e) = read_record(&dir, &r.payload)? else {
+                    return Err(bad("report panel kind"));
+                };
+                println!(
+                    "RAW_PANEL={} step={} rows={}/{} file_hash={} native_binding={} SCORE=OBSERVED_ONLY_NOT_ENDPOINT_VERIFIED",
+                    e.kind.name(),
+                    e.step,
+                    e.rows.len(),
+                    e.expected,
+                    hex(&r.payload.digest),
+                    r.native.is_some()
+                );
+            }
+        }
+    }
+    if incomplete {
+        println!("MODEL_PAIR=QUALITY_INCONCLUSIVE H3_SEAL=NOT_OPENED GOAL1_ACCEPTED=false");
+        return Ok(());
+    }
+    let mut endpoints = Vec::new();
+    for arm in ["C50", "A75"] {
+        let dir = root.join(arm);
+        let s = read_inputs(&dir)?;
+        let a = s
+            .authorization
+            .as_ref()
+            .ok_or_else(|| bad("pair report authorization"))?;
+        let mut terminals = std::fs::read_dir(&dir)?
+            .filter_map(|v| v.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("segment-"))
+            .map(|e| e.path().join("terminal.r3er"))
+            .collect::<Vec<_>>();
+        terminals.sort();
+        let last = terminals.last().ok_or_else(|| bad("arm not executed"))?;
+        let locator = last
+            .strip_prefix(&dir)
+            .map_err(|_| bad("terminal path"))?
+            .to_string_lossy();
+        let chain = lineage(&dir, &s, &reference(&dir, &locator)?)?;
+        let h = verified_history(&dir, &s, &chain)?;
+        let t = &chain.last().unwrap().1;
+        let l = resolve_native(&dir, &s, t.native.as_ref().unwrap(), true)?;
+        let framed = samples(
+            &s.train
+                .iter()
+                .map(|i| s.cases[*i as usize].clone())
+                .collect::<Vec<_>>(),
+            &l.tokenizer,
+            l.manifest.training.as_ref().unwrap().config.seq_len,
+        )?;
+        let mut draws = [0u64; 2];
+        let mut input = [0u64; 2];
+        let mut target = [0u64; 2];
+        let mut unique = [BTreeSet::new(), BTreeSet::new()];
+        let mut bases = [BTreeSet::new(), BTreeSet::new()];
+        let anchors: BTreeSet<_> = a.pools[0].iter().copied().collect();
+        for d in &s.tape[..t.updates as usize] {
+            for i in &d.indices {
+                let pool = usize::from(!anchors.contains(i));
+                draws[pool] += 1;
+                input[pool] += (framed[*i as usize].tokens.len() - 1) as u64;
+                target[pool] +=
+                    (framed[*i as usize].tokens.len() - framed[*i as usize].response_start) as u64;
+                unique[pool].insert(*i);
+                bases[pool].insert(scene(&s.cases[s.train[*i as usize] as usize]).to_string());
+            }
+        }
+        println!(
+            "NODE=G2 ARM={arm} STATE=REPORT updates={} absolute_step={} input={input:?} supervised={target:?} draws={draws:?} unique_views={:?} unique_bases={:?} elapsed_s={} generations={} teachers={} STOP={:?}",
+            t.updates,
+            t.native.as_ref().unwrap().step,
+            unique.each_ref().map(|x| x.len()),
+            bases.each_ref().map(|x| x.len()),
+            chain
+                .iter()
+                .map(|(_, t)| t.elapsed.finite())
+                .collect::<Result<Vec<_>>>()?
+                .iter()
+                .sum::<f64>(),
+            chain.iter().map(|(_, t)| t.generations).sum::<u64>(),
+            chain.iter().map(|(_, t)| t.teachers).sum::<u64>(),
+            t.stop
+        );
+        for n in [256, 512] {
+            for kind in [PanelKind::Dev, PanelKind::Cross, PanelKind::Ordinary] {
+                if let Some(r) = h.evaluations.get(&(s.parent.step + n, kind)) {
+                    let (e, l) = payload(&dir, &s, r)?;
+                    print_anchor_panel(&s, &e, &l)?;
+                }
+            }
+        }
+        let candidate = if t.complete && t.stop.is_empty() {
+            close_native_inner(&dir, &locator, control, false)?.candidate
+        } else {
+            false
+        };
+        endpoints.push((s, h, candidate));
+    }
+    if endpoints[0].0.authorization.as_ref().unwrap().pair
+        != endpoints[1].0.authorization.as_ref().unwrap().pair
+    {
+        return Err(bad("report mismatched pair"));
+    }
+    for n in [256, 512] {
+        for kind in [PanelKind::Dev, PanelKind::Cross, PanelKind::Ordinary] {
+            let mut rows = Vec::new();
+            for (i, (s, h, _)) in endpoints.iter().enumerate() {
+                if let Some(r) = h.evaluations.get(&(s.parent.step + n, kind)) {
+                    let (e, l) = payload(&root.join(if i == 0 { "C50" } else { "A75" }), s, r)?;
+                    rescore(s, &e, &l, true)?;
+                    rows.push(
+                        e.rows
+                            .iter()
+                            .map(|r| {
+                                let c = &s.cases[r.ordinal as usize];
+                                let (a, _) = row_output(r, &l)?;
+                                Ok((
+                                    case_hash(c),
+                                    strict_answer_match(
+                                        a.as_deref(),
+                                        &c.answer,
+                                        r.finish == Finish::Eos,
+                                        r.error.is_some(),
+                                    ) && r.completed
+                                        && r.interruption.is_none(),
+                                ))
+                            })
+                            .collect::<Result<Vec<_>>>()?,
+                    );
+                }
+            }
+            if rows.len() == 2 {
+                let mut counts = [0; 4];
+                for (a, b) in rows[0].iter().zip(&rows[1]) {
+                    if a.0 != b.0 {
+                        return Err(bad("paired case content"));
+                    }
+                    counts[usize::from(a.1) * 2 + usize::from(b.1)] += 1;
+                }
+                println!(
+                    "PAIRED updates={n} panel={} both_wrong/gain/loss/both_correct={counts:?}",
+                    kind.name()
+                );
+            }
+        }
+    }
+    println!(
+        "MODEL_PAIR={} C50_candidate={} A75_candidate={} GOAL1_ACCEPTED=false H3_SEAL=NOT_OPENED",
+        if endpoints.iter().any(|e| e.2) {
+            "JOINT_GATE_PASS_PENDING_FRESH_PROCESS"
+        } else {
+            "STUDY_COMPLETE_QUALITY_FAIL"
+        },
+        endpoints[0].2,
+        endpoints[1].2
+    );
+    Ok(())
+}
 fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Result<()> {
     let s = read_inputs(root)?;
-    if s.historical || !s.tiny_spec {
+    if s.historical || (!s.tiny_spec && s.authorization.is_none()) {
         return Err(bad(
             "this repair authorizes no SMALL optimizer updates; historical import cannot resume",
         ));
+    }
+    if let Some(authorization) = &s.authorization {
+        if s.source != evaluator_source()
+            || s.origins
+                .iter()
+                .find(|o| o.role == "execution-binary")
+                .is_none_or(|o| {
+                    file_hash(&std::env::current_exe().unwrap_or_default())
+                        .ok()
+                        .as_deref()
+                        != Some(hex(&o.original.digest).as_str())
+                })
+        {
+            return Err(bad("registered source/binary changed before training"));
+        }
+        let (_, generations, seconds) = anchor_budget(root, &s)?;
+        control.deadline = control.start + Duration::from_secs_f64((7200. - seconds).min(1800.));
+        control.generation_limit = 7500 - generations;
+        println!(
+            "NODE=G2 ARM={} STATE=START prior_generations={generations} prior_command_s={seconds:.3} source={} binary={} input_binding={}",
+            authorization.name(),
+            hex(&evaluator_source()),
+            file_hash(&std::env::current_exe()?)?,
+            hex(&s.binding())
+        );
     }
     let mut h = History {
         evaluations: BTreeMap::new(),
@@ -2464,6 +3311,18 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
         .training
         .clone()
         .ok_or_else(|| bad("training state"))?;
+    if s.authorization.is_some() {
+        fork_budget(
+            &mut state,
+            s.parent.step,
+            s.parent.counters[0],
+            s.tape.len(),
+            2_000_000,
+        )?;
+        let mut manifest = l.manifest.clone();
+        manifest.training = Some(state.clone());
+        checkpoint::validate_metadata(&manifest, &l.tokenizer)?;
+    }
     let mut adam = Adam {
         moments: std::mem::take(&mut l.optimizer),
     };
@@ -2474,6 +3333,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
     let mut decisions = Vec::new();
     let mut draws = Vec::new();
     let mut complete = false;
+    let mut heartbeat = Instant::now();
     let outcome = (|| -> Result<()> {
         let episodes: Vec<_> = s
             .train
@@ -2485,12 +3345,49 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
             let n = state.step as u64 - s.parent.step;
             l.model.refresh_identity()?;
             if s.eval_steps.contains(&(n as u32)) {
-                for kind in [PanelKind::Dev, PanelKind::Watch] {
-                    if let std::collections::btree_map::Entry::Vacant(entry) =
-                        h.evaluations.entry((state.step as u64, kind))
-                    {
+                let kinds: &[PanelKind] = if s.authorization.is_some() {
+                    &[
+                        PanelKind::Dev,
+                        PanelKind::Cross,
+                        PanelKind::Ordinary,
+                        PanelKind::Watch,
+                    ]
+                } else {
+                    &[PanelKind::Dev, PanelKind::Watch]
+                };
+                for &kind in kinds {
+                    if !h.evaluations.contains_key(&(state.step as u64, kind)) {
                         control.check("binary_before_evaluation")?;
-                        let e = evaluate(&s, &l, kind, state.step as u64, control, true)?;
+                        let e = if kind == PanelKind::Watch && s.authorization.is_some() {
+                            let r =
+                                &h.evaluations[&(state.step as u64, PanelKind::Ordinary)].payload;
+                            let Record::Evaluation(mut e) = read_record(root, r)? else {
+                                return Err(bad("ordinary watch source"));
+                            };
+                            let spec = panel(&s, kind)?;
+                            e.rows = spec
+                                .cases
+                                .iter()
+                                .map(|i| {
+                                    e.rows.iter().find(|r| r.ordinal == *i).cloned().ok_or_else(
+                                        || bad("incomplete ordinary cannot derive watch"),
+                                    )
+                                })
+                                .collect::<Result<_>>()?;
+                            e.kind = kind;
+                            e.expected = spec.cases.len() as u32;
+                            e
+                        } else {
+                            evaluate(&s, &l, kind, state.step as u64, control, s.tiny_spec)?
+                        };
+                        if s.authorization.is_some()
+                            && e.rows.len() == e.expected as usize
+                            && e.rows
+                                .iter()
+                                .all(|r| r.completed && r.interruption.is_none())
+                        {
+                            print_anchor_panel(&s, &e, &l)?;
+                        }
                         let r = publish(
                             root,
                             &format!("{name}/{}-{n:04}.r3er", kind.name()),
@@ -2500,7 +3397,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                             payload: r,
                             native: None,
                         };
-                        entry.insert(er.clone());
+                        h.evaluations.insert((state.step as u64, kind), er.clone());
                         evaluations.push(er);
                     }
                 }
@@ -2547,7 +3444,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                     index,
                     "RECOVERY_SCREENING",
                 )?;
-                for kind in [PanelKind::Dev, PanelKind::Watch] {
+                for &kind in kinds {
                     let mut r = h.evaluations[&(state.step as u64, kind)].clone();
                     r.native = Some(native.clone());
                     if let Some(existing) = evaluations
@@ -2642,13 +3539,32 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
             state.validation_loss = None;
             draws.push(d.clone());
             println!(
-                "ACTUAL_TINY_UPDATE={} MODEL_STEP={} INPUT_TOKENS={} TARGET_TOKENS={} LR_BITS={}",
+                "ACTUAL_{}_UPDATE={} MODEL_STEP={} INPUT_TOKENS={} TARGET_TOKENS={} LR_BITS={}",
+                if s.tiny_spec { "TINY" } else { "SMALL" },
                 draws.len(),
                 state.step,
                 d.input,
                 d.target,
                 rate.to_bits()
             );
+            if heartbeat.elapsed() >= Duration::from_secs(15) {
+                let n = state.step as u64 - s.parent.step;
+                println!(
+                    "NODE=G2 ARM={} STATE=TRAINING completed_updates={n}/{} optimizer_absolute_step={} input_tokens={} target_tokens={} anchor_draws={} focus_draws={} last_complete_eval={:?} quality_gate=NOT_EVALUATED elapsed_s={:.3} rss_kib={:?} last_stop={:?}",
+                    s.authorization.as_ref().map_or("TINY", |a| a.name()),
+                    s.tape.len(),
+                    state.step,
+                    state.consumed_tokens - s.parent.counters[0],
+                    state.target_tokens - s.parent.counters[1],
+                    n * u64::from(anchors_for(&s)),
+                    n * (8 - u64::from(anchors_for(&s))),
+                    h.decisions.keys().next_back(),
+                    control.start.elapsed().as_secs_f64(),
+                    control.last_rss_kib,
+                    control.stop
+                );
+                heartbeat = Instant::now();
+            }
         }
         Ok(())
     })();
@@ -2696,7 +3612,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
         control.observe(StopReason::ResourceLimit);
     }
     let _ = control.check("binary_terminal");
-    let t = SegmentReceipt {
+    let mut t = SegmentReceipt {
         run: s.run,
         binding: s.binding(),
         segment: index,
@@ -2717,14 +3633,28 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
         cleanup: Scalar::F64(cleanup.elapsed().as_secs_f64()),
         draws,
     };
+    if t.complete && t.stop.is_empty() && t.save_error.is_none() && s.authorization.is_some() {
+        let scores = t
+            .evaluations
+            .iter()
+            .filter_map(|r| match read_record(root, &r.payload) {
+                Ok(Record::Evaluation(e)) if e.step == state.step as u64 => {
+                    Some(rescore(&s, &e, &l, true).map(|v| (e.kind, v)))
+                }
+                _ => None,
+            })
+            .collect::<Result<Vec<_>>>()?;
+        t.candidate = eligible(&s, &scores, h.quality, &t.stop);
+    }
     publish(
         root,
         &format!("{name}/terminal.r3er"),
         &Record::Segment(t.clone()),
     )?;
     println!(
-        "SEGMENT={index} NEW_TINY_UPDATES={} NEW_SMALL_UPDATES=0 GENERATIONS={} TEACHERS={} STOP={:?} resume={} complete={} CANONICAL_JSON_WRITES=0 LEGACY_JSON_READS=0",
-        t.updates - start,
+        "SEGMENT={index} NEW_TINY_UPDATES={} NEW_SMALL_UPDATES={} GENERATIONS={} TEACHERS={} STOP={:?} resume={} complete={} CANONICAL_JSON_WRITES=0 LEGACY_JSON_READS=0",
+        if s.tiny_spec { t.updates - start } else { 0 },
+        if s.tiny_spec { 0 } else { t.updates - start },
         t.generations,
         t.teachers,
         t.stop,
@@ -3126,6 +4056,7 @@ fn import_legacy(
             progress_u64(&p, "baseline_errors")?,
         ],
         anchor_floor: progress_u64(&p, "anchor_floor")?,
+        authorization: None,
     };
     publish(output, "inputs.r3er", &Record::Inputs(Box::new(s.clone())))?;
     let mut refs = Vec::new();
@@ -3638,6 +4569,7 @@ fn fixture(output: &Path) -> Result<()> {
         lr_offset: 0,
         baseline: [0, 0, 0],
         anchor_floor: 178,
+        authorization: None,
     };
     for (i, kind) in [
         PanelKind::Dev,
@@ -3780,6 +4712,137 @@ fn fixture_check(roots: &[PathBuf]) -> Result<()> {
 #[cfg(test)]
 mod binary_tests {
     use super::*;
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn anchor_fork_exhausted_parent_budget_native_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("fork");
+        fixture(&root).unwrap();
+        let s = read_inputs(&root).unwrap();
+        let mut l = resolve_native(&root, &s, &s.parent, true).unwrap();
+        let mut state = l.manifest.training.clone().unwrap();
+        state.step = state.config.max_steps;
+        let parent_step = state.step as u64;
+        let parent = state.clone();
+        state.step += 2; // Metadata fixture only: no forward/backward/optimizer calls.
+        let adam = Adam {
+            moments: std::mem::take(&mut l.optimizer),
+        };
+        assert!(
+            save_arm(
+                &mut l,
+                &state,
+                &adam,
+                &root.join("rejected.r3m"),
+                "RECOVERY_SCREENING"
+            )
+            .is_err()
+        );
+        assert!(!root.join("rejected.r3m").exists());
+        fork_budget(&mut state, parent_step, parent.consumed_tokens, 2, 1000).unwrap();
+        let mut unchanged = state.config.clone();
+        unchanged.max_steps = parent.config.max_steps;
+        unchanged.max_tokens = parent.config.max_tokens;
+        unchanged.budget_start_step = parent.config.budget_start_step;
+        unchanged.budget_start_tokens = parent.config.budget_start_tokens;
+        assert_eq!(unchanged, parent.config);
+        save_arm(
+            &mut l,
+            &state,
+            &adam,
+            &root.join("accepted.r3m"),
+            "RECOVERY_SCREENING",
+        )
+        .unwrap();
+        let saved = checkpoint::load(&root.join("accepted.r3m"), Device::Cpu, true).unwrap();
+        assert_eq!(saved.manifest.training.as_ref().unwrap(), &state);
+        assert_eq!(
+            optimizer_hash(&saved.optimizer).unwrap(),
+            optimizer_hash(&adam.moments).unwrap()
+        );
+        assert_eq!(
+            saved.model.weight_hash().unwrap(),
+            l.model.weight_hash().unwrap()
+        );
+        println!(
+            "EXHAUSTED_PARENT_SAVE RED_REPRODUCED GREEN_NATIVE_RELOAD SMALL_UPDATES=0 TINY_UPDATES=0 GENERATIONS=0"
+        );
+    }
+    #[test]
+    fn anchor_ratio_master_streams_and_supervised_denominators() {
+        let pools = [(0..16).collect::<Vec<_>>(), (16..24).collect()];
+        let framed = (0..24)
+            .map(|i| Sample {
+                tokens: vec![3; 8 + i],
+                response_start: 4 + i / 2,
+                curriculum: false,
+            })
+            .collect::<Vec<_>>();
+        let (c, ct) = anchor_tape(&pools, 4, 31, &framed).unwrap();
+        let (a, at) = anchor_tape(&pools, 6, 31, &framed).unwrap();
+        let (again, _) = anchor_tape(&pools, 6, 31, &framed).unwrap();
+        for (t, n) in [(&c, 4), (&a, 6)] {
+            assert_eq!(t.len(), 512);
+            for (step, d) in t.iter().enumerate() {
+                assert_eq!(d.indices.len(), 8);
+                assert_eq!(d.indices.iter().filter(|i| **i < 16).count(), n);
+                assert_eq!(d.sampler, 32 + step as u64);
+                assert_eq!(
+                    d.input,
+                    d.indices.iter().map(|i| 7 + u64::from(*i)).sum::<u64>()
+                );
+                assert_eq!(
+                    d.target,
+                    d.indices
+                        .iter()
+                        .map(|i| 4 + u64::from(*i) - u64::from(*i) / 2)
+                        .sum::<u64>()
+                );
+            }
+        }
+        for pool in 0..2 {
+            let take = |t: &[Draw]| {
+                t.iter()
+                    .flat_map(|d| d.indices.iter())
+                    .filter(|i| usize::from(**i >= 16) == pool)
+                    .copied()
+                    .collect::<Vec<_>>()
+            };
+            let x = take(&c);
+            let y = take(&a);
+            let n = x.len().min(y.len());
+            assert_eq!(x[..n], y[..n]);
+        }
+        assert_eq!(
+            c.iter().map(|d| d.target).sum::<u64>(),
+            ct.iter().sum::<u64>()
+        );
+        assert_eq!(
+            a.iter().map(|d| d.target).sum::<u64>(),
+            at.iter().sum::<u64>()
+        );
+        assert_ne!(ct, at);
+        assert!(
+            a.iter()
+                .zip(&again)
+                .all(|(a, b)| a.indices == b.indices && a.sampler == b.sampler)
+        );
+        let auth = AnchorAuthorization {
+            pair: hash(b"pair"),
+            baseline: hash(b"baseline"),
+            expected_parent: hash(b"parent"),
+            anchors: 6,
+            pools,
+        };
+        let mut bytes = Vec::new();
+        auth.encode(&mut bytes);
+        let mut reader = Reader::new(&bytes);
+        let restored = AnchorAuthorization::decode(&mut reader).unwrap();
+        assert!(reader.finished());
+        assert_eq!(restored.pools, auth.pools);
+        assert_eq!(restored.anchors, 6);
+        println!("ANCHOR_RATIO_REGRESSION SMALL_UPDATES=0 TINY_UPDATES=0 GENERATIONS=0");
+    }
     use std::fs;
     #[test]
     fn legacy_posthoc_summary_location_is_explicit_and_null_is_rejected() {

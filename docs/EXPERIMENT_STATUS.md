@@ -1,5 +1,52 @@
 # 진단 및 구현 상태
 
+## G2 — C50 저장 실패로 pair 중단, QUALITY_INCONCLUSIVE
+
+2026-09-18 / EXECUTED_THIS_RUN. F512 부모의 anchor4/focus4 대6/2를 명시
+R3ER kind6으로 등록했다. 기존 parent Adam/step/tokenizer/정상 greedy를 유지하고
+LR actual1e-4를 사용했다. 원래 parent config의 lr 필드는3e-5이나 기존 F와 이번
+runner는 별도로 검증한 constant LR을 Adam에 전달한다. 새 warmup/reset은 없다.
+공통 anchor2048개는 원래 parent corpus의 ID와 전체 내용 hash로, focus512개는
+F training provenance로 검증했다. 같은 두 master stream의 prefix와 실제 배치
+4:4/6:2, input/target 분모를 직접 회귀로 검산했다. ordinary/CROSS/dev와 분리했다.
+
+C50은 실제256 SMALL updates, absolute24054, 생성1168/teacher0 후 저장 실패했다.
+terminal은 IntegrityFail/resume=false/complete=false/save_error를 보존한다.
+부모 max_steps23798을 새 fork metadata에 그대로 사용한 구현 결함으로 native
+validator가 저장을 거부했다. 이는 이번 runner의 결함이며 과거 학습 부진의 원인이라는
+증거가 아니다. A75와 추가 SMALL 실행은 중단했다. 원본 F512·Adam·corpus는 불변이다.
+새 weights/Adam endpoint는 저장되지 못했으므로 재개·fresh-process 검증 불가능하다.
+
+| C50 +256 in-memory 관측 | full | entity | event | errors |
+| --- | ---: | ---: | ---: | ---: |
+| dev256 | 244 | 250 | 251 | 0 |
+| CROSS512 | 464 | 503 | 498 | 0 |
+| ordinary400 | 233 | 별도 raw | 별도 raw | 0 |
+
+ordinary QA179/336,aux54/64,watch19/32. 원래 부모242/459/176과 비교한 부분 관측이며
+재현 가능한 endpoint 또는512 사전 비교 결과가 아니다. RAW native binding은 MISSING.
+H3/S4 품질 PASS 없음, seal NOT_OPENED, S5/S6 NOT_RUN, Goal1_READY/ACCEPTED=false.
+MODEL_PAIR=QUALITY_INCONCLUSIVE, ANCHOR_PRESERVED=UNRESOLVED, 다음 비율/LR 가설은
+이 중단 실험으로 선택하지 않는다. 먼저 저장 가능한 fork 경계가 필요하다. 새 학습0.
+
+수정은 새 fork 예산 metadata를 등록/첫 작업 전에 endpoint까지 검사하고, pair의
+저장 실패·손상·취소가 다른 arm에서도 중단을 유지하도록 했다. 기존 실패 실행은
+재작성/재등록하지 않는다. exhausted-parent native writer 실패→budget 수정 후
+writer/reader weights·Adam·state 일치 회귀 PASS(optimizer/generation0). 비율 회귀도
+PASS. 학습 전 quick59 PASS, 이후 직접 회귀2 PASS와 clippy PASS. TINY 누적45,
+scalar0. 새 binary TINY generation/teacher74/74; quick의 다른 legacy generation은
+별도 전역 계측하지 않았으므로 전체 generation 총수로 오해하지 않는다.
+
+실행 source는 G1 SHA0a13ac64b10ae189788fc999058403aaa1e947ad + 동결 diff,
+evaluator digest c4d42ad8919c2e86682e03f4a9bb69045376e72f527651c1979ef6bc07e6a447,
+binary af63cdd67dd92c6755e78c65f9627aa9048fd3a1f976e7582643677ba297cb2a.
+원자료는 local `artifacts/native-storage-quality-20260918/`의 `g2-source.diff`,
+`g2-source-binary.sha256`, `g2-C50.log`, `anchor-pair/{C50,A75}/inputs.r3er`,
+`anchor-pair/C50/segment-00/`이다. 모델/원문/로그는 Git에 게시하지 않는다.
+실제 command: frozen `g2-train recovery native run --root .../anchor-pair/C50`.
+첫 prepare의 corpus provenance 경로 오류와 개발 compile 실패도 별도 로그로 보존했다.
+G2는 실행 실패 상태로 닫고 승인된 독립 저장 작업 G3/G4를 계속한다.
+
 ## G1 — 최종 모델과 저장된 stop 경계 검증
 
 2026-09-18 / EXECUTED_THIS_RUN. CL-01/CL-02 RED→GREEN, CODE_CLOSE=VERIFIED.
