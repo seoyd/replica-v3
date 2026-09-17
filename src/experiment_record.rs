@@ -2611,11 +2611,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                 state.config.lr
             } else {
                 progress_lr(
-                    if s.lr_policy == 0 {
-                        "constant_1e-4"
-                    } else {
-                        "linear_1e-4_to_2e-5"
-                    },
+                    if s.lr_policy == 0 { "C" } else { "L" },
                     (n + 1 + s.lr_offset) as usize,
                 )?
             };
@@ -2817,6 +2813,40 @@ fn add_cases(cases: &mut Vec<Episode>, items: &[Episode]) -> Result<Vec<u32>> {
         })
         .collect()
 }
+// Two existing legacy schemas: arm panels carry their summary; post-hoc panels
+// carry raw rows/binding and keep the summary in their explicit terminal.
+fn legacy_panel_summary<'a>(
+    raw: &'a Value,
+    terminal: &'a Value,
+    kind: PanelKind,
+    key: &str,
+    posthoc: bool,
+) -> Result<&'a Value> {
+    let summary = match raw.get(key) {
+        Some(v) => v,
+        None if posthoc
+            && matches!(kind, PanelKind::Cross | PanelKind::Ordinary)
+            && raw.get("binding").is_some() =>
+        {
+            terminal
+                .get(kind.name())
+                .ok_or_else(|| bad("post-hoc terminal summary missing"))?
+        }
+        None => return Err(bad("legacy panel summary missing")),
+    };
+    if !summary.is_object() {
+        return Err(bad("legacy panel summary null/type"));
+    }
+    Ok(summary)
+}
+fn read_legacy_owned(path: &Path) -> Result<(Value, FileRef)> {
+    let bytes = neural::read_bounded(path, MAX_FILE)?;
+    let reference = FileRef {
+        locator: path.canonicalize()?.display().to_string(),
+        digest: hash(&bytes),
+    };
+    Ok((serde_json::from_slice(&bytes)?, reference))
+}
 #[allow(clippy::too_many_arguments)]
 fn import_legacy(
     policy: &Path,
@@ -2829,7 +2859,7 @@ fn import_legacy(
 ) -> Result<()> {
     control.check("legacy_import_start")?;
     // This is the sole explicit compatibility boundary. No normal reader calls it.
-    let p = read_json(policy)?;
+    let (p, policy_ref) = read_legacy_owned(policy)?;
     let inputs = load_verified_inputs(&progress_path(&p, "a0")?, Some(&p))?;
     let l = checkpoint::load(endpoint, Device::Cpu, true)?;
     let state = l
@@ -2837,16 +2867,16 @@ fn import_legacy(
         .training
         .as_ref()
         .ok_or_else(|| bad("legacy native training clock"))?;
-    let raw = [
-        read_json(evaluation)?,
-        read_json(cross)?,
-        read_json(ordinary)?,
-    ];
+    let (dev_raw, dev_ref) = read_legacy_owned(evaluation)?;
+    let (cross_raw, cross_ref) = read_legacy_owned(cross)?;
+    let (ordinary_raw, ordinary_ref) = read_legacy_owned(ordinary)?;
+    let raw = [dev_raw, cross_raw, ordinary_raw];
+    let raw_refs = [dev_ref, cross_ref, ordinary_ref];
     let terminal_path = cross
         .parent()
         .ok_or_else(|| bad("legacy terminal directory"))?
         .join("result.json");
-    let old_terminal = read_json(&terminal_path)?;
+    let (old_terminal, terminal_ref) = read_legacy_owned(&terminal_path)?;
     if old_terminal["candidate_eligible"] != false || old_terminal["resume_allowed"] != false {
         return Err(bad(
             "historical endpoint eligibility must remain explicitly false",
@@ -2854,17 +2884,18 @@ fn import_legacy(
     }
     let posthoc = raw[1].get("binding").is_some();
     let registration_path = cross.parent().unwrap().join("registration.json");
-    let registration = if posthoc {
-        Some(read_json(&registration_path)?)
+    let (registration, registration_ref) = if posthoc {
+        let (value, reference) = read_legacy_owned(&registration_path)?;
+        (Some(value), Some(reference))
     } else {
-        None
+        (None, None)
     };
     if let Some(reg) = &registration {
         if reg["native_sha256"] != file_hash(endpoint)?
             || reg["model_hash"] != l.model.weight_hash()?
             || reg["step"] != state.step
             || reg["tokenizer"] != l.tokenizer.semantic_id()
-            || reg["policy_sha256"] != file_hash(policy)?
+            || reg["policy_sha256"] != hex(&policy_ref.digest)
         {
             return Err(bad("historical registration/native/policy"));
         }
@@ -2896,7 +2927,7 @@ fn import_legacy(
     let source = p["source_digest"]
         .as_str()
         .ok_or_else(|| bad("legacy source provenance"))?;
-    let policy_hash = file_hash(policy)?;
+    let policy_hash = hex(&policy_ref.digest);
     let mut cases = Vec::new();
     let train = add_cases(&mut cases, &inputs.train)?;
     let mut panels = Vec::new();
@@ -2949,7 +2980,10 @@ fn import_legacy(
         // Old receipts are explicitly audit-only: don't claim JSON float identity was bit stable.
         // Existing content/token checks remain mandatory; current binding is separately recorded.
         let score = verify_panel_and_rescore(&spec, rows, None, &l, true)?;
-        verify_score(&v[score_key], &score)?;
+        verify_score(
+            legacy_panel_summary(v, &old_terminal, kind, score_key, posthoc)?,
+            &score,
+        )?;
         if matches!(kind, PanelKind::Cross | PanelKind::Ordinary) {
             verify_score(&old_terminal[kind.name()], &score)?;
             if let Some(binding) = v
@@ -2992,29 +3026,29 @@ fn import_legacy(
     run_material.extend(unhex(&file_hash(endpoint)?)?);
     let run = hash(&run_material);
     let mut origins = Vec::new();
-    for (role, path) in [
-        ("legacy-policy", policy),
-        ("legacy-endpoint", endpoint),
-        ("legacy-evaluation", evaluation),
-        ("legacy-cross", cross),
-        ("legacy-ordinary", ordinary),
-        ("legacy-terminal", terminal_path.as_path()),
+    for (role, original) in [
+        ("legacy-policy", policy_ref),
+        (
+            "legacy-endpoint",
+            FileRef {
+                locator: endpoint.canonicalize()?.display().to_string(),
+                digest: unhex(&file_hash(endpoint)?)?,
+            },
+        ),
+        ("legacy-evaluation", raw_refs[0].clone()),
+        ("legacy-cross", raw_refs[1].clone()),
+        ("legacy-ordinary", raw_refs[2].clone()),
+        ("legacy-terminal", terminal_ref),
     ] {
         origins.push(Origin {
             role: role.into(),
-            original: FileRef {
-                locator: path.canonicalize()?.display().to_string(),
-                digest: unhex(&file_hash(path)?)?,
-            },
+            original,
         });
     }
-    if registration.is_some() {
+    if let Some(original) = registration_ref {
         origins.push(Origin {
             role: "legacy-post-hoc-registration".into(),
-            original: FileRef {
-                locator: registration_path.canonicalize()?.display().to_string(),
-                digest: unhex(&file_hash(&registration_path)?)?,
-            },
+            original,
         });
     }
     let parent = CheckpointRef {
@@ -3051,9 +3085,17 @@ fn import_legacy(
         panels,
         tape: vec![],
         eval_steps: vec![],
-        lr_policy: 0,
-        lr_offset: 0,
-        baseline: [0; 3],
+        lr_policy: match p["lr_policy"].as_str() {
+            Some("C") => 0,
+            Some("L") => 1,
+            _ => return Err(bad("legacy LR policy")),
+        },
+        lr_offset: progress_u64(&p, "lr_offset")?,
+        baseline: [
+            progress_u64(&p, "baseline_dev")?,
+            progress_u64(&p, "baseline_watch")?,
+            progress_u64(&p, "baseline_errors")?,
+        ],
         anchor_floor: progress_u64(&p, "anchor_floor")?,
     };
     publish(output, "inputs.r3er", &Record::Inputs(Box::new(s.clone())))?;
@@ -3062,12 +3104,12 @@ fn import_legacy(
         let e = EvalPayload {
             run,
             binding: s.binding(),
-            source: unhex(&file_hash(match kind {
-                PanelKind::Dev | PanelKind::Watch => evaluation,
-                PanelKind::Cross => cross,
-                PanelKind::Ordinary => ordinary,
+            source: match kind {
+                PanelKind::Dev | PanelKind::Watch => raw_refs[0].digest,
+                PanelKind::Cross => raw_refs[1].digest,
+                PanelKind::Ordinary => raw_refs[2].digest,
                 _ => return Err(bad("legacy quality panel kind")),
-            })?)?,
+            },
             model: s.parent.model,
             tokenizer: s.parent.tokenizer,
             architecture: s.parent.architecture,
@@ -3329,6 +3371,39 @@ fn bench(root: &Path, terminal: &str, output: &Path, control: &mut RunControl) -
     // Comparison serialization includes every typed field, including teacher/timing and hashes.
     // JSON byte-array hashes are explicitly reported; original legacy schema is a separate figure.
     let json = serde_json::to_vec(&record)?;
+    let original = s
+        .origins
+        .iter()
+        .find(|o| o.role == "legacy-evaluation")
+        .ok_or_else(|| bad("benchmark legacy origin missing"))?;
+    let old_bytes = neural::read_bounded(Path::new(&original.original.locator), MAX_FILE)?;
+    if hash(&old_bytes) != original.original.digest {
+        return Err(bad("benchmark original changed"));
+    }
+    let old: Value = serde_json::from_slice(&old_bytes)?;
+    let old_rows = old["dev_rows"]
+        .as_array()
+        .ok_or_else(|| bad("benchmark legacy rows"))?;
+    if old_rows.len() != e.rows.len()
+        || old_rows.iter().zip(&e.rows).any(|(a, b)| {
+            serde_json::from_value::<Vec<u32>>(a["raw_tokens"].clone())
+                .ok()
+                .as_ref()
+                != Some(&b.tokens)
+        })
+    {
+        return Err(bad("benchmark content differs"));
+    }
+    let legacy = serde_json::to_vec(old_rows)?;
+    let cases: Vec<_> = panel(&s, PanelKind::Dev)?
+        .cases
+        .iter()
+        .map(|i| s.cases[*i as usize].clone())
+        .collect();
+    let mut case_bytes = Vec::new();
+    for case in &cases {
+        episode_encode(case, &mut case_bytes);
+    }
     std::fs::create_dir(output)?;
     let count = e.rows.len();
     let tokens: usize = e.rows.iter().map(|r| r.tokens.len()).sum();
@@ -3345,7 +3420,8 @@ fn bench(root: &Path, terminal: &str, output: &Path, control: &mut RunControl) -
         std::env::var("RAYON_NUM_THREADS"),
         std::env::var("VECLIB_MAXIMUM_THREADS")
     );
-    for format in ["binary", "typed-json"] {
+    report.push_str(&format!("LEGACY_ROWS_JSON_BYTES={} ACTIVE_BINARY_CASE_BYTES={} ACTIVE_CASES_PLUS_BINARY_PANEL={}\nLEGACY_COMPARISON=schema dedup + codec; legacy rows repeat input/expected/derived text; binary reconstructs it from the included active owned cases and tokenizer\nCANONICAL_INPUTS_FILE_BYTES={} (also includes unused training/other panels, excluded from this panel comparison)\n",legacy.len(),case_bytes.len(),binary.len()+case_bytes.len(),std::fs::metadata(root.join("inputs.r3er"))?.len()));
+    for format in ["binary", "typed-json", "legacy-row-json"] {
         for operation in ["encode", "decode", "hash", "verify", "durable"] {
             let (median, p95) = timed(control, 10, |i| {
                 match (format, operation) {
@@ -3355,17 +3431,26 @@ fn bench(root: &Path, terminal: &str, output: &Path, control: &mut RunControl) -
                     ("typed-json", "encode") => {
                         std::hint::black_box(serde_json::to_vec(&record)?);
                     }
+                    ("legacy-row-json", "encode") => {
+                        std::hint::black_box(serde_json::to_vec(old_rows)?);
+                    }
                     ("binary", "decode") => {
                         std::hint::black_box(Record::decode(&binary)?);
                     }
                     ("typed-json", "decode") => {
                         std::hint::black_box(serde_json::from_slice::<Value>(&json)?);
                     }
+                    ("legacy-row-json", "decode") => {
+                        std::hint::black_box(serde_json::from_slice::<Vec<Value>>(&legacy)?);
+                    }
                     ("binary", "hash") => {
                         std::hint::black_box(hash(&binary));
                     }
                     ("typed-json", "hash") => {
                         std::hint::black_box(hash(&json));
+                    }
+                    ("legacy-row-json", "hash") => {
+                        std::hint::black_box(hash(&legacy));
                     }
                     ("binary", "verify") => {
                         let Record::Evaluation(v) = Record::decode(&binary)? else {
@@ -3377,8 +3462,27 @@ fn bench(root: &Path, terminal: &str, output: &Path, control: &mut RunControl) -
                         std::hint::black_box(serde_json::from_slice::<Value>(&json)?);
                         std::hint::black_box(hash(&json));
                     }
+                    ("legacy-row-json", "verify") => {
+                        let rows: Vec<Value> = serde_json::from_slice(&legacy)?;
+                        let spec = super::PanelSpec {
+                            id: "dev",
+                            cases: &cases,
+                            split_hash: &hex(&panel(&s, PanelKind::Dev)?.dataset),
+                            policy_hash: &hex(&s.policy),
+                            source: &hex(&s.source),
+                            model: &hex(&s.parent.model),
+                            step: s.parent.step as usize,
+                        };
+                        std::hint::black_box(verify_panel_and_rescore(
+                            &spec, &rows, None, &l, true,
+                        )?);
+                    }
                     (_, "durable") => {
-                        let bytes = if format == "binary" { &binary } else { &json };
+                        let bytes = match format {
+                            "binary" => &binary,
+                            "typed-json" => &json,
+                            _ => &legacy,
+                        };
                         let p = output.join(format!("{format}-{i}.dat"));
                         publish_bytes(&p, bytes)?;
                         let loaded = neural::read_bounded(&p, MAX_FILE)?;
@@ -3648,6 +3752,37 @@ fn fixture_check(roots: &[PathBuf]) -> Result<()> {
 mod binary_tests {
     use super::*;
     use std::fs;
+    #[test]
+    fn legacy_posthoc_summary_location_is_explicit_and_null_is_rejected() {
+        let score = json!({"auxiliary":[2,4],"qa":[1,3]});
+        let terminal = json!({"cross":score});
+        let rows_only = json!({"binding":{"complete":true},"rows":[]});
+        assert_eq!(
+            legacy_panel_summary(&rows_only, &terminal, PanelKind::Cross, "score", true).unwrap(),
+            &terminal["cross"]
+        );
+        assert!(
+            legacy_panel_summary(&rows_only, &terminal, PanelKind::Cross, "score", false).is_err()
+        );
+        assert!(
+            legacy_panel_summary(&rows_only, &Value::Null, PanelKind::Cross, "score", true)
+                .is_err()
+        );
+        let null = json!({"binding":{},"score":null});
+        assert!(legacy_panel_summary(&null, &terminal, PanelKind::Cross, "score", true).is_err());
+    }
+    #[test]
+    fn legacy_owned_digest_is_from_the_consumed_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("legacy.json");
+        let before = br#"{"number":0.009906130842864513}"#;
+        fs::write(&file, before).unwrap();
+        let (owned, reference) = read_legacy_owned(&file).unwrap();
+        fs::write(&file, br#"{"number":0}"#).unwrap();
+        assert_eq!(reference.digest, hash(before));
+        assert_ne!(reference.digest, hash(&fs::read(&file).unwrap()));
+        assert_ne!(owned["number"], 0);
+    }
     #[test]
     fn scalar_literal_bits_and_bounded_records() {
         let golden = [1, 0x9a, 0x99, 0x99, 0x99, 0x99, 0x99, 0xb9, 0x3f];
