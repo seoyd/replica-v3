@@ -34,6 +34,26 @@ aux63/64; crossed development210/512. Parent/model/Adam/raw/corpus preserved, fi
 invalid prefixes reproduce cached/full, bounded QK and tokenizer/exposure diagnostics saved.
 Quick34/direct4 and release pass; SMALL/TINY/scalar updates0. NEXT=A1 independent C/L forks.
 
+A1 execution registration: `recovery progress-prepare` binds both C/L policies to the same
+A0 native parent, Adam content, cumulative step22774, inherited RNG and first512 draws of
+the existing skill tape. It records every input/target denominator before training.
+`progress-arm` permits only its registered arm and latest clean TIME_BUDGET continuation;
+ordinary trainer resume remains rejected. Native budget metadata extends for the explicit
+fork; optimizer hyperparameters and original corpus remain unchanged. LR comes from the
+sidecar policy, not the ordinary cosine config. The policy clock is retained across segments.
+Guards count all generation errors across dev256+watch32 (denominator288); parent208/18/errors2.
+Closed/failed segment calls and elapsed time count toward the global budget; an unclosed
+segment blocks continuation. `progress-close` checks actual traces and compares common
+prefixes before any conditional F/N or fresh-process/sealed acceptance. No seal is opened
+by these commands. A0 publication60a4f703b2824be971f267f7936876c205608d51 matched origin/main.
+
+Closed A1: both512 updates at identical actual exposure. C dev225/CROSS259/ordinary178;
+L dev227/CROSS289/ordinary185, auxiliary53 (C62/parent63). Neither meets raw H3 acceptance.
+L is the conditional A2 parent by the registered old-full ranking, not a claim of general
+LR superiority. Both native endpoints/Adam/raw receipts remain immutable. NEXT=A2 F/N
+with inherited L policy (already past its64-update ramp), identical anchor/distribution,
+at most512 updates each. No sealed/final input has been opened.
+
 ## Previous: R3-HARNESS-TO-GOAL1-1.0
 
 Renewed continuation after publication f964a2a0308dd64852fd3d33e83e8e431373ab17:

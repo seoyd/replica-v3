@@ -39,6 +39,15 @@ bindings. Missing legacy fields are unverified; fresh replay cannot cure a prior
 
 ## Bounded copy curriculum continuation
 
+`replica-train recovery progress-prepare --a0 A0_DIRECTORY --harness QUICK_SUMMARY --output NEW_PAIR`
+registers both LR policies and the common immutable parent/tape before any updates.
+Use the same frozen executable with `recovery progress-arm --experiment NEW_PAIR --arm C`
+then `--arm L`, one process at a time, VECLIB_MAXIMUM_THREADS=1/RAYON_NUM_THREADS=1.
+Only a clean TIME_BUDGET receipt permits explicit `--resume LATEST_SEGMENT_DIRECTORY`.
+`recovery progress-close --experiment NEW_PAIR` recounts actual trace exposure and paired
+raw scores; it never opens sealed cases or grants Goal1 readiness. Existing closed1024
+receipts remain immutable; new outputs must not reuse their directories.
+
 `replica-train recovery progress-baseline` is the no-update A0 entry for controlled H3
 progress. Explicit inputs are the H2 baseline, stopped1024 segment directory, native inference
 file, H3 corpus, exact-source passing quick receipt, new output and fixed development seed.

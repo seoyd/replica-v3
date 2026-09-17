@@ -4,7 +4,58 @@
 2026-09-17. 이전 R3-CUSTOMIZE-AND-DIAGNOSE-1.0 실행 이력은 아래 보존한다.
 모든 성공 표시는 구현자 확인이며 INDEPENDENT_PENDING이다.
 
-## 현재: A0 기준점 검증 완료, C/L 실행 전
+## 현재: A1 C/L 비교 종료, 조건부 A2 준비
+
+EXECUTED_THIS_RUN. C/L 각각512 NEW updates, input1,225,871/target138,665를 소비했다.
+동일 native 부모·Adam·누적 step22774·RNG와 실제512회 sample 순서/token 분모가 확인됐다.
+각 군4096draws=anchor2048+focus2048, unique2560bases/4096views다. 두 독립 모델의 노출을
+한 모델의 추가 epoch로 합산하지 않는다. 이번 새 SMALL 누계1024, 잔여는 조건부 F/N 각512다.
+
+| normal greedy | A0 parent | C constant3e-5 | L ramp64→1e-4 |
+| --- | ---: | ---: | ---: |
+| old dev full | 208/256 | 225/256 | 227/256 |
+| entity / event | 233 / 249 | 248 / 250 | 246 / 253 |
+| dev errors | 2 | 2 | 3 |
+| CROSS full | 210/512 | 259/512 | 289/512 |
+| CROSS entity / event | 262 / 492 | 299 / 502 | 321 / 507 |
+| CROSS errors | 1 | 1 | 0 |
+| ordinary | 178/336 | 178/336 | 185/336 |
+| auxiliary | 63/64 | 62/64 | 53/64 |
+| watch | 18/32 | 18/32 | 17/32 |
+
+C dev0/128/256/512=208/209/208/225; L=208/160/221/227. L의128회 하락 경고는256회에
+해제됐다. 양쪽 SCREENING_BUDGET_REACHED/control COMPLETED, resume=false,
+comparison eligible=true/candidate eligible=false다. 취소/무한값/시간초과/자료 변경 관측은 없다.
+C 941.34s/max RSS6,699,188,224B; L 939.41s/max RSS6,648,381,440B. 별도 peak memory
+footprint는 C7,204,084,168B/L7,208,016,328B다. 각1776 generation+1776 teacher calls.
+
+동일512회의 L 대 C old-dev 득실18/16, base4/4 득실6/6; CROSS 득실45/15, base11/5다.
+작은 old-full 차이로 일반적인 LR 우월성은 주장하지 않는다. C도 LR 변경 없이 추가 노출로
+개선됐다. L의 auxiliary 하락도 보존한다. 두 군 모두 H3 수용 FAIL, 봉인 NOT_OPENED다.
+A2 부모는 계약의 old-full 우선 순서로 L을 선택했다. 이는 S4/Goal1 승격이 아니다.
+
+실행 source digest e61ead8af945c5ab44d0909244a01442cee013e0f05f3d820680f671bb451826,
+source HEAD60a4f703b2824be971f267f7936876c205608d51 + 관련 미커밋 변경.
+동결 binary `artifacts/h3-controlled-20260917/a1-ready-frozen`, SHA
+519379ce072029a6dafe4177b5326ee4de08a59708a2db8afa6032121548a84f.
+C/L checkpoint·trace·raw: `artifacts/h3-controlled-20260917/a1/{C,L}/segment-00-0000/`.
+C native SHA d9bfabf9d3ae64d22fe0a9c102acab86ac4721ac33b1a1c0dc3cd0608234779e,
+model506076cf584b43af22bab18819a0cd38232922bd1bbeed68ff9b4bc608fa4d6a.
+L native SHA20996fa3c4ac2a0445014bf1c0fd394cefbc34c9f64f74c4dce62ea81e17a4eb,
+model eb9ef9f8612a5d9e43acb202945ac195b3deac4acbf8d45b1f56c4f735bcd601,
+Adam f4a37d163a1060a6aff14962401684e8e2c07920afb6934b372d07bf712bb8a2.
+Pair audit: `artifacts/h3-controlled-20260917/a1/comparison.json`; logs `a1-C.log`, `a1-L.log`,
+`a1-close.log` in the parent experiment directory. H3 corpus/CROSS remain the A0 files below.
+
+검증: 직접 progress6 tests, quick-a1-ready37 executions, 기존 constant-policy ordinary
+resume 거부1 test, release 제품/학습/checker build 모두 PASS. SMALL 테스트 업데이트0.
+새 native LR 재개 회귀는 실행당 TINY10 updates로 직접1회/quick3회 총40회다.
+초기 compile/test 실패와 두 번의 updates0 사전등록 실패 로그도 보존했다. 사전등록 실패는
+진단 JSON reader의 train_loss 1ULP 반올림 차이였다. 기록 대조에 같은 JSON 읽기 규칙을
+적용하고 실제 상태는 native에서 읽어 hash로 대조한다. 가중치/Adam 저장 형식은 변경하지
+않았고 LR trace에는 실제 f64 bits도 기록한다. 계측/UTF8 정책은 학습 중 변경하지 않았다.
+
+## A0 기준점 검증 완료 기록
 
 2026-09-17, EXECUTED_THIS_RUN. 시작 HEAD=be6e2b7a7f59e444ffa25d8bae9e1af34d418d66,
 추적 파일 clean, 기존 untracked487개 보존. rustc/cargo1.98.1, locked/offline,

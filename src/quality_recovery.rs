@@ -209,6 +209,29 @@ impl RunControl {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Register both independent LR forks before either optimizer is called.
+    ProgressPrepare {
+        #[arg(long)]
+        a0: PathBuf,
+        #[arg(long)]
+        harness: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Execute one registered controlled-progress arm; only clean time stops can resume.
+    ProgressArm {
+        #[arg(long)]
+        experiment: PathBuf,
+        #[arg(long)]
+        arm: String,
+        #[arg(long)]
+        resume: Option<PathBuf>,
+    },
+    /// Compare actual common prefixes and choose a safe endpoint without opening the seal.
+    ProgressClose {
+        #[arg(long)]
+        experiment: PathBuf,
+    },
     /// A0 only: immutable H3 parent replay, ordinary QA, token/QK/exposure and crossed development.
     ProgressBaseline {
         #[arg(long)]
@@ -591,13 +614,27 @@ fn registry(path: &Path) -> Result<Value> {
 pub fn run(command: Command) -> Result<()> {
     let mut budget = RunControl::command(matches!(
         &command,
-        Command::Arm { .. } | Command::SkillRun { .. }
+        Command::Arm { .. } | Command::SkillRun { .. } | Command::ProgressArm { .. }
     ))?;
-    if matches!(&command, Command::ProgressBaseline { .. }) {
+    if matches!(
+        &command,
+        Command::ProgressBaseline { .. } | Command::ProgressArm { .. }
+    ) {
         budget.deadline = budget.start + Duration::from_secs(1800);
     }
     budget.check("command_started")?;
     let outcome = match command {
+        Command::ProgressPrepare {
+            a0,
+            harness,
+            output,
+        } => progress_prepare(&a0, &harness, &output, &mut budget),
+        Command::ProgressArm {
+            experiment,
+            arm,
+            resume,
+        } => progress_arm(&experiment, &arm, resume.as_deref(), &mut budget),
+        Command::ProgressClose { experiment } => progress_close(&experiment, &mut budget),
         Command::ProgressBaseline {
             baseline,
             run,
@@ -3253,6 +3290,867 @@ fn skill_run(
     outcome.and(control.stop_result())
 }
 const PROGRESS_CONTRACT: &str = "R3-H3-CONTROLLED-PROGRESS-1.0";
+
+fn progress_lr(policy: &str, j: usize) -> Result<f64> {
+    if j == 0 {
+        return Err(Error::Invalid("LR clock starts at update one".into()));
+    }
+    match policy {
+        "C" => Ok(3e-5),
+        "L" => Ok(3e-5 + (1e-4 - 3e-5) * j.min(64) as f64 / 64.),
+        _ => Err(Error::Invalid("unknown controlled LR policy".into())),
+    }
+}
+fn progress_path(v: &Value, key: &str) -> Result<PathBuf> {
+    v[key]
+        .as_str()
+        .map(PathBuf::from)
+        .ok_or_else(|| Error::Corrupt(format!("missing path {key}")))
+}
+fn progress_u64(v: &Value, key: &str) -> Result<u64> {
+    v[key]
+        .as_u64()
+        .ok_or_else(|| Error::Corrupt(format!("missing count {key}")))
+}
+// Compare a persisted diagnostic snapshot using its actual JSON reader. Native
+// state/weights/moments remain authoritative and are independently byte/content hashed.
+fn progress_snapshot(v: &impl Serialize) -> Result<Value> {
+    Ok(serde_json::from_slice(&serde_json::to_vec(v)?)?)
+}
+fn progress_policy_valid(p: &Value) -> bool {
+    p["contract"] == PROGRESS_CONTRACT
+        && p["entry"] == "EXPERIMENT_FORK"
+        && p["parent_sha256"]
+            .as_str()
+            .is_some_and(|h| h.len() == 64 && h.bytes().all(|c| c.is_ascii_hexdigit()))
+        && p["maximum_updates"] == 512
+        && p["max_input_tokens"] == 2_000_000
+        && p["max_target_tokens"] == 500_000
+        && p["h3_max_updates"] == 2048
+        && p["h3_seconds"] == 7200
+        && p["normal_policy"] == "normal_greedy_v1"
+        && p["lr_policy"]
+            .as_str()
+            .is_some_and(|s| progress_lr(s, 1).is_ok())
+}
+fn progress_config(initial: &TrainingState) -> TrainConfig {
+    let mut c = initial.config.clone();
+    c.budget_start_step = initial.step;
+    c.max_steps = initial.step + 512;
+    c.budget_start_tokens = initial.consumed_tokens;
+    c.max_tokens = initial.consumed_tokens + 2_000_000;
+    c.validate_every = 128;
+    c
+}
+fn progress_prepare(
+    a0: &Path,
+    harness: &Path,
+    output: &Path,
+    control: &mut RunControl,
+) -> Result<()> {
+    control.check("progress_prepare")?;
+    let checked = verified_harness(harness)?;
+    let a = read_json(&a0.join("summary.json"))?;
+    let parent = progress_path(&a, "parent")?;
+    let receipt_path = parent.parent().unwrap().join("result.json");
+    let receipt = read_json(&receipt_path)?;
+    let l = checkpoint::load(&parent, Device::Cpu, true)?;
+    let state = l
+        .manifest
+        .training
+        .as_ref()
+        .ok_or_else(|| Error::Invalid("fork needs native Adam".into()))?;
+    let corpus = progress_path(&a, "corpus")?;
+    let (manifest, episodes, _) = data::load(&corpus)?;
+    if a["a0_pass"] != true
+        || a["contract"] != PROGRESS_CONTRACT
+        || a["parent_file_sha256"] != file_hash(&parent)?
+        || a["model_hash"] != l.model.weight_hash()?
+        || a["optimizer_hash"] != optimizer_hash(&l.optimizer)?
+        || a["state"] != progress_snapshot(state)?
+        || receipt["resume_allowed"] != false
+        || receipt["new_updates"] != 1024
+        || a["train_hash"] != manifest.train.sha256
+        || a["dev_hash"] != manifest.validation.sha256
+        || a["cross"]["validation"]["status"] != "SERIALIZED_INPUT_VERIFIED"
+        || a["cross"]["file_sha256"] != file_hash(&a0.join("cross-development.json"))?
+        || state.config.microbatch != 8
+        || state.config.accumulation != 1
+        || state.config.sample_group_size != 1
+        || state.config.first_target_weight != 8.
+        || state.config.weight_decay != 0.01
+    {
+        return Err(Error::Corrupt(
+            "A0/fork identity or fixed training contract".into(),
+        ));
+    }
+    let tape = skill_tape(&episodes, state.sampler_state)?[..512].to_vec();
+    let framed = samples(&episodes, &l.tokenizer, 512)?;
+    let denominators: Vec<_> = tape
+        .iter()
+        .map(|(indices, _)| {
+            let input: usize = indices.iter().map(|i| framed[*i].tokens.len() - 1).sum();
+            let target: usize = indices
+                .iter()
+                .map(|i| framed[*i].tokens.len() - framed[*i].response_start)
+                .sum();
+            (input, target)
+        })
+        .collect();
+    let mut common = json!({"contract":PROGRESS_CONTRACT,"node":"A1","entry":"EXPERIMENT_FORK","run_id":output,
+        "a0":a0,"a0_hash":file_hash(&a0.join("summary.json"))?,"parent":parent,"parent_sha256":file_hash(&parent)?,
+        "parent_receipt":receipt_path,"parent_receipt_sha256":file_hash(&receipt_path)?,"initial_model_hash":a["model_hash"],
+        "initial_adam_hash":a["optimizer_hash"],"initial_state":state,"initial_state_native_hash":digest(state)?,"tokenizer_hash":l.tokenizer.semantic_id(),
+        "source_commit":source_commit()?,"source_digest":checked["source_digest"],"binary_hash":file_hash(&std::env::current_exe()?)?,
+        "harness":harness,"harness_hash":file_hash(harness)?,"backend":neural::cpu_backend(),"compute_threads":1,
+        "corpus":corpus,"train_hash":manifest.train.sha256,"dev_hash":manifest.validation.sha256,
+        "cross_hash":a["cross"]["file_sha256"],"tape":tape,"tape_hash":digest(&tape)?,"denominators":denominators,
+        "denominators_hash":digest(&denominators)?});
+    let watch = read_json(&a0.join("watch32.json"))?;
+    let watch_score = skill_score(
+        watch["rows"]
+            .as_array()
+            .ok_or_else(|| Error::Corrupt("A0 watch rows".into()))?,
+    )?;
+    let limits = json!({"maximum_updates":512,"max_input_tokens":2_000_000,"max_target_tokens":500_000,
+        "h3_max_updates":2048,"h3_seconds":7200,"command_seconds":1800,"cleanup_seconds":120,"normal_policy":"normal_greedy_v1",
+        "baseline_dev":a["old_dev"]["exact_matches"],"baseline_watch":a["watch"]["exact_matches"],
+        "baseline_errors":progress_u64(&a["old_dev"],"generation_error_cases")?+progress_u64(&watch_score,"generation_error_cases")?,
+        "anchor_floor":a["ordinary_parent"]["qa"][0].as_u64().ok_or_else(||Error::Corrupt("A0 ordinary baseline".into()))?.max(175),
+        "evaluation_updates":[0,128,256,512],"guard":{"dev_drop":26,"watch_drop":4,"error_increase":6,"streak":2,"one_shot_error_fraction":0.2,"error_panel":"dev256+watch32; complete denominator288"},
+        "zero_evaluation":"DERIVED_FROM_A0_IDENTICAL_MODEL","new_lr_clock":0,"lr_offset":0,"seal":"NOT_OPENED"});
+    common
+        .as_object_mut()
+        .unwrap()
+        .extend(limits.as_object().unwrap().clone());
+    std::fs::create_dir(output)?;
+    for arm in ["C", "L"] {
+        common["arm"] = json!(arm);
+        common["lr_policy"] = json!(arm);
+        common["lr_function"] = json!(if arm == "C" {
+            "3e-5"
+        } else {
+            "3e-5+(1e-4-3e-5)*min(j,64)/64; j=1..512, cumulative Adam retained"
+        });
+        let dir = output.join(arm);
+        std::fs::create_dir(&dir)?;
+        save(&dir.join("policy.json"), &common)?;
+    }
+    control.check("progress_pair_registered")?;
+    save(
+        &output.join("pair.json"),
+        &json!({"node":"A1","contract":PROGRESS_CONTRACT,"arms":["C","L"],
+        "policy_hashes":[file_hash(&output.join("C/policy.json"))?,file_hash(&output.join("L/policy.json"))?],
+        "a0_elapsed_seconds":a["control"]["elapsed_seconds"],"prior_experiment":null,"maximum_pair_updates":1024}),
+    )?;
+    Ok(())
+}
+
+/// Counts every closed segment, including failed segments; an unclosed segment blocks reruns.
+fn progress_ledger(root: &Path) -> Result<(u64, u64, u64, f64)> {
+    let pair = read_json(&root.join("pair.json"))?;
+    let mut total = (0, 0, 0, 0.);
+    if let Some(prior) = pair["prior_experiment"].as_str() {
+        total = progress_ledger(Path::new(prior))?;
+    } else {
+        total.3 = pair["a0_elapsed_seconds"]
+            .as_f64()
+            .filter(|v| v.is_finite() && *v >= 0.)
+            .ok_or_else(|| Error::Corrupt("A0 elapsed budget".into()))?;
+    }
+    for arm in pair["arms"]
+        .as_array()
+        .ok_or_else(|| Error::Corrupt("pair arms".into()))?
+    {
+        let directory = root.join(
+            arm.as_str()
+                .ok_or_else(|| Error::Corrupt("arm name".into()))?,
+        );
+        for entry in std::fs::read_dir(directory)? {
+            let path = entry?.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let r = read_json(&path.join("result.json"))?;
+            total.0 += progress_u64(&r, "segment_updates")?;
+            total.1 += progress_u64(&r, "segment_input_tokens")?;
+            total.2 += progress_u64(&r, "segment_target_tokens")?;
+            total.3 += r["segment_elapsed_seconds"]
+                .as_f64()
+                .filter(|v| v.is_finite() && *v >= 0.)
+                .ok_or_else(|| Error::Corrupt("segment elapsed".into()))?;
+            if r["reason"] == "CANCELLED"
+                || r["reason"] == "INTEGRITY_FAIL"
+                || r["checkpoint_saved"] != true
+            {
+                return Err(Error::Invalid(
+                    "cancelled/invalid pair cannot automatically continue".into(),
+                ));
+            }
+        }
+    }
+    if total.0 > 2048 || total.1 > 8_000_000 || total.2 > 2_000_000 || total.3 >= 7200. {
+        return Err(Error::Invalid(
+            "controlled H3 total budget exhausted".into(),
+        ));
+    }
+    Ok(total)
+}
+fn progress_guard(p: &Value, e: &Value, streak: &mut [u64; 3]) -> Result<bool> {
+    if e["final_evaluation_complete"] != true
+        || e["dev"]["denominator"] != 256
+        || e["watch"]["denominator"] != 32
+    {
+        return Err(Error::Corrupt(
+            "guard requires all288 cases including errors".into(),
+        ));
+    }
+    let errors = progress_u64(&e["dev"], "generation_error_cases")?
+        + progress_u64(&e["watch"], "generation_error_cases")?;
+    let bad = [
+        progress_u64(p, "baseline_dev")?.saturating_sub(progress_u64(&e["dev"], "exact_matches")?)
+            >= 26,
+        progress_u64(p, "baseline_watch")?
+            .saturating_sub(progress_u64(&e["watch"], "exact_matches")?)
+            >= 4,
+        errors >= progress_u64(p, "baseline_errors")? + 6,
+    ];
+    for (s, b) in streak.iter_mut().zip(bad) {
+        *s = if b { *s + 1 } else { 0 };
+    }
+    Ok(streak.iter().any(|n| *n >= 2) || errors * 5 >= 288)
+}
+fn progress_time_resume(r: &Value) -> bool {
+    r["reason"] == "TIME_BUDGET"
+        && r["resume_allowed"] == true
+        && r["checkpoint_saved"] == true
+        && r["control"]["observed_conditions"] == json!(["TIME_BUDGET"])
+        && r.get("save_error") == Some(&Value::Null)
+        && r["cleanup_limit_exceeded"] == false
+        && r["new_updates"].as_u64().is_some_and(|n| n <= 512)
+}
+
+fn progress_arm(
+    root: &Path,
+    arm: &str,
+    resume: Option<&Path>,
+    control: &mut RunControl,
+) -> Result<()> {
+    control.check("progress_arm_start")?;
+    let pair = read_json(&root.join("pair.json"))?;
+    let arms = pair["arms"]
+        .as_array()
+        .ok_or_else(|| Error::Corrupt("pair arms".into()))?;
+    let arm_index = arms
+        .iter()
+        .position(|a| a == arm)
+        .ok_or_else(|| Error::Invalid("unregistered arm".into()))?;
+    let output = root.join(arm);
+    let policy_path = output.join("policy.json");
+    let p = read_json(&policy_path)?;
+    for (i, a) in arms.iter().enumerate() {
+        if pair["policy_hashes"][i]
+            != file_hash(&root.join(a.as_str().unwrap()).join("policy.json"))?
+        {
+            return Err(Error::Corrupt("registered pair policy changed".into()));
+        }
+    }
+    let checked = verified_harness(&progress_path(&p, "harness")?)?;
+    if !progress_policy_valid(&p)
+        || p["source_digest"] != checked["source_digest"]
+        || p["binary_hash"] != file_hash(&std::env::current_exe()?)?
+        || p["backend"] != neural::cpu_backend()
+        || p["harness_hash"] != file_hash(&progress_path(&p, "harness")?)?
+        || std::env::var("VECLIB_MAXIMUM_THREADS").as_deref() != Ok("1")
+        || std::env::var("RAYON_NUM_THREADS").as_deref() != Ok("1")
+    {
+        return Err(Error::Invalid(
+            "frozen experiment/source/binary/thread policy required".into(),
+        ));
+    }
+    let ledger = progress_ledger(root)?;
+    control.deadline = control.start + Duration::from_secs_f64((7200. - ledger.3).min(1800.));
+    let parent = progress_path(&p, "parent")?;
+    if p["parent_sha256"] != file_hash(&parent)?
+        || p["parent_receipt_sha256"] != file_hash(&progress_path(&p, "parent_receipt")?)?
+    {
+        return Err(Error::Corrupt("immutable fork parent changed".into()));
+    }
+    let a0 = progress_path(&p, "a0")?;
+    if p["a0_hash"] != file_hash(&a0.join("summary.json"))?
+        || p["cross_hash"] != file_hash(&a0.join("cross-development.json"))?
+    {
+        return Err(Error::Corrupt("frozen development baseline changed".into()));
+    }
+    let a = read_json(&a0.join("summary.json"))?;
+    let frozen = load(&progress_path(&a, "baseline")?.join("frozen.json"))?;
+    let (manifest, episodes, dev) = data::load(&progress_path(&p, "corpus")?)?;
+    if p["train_hash"] != manifest.train.sha256 || p["dev_hash"] != manifest.validation.sha256 {
+        return Err(Error::Corrupt("frozen experiment corpus changed".into()));
+    }
+    let mut previous = Value::Null;
+    let mut dirs = std::fs::read_dir(&output)?
+        .map(|e| e.map(|e| e.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    dirs.retain(|d| d.is_dir());
+    dirs.sort();
+    if let Some(path) = resume {
+        if dirs.last().is_none_or(|last| last != path) {
+            return Err(Error::Invalid(
+                "resume must use latest owned segment".into(),
+            ));
+        }
+        previous = read_json(&path.join("result.json"))?;
+        if !progress_time_resume(&previous)
+            || previous["policy_sha256"] != pair["policy_hashes"][arm_index]
+            || previous["checkpoint_file_sha256"] != file_hash(&path.join("final"))?
+        {
+            return Err(Error::Invalid("only matching clean time stop may resume; closed/failed parent requires explicit fork".into()));
+        }
+    } else if !dirs.is_empty() {
+        return Err(Error::Invalid(
+            "arm already started; no budget reset".into(),
+        ));
+    }
+    let checkpoint = resume.map(|r| r.join("final")).unwrap_or(parent.clone());
+    let mut l = checkpoint::load(&checkpoint, Device::Cpu, true)?;
+    let mut state = l
+        .manifest
+        .training
+        .clone()
+        .ok_or_else(|| Error::Corrupt("native Adam state required".into()))?;
+    let initial = if resume.is_none() {
+        state.clone()
+    } else {
+        checkpoint::load(&parent, Device::Cpu, true)?
+            .manifest
+            .training
+            .ok_or_else(|| Error::Corrupt("native parent state".into()))?
+    };
+    if p["initial_state_native_hash"] != digest(&initial)? {
+        return Err(Error::Corrupt("native parent state identity".into()));
+    }
+    let start = initial.step;
+    let start_input = initial.consumed_tokens;
+    let start_target = initial.target_tokens;
+    let tape: Vec<(Vec<usize>, u64)> = serde_json::from_value(p["tape"].clone())?;
+    let denominators: Vec<(usize, usize)> = serde_json::from_value(p["denominators"].clone())?;
+    if tape.len() != 512
+        || denominators.len() != 512
+        || p["tape_hash"] != digest(&tape)?
+        || p["denominators_hash"] != digest(&denominators)?
+        || l.tokenizer.semantic_id() != p["tokenizer_hash"]
+        || state.step < start
+        || state.step > start + 512
+        || (resume.is_none()
+            && (p["initial_model_hash"] != l.model.weight_hash()?
+                || p["initial_adam_hash"] != optimizer_hash(&l.optimizer)?
+                || p["initial_state"] != progress_snapshot(&state)?))
+        || (resume.is_some()
+            && (previous["model_content_hash"] != l.model.weight_hash()?
+                || previous["adam_hash"] != optimizer_hash(&l.optimizer)?
+                || previous["new_updates"] != state.step - start
+                || previous["sampler_state"] != state.sampler_state
+                || previous["additional_input_tokens"]
+                    .as_u64()
+                    .and_then(|n| start_input.checked_add(n))
+                    != Some(state.consumed_tokens)
+                || previous["additional_target_tokens"]
+                    .as_u64()
+                    .and_then(|n| start_target.checked_add(n))
+                    != Some(state.target_tokens)))
+        || (state.step > start && state.sampler_state != tape[state.step - start - 1].1)
+    {
+        return Err(Error::Corrupt(
+            "fork/resume tensor, Adam, clock or tape mismatch".into(),
+        ));
+    }
+    let framed = samples(&episodes, &l.tokenizer, 512)?;
+    let c = progress_config(&initial);
+    c.validate(l.model.config.context)?;
+    if resume.is_some() && serde_json::to_value(&state.config)? != serde_json::to_value(&c)? {
+        return Err(Error::Corrupt("resumed fork config changed".into()));
+    }
+    state.config = c.clone();
+    state.parent_checkpoint_hash = Some(
+        p["initial_model_hash"]
+            .as_str()
+            .ok_or_else(|| Error::Corrupt("parent model identity".into()))?
+            .into(),
+    );
+    let mut adam = Adam {
+        moments: std::mem::take(&mut l.optimizer),
+    };
+    l.manifest.source_id = checked["source_digest"].as_str().unwrap().into();
+    let segment_start = (state.step, state.consumed_tokens, state.target_tokens);
+    let segment = output.join(format!(
+        "segment-{:02}-{:04}",
+        dirs.len(),
+        state.step - start
+    ));
+    std::fs::create_dir(&segment)?;
+    let mut log = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(segment.join("trace.jsonl"))?;
+    let mut streak: [u64; 3] = if previous.is_null() {
+        [0; 3]
+    } else {
+        serde_json::from_value(previous["guard_streaks"].clone())?
+    };
+    let mut last = previous["last_evaluation"].clone();
+    let mut cross = Value::Null;
+    let mut ordinary = Value::Null;
+    let mut complete = false;
+    let outcome = (|| -> Result<()> {
+        if last.is_null() {
+            let d = read_json(&a0.join("normal-dev.json"))?;
+            let w = read_json(&a0.join("watch32.json"))?;
+            let watch_score = skill_score(
+                w["rows"]
+                    .as_array()
+                    .ok_or_else(|| Error::Corrupt("A0 watch rows".into()))?,
+            )?;
+            last = json!({"new_updates":0,"dev":d["score"],"watch":watch_score,"dev_rows":d["rows"],"watch_rows":w["rows"],
+                "final_evaluation_complete":true,"model_content_hash":p["initial_model_hash"],"evidence_level":"DERIVED_FROM_A0_IDENTICAL_MODEL",
+                "dev_file_hash":file_hash(&a0.join("normal-dev.json"))?,"watch_file_hash":file_hash(&a0.join("watch32.json"))?});
+            save(&segment.join("eval-0000.json"), &last)?;
+        }
+        loop {
+            control.check("progress_next_boundary")?;
+            let n = state.step - start;
+            if [128, 256, 512].contains(&n)
+                && (last["new_updates"] != n || last["final_evaluation_complete"] != true)
+            {
+                l.model.refresh_identity()?;
+                last = skill_evaluation(&l, &dev, &frozen.watch, control)?;
+                last["watch"] = skill_score(
+                    last["watch_rows"]
+                        .as_array()
+                        .ok_or_else(|| Error::Corrupt("watch rows".into()))?,
+                )?;
+                last["new_updates"] = json!(n);
+                last["model_content_hash"] = json!(l.model.weight_hash()?);
+                save(&segment.join(format!("eval-{n:04}.json")), &last)?;
+                control.check("progress_eval_recorded")?;
+                let guarded = progress_guard(&p, &last, &mut streak)?;
+                println!(
+                    "NODE={} ARM={arm} eval update={n} dev={}/256 entity={} event={} watch={}/32 errors={}+{} streak={streak:?}",
+                    p["node"],
+                    last["dev"]["exact_matches"],
+                    last["dev"]["entity_correct"],
+                    last["dev"]["event_id_correct"],
+                    last["watch"]["exact_matches"],
+                    last["dev"]["generation_error_cases"],
+                    last["watch"]["generation_error_cases"]
+                );
+                save_arm(
+                    &mut l,
+                    &state,
+                    &adam,
+                    &segment.join(format!("step-{n:04}")),
+                    "RECOVERY_SCREENING",
+                )?;
+                control.check("progress_eval_checkpoint")?;
+                if guarded {
+                    control.observe(StopReason::QualityGuard);
+                    return control.stop_result();
+                }
+            }
+            if n == 512 {
+                let cases: Vec<Episode> =
+                    serde_json::from_value(read_json(&a0.join("cross-development.json"))?)?;
+                let rows = evaluate_panel(&l, &cases, control);
+                cross = progress_copy_score(&rows, 512)?;
+                save(
+                    &segment.join("cross.json"),
+                    &json!({"policy":"normal_greedy_v1","score":cross,"rows":rows}),
+                )?;
+                control.check("progress_cross_recorded")?;
+                let (_, _, cases) = data::load(&frozen.corpus)?;
+                let rows = evaluate_panel(&l, &cases, control);
+                ordinary = summarize(&rows)?;
+                save(
+                    &segment.join("ordinary400.json"),
+                    &json!({"policy":"normal_greedy_v1","score":ordinary,"rows":rows}),
+                )?;
+                control.check("progress_ordinary_recorded")?;
+                complete = rows.len() == 400
+                    && cross["denominator"] == 512
+                    && last["final_evaluation_complete"] == true;
+                break;
+            }
+            let (indices, sampler) = &tape[n];
+            let b = batch(&framed, indices, &Device::Cpu)?;
+            let targets: usize = indices
+                .iter()
+                .map(|i| framed[*i].tokens.len() - framed[*i].response_start)
+                .sum();
+            if denominators[n] != (b.tokens, targets) {
+                return Err(Error::Corrupt(
+                    "registered actual token denominator changed".into(),
+                ));
+            }
+            if state.consumed_tokens - start_input + b.tokens as u64 > 2_000_000
+                || state.target_tokens - start_target + targets as u64 > 500_000
+                || ledger.0 + (state.step - segment_start.0) as u64 >= 2048
+            {
+                control.observe(StopReason::TokenBudget);
+                return control.stop_result();
+            }
+            let (ce, obj, actual_targets) = response_loss(
+                &l.model.forward(&b.input, Some(&b.valid))?,
+                &b,
+                c.first_target_weight,
+            )?;
+            control.check("progress_forward")?;
+            let ce = ce.to_scalar::<f32>()?;
+            let objective = obj.to_scalar::<f32>()?;
+            if !ce.is_finite() || !objective.is_finite() || actual_targets != targets {
+                return Err(Error::Model("nonfinite loss/target denominator".into()));
+            }
+            let gradients = obj.backward()?;
+            control.check("progress_backward")?;
+            let gradients = l
+                .model
+                .vars
+                .iter()
+                .map(|(name, var)| -> Result<_> {
+                    let g = gradients
+                        .get(var)
+                        .ok_or_else(|| Error::Model(format!("missing gradient {name}")))?;
+                    Ok((
+                        name.clone(),
+                        ((g * targets as f64)?.detach() / targets as f64)?,
+                    ))
+                })
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            let rate = progress_lr(
+                p["lr_policy"].as_str().unwrap(),
+                n + 1 + progress_u64(&p, "lr_offset")? as usize,
+            )?;
+            control.check("progress_before_optimizer")?;
+            let (norm, delta) =
+                adam.step_constant(&l.model.vars, &gradients, &c, state.step + 1, rate)?;
+            state.step += 1;
+            state.consumed_tokens += b.tokens as u64;
+            state.target_tokens += targets as u64;
+            state.sampler_state = *sampler;
+            state.train_loss = Some(ce as f64);
+            state.validation_loss = None;
+            let _ = control.check("progress_optimizer_committed");
+            let row = json!({"new_update":n+1,"cumulative_model_step":state.step,"optimizer_step":state.step,"lr_clock":n+1+progress_u64(&p,"lr_offset")? as usize,"lr":rate,"lr_bits":rate.to_bits(),
+                "sampler_state":sampler,"indices":indices,"ids":indices.iter().map(|i|&episodes[*i].id).collect::<Vec<_>>(),
+                "input_tokens":b.tokens,"target_tokens":targets,"consumed_input_tokens":state.consumed_tokens-start_input,"consumed_target_tokens":state.target_tokens-start_target,
+                "ce":ce,"objective":objective,"gradient_norm":norm,"update_norm":delta,"rss_kib":control.last_rss_kib,"elapsed_seconds":control.start.elapsed().as_secs_f64()});
+            writeln!(log, "{row}")?;
+            log.flush()?;
+            if (n + 1).is_multiple_of(32) {
+                println!(
+                    "NODE={} ARM={arm} step={} cumulative={} input={} target={} lr={rate:.9} ce={ce:.6}",
+                    p["node"],
+                    n + 1,
+                    state.step,
+                    state.consumed_tokens - start_input,
+                    state.target_tokens - start_target
+                );
+            }
+            control.stop_result()?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = &outcome {
+        control.classify_error(e);
+    }
+    let model_hash = l.model.weight_hash()?;
+    let adam_hash = optimizer_hash(&adam.moments)?;
+    log.sync_all()?;
+    let trace_hash = file_hash(&segment.join("trace.jsonl"))?;
+    let mut checkpoint_hash = Value::Null;
+    let mut result = finish_arm(control, complete, |reason| {
+        save_arm(&mut l, &state, &adam, &segment.join("final"), reason)?;
+        checkpoint_hash = json!(file_hash(&segment.join("final"))?);
+        if p["parent_sha256"] != file_hash(&parent)?
+            || p["parent_receipt_sha256"] != file_hash(&progress_path(&p, "parent_receipt")?)?
+        {
+            return Err(Error::Corrupt(
+                "fork parent changed during execution".into(),
+            ));
+        }
+        Ok(())
+    });
+    let cleanup = result["cleanup_elapsed_seconds"]
+        .as_f64()
+        .is_none_or(|n| n > 120.);
+    let raw_gate = complete
+        && last["dev"]["skill_pass"] == true
+        && cross["skill_pass"] == true
+        && ordinary["qa"][0]
+            .as_u64()
+            .is_some_and(|n| n >= p["anchor_floor"].as_u64().unwrap_or(u64::MAX));
+    let details = json!({"contract":PROGRESS_CONTRACT,"node":p["node"],"arm":arm,"policy_sha256":file_hash(&policy_path)?,"new_updates":state.step-start,
+        "segment_updates":state.step-segment_start.0,"segment_input_tokens":state.consumed_tokens-segment_start.1,"segment_target_tokens":state.target_tokens-segment_start.2,
+        "segment_elapsed_seconds":control.start.elapsed().as_secs_f64(),"additional_input_tokens":state.consumed_tokens-start_input,"additional_target_tokens":state.target_tokens-start_target,
+        "cumulative_model_step":state.step,"sampler_state":state.sampler_state,"model_content_hash":model_hash,"adam_hash":adam_hash,
+        "last_evaluation":last,"cross":cross,"ordinary":ordinary,"guard_streaks":streak,"raw_development_gate":raw_gate&&control.stop.is_none()&&!cleanup,
+        "candidate_eligible":false,"seal":"NOT_OPENED","goal1_ready":false,"cleanup_limit_exceeded":cleanup,
+        "resume_allowed":control.reason()==Some("TIME_BUDGET") && control.observed==[StopReason::TimeBudget] && ledger.3+control.start.elapsed().as_secs_f64()<7200. && !cleanup && result["checkpoint_saved"]==true,
+        "error":outcome.as_ref().err().map(ToString::to_string)});
+    result
+        .as_object_mut()
+        .unwrap()
+        .extend(details.as_object().unwrap().clone());
+    let exposed: Vec<_> = tape[..state.step - start]
+        .iter()
+        .flat_map(|(indices, _)| indices.iter().copied())
+        .collect();
+    result["exposure"] = json!({"draws":exposed.len(),"unique_views":exposed.iter().copied().collect::<BTreeSet<_>>().len(),
+        "unique_bases":exposed.iter().map(|i|scene(&episodes[*i])).collect::<BTreeSet<_>>().len(),
+        "anchor_draws":exposed.iter().filter(|i|**i<2048).count(),"focus_draws":exposed.iter().filter(|i|**i>=2048).count(),"trace_sha256":trace_hash});
+    if cleanup {
+        result["comparison_eligible"] = json!(false);
+    }
+    if result["checkpoint_saved"] == true {
+        result["checkpoint_file_sha256"] = checkpoint_hash;
+    }
+    log.sync_all()?;
+    save(&segment.join("result.json"), &result)?;
+    println!(
+        "NODE={} ARM={arm} reason={} updates={} dev={} cross={} ordinary={} raw_gate={} resume={}",
+        p["node"],
+        result["reason"],
+        result["new_updates"],
+        result["last_evaluation"]["dev"]["exact_matches"],
+        result["cross"]["exact_matches"],
+        result["ordinary"]["qa"],
+        result["raw_development_gate"],
+        result["resume_allowed"]
+    );
+    outcome.and(control.stop_result())
+}
+
+fn progress_pair_delta(a: &[Value], b: &[Value]) -> Result<Value> {
+    if a.len() != b.len()
+        || a.iter().zip(b).any(|(a, b)| {
+            a["id"] != b["id"]
+                || a["expected"] != b["expected"]
+                || a["prompt_digest"] != b["prompt_digest"]
+        })
+    {
+        return Err(Error::Corrupt(
+            "paired raw membership/input mismatch".into(),
+        ));
+    }
+    let mut cells = [0usize; 4];
+    let mut bases: BTreeMap<String, (bool, bool)> = BTreeMap::new();
+    for (a, b) in a.iter().zip(b) {
+        let x = a["exact_match"] == true;
+        let y = b["exact_match"] == true;
+        cells[x as usize * 2 + y as usize] += 1;
+        let base = a["scene"]
+            .as_str()
+            .ok_or_else(|| Error::Corrupt("paired base missing".into()))?;
+        let entry = bases.entry(base.into()).or_insert((true, true));
+        entry.0 &= x;
+        entry.1 &= y;
+    }
+    let mut groups = [0usize; 4];
+    for (x, y) in bases.values() {
+        groups[*x as usize * 2 + *y as usize] += 1;
+    }
+    Ok(
+        json!({"case_order":["both_wrong","treatment_gain","treatment_loss","both_correct"],"cases":cells,"base_all_views":groups,"base_count":bases.len(),"statistical_superiority":"NOT_CLAIMED"}),
+    )
+}
+fn progress_close(root: &Path, control: &mut RunControl) -> Result<()> {
+    control.check("progress_close")?;
+    let pair = read_json(&root.join("pair.json"))?;
+    let mut ends = Vec::new();
+    let mut evals = Vec::new();
+    let mut policies = Vec::new();
+    let mut traces = Vec::new();
+    for arm in pair["arms"]
+        .as_array()
+        .ok_or_else(|| Error::Corrupt("pair arms".into()))?
+    {
+        let name = arm.as_str().ok_or_else(|| Error::Corrupt("arm".into()))?;
+        let dir = root.join(name);
+        let p = read_json(&dir.join("policy.json"))?;
+        let mut entries = std::fs::read_dir(&dir)?
+            .map(|e| e.map(|e| e.path()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        entries.retain(|p| p.is_dir());
+        entries.sort();
+        let mut evaluations = BTreeMap::new();
+        let mut last = Value::Null;
+        let mut trace = Vec::new();
+        let (_, episodes, _) = data::load(&progress_path(&p, "corpus")?)?;
+        for segment in entries {
+            last = read_json(&segment.join("result.json"))?;
+            if last["policy_sha256"] != file_hash(&dir.join("policy.json"))?
+                || last["checkpoint_file_sha256"] != file_hash(&segment.join("final"))?
+            {
+                return Err(Error::Corrupt("close identity".into()));
+            }
+            if last["exposure"]["trace_sha256"] != file_hash(&segment.join("trace.jsonl"))? {
+                return Err(Error::Corrupt("actual draw trace changed".into()));
+            }
+            let before = trace.len();
+            for line in std::fs::read_to_string(segment.join("trace.jsonl"))?.lines() {
+                let row: Value = serde_json::from_str(line)?;
+                let n = trace.len();
+                let ids: Vec<usize> = serde_json::from_value(p["tape"][n][0].clone())?;
+                if row["new_update"] != n + 1
+                    || row["indices"] != p["tape"][n][0]
+                    || row["sampler_state"] != p["tape"][n][1]
+                    || row["input_tokens"] != p["denominators"][n][0]
+                    || row["target_tokens"] != p["denominators"][n][1]
+                    || row["ids"] != json!(ids.iter().map(|i| &episodes[*i].id).collect::<Vec<_>>())
+                    || row["optimizer_step"]
+                        != progress_u64(&p["initial_state"], "step")? + n as u64 + 1
+                    || row["lr_bits"]
+                        != progress_lr(
+                            p["lr_policy"].as_str().unwrap(),
+                            n + 1 + progress_u64(&p, "lr_offset")? as usize,
+                        )?
+                        .to_bits()
+                    || ["ce", "objective", "gradient_norm", "update_norm"]
+                        .iter()
+                        .any(|key| row[*key].as_f64().is_none_or(|x| !x.is_finite()))
+                {
+                    return Err(Error::Corrupt(
+                        "executed trace differs from registered policy/tape/denominator".into(),
+                    ));
+                }
+                trace.push(row);
+            }
+            if last["segment_updates"] != trace.len() - before || last["new_updates"] != trace.len()
+            {
+                return Err(Error::Corrupt("actual optimizer call ledger".into()));
+            }
+            for n in [0, 128, 256, 512] {
+                let path = segment.join(format!("eval-{n:04}.json"));
+                if path.exists() {
+                    evaluations.insert(n, read_json(&path)?);
+                }
+            }
+            last["segment"] = json!(segment);
+        }
+        if last.is_null() || last["reason"] == "TIME_BUDGET" {
+            return Err(Error::Invalid(
+                "both arms must close before comparison".into(),
+            ));
+        }
+        ends.push(last);
+        evals.push(evaluations);
+        policies.push(p);
+        traces.push(trace);
+    }
+    if ends.len() != 2
+        || policies[0]["initial_model_hash"] != policies[1]["initial_model_hash"]
+        || policies[0]["initial_adam_hash"] != policies[1]["initial_adam_hash"]
+        || policies[0]["initial_state"] != policies[1]["initial_state"]
+    {
+        return Err(Error::Corrupt("paired parents differ".into()));
+    }
+    let mut paired = Vec::new();
+    for (n, e) in &evals[0] {
+        if let Some(other) = evals[1].get(n)
+            && e["final_evaluation_complete"] == true
+            && other["final_evaluation_complete"] == true
+        {
+            paired.push(json!({"new_updates":n,"dev":progress_pair_delta(e["dev_rows"].as_array().unwrap(),other["dev_rows"].as_array().unwrap())?,"watch":progress_pair_delta(e["watch_rows"].as_array().unwrap(),other["watch_rows"].as_array().unwrap())?}));
+        }
+    }
+    let safe = |r: &Value| {
+        r["reason"] == "SCREENING_BUDGET_REACHED"
+            && r["comparison_eligible"] == true
+            && r["cleanup_limit_exceeded"] == false
+            && r["new_updates"] == 512
+    };
+    let rank = |r: &Value| {
+        let d = &r["last_evaluation"]["dev"];
+        (
+            d["exact_matches"].as_u64().unwrap_or(0),
+            d["entity_correct"]
+                .as_u64()
+                .unwrap_or(0)
+                .min(d["event_id_correct"].as_u64().unwrap_or(0)),
+            std::cmp::Reverse(d["generation_error_cases"].as_u64().unwrap_or(u64::MAX)),
+        )
+    };
+    let accepted = (0..2).find(|i| safe(&ends[*i]) && ends[*i]["raw_development_gate"] == true);
+    let selected = accepted.or_else(|| {
+        (0..2)
+            .filter(|i| {
+                safe(&ends[*i])
+                    && rank(&ends[*i]).0
+                        >= policies[*i]["baseline_dev"].as_u64().unwrap_or(u64::MAX)
+            })
+            .max_by(|a, b| rank(&ends[*a]).cmp(&rank(&ends[*b])).then_with(|| b.cmp(a)))
+    });
+    let exposure_equal = policies[0]["tape_hash"] == policies[1]["tape_hash"]
+        && policies[0]["denominators_hash"] == policies[1]["denominators_hash"];
+    if pair["node"] == "A1" && !exposure_equal {
+        return Err(Error::Corrupt("C/L exposure differs".into()));
+    }
+    let common_prefix = traces[0].len().min(traces[1].len());
+    if pair["node"] == "A1" {
+        for (a, b) in traces[0][..common_prefix]
+            .iter()
+            .zip(&traces[1][..common_prefix])
+        {
+            for key in [
+                "new_update",
+                "optimizer_step",
+                "sampler_state",
+                "indices",
+                "ids",
+                "input_tokens",
+                "target_tokens",
+                "consumed_input_tokens",
+                "consumed_target_tokens",
+            ] {
+                if a[key] != b[key] {
+                    return Err(Error::Corrupt(format!(
+                        "actual paired exposure mismatch: {key}"
+                    )));
+                }
+            }
+        }
+    }
+    let mut final_pairs = Value::Null;
+    if safe(&ends[0]) && safe(&ends[1]) {
+        final_pairs = json!({});
+        for (name, file) in [("cross", "cross.json"), ("ordinary", "ordinary400.json")] {
+            let a = read_json(&progress_path(&ends[0], "segment")?.join(file))?;
+            let b = read_json(&progress_path(&ends[1], "segment")?.join(file))?;
+            final_pairs[name] = progress_pair_delta(
+                a["rows"]
+                    .as_array()
+                    .ok_or_else(|| Error::Corrupt("final panel rows".into()))?,
+                b["rows"]
+                    .as_array()
+                    .ok_or_else(|| Error::Corrupt("final panel rows".into()))?,
+            )?;
+        }
+    }
+    control.seal_terminal()?;
+    save(
+        &root.join("comparison.json"),
+        &json!({"contract":PROGRESS_CONTRACT,"node":pair["node"],"paired":paired,"policies_same_exposure":exposure_equal,
+        "endpoints":ends,"selected_index":selected,"selected_arm":selected.map(|i|&pair["arms"][i]),"raw_development_gate":accepted.is_some(),"actual_common_prefix_updates":common_prefix,"final_paired":final_pairs,
+        "next":if accepted.is_some(){"A3_FRESH_PROCESS_THEN_SEAL"}else if selected.is_some() && pair["node"]=="A1"{"A2_CONDITIONAL"}else{"H3_BUDGET_CLOSED"},
+        "endpoint_exposure_equal":ends[0]["new_updates"]==ends[1]["new_updates"],"h3_seal":"NOT_OPENED","s4":"NOT_PASSED","goal1_ready":false,"control":control.receipt()}),
+    )?;
+    println!(
+        "NODE={} closed selected={selected:?} raw_gate={} paired_points={}",
+        pair["node"],
+        accepted.is_some(),
+        paired.len()
+    );
+    Ok(())
+}
 
 fn optimizer_hash(tensors: &BTreeMap<String, Tensor>) -> Result<String> {
     use sha2::{Digest, Sha256};
@@ -7673,5 +8571,201 @@ mod tests {
         };
         assert_eq!(continued.learning_rate(101), 0.0005);
         assert_eq!(continued.learning_rate(102), 0.001);
+    }
+    #[test]
+    fn progress_fork_required_fields_closed_resume_and_final_cancel() {
+        let policy = json!({"contract":PROGRESS_CONTRACT,"entry":"EXPERIMENT_FORK","parent_sha256":"a".repeat(64),"maximum_updates":512,
+            "max_input_tokens":2_000_000,"max_target_tokens":500_000,"h3_max_updates":2048,"h3_seconds":7200,"normal_policy":"normal_greedy_v1","lr_policy":"C"});
+        assert!(progress_policy_valid(&policy));
+        for key in [
+            "contract",
+            "entry",
+            "parent_sha256",
+            "maximum_updates",
+            "max_input_tokens",
+            "max_target_tokens",
+            "h3_max_updates",
+            "h3_seconds",
+            "normal_policy",
+            "lr_policy",
+        ] {
+            let mut bad = policy.clone();
+            bad.as_object_mut().unwrap().remove(key);
+            assert!(!progress_policy_valid(&bad), "{key}");
+        }
+        let closed = json!({"reason":"SCREENING_BUDGET_REACHED","resume_allowed":false,"checkpoint_saved":true,"new_updates":1024});
+        let bytes = serde_json::to_vec(&closed).unwrap();
+        assert!(!progress_time_resume(&closed));
+        assert_eq!(bytes, serde_json::to_vec(&closed).unwrap());
+        let time = json!({"reason":"TIME_BUDGET","resume_allowed":true,"checkpoint_saved":true,"control":{"observed_conditions":["TIME_BUDGET"]},"save_error":null,"cleanup_limit_exceeded":false,"new_updates":256});
+        assert!(progress_time_resume(&time));
+        for reason in ["CANCELLED", "QUALITY_GUARD", "INTEGRITY_FAIL"] {
+            let mut bad = time.clone();
+            bad["reason"] = json!(reason);
+            assert!(!progress_time_resume(&bad));
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let segment = dir.path().join("segment");
+        std::fs::create_dir(&segment).unwrap();
+        save(&dir.path().join("policy.json"), &policy).unwrap();
+        let checkpoint = segment.join("not-loaded");
+        let output = dir.path().join("not-created");
+        let mut run = training_run(&checkpoint, &output);
+        run.resume = true;
+        assert!(
+            train_controlled(run, &mut repair_control())
+                .unwrap_err()
+                .to_string()
+                .contains("requires recovery progress-arm")
+        );
+        assert!(!output.exists());
+        let mut control = repair_control();
+        control.hook = Some(Box::new(|boundary, cancel| {
+            if boundary == "checkpoint_preserved" {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        }));
+        let finalization = finish_arm(&mut control, true, |_| Ok(()));
+        assert_eq!(finalization["reason"], "CANCELLED");
+        assert_eq!(finalization["comparison_eligible"], false);
+        let mut cancelled = repair_control();
+        cancelled.cancel.store(true, Ordering::Relaxed);
+        assert!(progress_arm(dir.path(), "C", None, &mut cancelled).is_err());
+        assert!(!dir.path().join("C").exists());
+    }
+    #[test]
+    fn progress_guards_keep_errors_in_denominator_and_require_streaks() {
+        let p = json!({"baseline_dev":208,"baseline_watch":18,"baseline_errors":2});
+        let mut e = json!({"final_evaluation_complete":true,"dev":{"denominator":256,"exact_matches":208,"generation_error_cases":2},"watch":{"denominator":32,"exact_matches":18,"generation_error_cases":0}});
+        let mut streak = [0; 3];
+        assert!(!progress_guard(&p, &e, &mut streak).unwrap());
+        e["dev"]["generation_error_cases"] = json!(4);
+        assert!(!progress_guard(&p, &e, &mut streak).unwrap());
+        e["dev"]["exact_matches"] = json!(182);
+        assert!(!progress_guard(&p, &e, &mut streak).unwrap());
+        assert!(progress_guard(&p, &e, &mut streak).unwrap());
+        e["dev"]["exact_matches"] = json!(208);
+        assert!(!progress_guard(&p, &e, &mut streak).unwrap());
+        assert_eq!(streak, [0; 3]);
+        e["watch"]["exact_matches"] = json!(14);
+        assert!(!progress_guard(&p, &e, &mut streak).unwrap());
+        assert!(progress_guard(&p, &e, &mut streak).unwrap());
+        e["watch"]["exact_matches"] = json!(18);
+        e["dev"]["generation_error_cases"] = json!(8);
+        assert!(!progress_guard(&p, &e, &mut streak).unwrap());
+        assert!(progress_guard(&p, &e, &mut streak).unwrap());
+        e["dev"]["generation_error_cases"] = json!(58);
+        assert!(progress_guard(&p, &e, &mut [0; 3]).unwrap());
+        e["dev"]["denominator"] = json!(255);
+        assert!(progress_guard(&p, &e, &mut streak).is_err());
+        e["dev"]["denominator"] = json!(256);
+        e["final_evaluation_complete"] = json!(false);
+        assert!(progress_guard(&p, &e, &mut streak).is_err());
+    }
+    #[test]
+    fn progress_lr_native_split_adam_clock_and_cursor_parity() {
+        let diagnostic = json!({"loss":f64::from(0.009906131_f32)});
+        let stored: Value =
+            serde_json::from_slice(&serde_json::to_vec(&diagnostic).unwrap()).unwrap();
+        assert_ne!(diagnostic, stored); // The locked JSON reader can round a diagnostic f64 by one ULP.
+        assert_eq!(progress_snapshot(&diagnostic).unwrap(), stored);
+        assert!(progress_lr("L", 0).is_err());
+        assert_eq!(progress_lr("C", 512).unwrap(), 3e-5);
+        assert_eq!(progress_lr("L", 1).unwrap(), 3e-5 + (1e-4 - 3e-5) / 64.);
+        assert!((progress_lr("L", 64).unwrap() - 1e-4).abs() < 1e-18);
+        assert_eq!(
+            progress_lr("L", 64).unwrap(),
+            progress_lr("L", 512).unwrap()
+        );
+        for policy in ["C", "L"] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut l = repair_loaded();
+            let framed = samples(&[repair_episode("lr-native")], &l.tokenizer, 32).unwrap();
+            let b = batch(&framed, &[0], &Device::Cpu).unwrap();
+            let config = TrainConfig {
+                seq_len: 32,
+                max_steps: 100,
+                microbatch: 1,
+                accumulation: 1,
+                ..Default::default()
+            };
+            let mut state = TrainingState {
+                contrast16: false,
+                parent_checkpoint_hash: None,
+                config: config.clone(),
+                step: 17,
+                consumed_tokens: 100,
+                target_tokens: 10,
+                sampler_state: 919,
+                corpus_hash: l.tokenizer.train_hash.clone(),
+                validation_hash: "3".repeat(64),
+                previous_corpora: vec![],
+                initial_weight_hash: l.manifest.initial_weight_hash.clone(),
+                train_loss: None,
+                validation_loss: None,
+            };
+            let update = |l: &Loaded, adam: &mut Adam, s: &mut TrainingState, j| {
+                let (_, loss, n) =
+                    response_loss(&l.model.forward(&b.input, Some(&b.valid)).unwrap(), &b, 1.)
+                        .unwrap();
+                let g = loss.backward().unwrap();
+                let grads = l
+                    .model
+                    .vars
+                    .iter()
+                    .map(|(k, v)| (k.clone(), g.get(v).unwrap().detach()))
+                    .collect();
+                adam.step_constant(
+                    &l.model.vars,
+                    &grads,
+                    &config,
+                    s.step + 1,
+                    progress_lr(policy, j).unwrap(),
+                )
+                .unwrap();
+                s.step += 1;
+                s.consumed_tokens += b.tokens as u64;
+                s.target_tokens += n as u64;
+                let mut rng = Rng {
+                    state: s.sampler_state,
+                };
+                rng.next_u64();
+                s.sampler_state = rng.state;
+            };
+            let mut adam = Adam::new(&l.model.vars).unwrap();
+            update(&l, &mut adam, &mut state, 63);
+            save_arm(
+                &mut l,
+                &state,
+                &adam,
+                &dir.path().join("native"),
+                "RECOVERY_SCREENING",
+            )
+            .unwrap();
+            let restored = checkpoint::load(&dir.path().join("native"), Device::Cpu, true).unwrap();
+            let mut other_state = restored.manifest.training.clone().unwrap();
+            let mut other = Adam {
+                moments: restored.optimizer.clone(),
+            };
+            for j in [64, 65] {
+                update(&l, &mut adam, &mut state, j);
+                update(&restored, &mut other, &mut other_state, j);
+            }
+            assert_eq!(
+                l.model.weight_hash().unwrap(),
+                restored.model.weight_hash().unwrap()
+            );
+            assert_eq!(
+                optimizer_hash(&adam.moments).unwrap(),
+                optimizer_hash(&other.moments).unwrap()
+            );
+            assert_eq!(
+                serde_json::to_value(state).unwrap(),
+                serde_json::to_value(other_state).unwrap()
+            );
+        }
+        println!(
+            "PROGRESS_LR_NATIVE actual_TINY_updates=10 SMALL_updates=0; clock17 and policy prefix62 are constructed fixtures"
+        );
     }
 }

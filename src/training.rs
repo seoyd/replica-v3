@@ -750,6 +750,12 @@ fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<
             if policy["stage"] == "H3" && policy.get("constant_lr").is_some() {
                 return Err(Error::Invalid("constant-rate skill checkpoint requires recovery skill-run --resume and its frozen policy".into()));
             }
+            if policy["entry"] == "EXPERIMENT_FORK" {
+                return Err(Error::Invalid(
+                    "controlled experiment requires recovery progress-arm and its frozen policy"
+                        .into(),
+                ));
+            }
         }
     }
     let mut loaded = checkpoint::load(run.checkpoint, Device::Cpu, run.resume)?;
