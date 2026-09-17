@@ -114,6 +114,11 @@ enum Commands {
         extend_curriculum_steps: Option<usize>,
         #[arg(long, requires = "extend_steps")]
         extend_first_target_weight: Option<f64>,
+        /// Explicit LR policy at a new continuation boundary; Adam/RNG remain intact.
+        #[arg(long, requires = "extend_steps")]
+        extend_lr: Option<f64>,
+        #[arg(long, requires = "extend_steps")]
+        extend_warmup: Option<usize>,
         #[arg(long, requires = "extend_steps")]
         source_id: Option<String>,
         /// Explicit continued training on a new declared split; preserves tokenizer/data lineage.
@@ -466,6 +471,8 @@ fn run() -> Result<()> {
             extend_sample_group_size,
             extend_curriculum_steps,
             extend_first_target_weight,
+            extend_lr,
+            extend_warmup,
             source_id,
             replace_corpus,
         } => {
@@ -508,6 +515,8 @@ fn run() -> Result<()> {
                     extend_sample_group_size: extend_sample_group_size.map(usize::from),
                     extend_curriculum_steps,
                     extend_first_target_weight,
+                    extend_lr,
+                    extend_warmup,
                     source_id,
                     replace_corpus,
                 },

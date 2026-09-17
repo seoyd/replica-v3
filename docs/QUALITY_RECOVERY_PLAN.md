@@ -72,6 +72,60 @@ Direct6tests/fmt/check/clippy/release passed. The next learning plan will keep t
 parent corpus rather than the narrowed U2 distribution. Ordinary QA bytes already existed
 in v8, so recent379updates alone do not establish insufficient lifetime training exposure.
 
+Next registered learning stage P (stable original corpus): restore the preserved general
+QA parent as the starting artifact, without changing that artifact or deploying it.
+Use artifacts/goal1-corpus-v9 unchanged (train20000, ordinary16668; validation400,
+ordinary336/aux64). This tests learning on the original distribution after C/L/B on U2
+failed to recover quality; it does not assume lifetime underexposure or a confirmed bug.
+
+P cap:1000new SMALL updates and20Minput tokens total, four segments of at most250updates.
+Retain Adam, initial sampler, batch8/group1/accumulation1/first-target8, tokenizer and
+architecture. Explicit continuation LR0.00008650922011682288, warmup0, cosine1000;
+subsequent segments are plain exact resume with no schedule reset. The existing native
+TrainConfig stores this policy. CLI --extend-lr/--extend-warmup applies only at the first
+explicit extension; ordinary resume keeps its saved policy. No new corpus/heldout is made.
+
+At baseline and after each250, generate existing validation400 once and score ordinary
+QA separately from auxiliary tasks. Select by ordinary five-category macro, then ordinary
+EM, then earlier step. A run is stopped for nonfinite/RSS16GiB/cancel or token/update cap;
+each segment is monitored with a900s wall budget and an owned-process SIGINT at that
+boundary, permitting consistent checkpoint cleanup. No hard-preemption claim. Stop if
+ordinary macro drops≥0.10 or new generation errors≥2 on two consecutive evaluations;
+also stop after three consecutive evaluations without improvement. Do not extend a
+negative result automatically. Maximum training wall budget3600s plus measured cleanup
+and evaluations; inference commands retain their900s/12GiB bounds.
+
+S4 final evaluation remains NOT_RUN until a validation-selected candidate reaches at
+least95% ordinary QA overall,90% per category and zero invalid-citation acceptance.
+Existing development400 remains development, and the final200 constructor is not used
+to generate training data. New direct native resume test executes16TINY optimizer steps
+(full6 + split3/3 + extension4); these are separate from SMALL training totals.
+
+P observed closure:1000updates completed with all four native saves and five fresh-process
+validation400 evaluations. Ordinary QA155→162→150→162→164 of336; auxiliary64/64 at every
+evaluation. Macro/EM selectsP1000. Generation errors0 throughout; this remains below S4.
+Input2323914/target205719tokens, training wall1461.87s, maximum RSS6930546688bytes; all
+registered limits respected. Original17file hashes and executed source/binary remain equal.
+Renewed totals1700SMALL and16TINY optimizer updates. No corpus/architecture/storage change.
+
+Next registered learning stage T: P improved ordinary validation by9answers, while the
+remaining errors are concentrated in question/evidence selection. This observation supports
+a bounded continuation from the selectedP1000, not a claim that an implementation defect
+was identified. Preserve the same original corpus and every model/Adam/sampler/objective
+setting. Extend by at most2000SMALL updates/20Minput tokens, four500-update segments;
+first extension explicitly uses LR0.00008650922011682288/warmup0/cosine2000. This raises
+the endpoint LR at a declared new learning boundary; subsequent500 segments plain-resume
+that schedule without resets. It is continued learning, not a matched-step causal comparison.
+
+T starts at model step20750. Check existing validation400 after each500, baseline reused
+fromP1000 with identical source/binary/input. Select ordinary five-category macro, then EM,
+then earlier step; keep every candidate. Stop after3consecutive evaluations without a new
+best, or macro drop≥0.10/new generation errors≥2 relative to baseline on two consecutive
+evaluations. Each training segment≤900s plus consistent cleanup, total≤3600s; inference
+900s/12GiB, training16GiB, nonfinite/cancel stop immediately at existing safe boundaries.
+No sweep, new corpus, memorization retest, storage/kernel/topology change or final-heldout
+selection. Negative T is not automatically extended. S4 eligibility/quality gates are unchanged.
+
 ## R3-S4-DIAGNOSTIC-REPAIR-1.0 — closed repair round
 
 2026-09-17, baseline main `3b671bf695ae86511273c4139d43d75bd976e490`.

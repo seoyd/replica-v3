@@ -407,7 +407,7 @@ fn rows(path: &Path) -> Result<(Value, Vec<Value>)> {
     }
     Ok((header, cases))
 }
-fn summarize(rows: &[Value]) -> Result<Value> {
+pub(super) fn summarize(rows: &[Value]) -> Result<Value> {
     let mut ids = BTreeSet::new();
     let mut groups: BTreeMap<String, [usize; 2]> = BTreeMap::new();
     let (mut errors, mut empty, mut utf8, mut first_eos, mut control, mut timeout) =

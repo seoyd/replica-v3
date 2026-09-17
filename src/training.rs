@@ -482,6 +482,7 @@ pub fn evaluate_corpus(
     }
     let _ = control.check("evaluate_summary");
     let mut summary = serde_json::json!({"summary":true,"split":split,"exact_matches":exact,"denominator":evaluated.len(),"generation_failures":failed,"groups_correct_total":groups,"final_heldout":false,"oracle_question_ablation":rephrase || rephrase_field,"oracle_field_task_label":rephrase_field || single_record,"oracle_record_selection":single_record});
+    summary["diagnostic_score"] = recovery::summarize(&evaluated)?;
     recovery::add_partial_counts(&mut summary, &evaluated, limit, &control);
     writeln!(log, "{summary}")?;
     log.sync_all()?;
@@ -624,6 +625,8 @@ pub struct Run<'a> {
     pub extend_sample_group_size: Option<usize>,
     pub extend_curriculum_steps: Option<usize>,
     pub extend_first_target_weight: Option<f64>,
+    pub extend_lr: Option<f64>,
+    pub extend_warmup: Option<usize>,
     pub source_id: Option<String>,
     pub replace_corpus: bool,
 }
@@ -632,10 +635,12 @@ pub fn train(run: Run<'_>, cancel: &AtomicBool) -> Result<()> {
         && (run.extend_microbatch.is_some()
             || run.extend_sample_group_size.is_some()
             || run.extend_curriculum_steps.is_some()
-            || run.extend_first_target_weight.is_some())
+            || run.extend_first_target_weight.is_some()
+            || run.extend_lr.is_some()
+            || run.extend_warmup.is_some())
     {
         return Err(Error::Invalid(
-            "batch/curriculum/objective changes require explicit extension".into(),
+            "batch/curriculum/objective/LR changes require explicit extension".into(),
         ));
     }
     if run.replace_corpus && (!run.resume || run.extend_steps.is_none() || run.numeric_probe) {
@@ -690,6 +695,12 @@ pub fn train(run: Run<'_>, cancel: &AtomicBool) -> Result<()> {
         if let Some(weight) = run.extend_first_target_weight {
             config.first_target_weight = weight;
         }
+        if let Some(lr) = run.extend_lr {
+            config.lr = lr;
+        }
+        if let Some(warmup) = run.extend_warmup {
+            config.warmup = warmup;
+        }
         if let Some(steps) = run.extend_curriculum_steps {
             if steps > additional {
                 return Err(Error::Invalid(
@@ -704,13 +715,15 @@ pub fn train(run: Run<'_>, cancel: &AtomicBool) -> Result<()> {
             .ok_or_else(|| Error::Invalid("token budget overflow".into()))?;
         loaded.manifest.source_id = source_id.clone();
         println!(
-            "explicit_extension start_step={} start_tokens={} additional_steps={additional} additional_token_cap=20000000 microbatch={} sample_group_size={} copy_until_step={} first_target_weight={} schedule_restart=true optimizer_reset=false source_id={source_id}",
+            "explicit_extension start_step={} start_tokens={} additional_steps={additional} additional_token_cap=20000000 microbatch={} sample_group_size={} copy_until_step={} first_target_weight={} lr={} warmup={} schedule_restart=true optimizer_reset=false source_id={source_id}",
             previous.step,
             previous.consumed_tokens,
             config.microbatch,
             config.sample_group_size,
             config.curriculum_steps,
-            config.first_target_weight
+            config.first_target_weight,
+            config.lr,
+            config.warmup
         );
     }
     config.validate(loaded.model.config.context)?;

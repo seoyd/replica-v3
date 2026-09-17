@@ -5,7 +5,9 @@
 RF-01~03 수정은 검증·공개됐고 원격52e8b88과 일치한다. 먼저 같은 parent/자료/tape의
 제한 C/L LR-policy 비교를 완료했다. C는200updates에서watch11/32로 품질 중단,
 L은250updates에서15/32로 종료했다. 이어서 L의 sampler만 변경한 B250도15/32로
-종료했다. 신규 합계700updates이며 S4/S5/S6는 미통과다. 실패 arm은 연장하지 않는다.
+종료했다. 원래 parent/corpus를 유지한 P1000은 일반 QA155→164/336으로 개선됐지만
+S4 기준에 미달했다. 신규 합계1700SMALL/16TINY updates이며 S4/S5/S6는 미통과다.
+실패 arm은 연장하지 않는다. P의 개발 후보에서 별도 제한 T2000 학습을 사전 등록했다.
 구체적인 사전 예산과 중단 조건은 QUALITY_RECOVERY_PLAN.md, 실제 실행은
 EXPERIMENT_STATUS.md에 유지한다. 아래 제한 진단 종료 기록과 실패는 보존한다.
 
@@ -48,7 +50,7 @@ verification. Source inspection and execution are separate evidence levels.
 | S1 | VERIFIED | src/{store,app,retrieval,model}.rs; tests/{store,runtime,retrieval,cli}.rs; logs/goal1-s1-tests.txt; logs/goal1-s1-source-digest.txt | published 4edd62c; remote matched |
 | S2 | VERIFIED | src/{data,neural,train_main}.rs; tests/{native,training}.rs; logs/goal1-s2-final-tests.txt, goal1-s2-tokenizer.txt; goal1-s2-source-digest.txt | published 6ded741; remote matched |
 | S3 | VERIFIED | src/neural/{transformer,checkpoint}.rs, src/training.rs; logs/goal1-s3-exit-tests.txt, goal1-s3-small-boundaries.txt; goal1-s3-source-digest.txt | published 23cc5b0; remote matched |
-| S4 | IMPLEMENTING; C/L CLOSED_NEGATIVE | RF-01~03 수정 검증 후 사용자 갱신 예산으로 C200/L250 실행; 동일200update watch11/32 vs14/32, L최종15/32. 원본 checkpoints 보존. | 이전 수준 복구·새 전이 미확정; final200 NOT_RUN_NOT_ELIGIBLE |
+| S4 | IMPLEMENTING; C/L/B CLOSED_NEGATIVE; P BUDGET_COMPLETE | 갱신 예산으로 SMALL1700updates; 원래 corpus의 P1000 일반 QA164/336, copy64/64, 생성오류0. 원본과 실패 checkpoints 보존. | final200 NOT_RUN_NOT_ELIGIBLE; 다음 제한 T 계획 등록 |
 | S5 | IMPLEMENTING | src/{model,main,app,retrieval}.rs native-only ask/generate/chat; examples/validate.rs actual CLI smoke; intermediate diagnostic4/14 correct,14/14 same-key no-model replays | prerequisite S4 pending; required five categories and fresh-process quality still FAIL |
 | S6 | BLOCKED | quantization not implemented | S4/S5 prerequisites unmet; T-N08 and complete T-I04/T-D02 pending |
 

@@ -1538,12 +1538,30 @@ fn native_training_resume_is_identical_in_fresh_processes() {
         "--numeric-probe",
         "--extend-steps",
         "4",
+        "--extend-lr",
+        "0.001",
+        "--extend-warmup",
+        "2",
         "--source-id",
         &source_id,
     ]);
     let entry = checkpoint::load(&extended.join("start"), Device::Cpu, true).unwrap();
     assert_eq!(entry.manifest.weights_sha256, a.manifest.weights_sha256);
+    for (name, moment) in &a.optimizer {
+        assert_eq!(
+            moment.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+            entry.optimizer[name]
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap()
+        );
+    }
     let entry_state = entry.manifest.training.unwrap();
+    assert_eq!(entry_state.config.lr, 0.001);
+    assert_eq!(entry_state.config.warmup, 2);
+    assert_eq!(entry_state.config.learning_rate(7), 0.0005);
+    assert_eq!(entry_state.config.learning_rate(8), 0.001);
     assert_eq!(entry_state.sampler_state, a_state.sampler_state);
     assert_eq!(entry_state.config.budget_start_step, 6);
     assert_eq!(
@@ -1587,6 +1605,9 @@ fn native_training_resume_is_identical_in_fresh_processes() {
         ("--extend-first-target-weight", "0"),
         ("--extend-first-target-weight", "17"),
         ("--extend-first-target-weight", "NaN"),
+        ("--extend-lr", "0"),
+        ("--extend-lr", "NaN"),
+        ("--extend-warmup", "5"),
         ("--extend-curriculum-steps", "5"),
     ] {
         let output = d.path().join(format!("invalid-{flag}-{value}"));

@@ -66,6 +66,61 @@ RNG/tape/ID/step/LR를 실제 원문과 재검산하고, 시작 watch raw 출력
 다음 검토에서 원래 일반 QA corpus의 원문이 v8부터 유지된 사실을 확인했으므로,
 parent의 최근379update만으로 모든 QA의 학습 노출을 계산하거나 노출 부족을 원인으로
 단정하지 않는다. 새 후속 학습은 원래 corpus의 분포를 유지하는 별도 계획으로 고정한다.
+B 소스·기록 commit `0dfc918271eb83d293662cbc751bb52fd0b52f10` 정상 push 및 원격 일치를
+확인했다. 다음 P는 원래 parent/corpus의 최대1000updates를250단위로 검증하며 진행한다.
+P의 원래 parent/corpus validation400 재생성은219/400, ordinary155/336, copy64/64였고
+분류별13/68·22/68·5/68·54/68·61/64, 생성/UTF-8 오류0으로 기존 결과와 일치했다.
+실제 wall44.83s/max RSS974307328bytes,400개 완료 및 terminal COMPLETED를 확인했다.
+P 첫250update는365.96s/input577458/target50665tokens에서 정상 구간 종료·저장됐다.
+이후 validation은226/400, ordinary162/336, copy64/64, 분류별16/68·24/68·5/68·54/68·63/64,
+생성/UTF-8 오류0이었다(wall44.71s). 두 번째250도 plain exact resume으로 완료했다.
+구간 입력587192/target52835tokens, wall367.40s/max RSS6494011392bytes였고, 누적500의
+validation은214/400, ordinary150/336, copy64/64,14/68·21/68·4/68·48/68·63/64,
+생성/UTF-8 오류0이었다(wall44.22s). 세 번째250은 입력582618/target51722tokens,
+wall360.23s/max RSS6930546688bytes에서 완료·저장됐다. 누적750의 validation은226/400,
+ordinary162/336, copy64/64,19/68·22/68·6/68·52/68·63/64, 생성/UTF-8 오류0이었다
+(wall44.25s). 이 시점에는 전체 QA와 category macro가250과 같아250 후보를 유지했다.
+마지막250은 input576646/target50497tokens, wall368.28s/max RSS6503333888bytes,
+step20750/BUDGET_REACHED에서 정상 저장됐다. 마지막 validation은228/400,
+ordinary164/336, copy64/64,21/68·22/68·6/68·52/68·63/64, 생성/UTF-8 오류0이었다
+(wall45.23s). category macro와 ordinary EM이 개선돼 사전 규칙상P1000을 개발 후보로
+선택했다. 독립 최종 평가 후보 자격은 없으며 운영 DB/모델을 교체하지 않았다.
+명시 LR/warmup 옵션과 Adam/RNG 보존·native exact
+resume 회귀, 기존 엄격 집계 회귀, fmt/clippy/release가 통과했다. resume 테스트의 TINY
+optimizer16회는 SMALL 학습과 별도로 계상한다. P 실행 source manifest는
+`848df720b46efbec53627a8074f2549b2509e9bd96ca735a766920498650665b`, 실행 binary는
+`de55611f45af58fd2c5ecd0ce3bff6d82093e354ae53f55c8d12c34c40571c06`이다.
+
+### P 단계 종료 — 실제 학습 완료, S4 품질 미달
+
+P 총1000SMALL updates/input2323914/target205719tokens, 학습 OS wall1461.87s,
+최대 RSS6930546688bytes였다. 매 구간900s/전체3600s, input20M/RSS16GiB 상한 안에서
+완료했다. baseline 포함5×400=2000개의 실제 generation/teacher 평가를 새 프로세스로
+완료했고 모두 full panel/COMPLETED/오류0이었다. 평가 wall 합계223.24s다.
+P250/500/750/1000은 각각162/150/162/164 of336이었다. 최종164/336은 parent155/336보다
+9개 많지만 전체95%·분류별90% 기준을 통과하지 못했다. qa-2는6/68에 머물렀다.
+teacher-forced token accuracy97.01%를 전체 답변 정확도48.81%로 바꿔 보고하지 않는다.
+
+이번 재개 누계: SMALL1700(C200+L250+B250+P1000), TINY optimizer16.
+실제 직접 회귀는9distinct tests(P 관련2포함), fmt/check/clippy/release PASS다.
+P 실행 source manifest 전항목과 binary가 그대로이며 원본17파일 해시도 모두 일치했다.
+신규 소스 파일/의존/구조/저장 schema/자료 확장 없음. 새 native checkpoint/raw log는
+로컬 artifacts/goal1-renewed-20260917 아래 보존한다. 모델 품질 실패를 도구 실패나
+Goal1 성공으로 바꾸지 않는다. REPAIR_VERIFIED=YES, DATA_AUDIT는 이전 제한 범위 유지,
+RECOVERY_ESTABLISHED=NO, S4_QUALITY_PASS=NO, S5/S6 미완, GOAL1_READY=NO다.
+
+| P 구간 | artifact physical SHA256 | manifest weights SHA256 |
+|---|---|---|
+| 250 | 1d9c1170e287c0ae383f6885a3d6158c3e8bb79774eddbd1bd7aadbd36a6df83 | 18064a0e0b6e8f031300aa6fe7fc31761be1f1ff788290e8d25b997a3a92f770 |
+| 500 | da2e6cb23e9b033e879da879bd202c0d579874ec29147d763a35b316d84a83de | c04c35ed93a544a9c71f49826b0ad6e68139e6ff7eab12422db37bade7fef392 |
+| 750 | 35472867a39207877e007cb203fd0f54197424b01ed187787f349e790aa4cae4 | 7d99a382615221b1854b03cfb4aa47ec7e59db4498d6e717b80f0610d3113c17 |
+| 1000 | e99fbfbfda47fdf0c29112c8b9a30b127476b7ee5219aeecdbab71b374832b40 | d19919907db369f20f25e1f9885837bf27b7372dd21a528468e0c55cca06b3a9 |
+
+각 artifact는 artifacts/goal1-renewed-20260917/parent-p-N/final이다. 실제 corpus는
+artifacts/goal1-corpus-v9, 각 원문 generation ledger는 parent-validation-N.jsonl,
+학습 로그는 parent-p-N.txt, native inspect는 parent-N-manifest.txt다. 기존 parent,
+실패U2 및 원본 corpus를 덮어쓰지 않았다. 다음 T는 P의 관측된 개선을 출발점으로 하는
+별도 제한 학습이며 계획만 등록된 NOT_RUN이다. 독립 최종200은 아직 NOT_RUN_NOT_ELIGIBLE.
 
 ## 이전: 세 진단 경계 수정 — 2026-09-17
 
