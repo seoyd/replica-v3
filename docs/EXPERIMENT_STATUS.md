@@ -1,5 +1,84 @@
 # 진단 및 구현 상태
 
+## G5 최종 — 저장 검증 완료, 모델 비교 중단, RESULT=PARTIAL
+
+2026-09-18 / R3-NATIVE-STORAGE-QUALITY-1.0 / IMPLEMENTER_REPORT.
+최종 source `2e4121035aabd11918d64875285661ad8e3a8f91`를 origin/main에 정상 push하고
+실제 full remote SHA 일치를 확인했다. 이 절의 후속 report-only commit은 source와
+구분한다. 기준 source는 b18ec31bb78a8d0ef0adf985b46697a2d4993474이며, 실행 당시
+동결 source/binary와 실패 raw는 아래 G2에 별도 기록했다. independent review는 미실행.
+
+| 판정 | 결과 |
+| --- | --- |
+| CODE_CLOSE | VERIFIED: 서로 다른 정상 모델 panel 혼합 거부, 저장된 취소 fresh close 거부 |
+| BINARY_MODEL_STORAGE | VERIFIED: 기존 native F32/Adam 분리, exact cold 측정·생성 parity |
+| GRAPH_JOURNAL | VERIFIED_PROTOTYPE: exact bytes/관계/재시작/tail 복구; 운영 이전 없음 |
+| MODEL_PAIR | QUALITY_INCONCLUSIVE: C50+256 native 저장 실패, A75 NOT_RUN |
+| ANCHOR_PRESERVED | UNRESOLVED: 관측 QA179/336을512 endpoint 또는 재현된 개선으로 승격하지 않음 |
+| RAW_H3 | C50+256 dev244/256,CROSS464/512 관측; native binding 없음, joint gate 미달 |
+| H3_SEAL | NOT_OPENED |
+| S4 | NOT_PASSED |
+| S5 / S6 | NOT_RUN_THIS_SCOPE / NOT_ACCEPTED |
+| GOAL1_READY / GOAL1_ACCEPTED | false / false |
+| INDEPENDENT_ACCEPTANCE | PENDING_EXTERNAL_REVIEW |
+
+새 SMALL optimizer256, input613,608/target69,629 tokens, anchor/focus draws1024/1024.
+SMALL generation1,180 = C50 평가1,168 + F512 저장 parity12, 자체 teacher0, 외부 모델
+호출0. A75 optimizer/generation0. 실패 직후부터 추가 SMALL 학습0이며 재시도·예산연장
+없다. TINY optimizer71/scalar0: G1 14 + 학습 전 quick31 + 최종 저장참조 process12
++ 중복 파일을 기대하던 기존 assertion 실패4 + 수정 후 time-split 회귀10.
+새 binary TINY generation/teacher148/148. 이전 bootstrap24는 재사용했으며 이번 신규
+업데이트에 포함하지 않는다. quick의 다른 legacy generation/teacher는 전역 계측하지
+않았으므로 위 수치를 전체 프로젝트의 모든 테스트 호출 수라고 주장하지 않는다.
+
+최종 직접 binary unit9 PASS. G1 source RED/GREEN과 최종 process2 PASS, 이후
+same-step 재사용 time-split process1 PASS. journal5/기존 archive unit3/version graph1/
+canonical CLI process1 PASS. 모델 저장 unit3/cold1 PASS. 학습 전 quick59 PASS와
+최종 all-target clippy/fmt 검사를 구분한다. 전체 무관한 테스트나 새 대규모 학습은 없다.
+최종 `g5-binary-unit.log`, `g5-native-process.log`, `g5-reuse-final.log`, `g5-clippy.log`
+및 각 G3/G4 로그가 실제 실행 증거다. compile 실패와 실패 assertion 로그도 남겨 두었다.
+
+저장 측정 후 작은 중복 최적화도 적용했다. 같은 step의 durable checkpoint가 현재
+weights·Adam·전체 TrainingState와 실제 file hash까지 일치하면 새 평가/terminal에서
+그 immutable 파일을 재사용한다. 상세 종료 사유는 terminal에 보존한다. 모델 파일
+status를 고쳐 쓰지 않는다. 새 process의 시간 분할/최종 취소에서 BYTES_WRITTEN=0,
+weights/Adam/token/guard/f64 bits 동일성을 확인했다. 다른 상태면 재사용하지 않는다.
+원본 F512115,285,312B의 저장비용은 G3 실측이며 TINY 절감량을 SMALL 실측 속도로
+확대하지 않는다. 재개 중 이미 평가한 step을 다시 저장하지 않는 assertion도 포함한다.
+
+### 새 binary와 남은 JSON의 실제 경계
+
+| 경로 | 기준 상태 및 이번 실행 |
+| --- | --- |
+| experiment_record native run/close | typed R3ER; C50 run CANONICAL_JSON_WRITES=0, LEGACY_JSON_READS=0 |
+| anchor-prepare / 기존 F baseline | frozen corpus/policy JSON read-only 검증 후 owned R3ER 등록; 새 JSON corpus/receipt writer 없음 |
+| 모델 artifact | 기존 R3MODEL F32 + binary mapping/state; compatibility ID와 기존 mapping 의미 유지 |
+| graph 원장 | RPV3 exact envelope + R3ARCH + R3JRN; binary writer/reader, JSON 상태 없음 |
+| model.rs worker IPC | 기존 JSON request/response 유지; G2 direct native 경로에서는 사용하지 않음 |
+| data.rs / quality_recovery legacy commands | 기존 JSON corpus/manifest/legacy import·과거 실험 경로 보존; 자동 변환·삭제하지 않음 |
+| checker / validate 표시 | 기존 개발자 summary 및 parity JSONL 출력 유지; native controller나 제품 정답 입력이 아님 |
+| 사용자 JSON 원문 | 사건 payload일 때 bytes 그대로 보존 |
+
+### Candidate와 인가된 로컬 증거
+
+Root=`artifacts/native-storage-quality-20260918/`. `candidate-source.diff`는 위 기준
+source→최종 source의 src/tests/examples diff, `candidate-source.sha256`는 digest 목록.
+실제 F512 read-only 부모는 `anchor-pair/C50/parent.r3m`, 원문 corpus는 기존
+`artifacts/h3-controlled-20260917/a2/corpus-F/`와 `artifacts/goal1-corpus-v9/`,
+ordinary는 `artifacts/s4-completion-20260917/binding-corpus/validation.json`이다.
+등록된 실제 소유 입력은 `anchor-pair/{C50,A75}/inputs.r3er`. 실패 raw/terminal은
+`anchor-pair/C50/segment-00/`; 해당 새 model checkpoint는 존재하지 않는다.
+`model-storage/`는 G3 새 export/cold 복원, `graph-final-*`는 G4 synthetic 저장소다.
+이 파일들은 로컬 검토 자료이며 Git에는 올리지 않았다. 운영 DB는 탐색/수정하지 않았다.
+
+원본 보존 manifest 재확인 native6/6,data/policy/raw192/192 OK. 소유 모델/benchmark
+process는 종료됐다. 임시 지시문에 대한 source/doc 의존은 없고 checker deny-pattern만
+남아 있다. 새 영구 파일은 `src/journal.rs`, `tests/journal.rs` 두 개다.
+최종 계약 대조에서 G1/G3/G4를 검증했으며 G2 full pair·H3/S4/S5/S6·Goal1과 외부
+독립 수용은 남아 있음을 확인했다. 다음 단일 제안은 **동일 anchor 비율 비교의 저장
+가능성 사전검증을 갖춘 재등록 검토**다. 새로운 LR/tokenizer/코어 가설은 이 실패로
+뒷받침되지 않는다. 종료된 pair의 남은 예산을 자동 재사용하지 않는다.
+
 ## G4 — 분리된 graph journal 원형 검증
 
 2026-09-18 / EXECUTED_THIS_RUN. R3JRN v1 writer/reader를 추가하고 기존 Archive의
