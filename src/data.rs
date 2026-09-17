@@ -2209,6 +2209,14 @@ pub fn crossed_copy_development(
     prior: &[Episode],
     seed: u64,
 ) -> Result<(Vec<Episode>, serde_json::Value)> {
+    crossed_copy_panel(prior, seed, 128, false)
+}
+fn crossed_copy_panel(
+    prior: &[Episode],
+    seed: u64,
+    bases: usize,
+    training: bool,
+) -> Result<(Vec<Episode>, serde_json::Value)> {
     use replica_v3::neural::transformer::Rng;
     use serde_json::json;
     let prefixes = ["장치", "설비", "센서", "장비"];
@@ -2232,7 +2240,7 @@ pub fn crossed_copy_development(
         .filter(|e| available(e))
         .collect();
     let mut meta = json!({"role":"DEVELOPMENT_ONLY","generator":"cross-copy-v1","seed":seed,
-        "planned_bases":128,"planned_views":512,"one_digit_unseen_unreserved":one_digit,
+        "planned_bases":bases,"planned_views":bases*4,"one_digit_unseen_unreserved":one_digit,
         "reserved_old_seal":"entire hash partition2; cases unopened","max_attempts_per_base":10000,
         "one_digit_patterns":"general/repeated/alternating/adjacent coincide; not independent conditions",
         "split_scope":"full entity absent from supplied train/development; old seal namespace reserved",
@@ -2249,8 +2257,8 @@ pub fn crossed_copy_development(
     ];
     let mut rng = Rng::new(seed);
     let mut out = Vec::new();
-    for base in 0..128 {
-        let digits = base / 16 + 1;
+    for base in 0..bases {
+        let digits = (base % 128) / 16 + 1;
         let kind = (base / 8) % 2;
         let pattern = (base / 2) % 4;
         let mut pair = None;
@@ -2301,7 +2309,16 @@ pub fn crossed_copy_development(
             return Ok((Vec::new(), meta));
         };
         let context = format!("구역{}", 1 + rng.next_u64() % 999_999);
-        let event_id = (1 + rng.next_u64() % 999_999) as i64;
+        let mut event_id = (1 + rng.next_u64() % 999_999) as i64;
+        if training && base % 4 == 1 {
+            // A disclosed training counterexample: the same number in two fields,
+            // with the remaining examples independently assigned. Never an inference rule.
+            event_id = context
+                .strip_prefix("구역")
+                .unwrap()
+                .parse()
+                .map_err(|_| Error::Invalid("context integer".into()))?;
+        }
         let recorded_at = (rng.next_u64() % 1_000_000_000) as i64;
         let value = if kind == 0 {
             directions[(rng.next_u64() % 8) as usize].to_owned()
@@ -2327,7 +2344,12 @@ pub fn crossed_copy_development(
             let original = format!("{name}의 {context} 이동 지시는 {val}이다.");
             let mut item = evidence(event_id, original.clone(), "current");
             item.recorded_at = recorded_at;
-            let id = format!("cross-H3/development/{seed}/{base}/{view}");
+            let namespace = if training {
+                "train-renewal"
+            } else {
+                "development"
+            };
+            let id = format!("cross-H3/{namespace}/{seed}/{base}/{view}");
             let input = if view == 3 {
                 "제공된 유일한 기록의 원문을 빠짐없이 쓰고 그 사건을 인용해줘.".into()
             } else {
@@ -2352,10 +2374,8 @@ pub fn crossed_copy_development(
             out.push(Episode {
                 id,
                 category: 0,
-                family: format!(
-                    "cross/H3/digits-{digits}/kind-{kind}/pattern-{pattern}/replica-{}/view-{view}",
-                    base % 2
-                ),
+                family: if training {format!("renewal/H3/train/digits-{digits}/kind-{kind}/pattern-{pattern}/replica-{}/view-{view}",base%2)}
+                    else {format!("cross/H3/digits-{digits}/kind-{kind}/pattern-{pattern}/replica-{}/view-{view}",base%2)},
                 binding: format!("{name}/{context}/{val}"),
                 sequence: hash(&serde_json::to_vec(&(
                     &request.input,
@@ -2368,7 +2388,7 @@ pub fn crossed_copy_development(
     }
     check_split(prior, &out)?;
     meta["status"] = json!("MATERIALIZED_NOT_VALIDATED");
-    meta["bases"] = json!(128);
+    meta["bases"] = json!(bases);
     meta["views"] = json!(out.len());
     meta["unique_entities"] = json!(
         out.iter()
@@ -2376,7 +2396,49 @@ pub fn crossed_copy_development(
             .collect::<BTreeSet<_>>()
             .len()
     );
+    if training {
+        meta["role"] = json!("TRAINING_ONLY");
+        meta["generator"] = json!("controlled-renewal-H3-v1");
+        meta["counterexample_same_number_context_event"] =
+            json!("base%4==1; others independently sampled");
+    }
     Ok((out, meta))
+}
+/// F is a fixed balanced quarter of N. Both use the same grammar and 128-stratum schedule.
+pub fn renewed_copy_curricula(
+    original: &Path,
+    heldout: &[Episode],
+    output: &Path,
+    seed: u64,
+) -> Result<serde_json::Value> {
+    use serde_json::json;
+    let (parent, old, dev) = load(original)?;
+    if old.len() != 4096 || dev.len() != 256 {
+        return Err(Error::Invalid("original H3 curriculum required".into()));
+    }
+    let (focus, meta) = crossed_copy_panel(heldout, seed, 512, true)?;
+    if focus.len() != 2048 {
+        return Err(Error::Invalid(format!("renewal capacity: {meta}")));
+    }
+    check_split(&old, &focus)?;
+    check_split(&focus, &dev)?;
+    let mut report = json!({"generator":meta,"original_train_hash":parent.train.sha256,"seed":seed,"arms":{},"optimizer_updates":0});
+    for (arm, count) in [("F", 512), ("N", 2048)] {
+        let dir = output.join(format!("corpus-{arm}"));
+        std::fs::create_dir(&dir)?;
+        let mut train = old[..2048].to_vec();
+        train.extend_from_slice(&focus[..count]);
+        check_split(&train, heldout)?;
+        let manifest=CorpusManifest {version:1,scope:parent.scope.clone(),permission:"project synthetic training; original anchors preserved".into(),
+            generator:"controlled-renewal-H3-v1".into(),seed,split_rule:"holdout full entity excluded; old seal partition reserved; original train binding/raw disjoint; base views kept together".into(),
+            train:save_split(&dir,"train",&train)?,validation:save_split(&dir,"validation",&dev)?};
+        write_new(
+            &dir.join("manifest.json"),
+            &serde_json::to_vec_pretty(&manifest)?,
+        )?;
+        report["arms"][arm] = json!({"corpus":dir,"focus_views":count,"focus_bases":count/4,"train_hash":manifest.train.sha256,"dev_hash":manifest.validation.sha256});
+    }
+    Ok(report)
 }
 pub fn tokenizer(root: &Path, output: &Path, vocab: usize) -> Result<()> {
     let (mut manifest, train, validation) = load(root)?;

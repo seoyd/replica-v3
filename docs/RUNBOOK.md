@@ -48,6 +48,13 @@ Only a clean TIME_BUDGET receipt permits explicit `--resume LATEST_SEGMENT_DIREC
 raw scores; it never opens sealed cases or grants Goal1 readiness. Existing closed1024
 receipts remain immutable; new outputs must not reuse their directories.
 
+After A1 closes with `next=A2_CONDITIONAL`, use the newly verified frozen executable:
+`recovery progress-renewal --experiment A1_PAIR --harness NEW_QUICK_SUMMARY --output NEW_A2_PAIR --seed SEED`.
+This creates both balanced corpora and registers F/N before training. Run `progress-arm`
+with `--arm F`, then `--arm N`, against that new pair, and finish with `progress-close`.
+The prior A1 update/time ledger remains part of the same2048-update/120-minute H3 budget.
+Never resume an old closed arm or reset its LR/Adam when registering this conditional pair.
+
 `replica-train recovery progress-baseline` is the no-update A0 entry for controlled H3
 progress. Explicit inputs are the H2 baseline, stopped1024 segment directory, native inference
 file, H3 corpus, exact-source passing quick receipt, new output and fixed development seed.

@@ -1,6 +1,14 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: R3-H3-CONTROLLED-PROGRESS-1.0
+## Closed: R3-H3-CONTROLLED-PROGRESS-1.0
+
+A0/A1/A2 are implemented, checked and executed. All four arms reached512 new updates;
+total2048 updates/4,903,380input/554,581target, approximately65.2minutes of A0+arm execution.
+Final F dev242/CROSS459/ordinary176 and N236/449/174 both fail raw H3 and original-QA
+retention. The once-only seal remains unopened. NEXT=H3_BUDGET_CLOSED, no automatic
+extension, no H4–H8/S4–S6 execution or Goal1 readiness. N256 dev252 did not survive to512
+and is not substituted for final acceptance. Full results/provenance are in EXPERIMENT_STATUS.
+The registered execution contract below is retained as history, not pending authorization.
 
 Start at report HEAD be6e2b7a7f59e444ffa25d8bae9e1af34d418d66, code d31e53eda459af447eed10d87617e4ee4d11ead3.
 Preserve the1024-update H3 native/Adam and its failed quality/closed budget/resume=false receipts.
@@ -53,6 +61,21 @@ L is the conditional A2 parent by the registered old-full ranking, not a claim o
 LR superiority. Both native endpoints/Adam/raw receipts remain immutable. NEXT=A2 F/N
 with inherited L policy (already past its64-update ramp), identical anchor/distribution,
 at most512 updates each. No sealed/final input has been opened.
+
+A2 registration uses `progress-renewal`: the selected L native endpoint/Adam/RNG is
+immutable and both new arms continue LR clock513..1024 at1e-4, cumulative Adam23287..23798.
+Balanced128-base strata repeat four times in the schedule. F reuses128bases×4views;
+N supplies512bases×4views, each view once. F is the first balanced quarter of the N
+materialization, allowing the renewal contrast without changing grammar/distribution.
+Original anchor2048views and their draw order are identical. Full heldout entities are
+excluded and the old seal's entire namespace is reserved; existing train bindings/raw
+are also excluded from new focus. Counterexamples include leading-zero IDs, one-digit
+ID changes, value changes, and disclosed context/event numeric equality on base%4==1.
+Actual target/input token differences are reported rather than padded or truncated.
+Persisted corpus, generator revision/seed/namespace/base/view/update/slot coordinates,
+native cursor and tape hashes make resumed sampling exact. The independent serialized
+validator checks every new focus view before learning. Final stop eligibility fails closed
+when any terminal/cleanup/checkpoint eligibility field is missing.
 
 ## Previous: R3-HARNESS-TO-GOAL1-1.0
 

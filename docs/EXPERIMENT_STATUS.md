@@ -4,7 +4,111 @@
 2026-09-17. 이전 R3-CUSTOMIZE-AND-DIAGNOSE-1.0 실행 이력은 아래 보존한다.
 모든 성공 표시는 구현자 확인이며 INDEPENDENT_PENDING이다.
 
-## 현재: A1 C/L 비교 종료, 조건부 A2 준비
+## 현재: A0/A1/A2 검증 종료 — H3 품질 미달, 새 예산 종료
+
+EXECUTED_THIS_RUN / IMPLEMENTER_REPORT. 현재 실행 중인 학습은 없다. 새 SMALL optimizer
+호출은 C/L/F/N 각512, 총2048회로 상한에 도달했다. 합계 input4,903,380/target554,581이며
+이는 네 독립 arm의 합계다. 각 F/N 모델이 물려받은 새 학습은 L512+자신512=1024회다.
+옛 H3 1024와 이전 종료/resume=false는 변경하지 않았다. A1 publication
+5c52c27fc56e07dd05d44e2398f5caf1a741b6df는 실제 origin/main과 일치했다.
+
+| A2 normal greedy | 선택 부모 L | F 고정 focus | N 갱신 focus |
+| --- | ---: | ---: | ---: |
+| old dev full | 227/256 | 242/256 | 236/256 |
+| entity / event | 246 / 253 | 251 / 251 | 252 / 245 |
+| dev errors | 3 | 0 | 0 |
+| CROSS full | 289/512 | 459/512 | 449/512 |
+| CROSS entity / context / value / event | 321 / — / — / 507 | 501 / 490 / 502 / 498 | 504 / 481 / 491 / 500 |
+| CROSS errors | 0 | 0 | 0 |
+| CROSS base4/4 | — | 106/128 | 106/128 |
+| ordinary | 185/336 | 176/336 | 174/336 |
+| auxiliary | 53/64 | 56/64 | 55/64 |
+| watch | 17/32 | 15/32 | 16/32 |
+
+F dev0/128/256/512=227/217/242/242; N=227/244/252/236이다. N256은 기존 dev에서
+full252/entity255/event256/오류0을 충족했지만 최종512에서 유지하지 못했다. 그 중간 결과를
+최종 PASS로 대체하거나 별도 미등록 후보 선택에 쓰지 않았다. 원래 ordinary 하한178/336을
+F/N 모두 잃었다. 양쪽 raw-development gate=false/candidate=false/resume=false,
+terminal=SCREENING_BUDGET_REACHED/control=COMPLETED다. comparison의 selected_arm=F는
+안전한 endpoint 중 old-full 순위일 뿐 승인/배포가 아니며 next=H3_BUDGET_CLOSED다.
+
+N 대 F 최종 paired old-dev 획득4/상실10, base4/4 획득3/상실6이다. CROSS 획득17/상실27,
+base4/4 획득9/상실9다. 고정 focus보다 갱신 focus가 최종 full-answer를 개선했다는 증거는
+이번 비교에서 없다. 초기 향상과 후기 하락의 인과 원인을 LR/temperature/tokenizer 중 하나로
+확정하지 않는다. F의 CROSS459/512는 A0의210/512보다249개 높지만 수용치487에는 미달한다.
+양쪽 UTF-8/empty/control/length 오류0이어도 숫자·맥락·값·인용의 전체 정답 기준은 별도다.
+
+CROSS 길이1..8의 full/64: F=51/60/60/56/62/64/54/52, N=56/59/57/53/60/60/59/45.
+방향/짧은경로 full/256: F236/223, N231/218. 일반/반복/교대/인접중복 base-pattern의
+view full/128: F116/107/122/114, N111/103/114/121. 1자리 패턴 중복과 rename-view의
+모양 변경은 A0에 공개한 그대로이며 독립 표본 수로 부풀리지 않는다. 각 raw score에 모든
+stratum, 첫 불일치 field, base, EOS, token, teacher 통계를 보존했다.
+
+A2의 두 군은 L의 같은 native/Adam/RNG에서 시작했고 LR 시계513..1024를1e-4로 이어갔다.
+새 warmup/Adam reset/decay/tokenizer/temperature 개입은 없다. anchor draw2048은 동일하다.
+F focus128bases/512views/384bindings를4회 소비, N512bases/2048views/1536bindings를1회 소비했다.
+view0/3은 같은 원문·binding의 서로 다른 질문이므로2048개의 독립 binding이라고 하지 않는다.
+F/N의 전체 unique bases/views는2176/2560 및2560/4096이다. N은 F보다 실제 input50/target21
+token 적다(F1,225,844/138,636; N1,225,794/138,615). padding/정답 절단으로 맞추지 않았다.
+F는 N materialization의 균형 첫128base 부분집합이며, 두 군의 분포·stratum/view schedule은 같다.
+
+자료 seed917260419, generator controlled-renewal-H3-v1. 새 training 사례는 새 binding/raw이며
+entity 문자열은 이전 training에서 본 것을 재사용할 수 있다. 생성기의 exclusion 입력은
+기존 dev+CROSS+ordinary heldout이다. 모든 heldout full entity와 옛 seal hash namespace는
+제외했으며 seal 사례는 읽지 않았다. 단일 자리17개 가용 ID도 이 heldout 예약에 대한 값이다.
+따라서 이를 '이전 training에서 모두 처음 보는 full entity'라고 주장하지 않는다.
+F/N corpus의 각 focus view는 독립 serialized validator를 통과했다(max framed309tokens).
+전체 원문/target/manifest와 update/slot/base/view/sequence 좌표는 로컬에 동결했다.
+
+F931.79s/max RSS6,688,325,632B, N932.20s/max RSS6,686,916,608B; 별도 peak memory footprint
+F7,253,449,208B/N7,259,560,440B다. A0+네 arm의 학습/평가 관측 시간은 약65.2분으로120분
+이내이며 모든 command1800초/cleanup120초 이내다. 각 arm1776 generation+1776 teacher calls,
+이번 A0 포함 총8272 generation이다. 모든 실제 SMALL update와 실패 사전검사 기록을 보존했다.
+
+A2 실행 source HEAD5c52c27fc56e07dd05d44e2398f5caf1a741b6df + 관련 미커밋 소스,
+digest9e5c7503651c7908a2f30514be58df689154cd6af8c70f01ac40ab5aee28c9c6.
+동결 binary `artifacts/h3-controlled-20260917/a2-train-frozen`, SHA
+8504af591a9eb675b0c8aae23c66cff527485bdefaca00f8c6020b1a5d83fbea.
+실제 자료: `artifacts/h3-controlled-20260917/a2/corpus-F` 및 `corpus-N`.
+Train SHA F=fe36d1a44a0dd1b6370777c23d588f1c928c0fd242ff186f66985ce027723cde,
+N=41aa4ead3f90d7a3e869022105ebc41e00656ddd52aff879ce9eb4766929676a.
+dev SHA는 기존ca5c86f91b4defe471bf1c6c2931bcc97ac0b88e084bd5506b65b0101ebccd89 그대로다.
+Checkpoint/raw/trace: `artifacts/h3-controlled-20260917/a2/{F,N}/segment-00-0000/`.
+F final native SHA bdc28e3f4b31ad5d600cf1c6ec0615b591deed9e26b069d9167f6a175f0a0e16,
+model565a40a33ee896916a421dbee538d3f126789a67ee184039b28e7cc4224a375a.
+N final native SHA734ec32aa4bfad8bce9ecf2387eae81f988cd9643b3257612f7527733d4f0bca,
+model870facdd31aca3a251dfe4b111745281724517b673f2a4d38aa6267d982594ea.
+Policies, coordinates, generated audit and comparison reside in the same A2 root;
+console/time logs are `artifacts/h3-controlled-20260917/a2-{F,N,close}.log`.
+
+검증: A2 직접 progress7 PASS, 추가 renewal/native2 PASS, quick-a239 executions PASS
+(0 failed/ignored), 최종 fmt/check/clippy 및 release 제품/학습/checker build PASS.
+처음 자료 회귀는 테스트용264-byte tokenizer의 context 한계로 실패했고, 기존801-token
+교육자료 tokenizer fixture 방식을 재사용해 수정했다. 실제 SMALL tokenizer는 변경하지 않았다.
+이 실패와 clippy 실패 로그도 보존했다. 이번 수치 회귀 실제 TINY updates 총82/SMALL0이며
+제품 품질을 TINY 결과로 대신하지 않는다. 과거34개 수치 시험은 이번 횟수에 합산하지 않았다.
+기존 untracked487개와 원본 보존 manifest를 최종 대조했다. 임시 지시문/원문/weights/DB는
+publish 대상이 아니며 source·문서 신규 파일0개, 로컬 실험 artifact만 생성했다.
+
+최종 요구사항 대조 및 판정:
+
+- CODE/HARNESS_VERDICT=CHECKED_SCOPE_PASS: Rust-only, 기존 하네스/RunControl/저장/검사기 재사용.
+  explicit fork, native Adam/LR clock/cursor parity, 누락·중단 fail-closed, serialized 자료·분모 검증 완료.
+- REPORTED_CLAIMS_VERIFIED=A0 재현/원자료/노출/토큰/QK 제한 관측 완료; 가설을 원인으로 확정하지 않음.
+- LR_EFFECT=조건부 관측: L 최종 old-dev+2/CROSS+30/ordinary+7, auxiliary-9 versus C; 일반 우월성 미확정.
+- RENEWAL_EFFECT=최종 개선 미입증: N이 F보다 old-dev6/CROSS10/ordinary2개 낮음; 중간 향상은 보존.
+- QK_CAUSE_LEVEL=OBSERVATIONAL_ONLY. RMS로±7을 강제하지 않았고 decay/iid 산식을 원인 증명에 쓰지 않음.
+- RAW_H3_PASS=FAIL. UTF8_GUARD_ONLY_RESULT=NOT_RUN (선택 사항, normal greedy 유지).
+- ANCHOR_PRESERVED=C/L PASS, F/N FAIL (하한178). H3_SEAL_PASS=NOT_RUN_SEALED.
+- A3 새 프로세스 후보 수용=NOT_RUN_PREREQUISITE; A0 부모 재현/수치 native 재개 검증과 구분.
+- H4–H8/S4/S5/S6=NOT_RUN_PREREQUISITE; GOAL1_IMPLEMENTER_READY=false,
+  GOAL1_ACCEPTED=false; INDEPENDENT_REVIEW=PENDING. 추가 학습/봉인 개봉/배포 없음.
+
+후속 판단 근거만 남긴다: 마지막 F/N은 UTF-8 오류0이지만 CROSS 전체 정답과 ordinary 보존이
+부족했고 N의 중간 dev 성능이 최종에 하락했다. tokenizer/temperature 또는 다른 LR/retention
+정책을 바꾸려면 이 기록을 바탕으로 새 통제 계약이 필요하며 이번에는 시행하지 않았다.
+
+## A1 C/L 비교 종료 기록
 
 EXECUTED_THIS_RUN. C/L 각각512 NEW updates, input1,225,871/target138,665를 소비했다.
 동일 native 부모·Adam·누적 step22774·RNG와 실제512회 sample 순서/token 분모가 확인됐다.

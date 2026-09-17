@@ -209,6 +209,17 @@ impl RunControl {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Conditional F/N registration after a closed, safe, improving A1 comparison.
+    ProgressRenewal {
+        #[arg(long)]
+        experiment: PathBuf,
+        #[arg(long)]
+        harness: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        seed: u64,
+    },
     /// Register both independent LR forks before either optimizer is called.
     ProgressPrepare {
         #[arg(long)]
@@ -624,6 +635,12 @@ pub fn run(command: Command) -> Result<()> {
     }
     budget.check("command_started")?;
     let outcome = match command {
+        Command::ProgressRenewal {
+            experiment,
+            harness,
+            output,
+            seed,
+        } => progress_renewal(&experiment, &harness, &output, seed, &mut budget),
         Command::ProgressPrepare {
             a0,
             harness,
@@ -3446,13 +3463,220 @@ fn progress_prepare(
     Ok(())
 }
 
+fn progress_endpoint_safe(r: &Value) -> bool {
+    r["reason"] == "SCREENING_BUDGET_REACHED"
+        && r["comparison_eligible"] == true
+        && r["cleanup_limit_exceeded"] == false
+        && r["new_updates"] == 512
+        && r["checkpoint_saved"] == true
+        && r.get("save_error") == Some(&Value::Null)
+        && r["final_evaluation_complete"] == true
+        && r["control"]["terminal_reason"] == "COMPLETED"
+        && r["control"]["observed_conditions"] == json!([])
+        && r["resume_allowed"] == false
+}
+#[allow(clippy::type_complexity)] // Reuse the existing persisted skill-tape tuple representation.
+fn progress_renewal_tapes(
+    original: &[Episode],
+    sampler: u64,
+) -> Result<[Vec<(Vec<usize>, u64)>; 2]> {
+    let anchors = skill_tape(original, sampler)?;
+    let mut rng = Rng { state: sampler };
+    let mut order: Vec<_> = (0..128).collect();
+    for i in (1..128).rev() {
+        order.swap(i, (rng.next_u64() % (i + 1) as u64) as usize);
+    }
+    let mut variants = vec![[0, 1, 2, 3]; 128];
+    for v in &mut variants {
+        for i in (1..4).rev() {
+            v.swap(i, (rng.next_u64() % (i + 1) as u64) as usize);
+        }
+    }
+    let mut tapes = [Vec::new(), Vec::new()];
+    for round in 0..4 {
+        for cycle in 0..4 {
+            for group in order.as_chunks::<4>().0 {
+                let n = tapes[0].len();
+                for (arm, tape) in tapes.iter_mut().enumerate() {
+                    let mut indices = anchors[n].0[..4].to_vec();
+                    indices.extend(group.iter().map(|base| {
+                        2048 + (base + if arm == 0 { 0 } else { cycle * 128 }) * 4
+                            + variants[*base][(round + cycle) % 4]
+                    }));
+                    tape.push((indices, anchors[n].1));
+                }
+            }
+        }
+    }
+    Ok(tapes)
+}
+fn progress_renewal(
+    root: &Path,
+    harness: &Path,
+    output: &Path,
+    seed: u64,
+    control: &mut RunControl,
+) -> Result<()> {
+    control.check("progress_renewal_prepare")?;
+    let checked = verified_harness(harness)?;
+    let comparison = read_json(&root.join("comparison.json"))?;
+    let selected = progress_u64(&comparison, "selected_index")? as usize;
+    if comparison["node"] != "A1"
+        || comparison["contract"] != PROGRESS_CONTRACT
+        || comparison["next"] != "A2_CONDITIONAL"
+        || comparison["raw_development_gate"] != false
+        || selected > 1
+        || !progress_endpoint_safe(&comparison["endpoints"][selected])
+    {
+        return Err(Error::Invalid(
+            "A2 requires closed safe improving A1 endpoint, not another sweep".into(),
+        ));
+    }
+    let ledger = progress_ledger(root)?;
+    if ledger.0 > 1024 {
+        return Err(Error::Invalid("A1 update ledger".into()));
+    }
+    let end = &comparison["endpoints"][selected];
+    let segment = progress_path(end, "segment")?;
+    let mut p = read_json(&segment.parent().unwrap().join("policy.json"))?;
+    if end["policy_sha256"] != file_hash(&segment.parent().unwrap().join("policy.json"))?
+        || end["checkpoint_file_sha256"] != file_hash(&segment.join("final"))?
+    {
+        return Err(Error::Corrupt("selected endpoint changed".into()));
+    }
+    let l = checkpoint::load(&segment.join("final"), Device::Cpu, true)?;
+    let state = l
+        .manifest
+        .training
+        .as_ref()
+        .ok_or_else(|| Error::Corrupt("A2 native Adam".into()))?;
+    if end["model_content_hash"] != l.model.weight_hash()?
+        || end["adam_hash"] != optimizer_hash(&l.optimizer)?
+        || end["cumulative_model_step"] != state.step
+        || end["sampler_state"] != state.sampler_state
+    {
+        return Err(Error::Corrupt("A2 native parent tensor/Adam/clock".into()));
+    }
+    let a0 = progress_path(&p, "a0")?;
+    let a = read_json(&a0.join("summary.json"))?;
+    let original = progress_path(&p, "corpus")?;
+    let (_, old, dev) = data::load(&original)?;
+    let mut heldout: Vec<Episode> =
+        serde_json::from_value(read_json(&a0.join("cross-development.json"))?)?;
+    heldout.extend(dev);
+    let frozen = load(&progress_path(&a, "baseline")?.join("frozen.json"))?;
+    let (_, _, ordinary) = data::load(&frozen.corpus)?;
+    heldout.extend(ordinary);
+    std::fs::create_dir(output)?;
+    let mut generated = data::renewed_copy_curricula(&original, &heldout, output, seed)?;
+    let tapes = progress_renewal_tapes(&old, state.sampler_state)?;
+    p["node"] = json!("A2");
+    p["run_id"] = json!(output);
+    p["parent"] = json!(segment.join("final"));
+    p["parent_sha256"] = end["checkpoint_file_sha256"].clone();
+    p["parent_receipt"] = json!(segment.join("result.json"));
+    p["parent_receipt_sha256"] = json!(file_hash(&segment.join("result.json"))?);
+    p["initial_model_hash"] = end["model_content_hash"].clone();
+    p["initial_adam_hash"] = end["adam_hash"].clone();
+    p["initial_state"] = serde_json::to_value(state)?;
+    p["initial_state_native_hash"] = json!(digest(state)?);
+    p["source_commit"] = json!(source_commit()?);
+    p["source_digest"] = checked["source_digest"].clone();
+    p["binary_hash"] = json!(file_hash(&std::env::current_exe()?)?);
+    p["harness"] = json!(harness);
+    p["harness_hash"] = json!(file_hash(harness)?);
+    p["baseline_dev"] = end["last_evaluation"]["dev"]["exact_matches"].clone();
+    p["baseline_watch"] = end["last_evaluation"]["watch"]["exact_matches"].clone();
+    p["baseline_errors"] = json!(
+        progress_u64(&end["last_evaluation"]["dev"], "generation_error_cases")?
+            + progress_u64(&end["last_evaluation"]["watch"], "generation_error_cases")?
+    );
+    p["lr_offset"] = json!(progress_u64(&p, "lr_offset")? + progress_u64(end, "new_updates")?);
+    p["lr_function"] = json!(
+        "continue selected A1 policy clock; no restart of ramp; same F/N LR and inherited cumulative Adam"
+    );
+    p["zero_evaluation"] = json!("DERIVED_FROM_A1_IDENTICAL_SELECTED_MODEL");
+    p["zero_evaluation_file"] = json!(segment.join("eval-0512.json"));
+    p["zero_evaluation_hash"] = json!(file_hash(&segment.join("eval-0512.json"))?);
+    p["parent_comparison_hash"] = json!(file_hash(&root.join("comparison.json"))?);
+    p["generator"] = generated["generator"].clone();
+    for (index, arm) in ["F", "N"].iter().enumerate() {
+        let corpus = output.join(format!("corpus-{arm}"));
+        let (manifest, episodes, _) = data::load(&corpus)?;
+        let count = if index == 0 { 512 } else { 2048 };
+        generated["arms"][*arm]["validation"] =
+            verify_cross_panel(&episodes[2048..], &heldout, &l, count)?;
+        let framed = samples(&episodes, &l.tokenizer, 512)?;
+        let denominators: Vec<_> = tapes[index]
+            .iter()
+            .map(|(ids, _)| {
+                (
+                    ids.iter()
+                        .map(|i| framed[*i].tokens.len() - 1)
+                        .sum::<usize>(),
+                    ids.iter()
+                        .map(|i| framed[*i].tokens.len() - framed[*i].response_start)
+                        .sum::<usize>(),
+                )
+            })
+            .collect();
+        let mut coordinates = Vec::new();
+        for (n, (ids, _)) in tapes[index].iter().enumerate() {
+            if ids
+                .iter()
+                .map(|i| scene(&episodes[*i]))
+                .collect::<BTreeSet<_>>()
+                .len()
+                != 8
+            {
+                return Err(Error::Corrupt("renewal batch repeats base".into()));
+            }
+            for (slot, i) in ids[4..].iter().enumerate() {
+                coordinates.push(json!({"generator_revision":"controlled-renewal-H3-v1","namespace":"train-renewal","seed":seed,"update":n+1,"slot":slot,"base":(i-2048)/4,"view":(i-2048)%4,"id":episodes[*i].id,"sequence":episodes[*i].sequence}));
+            }
+        }
+        p["arm"] = json!(arm);
+        p["corpus"] = json!(corpus);
+        p["train_hash"] = json!(manifest.train.sha256);
+        p["dev_hash"] = json!(manifest.validation.sha256);
+        p["tape"] = json!(tapes[index]);
+        p["tape_hash"] = json!(digest(&tapes[index])?);
+        p["denominators"] = json!(denominators);
+        p["denominators_hash"] = json!(digest(&denominators)?);
+        let dir = output.join(arm);
+        std::fs::create_dir(&dir)?;
+        save(&dir.join("coordinates.json"), &json!(coordinates))?;
+        p["coordinates_hash"] = json!(file_hash(&dir.join("coordinates.json"))?);
+        save(&dir.join("policy.json"), &p)?;
+    }
+    save(&output.join("generated.json"), &generated)?;
+    control.check("progress_renewal_registered")?;
+    save(
+        &output.join("pair.json"),
+        &json!({"node":"A2","contract":PROGRESS_CONTRACT,"arms":["F","N"],"policy_hashes":[file_hash(&output.join("F/policy.json"))?,file_hash(&output.join("N/policy.json"))?],
+        "prior_experiment":root,"prior_comparison_hash":file_hash(&root.join("comparison.json"))?,"maximum_pair_updates":1024,"same_strata_schedule":true,
+        "same_anchor_tape":true,"renewal_only":"F512views repeated4; N2048views once, four views on distinct batches; F is balanced first128base quarter of N",
+        "learning_before_registration":0,"actual_prior_updates":ledger.0}),
+    )?;
+    Ok(())
+}
 /// Counts every closed segment, including failed segments; an unclosed segment blocks reruns.
 fn progress_ledger(root: &Path) -> Result<(u64, u64, u64, f64)> {
     let pair = read_json(&root.join("pair.json"))?;
     let mut total = (0, 0, 0, 0.);
     if let Some(prior) = pair["prior_experiment"].as_str() {
+        if pair["node"] != "A2"
+            || read_json(&Path::new(prior).join("pair.json"))?["node"] != "A1"
+            || pair["prior_comparison_hash"]
+                != file_hash(&Path::new(prior).join("comparison.json"))?
+        {
+            return Err(Error::Corrupt("bounded A1 to A2 ledger lineage".into()));
+        }
         total = progress_ledger(Path::new(prior))?;
     } else {
+        if pair["node"] != "A1" {
+            return Err(Error::Corrupt("missing A1 prior ledger".into()));
+        }
         total.3 = pair["a0_elapsed_seconds"]
             .as_f64()
             .filter(|v| v.is_finite() && *v >= 0.)
@@ -3582,6 +3806,9 @@ fn progress_arm(
     {
         return Err(Error::Corrupt("frozen development baseline changed".into()));
     }
+    if p["node"] == "A2" && p["coordinates_hash"] != file_hash(&output.join("coordinates.json"))? {
+        return Err(Error::Corrupt("renewal replay coordinates changed".into()));
+    }
     let a = read_json(&a0.join("summary.json"))?;
     let frozen = load(&progress_path(&a, "baseline")?.join("frozen.json"))?;
     let (manifest, episodes, dev) = data::load(&progress_path(&p, "corpus")?)?;
@@ -3672,6 +3899,21 @@ fn progress_arm(
         return Err(Error::Corrupt("resumed fork config changed".into()));
     }
     state.config = c.clone();
+    if resume.is_some()
+        && (state.corpus_hash != manifest.train.sha256
+            || state.validation_hash != manifest.validation.sha256)
+    {
+        return Err(Error::Corrupt(
+            "resumed renewal corpus state changed".into(),
+        ));
+    }
+    if state.corpus_hash != manifest.train.sha256 {
+        state.previous_corpora.push(state.corpus_hash.clone());
+        state.previous_corpora.sort();
+        state.previous_corpora.dedup();
+        state.corpus_hash = manifest.train.sha256.clone();
+        state.validation_hash = manifest.validation.sha256.clone();
+    }
     state.parent_checkpoint_hash = Some(
         p["initial_model_hash"]
             .as_str()
@@ -3704,16 +3946,32 @@ fn progress_arm(
     let mut complete = false;
     let outcome = (|| -> Result<()> {
         if last.is_null() {
-            let d = read_json(&a0.join("normal-dev.json"))?;
-            let w = read_json(&a0.join("watch32.json"))?;
-            let watch_score = skill_score(
-                w["rows"]
-                    .as_array()
-                    .ok_or_else(|| Error::Corrupt("A0 watch rows".into()))?,
-            )?;
-            last = json!({"new_updates":0,"dev":d["score"],"watch":watch_score,"dev_rows":d["rows"],"watch_rows":w["rows"],
+            if p["node"] == "A2" {
+                let path = progress_path(&p, "zero_evaluation_file")?;
+                if p["zero_evaluation_hash"] != file_hash(&path)? {
+                    return Err(Error::Corrupt("selected parent raw changed".into()));
+                }
+                last = read_json(&path)?;
+                if last["model_content_hash"] != p["initial_model_hash"]
+                    || last["final_evaluation_complete"] != true
+                {
+                    return Err(Error::Corrupt("derived A2 zero provenance".into()));
+                }
+                last["derived_parent_new_updates"] = last["new_updates"].clone();
+                last["new_updates"] = json!(0);
+                last["evidence_level"] = p["zero_evaluation"].clone();
+            } else {
+                let d = read_json(&a0.join("normal-dev.json"))?;
+                let w = read_json(&a0.join("watch32.json"))?;
+                let watch_score = skill_score(
+                    w["rows"]
+                        .as_array()
+                        .ok_or_else(|| Error::Corrupt("A0 watch rows".into()))?,
+                )?;
+                last = json!({"new_updates":0,"dev":d["score"],"watch":watch_score,"dev_rows":d["rows"],"watch_rows":w["rows"],
                 "final_evaluation_complete":true,"model_content_hash":p["initial_model_hash"],"evidence_level":"DERIVED_FROM_A0_IDENTICAL_MODEL",
                 "dev_file_hash":file_hash(&a0.join("normal-dev.json"))?,"watch_file_hash":file_hash(&a0.join("watch32.json"))?});
+            }
             save(&segment.join("eval-0000.json"), &last)?;
         }
         loop {
@@ -4062,12 +4320,7 @@ fn progress_close(root: &Path, control: &mut RunControl) -> Result<()> {
             paired.push(json!({"new_updates":n,"dev":progress_pair_delta(e["dev_rows"].as_array().unwrap(),other["dev_rows"].as_array().unwrap())?,"watch":progress_pair_delta(e["watch_rows"].as_array().unwrap(),other["watch_rows"].as_array().unwrap())?}));
         }
     }
-    let safe = |r: &Value| {
-        r["reason"] == "SCREENING_BUDGET_REACHED"
-            && r["comparison_eligible"] == true
-            && r["cleanup_limit_exceeded"] == false
-            && r["new_updates"] == 512
-    };
+    let safe = progress_endpoint_safe;
     let rank = |r: &Value| {
         let d = &r["last_evaluation"]["dev"];
         (
@@ -4116,6 +4369,26 @@ fn progress_close(root: &Path, control: &mut RunControl) -> Result<()> {
                         "actual paired exposure mismatch: {key}"
                     )));
                 }
+            }
+        }
+    }
+    if pair["node"] == "A2" {
+        if policies[0]["lr_policy"] != policies[1]["lr_policy"]
+            || policies[0]["lr_offset"] != policies[1]["lr_offset"]
+        {
+            return Err(Error::Corrupt("F/N LR changed".into()));
+        }
+        for (a, b) in traces[0][..common_prefix]
+            .iter()
+            .zip(&traces[1][..common_prefix])
+        {
+            if a["indices"].as_array().unwrap()[..4] != b["indices"].as_array().unwrap()[..4]
+                || a["ids"].as_array().unwrap()[..4] != b["ids"].as_array().unwrap()[..4]
+                || a["lr_bits"] != b["lr_bits"]
+                || a["optimizer_step"] != b["optimizer_step"]
+                || a["sampler_state"] != b["sampler_state"]
+            {
+                return Err(Error::Corrupt("actual F/N anchor/LR/clock mismatch".into()));
             }
         }
     }
@@ -4197,7 +4470,15 @@ fn progress_copy_score(rows: &[Value], expected: usize) -> Result<Value> {
     Ok(score)
 }
 fn verify_cross_development(cases: &[Episode], prior: &[Episode], l: &Loaded) -> Result<Value> {
-    if cases.len() != 512 {
+    verify_cross_panel(cases, prior, l, 512)
+}
+fn verify_cross_panel(
+    cases: &[Episode],
+    prior: &[Episode],
+    l: &Loaded,
+    expected: usize,
+) -> Result<Value> {
+    if ![512, 2048].contains(&expected) || cases.len() != expected {
         return Err(Error::Invalid(
             "CROSS denominator; never shrink capacity failures".into(),
         ));
@@ -4293,7 +4574,10 @@ fn verify_cross_development(cases: &[Episode], prior: &[Episode], l: &Loaded) ->
             return Err(Error::Invalid("CROSS contrast semantics".into()));
         }
     }
-    if bases.len() != 128 || strata.len() != 16 || strata.values().any(|&n| n != 32) {
+    if bases.len() != expected / 4
+        || strata.len() != 16
+        || strata.values().any(|&n| n != expected / 16)
+    {
         return Err(Error::Invalid("CROSS balanced length/value strata".into()));
     }
     let framed = samples(cases, &l.tokenizer, 512)?;
@@ -8574,6 +8858,17 @@ mod tests {
     }
     #[test]
     fn progress_fork_required_fields_closed_resume_and_final_cancel() {
+        let endpoint = json!({"reason":"SCREENING_BUDGET_REACHED","comparison_eligible":true,"cleanup_limit_exceeded":false,"new_updates":512,"checkpoint_saved":true,
+            "save_error":null,"final_evaluation_complete":true,"control":{"terminal_reason":"COMPLETED","observed_conditions":[]},"resume_allowed":false});
+        assert!(progress_endpoint_safe(&endpoint));
+        for key in endpoint.as_object().unwrap().keys() {
+            let mut bad = endpoint.clone();
+            bad.as_object_mut().unwrap().remove(key);
+            assert!(!progress_endpoint_safe(&bad), "{key}");
+        }
+        let mut interrupted = endpoint.clone();
+        interrupted["control"]["terminal_reason"] = json!("CANCELLED");
+        assert!(!progress_endpoint_safe(&interrupted));
         let policy = json!({"contract":PROGRESS_CONTRACT,"entry":"EXPERIMENT_FORK","parent_sha256":"a".repeat(64),"maximum_updates":512,
             "max_input_tokens":2_000_000,"max_target_tokens":500_000,"h3_max_updates":2048,"h3_seconds":7200,"normal_policy":"normal_greedy_v1","lr_policy":"C"});
         assert!(progress_policy_valid(&policy));
@@ -8661,6 +8956,210 @@ mod tests {
         e["dev"]["denominator"] = json!(256);
         e["final_evaluation_complete"] = json!(false);
         assert!(progress_guard(&p, &e, &mut streak).is_err());
+    }
+    #[test]
+    fn progress_renewal_materialization_distribution_exposure_and_split_cursor() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("original");
+        let dev: Vec<_> = (0..256)
+            .map(|i| repair_episode(&format!("heldout/{i}/0")))
+            .collect();
+        let mut manifest = repair_corpus(&root, &dev);
+        let old: Vec<_> = (0..4096)
+            .map(|i| {
+                repair_episode(&if i < 2048 {
+                    format!("anchor/{i}/0")
+                } else {
+                    format!("focus/{}/{}", (i - 2048) / 4, (i - 2048) % 4)
+                })
+            })
+            .collect();
+        let bytes = serde_json::to_vec(&old).unwrap();
+        std::fs::write(root.join("train.json"), &bytes).unwrap();
+        manifest.train = data::Split {
+            file: "train.json".into(),
+            sha256: neural::hash(&bytes),
+            bytes: bytes.len(),
+            documents: 4096,
+            tokens: None,
+        };
+        std::fs::write(
+            root.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        let output = dir.path().join("pair");
+        std::fs::create_dir(&output).unwrap();
+        let report = data::renewed_copy_curricula(&root, &dev, &output, 82119).unwrap();
+        assert_eq!(report["arms"]["F"]["focus_views"], 512);
+        assert_eq!(report["arms"]["N"]["focus_views"], 2048);
+        let (_, f, _) = data::load(&output.join("corpus-F")).unwrap();
+        let (_, n, _) = data::load(&output.join("corpus-N")).unwrap();
+        assert_eq!(digest(&f[..2048]).unwrap(), digest(&old[..2048]).unwrap());
+        assert_eq!(digest(&f).unwrap(), digest(&n[..2560]).unwrap());
+        let mut l = repair_loaded();
+        let docs: Vec<_> = f[2048..]
+            .iter()
+            .map(|e| serde_json::to_vec(e).unwrap())
+            .collect();
+        l.tokenizer =
+            ByteBpe::train(&docs, &neural::hash(b"renewal test tokenizer only"), 801).unwrap();
+        verify_cross_panel(&f[2048..], &dev, &l, 512).unwrap();
+        verify_cross_panel(&n[2048..], &dev, &l, 2048).unwrap();
+        assert!(verify_cross_panel(&n[2048..], &[n[2048].clone()], &l, 2048).is_err());
+        let mut broken = f[2048..].to_vec();
+        broken[0].request.evidence.items[0].original_excerpt.clear();
+        assert!(verify_cross_panel(&broken, &dev, &l, 512).is_err());
+        broken = f[2048..].to_vec();
+        broken[0].request.evidence.items[0]
+            .original_excerpt
+            .push_str(" another unsupported fact");
+        assert!(verify_cross_panel(&broken, &dev, &l, 512).is_err());
+        let tapes = progress_renewal_tapes(&old, 19177).unwrap();
+        assert_eq!(tapes, progress_renewal_tapes(&old, 19177).unwrap());
+        let restored: [Vec<(Vec<usize>, u64)>; 2] =
+            serde_json::from_slice(&serde_json::to_vec(&tapes).unwrap()).unwrap();
+        for arm in 0..2 {
+            let data = if arm == 0 { &f } else { &n };
+            let mut draws = BTreeMap::<usize, usize>::new();
+            assert_eq!(tapes[arm].len(), 512);
+            assert_eq!(tapes[arm][193..], restored[arm][193..]);
+            for (step, (indices, rng)) in tapes[arm].iter().enumerate() {
+                assert_eq!(indices[..4], tapes[1 - arm][step].0[..4]);
+                assert_eq!(*rng, tapes[1 - arm][step].1);
+                assert_eq!(
+                    indices
+                        .iter()
+                        .map(|i| scene(&data[*i]))
+                        .collect::<BTreeSet<_>>()
+                        .len(),
+                    8
+                );
+                for (slot, i) in indices[4..].iter().enumerate() {
+                    *draws.entry(*i).or_default() += 1;
+                    let j = tapes[1 - arm][step].0[slot + 4];
+                    assert_eq!((i - 2048) % 512, (j - 2048) % 512); // Same base stratum AND view.
+                    assert_eq!(data[*i].family, if arm == 0 { &n } else { &f }[j].family);
+                }
+            }
+            assert_eq!(draws.len(), if arm == 0 { 512 } else { 2048 });
+            assert!(draws.values().all(|n| *n == if arm == 0 { 4 } else { 1 }));
+        }
+        let again = dir.path().join("again");
+        std::fs::create_dir(&again).unwrap();
+        data::renewed_copy_curricula(&root, &dev, &again, 82119).unwrap();
+        assert_eq!(
+            file_hash(&output.join("corpus-N/train.json")).unwrap(),
+            file_hash(&again.join("corpus-N/train.json")).unwrap()
+        );
+    }
+    #[test]
+    fn progress_renewal_native_checkpoint_cursor_and_moments() {
+        let original: Vec<_> = (0..4096)
+            .map(|i| {
+                repair_episode(&if i < 2048 {
+                    format!("anchor/{i}/0")
+                } else {
+                    format!("focus/{}/{}", (i - 2048) / 4, (i - 2048) % 4)
+                })
+            })
+            .collect();
+        let tapes = progress_renewal_tapes(&original, 81727).unwrap();
+        for (arm, tape) in tapes.iter().enumerate() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut l = repair_loaded();
+            let numeric: Vec<_> = (0..if arm == 0 { 2560 } else { 4096 })
+                .map(|i| {
+                    let mut e = repair_episode(&format!("numeric/{i}"));
+                    e.request.input = format!("a{i}");
+                    e.answer = format!("b{i}");
+                    e
+                })
+                .collect();
+            let framed = samples(&numeric, &l.tokenizer, 32).unwrap();
+            let config = TrainConfig {
+                seq_len: 32,
+                microbatch: 8,
+                accumulation: 1,
+                max_steps: 1024,
+                warmup: 0,
+                first_target_weight: 8.,
+                ..Default::default()
+            };
+            let mut state = TrainingState {
+                contrast16: false,
+                parent_checkpoint_hash: None,
+                config: config.clone(),
+                step: 209,
+                consumed_tokens: 10000,
+                target_tokens: 1000,
+                sampler_state: tape[191].1,
+                corpus_hash: l.tokenizer.train_hash.clone(),
+                validation_hash: "3".repeat(64),
+                previous_corpora: vec![],
+                initial_weight_hash: l.manifest.initial_weight_hash.clone(),
+                train_loss: None,
+                validation_loss: None,
+            };
+            let mut adam = Adam::new(&l.model.vars).unwrap();
+            let update = |l: &Loaded, adam: &mut Adam, state: &mut TrainingState| {
+                let cursor = state.step - 17;
+                let b = batch(&framed, &tape[cursor].0, &Device::Cpu).unwrap();
+                let (_, loss, targets) =
+                    response_loss(&l.model.forward(&b.input, Some(&b.valid)).unwrap(), &b, 8.)
+                        .unwrap();
+                let gradients = loss.backward().unwrap();
+                let gradients = l
+                    .model
+                    .vars
+                    .iter()
+                    .map(|(name, var)| (name.clone(), gradients.get(var).unwrap().detach()))
+                    .collect();
+                adam.step_constant(
+                    &l.model.vars,
+                    &gradients,
+                    &config,
+                    state.step + 1,
+                    progress_lr("L", 512 + cursor + 1).unwrap(),
+                )
+                .unwrap();
+                state.step += 1;
+                state.consumed_tokens += b.tokens as u64;
+                state.target_tokens += targets as u64;
+                state.sampler_state = tape[cursor].1;
+            };
+            update(&l, &mut adam, &mut state);
+            save_arm(
+                &mut l,
+                &state,
+                &adam,
+                &dir.path().join("resume"),
+                "RECOVERY_SCREENING",
+            )
+            .unwrap();
+            let restored = checkpoint::load(&dir.path().join("resume"), Device::Cpu, true).unwrap();
+            let mut restored_state = restored.manifest.training.clone().unwrap();
+            let mut restored_adam = Adam {
+                moments: restored.optimizer.clone(),
+            };
+            update(&l, &mut adam, &mut state);
+            update(&restored, &mut restored_adam, &mut restored_state);
+            assert_eq!(
+                l.model.weight_hash().unwrap(),
+                restored.model.weight_hash().unwrap()
+            );
+            assert_eq!(
+                optimizer_hash(&adam.moments).unwrap(),
+                optimizer_hash(&restored_adam.moments).unwrap()
+            );
+            assert_eq!(
+                serde_json::to_value(state).unwrap(),
+                serde_json::to_value(restored_state).unwrap()
+            );
+        }
+        println!(
+            "RENEWAL_NATIVE actual_TINY_updates=6 SMALL_updates=0; starting cursor192/clock209 are constructed numeric fixtures"
+        );
     }
     #[test]
     fn progress_lr_native_split_adam_clock_and_cursor_parity() {
