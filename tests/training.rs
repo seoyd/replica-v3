@@ -1,5 +1,143 @@
 use std::process::Command;
 #[test]
+fn full_population_binding_pairs_require_question_and_value_without_split_growth() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source");
+    let output = dir.path().join("paired");
+    let run = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_replica-train"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    run(&[
+        "corpus",
+        "prepare",
+        "--profile",
+        "entity-cue",
+        "--documents",
+        "384",
+        "--seed",
+        "317",
+        "--output",
+        source.to_str().unwrap(),
+    ]);
+    let raw = std::fs::read(source.join("train.json")).unwrap();
+    let original: Vec<serde_json::Value> = serde_json::from_slice(&raw).unwrap();
+    run(&[
+        "corpus",
+        "binding-pairs",
+        "--source",
+        source.to_str().unwrap(),
+        "--output",
+        output.to_str().unwrap(),
+    ]);
+    assert_eq!(std::fs::read(source.join("train.json")).unwrap(), raw);
+    assert_eq!(
+        std::fs::read(source.join("validation.json")).unwrap(),
+        std::fs::read(output.join("validation.json")).unwrap()
+    );
+    let paired_raw = std::fs::read(output.join("train.json")).unwrap();
+    let paired: Vec<serde_json::Value> = serde_json::from_slice(&paired_raw).unwrap();
+    assert_eq!(paired.len(), original.len());
+    let mut changed = 0;
+    for (old, new) in original.chunks(4).zip(paired.chunks(4)) {
+        if !matches!(old[0]["category"].as_u64(), Some(0 | 2))
+            || old[0]["family"].as_str().unwrap().starts_with("copy/")
+        {
+            assert_eq!(old, new);
+            continue;
+        }
+        changed += 4;
+        assert_eq!(new[0]["request"]["input"], new[2]["request"]["input"]);
+        assert_eq!(new[1]["request"]["input"], new[3]["request"]["input"]);
+        assert_ne!(new[0]["request"]["input"], new[1]["request"]["input"]);
+        assert_eq!(new[0]["request"]["evidence"], new[1]["request"]["evidence"]);
+        assert_eq!(new[2]["request"]["evidence"], new[3]["request"]["evidence"]);
+        assert_ne!(new[0]["answer"], new[1]["answer"]);
+        assert_ne!(new[0]["answer"], new[2]["answer"]);
+        for (before, after) in old.iter().zip(new) {
+            assert_eq!(before["id"], after["id"]);
+            assert_eq!(before["request"]["system"], after["request"]["system"]);
+            assert_eq!(before["request"]["limits"], after["request"]["limits"]);
+        }
+        for row in new {
+            let question = row["request"]["input"].as_str().unwrap();
+            let affirmative = question.split_once(" 말고 ").map_or(question, |(_, s)| s);
+            let records = row["request"]["evidence"]["items"].as_array().unwrap();
+            // Resolve from serialized query/records, not the generator's selected index,
+            // label, binding metadata, or the other rows in this quartet.
+            let selected: Vec<_> = records
+                .iter()
+                .filter(|r| {
+                    let (entity, rest) = r["original_excerpt"]
+                        .as_str()
+                        .unwrap()
+                        .split_once("의 ")
+                        .unwrap();
+                    let context = rest.split_once(" 이동 지시는 ").unwrap().0;
+                    affirmative.contains(entity)
+                        && (row["category"] == 0
+                            || ["에서", " 이동", "의"]
+                                .iter()
+                                .any(|suffix| affirmative.contains(&format!("{context}{suffix}"))))
+                })
+                .collect();
+            assert_eq!(selected.len(), 1, "{question}");
+            let event = selected[0];
+            assert_eq!(
+                row["answer"],
+                format!(
+                    "{} [event:{}]",
+                    event["original_excerpt"].as_str().unwrap(),
+                    event["event_id"]
+                )
+            );
+        }
+        for (a, b) in new[0]["request"]["evidence"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(new[2]["request"]["evidence"]["items"].as_array().unwrap())
+        {
+            let mut b = b.clone();
+            b["original_excerpt"] = a["original_excerpt"].clone();
+            assert_eq!(
+                *a, b,
+                "value swaps must preserve ID/status/time/order metadata"
+            );
+        }
+    }
+    assert!(changed > 0);
+    assert!(changed < paired.len());
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(output.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(
+        manifest["train"]["sha256"],
+        replica_v3::neural::hash(&paired_raw)
+    );
+    // A malformed/non-quartet source is rejected before the output is created.
+    let rejected = dir.path().join("rejected");
+    let result = Command::new(env!("CARGO_BIN_EXE_replica-train"))
+        .args([
+            "corpus",
+            "binding-pairs",
+            "--source",
+            output.to_str().unwrap(),
+            "--output",
+            rejected.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(!rejected.exists());
+}
+#[test]
 fn full_qa_pairs_keep_split_and_bind_question_value_citation_in_both_orders() {
     let d = tempfile::tempdir().unwrap();
     let source = d.path().join("source");

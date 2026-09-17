@@ -1531,6 +1531,157 @@ pub fn prepare(
     Ok(())
 }
 /// Full-answer contrasts from existing training scenes; the development split stays unchanged.
+/// Keep the full training population, but make two-record direction QA depend on
+/// both the requested target and its record's value. Never used by the worker.
+pub fn binding_pairs(source: &Path, output: &Path) -> Result<()> {
+    let (mut manifest, mut train, validation) = load(source)?;
+    if !train.len().is_multiple_of(4) {
+        return Err(Error::Invalid(
+            "binding pairs require complete existing quartets".into(),
+        ));
+    }
+    let mut changed = 0;
+    for group in train.chunks_mut(4) {
+        let base = group[0].clone();
+        if base.family.starts_with("copy/") || !matches!(base.category, 0 | 2) {
+            continue;
+        }
+        if group
+            .iter()
+            .any(|e| e.category != base.category || e.request.input != base.request.input)
+            || base.request.evidence.items.len() != 2
+            || base
+                .request
+                .evidence
+                .items
+                .iter()
+                .any(|r| r.version_status != "current" || r.excerpt_truncated)
+        {
+            return Err(Error::Invalid("binding pair source layout".into()));
+        }
+        let parsed: Vec<_> = base
+            .request
+            .evidence
+            .items
+            .iter()
+            .map(|r| {
+                r.original_excerpt
+                    .split_once("의 ")
+                    .and_then(|(entity, rest)| {
+                        rest.split_once(" 이동 지시는 ")
+                            .and_then(|(context, value)| {
+                                value
+                                    .strip_suffix("이다.")
+                                    .map(|value| (entity, context, value))
+                            })
+                    })
+                    .ok_or_else(|| Error::Invalid("binding pair source grammar".into()))
+            })
+            .collect::<Result<_>>()?;
+        let cited = replica_v3::app::citations(&base.answer)?;
+        let target = base
+            .request
+            .evidence
+            .items
+            .iter()
+            .position(|r| cited == [r.event_id])
+            .ok_or_else(|| Error::Invalid("binding pair single source citation".into()))?;
+        if base.answer
+            != format!(
+                "{} [event:{}]",
+                base.request.evidence.items[target].original_excerpt, cited[0]
+            )
+            || !base.request.input.contains(parsed[target].0)
+            || !base.request.input.contains(parsed[target].1)
+            || parsed[0].2 == parsed[1].2
+        {
+            return Err(Error::Invalid("binding pair source target".into()));
+        }
+        let other = 1 - target;
+        let mut replacements = Vec::new();
+        for field in 0..2 {
+            let a = if field == 0 {
+                parsed[target].0
+            } else {
+                parsed[target].1
+            };
+            let b = if field == 0 {
+                parsed[other].0
+            } else {
+                parsed[other].1
+            };
+            if a != b {
+                replacements.push((a.to_owned(), b.to_owned()));
+                replacements.push((b.to_owned(), a.to_owned()));
+            }
+        }
+        // Longest-first prevents context1 from matching the prefix of context10.
+        replacements.sort_by_key(|(old, _)| std::cmp::Reverse(old.len()));
+        let other_question = replace_training_literals(&base.request.input, &replacements);
+        if other_question == base.request.input {
+            return Err(Error::Invalid("binding pair questions must differ".into()));
+        }
+        for (variant, episode) in group.iter_mut().enumerate() {
+            let selected = if variant % 2 == 0 { target } else { other };
+            let swapped = variant >= 2;
+            episode.request.evidence = base.request.evidence.clone();
+            if swapped {
+                for (i, record) in episode.request.evidence.items.iter_mut().enumerate() {
+                    record.original_excerpt = format!(
+                        "{}의 {} 이동 지시는 {}이다.",
+                        parsed[i].0,
+                        parsed[i].1,
+                        parsed[1 - i].2
+                    );
+                }
+            }
+            episode.request.input = if selected == target {
+                base.request.input.clone()
+            } else {
+                other_question.clone()
+            };
+            let record = &episode.request.evidence.items[selected];
+            episode.answer = format!("{} [event:{}]", record.original_excerpt, record.event_id);
+            episode.binding = format!(
+                "{}/{}/{}",
+                parsed[selected].0,
+                parsed[selected].1,
+                parsed[if swapped { 1 - selected } else { selected }].2
+            );
+            episode.family.push_str("/query-value-pair");
+            episode.sequence = hash(&serde_json::to_vec(&(
+                &episode.request.input,
+                &episode.request.evidence.items,
+            ))?);
+        }
+        changed += group.len();
+    }
+    if changed == 0 {
+        return Err(Error::Invalid("no supported binding pair quartets".into()));
+    }
+    check_split(&train, &validation)?;
+    let parent_train = manifest.train.sha256.clone();
+    manifest.generator.push_str("/full-binding-pairs-v1");
+    manifest.split_rule = format!(
+        "Same training count; {changed} existing two-current-record QA0/QA2 cases become query/value pairs; other cases and validation bytes unchanged; parent train={parent_train}; {}",
+        manifest.split_rule
+    );
+    let validation_bytes = read_bounded(&source.join(&manifest.validation.file), MAX_CORPUS)?;
+    if hash(&validation_bytes) != manifest.validation.sha256 {
+        return Err(Error::Corrupt(
+            "binding pair validation changed during preparation".into(),
+        ));
+    }
+    std::fs::create_dir(output)?;
+    manifest.train = save_split(output, "train", &train)?;
+    write_new(&output.join(&manifest.validation.file), &validation_bytes)?;
+    write_new(
+        &output.join("manifest.json"),
+        &serde_json::to_vec_pretty(&manifest)?,
+    )?;
+    println!("{}", serde_json::to_string_pretty(&manifest)?);
+    Ok(())
+}
 pub fn qa_pairs(source: &Path, output: &Path, groups: usize) -> Result<()> {
     let (mut manifest, original, validation) = load(source)?;
     if !(1..=128).contains(&groups)

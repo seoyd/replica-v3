@@ -1,6 +1,59 @@
 # Diagnostic repair and bounded quality recovery
 
-Current: ordinary trainer cancellation follow-through verified; C/L/B/P/T learning runs
+## S4 completion continuation V — authorized 2026-09-17
+
+User again explicitly requires S4 quality and Goal1 completion. Baseline52aaccdab8153ea34d14db5026fad810f8dcdf26.
+The former RF-only update cap and closed T run remain historical; authorization includes
+new bounded learning, then S5/S6 in order, without lowering acceptance criteria. Do not
+repeat tiny memorization, externalize inference, or alter the current model/storage formulas.
+
+Observed before this learning: T500's original train prefix400 gives239/336 ordinary QA
+and64/64auxiliary;97ordinary failures include85 first value errors. Train QA0/1/2 are37/68,
+36/68,34/68, while single-record QA3 and causal QA4 are68/68 and64/64. On unchanged validation,
+known-question-only ablation gives69/136 QA0/2 instead of35/136, including QA2 11→40/68.
+These are diagnostics, not final test scores: both multi-record value binding and question
+expression transfer remain. No new label contradiction or core numerical defect was found.
+
+One learning-data intervention: full-population question/value pairs. Reuse each existing
+four-case ordinary QA0/QA2 block, holding both records fixed for two different requested
+targets, then swapping only the two source values. Derive training labels from those actual
+records. Keep episode count/base scenes, all other categories/auxiliary cases, and validation
+bytes unchanged. Preserve the original corpus and publish only the Rust transformer/tests.
+This addresses absence of same-evidence/opposite-question supervision in ordinary QA without
+the earlier U2 population reduction. It does not claim data design is the sole root cause.
+
+Start V from preserved P1000 step20750, exactly as the historical T control. Same Adam/RNG,
+batch8/group1/accumulation1/first-target8, CPU/Accelerate/F32 and tokenizer. Same explicit
+LR0.00008650922011682288/warmup0/cosine2000 extension, with subsequent plain resumes. Only
+the new declared train split changes; index draws and schedule remain comparable, while
+actual samples/input-token counts necessarily differ. New source has the verified ordinary
+trainer stop checks; they do not change finite uninterrupted optimizer arithmetic.
+
+V cap2000updates/20Minput tokens, four≤500-update segments, each work≤900s plus preservation,
+training RSS16GiB; one heavy process. Evaluate the original validation400 every500 and
+compare to the existing T rows at matching steps. Stop for nonfinite/cancel/resource limits,
+≥0.10 ordinary macro loss or≥2new generation errors at two evaluations, or three consecutive
+evaluations without a new best. No automatic extension of a failed V. Use validation-only
+selection; do not run final200 until a candidate passes the unchanged development gate.
+Track actual train versus validation outcomes without calling ablations candidate scores.
+Local evidence: artifacts/s4-completion-20260917. Original checkpoints/corpus/logs remain intact.
+
+During V's second segment, the user asked whether repeated attempts were improving and
+requested a direction if quality remains unchanged. V500 was165/336 versus T500169/336.
+Decision made before observing V1000: finish/preserve/evaluate the current segment; if it
+still fails the original development quality gate, do not launch V1500/V2000. The2000 cap
+is an upper bound, not a reason to consume it. Reuse existing question/record ablation
+evidence first, fill only missing no-update comparisons, then identify a specific boundary
+before any next training. This is an early bounded closure, not a revised acceptance gate.
+
+V observed closure:1000updates,2,330,384input/208,320target tokens, training wall1571.40s,
+maximum RSS7,039,188,992bytes. V500 ordinary165/336; V1000 ordinary175/336 versus T1000
+169/336 on identical400 inputs/targets. Auxiliary64/64 and generation failures0 in both V
+evaluations. V1000 has a small development gain; QA2 remains10/68, so the original gate
+fails. V1500/V2000 were not run under the early closure decision recorded above. Preserve
+both native artifacts and raw failures; no final test, memorization retest or new optimizer run.
+
+Current: ordinary trainer cancellation follow-through verified; C/L/B/P/T/V learning runs
 remain CLOSED, NOT_RUNNING. S4 quality and Goal1 remain incomplete. T closed after three
 consecutive evaluations without a new best and its2000-update cap. No automatic extension
 of this negative closure.

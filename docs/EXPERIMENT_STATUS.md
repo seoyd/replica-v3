@@ -4,7 +4,69 @@
 2026-09-17. 이전 R3-CUSTOMIZE-AND-DIAGNOSE-1.0 실행 이력은 아래 보존한다.
 모든 성공 표시는 구현자 확인이며 INDEPENDENT_PENDING이다.
 
-## 현재: 일반 학습 경로의 취소·종료 보완 — 2026-09-17
+## 현재: S4 V1000 종료, 품질 미달 — 2026-09-17
+
+사용자가 S4 품질과 Goal1 전체 완료를 다시 명시했다. 기존 제한 진단 완료를 최종 완료로
+대체하지 않는다. 새 V의 실행 전 계획은 QUALITY_RECOVERY_PLAN의 S4 completion V에
+기록했다. 실제1000updates에서 종료했고 남은1000updates는 실행하지 않았다.
+이미 닫힌 T를 단순 연장하지 않고, 동일 출발점/optimizer/sampling/LR에서 학습 자료의
+질문·값 결합 하나를 바꾸는 비교다. S4/S5/S6 품질 판정은 아직 NO다.
+
+읽기 전용 진단: 기존 T500 가중치로 원본 train 앞400을 실제 생성해 일반239/336,
+보조64/64를 관측했다. 이는 전체train 정확도가 아니다. ordinary97실패 중85개는 첫 오답이
+value에서 발생했다. validation QA0/2의 known-question ablation은69/136으로, 원문35/136보다
+높았다. 특히 QA2는11→40/68이었다. oracle 질문 치환 점수를 후보 품질로 사용하지 않는다.
+원래 validation과 최종200자료를 재작성하지 않았다.
+
+기존 Rust data/CLI에 full-population binding-pairs 변환을 추가했다. 원본 train20000중
+QA0/QA2의6668개를 같은 근거/다른 질문과 값 교환 대조로 바꾸고, 나머지13332개와
+validation400의 바이트를 유지했다. 실제 출력 전체를 별도 Rust 읽기 도구로 검산했다.
+신규 scene/자료 수 증가0, 원본 덮어쓰기0. 직접 CLI 회귀1개와 check/clippy/release 통과.
+초기 clippy의 테스트 반복문 경고는 보존하고 수정했다. 아직 단계 완료로 commit하지 않았다.
+
+V 출발 artifact는 artifacts/goal1-renewed-20260917/parent-p-1000/final(step20750)이다.
+새 corpus는 artifacts/s4-completion-20260917/binding-corpus이며 train SHA256은
+809b4559c44f3a9e46d68afd6038f9a0f434d3b1274fdc6264d6071e58344d77,
+validation은 이전572b0d9d797feb2c31fa8713566853aff91ae6b994d736c399e8bad0cb3fb004다.
+실행 source manifest digest는9158a9c3b69b576d2e0d6995b617ccce2434334d620c013289b57555d601159b,
+trainer binary는c0766a7f02b594e450439b02edb00d9eed165e2c476be3655e595984dde4ffc6이다.
+실제 초기 validation CE0.13134989는 P1000과 일치했다. batch8/group1/acc1/first-target8,
+Adam/RNG 유지, LR0.00008650922011682288/warmup0/cosine2000을 저장 상태로 확인했다.
+이 실행 중 source/binary는 고정한다. 큰 자료·체크포인트·원문 로그는 로컬만 보존한다.
+
+V500 완료: step21250, 입력1,165,743/target104,272tokens, wall832.17s,
+maximum RSS6,438,551,552bytes.900초 작업 상한 안에서 최종 validation과 native 저장을
+완료했고 TRAIN_CONTROL의 work_error/save_error는 null이었다. 새 프로세스 validation400은
+ordinary165/336, auxiliary64/64, QA0~4는23/68·20/68·7/68·53/68·62/64이며 생성/UTF-8/
+빈 응답 오류0이다. 같은500updates의 T169/336보다 낮아 효과를 확인하지 못했다.
+V500 physical SHA256은5a7a78d750c31939a187bf12016969fb2fd950b93d2d42a047b08496f37f857c,
+weight manifest SHA256은12b2b0af9b2e5682e21bec0a9ee50550253c8547162012b875534b08d42c51b4다.
+원래 P1000보다 ordinary1개 높고 사전 중단 조건에 닿지 않아 두 번째500 구간을
+plain resume했다.
+
+V1000 완료: step21750, 두 번째 구간 입력1,164,641/target104,048tokens,
+wall739.23s/maximum RSS7,039,188,992bytes. 최종 validation과 native 저장을 모두 완료했다.
+새 process validation400은 ordinary175/336(52.08%), auxiliary64/64이며 QA0~4는
+25/68·24/68·10/68·54/68·62/64, 생성/UTF-8/빈 응답 오류0이다. T500 최고169/336보다
+6문항(1.79%p) 높다. 동일1000updates의 T169/336과 비교하면 gain26/loss20이며, 질문·근거·
+정답·제공ID·분모400이 모두 같은 것을 별도 Rust 집계로 검산했다. 작은 개발 점수 개선을
+S4 통과나 단일 원인 규명으로 확대하지 않는다. ordinary macro는 V0.5261029412,
+동일step T0.5084558824다. 특히 QA2는10/68로 계속 실패했다.
+
+V1000 physical SHA256은bce08fe79cccdfa44ec8fbc0abc7c27f6248611cabbac4b1a92c20bfe8221cc0,
+weight manifest SHA256은61b2795a13996768ae743fb83591bb6b6da4948cbcf73beb1d9d83bf866bf8a4다.
+두 구간 합계 실제1000updates/입력2,330,384/target208,320tokens, wall1571.40s다.
+V 내부 및 동일 원본 QA 개발 기준 후보는 V1000이나 최종 시험 적격은 아니다.
+사용자의 반복 개선 실패에 대한 방향 질문 후, V1000 결과를 보기 전에 미달 시 현 구간에서
+닫도록 상한을 줄였다. 계획된 상한을 다 소진하기 위한 V1500/V2000 자동 연장은 하지 않는다.
+학습은 NOT_RUNNING이며 S4_QUALITY_PASS=NO, S5/S6=NOT_RUN_PREREQUISITE,
+GOAL1_READY=NO, INDEPENDENT_PENDING이다. final200과 운영 모델은 변경하지 않았다.
+
+직접 CLI 회귀1개와 fmt/check/clippy/release가 통과했다. 실행 소스29개와 원본17개,
+기존 P/T checkpoints8개의 보존 해시를 재확인했다. 새 영구 파일/의존성은0이다.
+실행자료는 artifacts/s4-completion-20260917에 남으며 소스·테스트·작은 상태 문서만 게시한다.
+
+## 이전: 일반 학습 경로의 취소·종료 보완 — 2026-09-17
 
 **일반 trainer의 중단 경계를 추가 수정했다. S4·Goal1 전체 판정은 PARTIAL이다.**
 출발 SHA는32a633200950c820c22d50508b65c814bbd2837c이며 원격 일치와 tracked clean을

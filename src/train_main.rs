@@ -220,6 +220,13 @@ enum Models {
 }
 #[derive(Subcommand)]
 enum Corpus {
+    /// Same-size training-only query/value pairs; preserve validation and other categories.
+    BindingPairs {
+        #[arg(long)]
+        source: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Bounded full-answer query/value/order pairs from an existing query-pairs training split.
     QaPairs {
         #[arg(long)]
@@ -270,6 +277,9 @@ enum Tokenizer {
 }
 fn run() -> Result<()> {
     match Cli::parse().command {
+        Commands::Corpus {
+            command: Corpus::BindingPairs { source, output },
+        } => data::binding_pairs(&source, &output),
         Commands::Recovery { command } => training::recovery::run(command),
         Commands::Contrast { command } => {
             use training::contrast;

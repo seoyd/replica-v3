@@ -1,6 +1,9 @@
 # Native Goal 1 work graph
 
-현재 상태: **S4 INCOMPLETE / bounded runs CLOSED / NOT_RUNNING**, GOAL1-NATIVE-TRPP-1.0 미완.
+현재 상태: **S4 INCOMPLETE / V1000 CLOSED / NOT_RUNNING**, GOAL1-NATIVE-TRPP-1.0 미완.
+기존 C/L/B/P/T는 CLOSED이며, 같은 P1000 출발점의 질문/값 대조 V도1000updates에서
+닫았다. 같은 원본 validation의 일반 QA175/336으로 이전169/336보다6개 높지만 품질 기준은
+미달이다. V1000 평가 전에 정한 조기 종료에 따라1500/2000구간은 실행하지 않았다.
 2026-09-17 사용자가 학습 제한 갱신과 S4·Goal1까지 계속 진행을 명시했다.
 RF-01~03 수정은 검증·공개됐고 원격52e8b88과 일치한다. 먼저 같은 parent/자료/tape의
 제한 C/L LR-policy 비교를 완료했다. C는200updates에서watch11/32로 품질 중단,
@@ -8,7 +11,8 @@ L은250updates에서15/32로 종료했다. 이어서 L의 sampler만 변경한 B
 종료했다. 원래 parent/corpus를 유지한 P1000은 일반 QA155→164/336으로 개선됐지만
 S4 기준에 미달했다. 이어진 T2000은 최고169/336 이후169→167→166으로 세 번 연속
 개선이 없어 닫았다. 신규 합계3700SMALL/16TINY updates이며 S4/S5/S6는 미통과다.
-실패 실행을 자동 연장하지 않는다. 최상의 개발 후보는 T500이며 최종 checkpoint와 다르다.
+실패 실행을 자동 연장하지 않는다. 위3700updates는 V 이전 합계이며, 이번 V1000은 별도다.
+같은 원본 QA 개발 기준 현재 후보는 V1000이다. 최종 시험 적격이나 운영 채택은 아니다.
 구체적인 사전 예산과 중단 조건은 QUALITY_RECOVERY_PLAN.md, 실제 실행은
 EXPERIMENT_STATUS.md에 유지한다. 아래 제한 진단 종료 기록과 실패는 보존한다.
 
@@ -51,7 +55,7 @@ verification. Source inspection and execution are separate evidence levels.
 | S1 | VERIFIED | src/{store,app,retrieval,model}.rs; tests/{store,runtime,retrieval,cli}.rs; logs/goal1-s1-tests.txt; logs/goal1-s1-source-digest.txt | published 4edd62c; remote matched |
 | S2 | VERIFIED | src/{data,neural,train_main}.rs; tests/{native,training}.rs; logs/goal1-s2-final-tests.txt, goal1-s2-tokenizer.txt; goal1-s2-source-digest.txt | published 6ded741; remote matched |
 | S3 | VERIFIED | src/neural/{transformer,checkpoint}.rs, src/training.rs; logs/goal1-s3-exit-tests.txt, goal1-s3-small-boundaries.txt; goal1-s3-source-digest.txt | published 23cc5b0; remote matched |
-| S4 | INCOMPLETE; bounded runs CLOSED | 갱신 후 SMALL3700/TINY16updates; 최고 T500 일반 QA169/336, copy64/64, 생성오류0. T 마지막3평가 비개선, 원본과 실패 checkpoints 보존. | final200 NOT_RUN_NOT_ELIGIBLE; 품질95%/각90% 미달, 원인 미확정 |
+| S4 | INCOMPLETE; V1000 CLOSED | 같은 P1000/학습 정책에서 자료 수를 유지한 질문/값 대조 V1000 검증. 일반 QA175/336, 이전 T500169/336; 새 파일0, 실제1000updates | final200 NOT_RUN_NOT_ELIGIBLE; 품질95%/각90% 미달; 학습 자동 연장 없음 |
 | S5 | IMPLEMENTING | src/{model,main,app,retrieval}.rs native-only ask/generate/chat; examples/validate.rs actual CLI smoke; intermediate diagnostic4/14 correct,14/14 same-key no-model replays | prerequisite S4 pending; required five categories and fresh-process quality still FAIL |
 | S6 | BLOCKED | quantization not implemented | S4/S5 prerequisites unmet; T-N08 and complete T-I04/T-D02 pending |
 
