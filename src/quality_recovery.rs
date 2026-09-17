@@ -190,6 +190,17 @@ impl RunControl {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Compare a completed or stopped fixed-tape C/L run from its actual records.
+    ScheduleReport {
+        #[arg(long)]
+        fixture: PathBuf,
+        #[arg(long)]
+        control: PathBuf,
+        #[arg(long)]
+        treatment: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Recount preserved ledgers and verify C/W trace binding without model calls.
     Recount {
         #[arg(long)]
@@ -224,12 +235,14 @@ pub enum Command {
         #[arg(long)]
         output: PathBuf,
     },
-    /// One-factor C/W screening only, fixed tape and at most 50 real updates.
+    /// Fixed-tape screening; explicit renewed runs may compare the parent LR policy.
     Arm {
         #[arg(long)]
         fixture: PathBuf,
-        #[arg(long, value_parser=["C","W"])]
+        #[arg(long, value_parser=["C","W","L"])]
         arm: String,
+        #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u16).range(1..=250))]
+        max_updates: u16,
         #[arg(long)]
         source_id: String,
         #[arg(long)]
@@ -479,6 +492,12 @@ pub fn run(command: Command) -> Result<()> {
     let mut budget = RunControl::command(matches!(&command, Command::Arm { .. }))?;
     budget.check("command_started")?;
     let outcome = match command {
+        Command::ScheduleReport {
+            fixture,
+            control,
+            treatment,
+            output,
+        } => schedule_report(&fixture, [&control, &treatment], &output, &mut budget),
         Command::Recount {
             fixture,
             parent_log,
@@ -535,9 +554,17 @@ pub fn run(command: Command) -> Result<()> {
         Command::Arm {
             fixture,
             arm,
+            max_updates,
             source_id,
             output,
-        } => arm_run(&fixture, &arm, &source_id, &output, &mut budget),
+        } => arm_run(
+            &fixture,
+            &arm,
+            usize::from(max_updates),
+            &source_id,
+            &output,
+            &mut budget,
+        ),
         Command::Freeze {
             parent,
             start,
@@ -2011,11 +2038,174 @@ fn arm_config(original: &TrainConfig, arm: &str) -> Result<TrainConfig> {
     }
     Ok(c)
 }
+fn schedule_config(
+    original: &TrainConfig,
+    parent: &TrainConfig,
+    parent_step: usize,
+) -> Result<TrainConfig> {
+    let mut c = arm_config(original, "C")?;
+    // The entire intervention is the saved LR policy; Adam, step and tape stay intact.
+    // Keep the same saved horizon, start at the parent's end-of-run LR,
+    // and use the existing cosine formula without another warmup ramp.
+    c.lr = parent.learning_rate(parent_step);
+    c.warmup = 0;
+    Ok(c)
+}
 fn read_json(path: &Path) -> Result<Value> {
     Ok(serde_json::from_slice(&neural::read_bounded(
         path,
         16 * 1024 * 1024,
     )?)?)
+}
+fn schedule_report(
+    fixture: &Path,
+    paths: [&Path; 2],
+    output: &Path,
+    budget: &mut RunControl,
+) -> Result<()> {
+    let f = load(fixture)?;
+    let policies = paths
+        .map(|p| read_json(&p.join("policy.json")))
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+    let traces = paths
+        .map(|p| trace(&p.join("trace.jsonl")))
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+    let results = paths
+        .map(|p| read_json(&p.join("result.json")))
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+    let base: TrainConfig = serde_json::from_value(policies[0]["config"].clone())?;
+    let parent: TrainingState =
+        serde_json::from_value(f.registry["GENERAL_QA_PARENT"]["manifest"]["training"].clone())?;
+    let treatment = schedule_config(&base, &parent.config, parent.step)?;
+    let fixture_hash = file_hash(fixture)?;
+    if policies[0]["arm"] != "C"
+        || policies[1]["arm"] != "L"
+        || json!(treatment) != policies[1]["config"]
+    {
+        return Err(Error::Corrupt("C/L schedule-only configuration".into()));
+    }
+    for key in [
+        "parent",
+        "tape",
+        "tape_hash",
+        "source_id",
+        "binary_hash",
+        "max_new_updates",
+        "max_input_tokens",
+        "max_target_tokens",
+        "max_seconds",
+        "max_rss_bytes",
+    ] {
+        if policies[0][key] != policies[1][key] {
+            return Err(Error::Corrupt(format!("C/L changed {key}")));
+        }
+    }
+    for ((policy, rows), result) in policies.iter().zip(&traces).zip(&results) {
+        budget.check("schedule_trace")?;
+        let config: TrainConfig = serde_json::from_value(policy["config"].clone())?;
+        let tape: Vec<(Vec<usize>, u64)> = serde_json::from_value(policy["tape"].clone())?;
+        if policy["fixture_hash"] != fixture_hash
+            || policy["parent"] != f.registry["U2_POLICY_START"]
+            || digest(&tape)? != policy["tape_hash"]
+            || rows.len() > tape.len()
+            || result["new_updates"] != rows.len()
+            || result["cumulative_model_step"] != parent.step + rows.len()
+            || result["checkpoint_saved"] != true
+        {
+            return Err(Error::Corrupt("C/L actual run binding".into()));
+        }
+        for (i, (row, (indices, rng))) in rows.iter().zip(&tape).enumerate() {
+            let step = parent.step + i + 1;
+            if row["indices"] != json!(indices)
+                || row["sampler_state"] != json!(rng)
+                || row["new_update"] != i + 1
+                || row["cumulative_model_step"] != step
+                || row["optimizer_step"] != step
+                || row["schedule_step"] != step - config.budget_start_step
+                || row["lr"]
+                    .as_f64()
+                    .is_none_or(|lr| (lr - config.learning_rate(step)).abs() > 1e-15)
+            {
+                return Err(Error::Corrupt("C/L actual clock/tape/LR".into()));
+            }
+        }
+    }
+    for (a, b) in traces[0].iter().zip(&traces[1]) {
+        for key in [
+            "indices",
+            "ids",
+            "input_tokens",
+            "target_tokens",
+            "sampler_state",
+            "optimizer_step",
+            "schedule_step",
+        ] {
+            if a[key] != b[key] {
+                return Err(Error::Corrupt(format!("C/L actual trace {key}")));
+            }
+        }
+    }
+    let mut comparisons = Vec::new();
+    let details = |rows: &[Value]| -> Result<Value> {
+        let mut score = summarize(rows)?;
+        for key in [
+            "entity",
+            "context",
+            "value",
+            "citation_exact",
+            "citation_in_provided",
+        ] {
+            let mut counts = [0usize; 2];
+            for row in rows {
+                if let Some(correct) = row["components"][key].as_bool() {
+                    counts[0] += usize::from(correct);
+                    counts[1] += 1;
+                }
+            }
+            score["components"][key] = json!(counts);
+        }
+        Ok(score)
+    };
+    for n in [0, 10, 25, 50, 100, 150, 200, 250] {
+        if n > traces[0].len().min(traces[1].len()) {
+            break;
+        }
+        let mut scores = Vec::new();
+        let mut train_scores = Vec::new();
+        for path in paths {
+            let evaluation = read_json(&path.join(format!("eval-{n:03}.json")))?;
+            if evaluation["final_evaluation_complete"] != true {
+                return Err(Error::Invalid("incomplete comparison evaluation".into()));
+            }
+            let rows: Vec<Value> = serde_json::from_value(evaluation["watch_rows"].clone())?;
+            verify_historical_rows(&f.watch, &rows)?;
+            scores.push(details(&rows)?);
+            let train_rows: Vec<Value> =
+                serde_json::from_value(evaluation["train_exposure_panel"].clone())?;
+            train_scores.push(details(&train_rows)?);
+        }
+        let comparison = json!({"new_updates":n,"control":scores[0],"treatment":scores[1],"control_train16":train_scores[0],"treatment_train16":train_scores[1]});
+        println!(
+            "step={n} C_watch={} L_watch={} C_train={} L_train={} C_components={} L_components={}",
+            scores[0]["exact_matches"],
+            scores[1]["exact_matches"],
+            train_scores[0]["exact_matches"],
+            train_scores[1]["exact_matches"],
+            scores[0]["components"],
+            scores[1]["components"]
+        );
+        comparisons.push(comparison);
+    }
+    budget.check("schedule_report_complete")?;
+    save(
+        output,
+        &json!({"status":"VERIFIED_COMPARISON","fixture_hash":fixture_hash,"source_id":policies[0]["source_id"],"binary_hash":policies[0]["binary_hash"],"same_tape_and_optimizer_clocks":true,"comparisons":comparisons,"runs":results,"new_small_optimizer_updates":traces.iter().map(Vec::len).sum::<usize>(),"final_heldout":false,"goal1_ready":false}),
+    )?;
+    println!("schedule comparison saved: {}", output.display());
+    Ok(())
 }
 fn trace(path: &Path) -> Result<Vec<Value>> {
     neural::read_bounded(path, 16 * 1024 * 1024)?
@@ -2599,11 +2789,15 @@ fn finish_arm(
 fn arm_run(
     fixture: &Path,
     arm: &str,
+    max_updates: usize,
     source_id: &str,
     output: &Path,
     control: &mut RunControl,
 ) -> Result<()> {
     control.check("arm_started")?;
+    if max_updates == 0 || max_updates > 250 || (arm == "W" && max_updates > 50) {
+        return Err(Error::Invalid("explicit screening update budget".into()));
+    }
     if source_id.len() != 64 || !source_id.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(Error::Invalid("frozen source digest required".into()));
     }
@@ -2628,7 +2822,29 @@ fn arm_run(
         .training
         .clone()
         .ok_or_else(|| Error::Invalid("arm optimizer required".into()))?;
-    let c = arm_config(&state.config, arm)?;
+    let c = if arm == "L" {
+        let parent: TrainingState = serde_json::from_value(
+            f.registry["GENERAL_QA_PARENT"]["manifest"]["training"].clone(),
+        )?;
+        if parent.step != state.step {
+            return Err(Error::Corrupt("LR comparison parent clock".into()));
+        }
+        schedule_config(&state.config, &parent.config, parent.step)?
+    } else {
+        arm_config(&state.config, arm)?
+    };
+    c.validate(l.model.config.context)?;
+    if state
+        .step
+        .checked_add(max_updates)
+        .is_none_or(|end| end > c.max_steps)
+    {
+        return Err(Error::Invalid(
+            "screening exceeds saved schedule horizon".into(),
+        ));
+    }
+    let max_input_tokens = max_updates as u64 * 4000;
+    let max_target_tokens = max_updates as u64 * 1000;
     let start_step = state.step;
     let start_input = state.consumed_tokens;
     let start_targets = state.target_tokens;
@@ -2641,7 +2857,7 @@ fn arm_run(
         state: state.sampler_state,
     };
     let mut tape = Vec::new();
-    for _ in 0..50 {
+    for _ in 0..max_updates {
         let ids = draw_indices(&pool, &c, &mut rng)?;
         tape.push((ids, rng.state));
     }
@@ -2659,7 +2875,7 @@ fn arm_run(
     std::fs::create_dir(output)?;
     save(
         &output.join("policy.json"),
-        &json!({"arm":arm,"parent":f.registry["U2_POLICY_START"],"fixture_hash":file_hash(fixture)?,"source_id":source_id,"binary_hash":file_hash(&std::env::current_exe()?)?,"tape":tape,"tape_hash":digest(&tape)?,"config":c,"max_new_updates":50,"max_input_tokens":200000,"max_target_tokens":50000,"max_seconds":900,"max_rss_bytes":17179869184u64,"clock_policy":"moments + cumulative optimizer clock retained; saved U2 schedule unchanged"}),
+        &json!({"arm":arm,"parent":f.registry["U2_POLICY_START"],"fixture_hash":file_hash(fixture)?,"source_id":source_id,"binary_hash":file_hash(&std::env::current_exe()?)?,"tape":tape,"tape_hash":digest(&tape)?,"config":c,"max_new_updates":max_updates,"max_input_tokens":max_input_tokens,"max_target_tokens":max_target_tokens,"max_seconds":900,"max_rss_bytes":17179869184u64,"clock_policy":if arm=="L"{"moments + cumulative optimizer clock retained; parent endpoint LR, no warmup, same cosine horizon"}else{"moments + cumulative optimizer clock retained; saved U2 schedule unchanged"}}),
     )?;
     let mut log = std::fs::OpenOptions::new()
         .write(true)
@@ -2680,7 +2896,8 @@ fn arm_run(
             .enumerate()
         {
             control.check("arm_loop")?;
-            if [0, 10, 25, 50].contains(&n) {
+            if [0, 10, 25, 50].contains(&n) || (n > 50 && n.is_multiple_of(50)) || n == max_updates
+            {
                 l.manifest.training = Some(state.clone());
                 l.model.refresh_identity()?;
                 let mut evaluation = arm_evaluation(&l, &f.watch, &train_panel, control)?;
@@ -2723,7 +2940,7 @@ fn arm_run(
                 last_evaluation = evaluation;
                 control.check("evaluation_recorded")?;
                 println!(
-                    "arm={arm} new_updates={n}/50 cumulative_step={} watch={count}/32 new_errors={new_errors} elapsed_s={:.3}",
+                    "arm={arm} new_updates={n}/{max_updates} cumulative_step={} watch={count}/32 new_errors={new_errors} elapsed_s={:.3}",
                     state.step,
                     control.start.elapsed().as_secs_f64()
                 );
@@ -2737,7 +2954,7 @@ fn arm_run(
                 )?;
                 control.check("evaluation_checkpoint_saved")?;
                 final_evaluation_complete =
-                    n == 50 && last_evaluation["final_evaluation_complete"] == true;
+                    n == max_updates && last_evaluation["final_evaluation_complete"] == true;
                 if bad_streak >= 2 {
                     control.observe(StopReason::QualityGuard);
                     break;
@@ -2752,8 +2969,8 @@ fn arm_run(
                 .iter()
                 .map(|&i| s[i].tokens.len() - s[i].response_start)
                 .sum();
-            if state.consumed_tokens - start_input + b.tokens as u64 > 200000
-                || state.target_tokens - start_targets + target_count as u64 > 50000
+            if state.consumed_tokens - start_input + b.tokens as u64 > max_input_tokens
+                || state.target_tokens - start_targets + target_count as u64 > max_target_tokens
             {
                 control.observe(StopReason::TokenBudget);
                 break;
@@ -3658,6 +3875,48 @@ mod tests {
             assert_eq!(a.learning_rate(step), b.learning_rate(step));
         }
         assert_eq!(r1.state, r2.state);
+    }
+    #[test]
+    fn recovery_parent_lr_policy_changes_only_schedule_and_preserves_250_draws() {
+        let base = TrainConfig {
+            lr: 0.0003,
+            first_target_weight: 8.,
+            microbatch: 8,
+            sample_group_size: 8,
+            accumulation: 1,
+            budget_start_step: 19750,
+            max_steps: 20750,
+            ..Default::default()
+        };
+        let parent = TrainConfig {
+            budget_start_step: 19371,
+            max_steps: 19871,
+            ..base.clone()
+        };
+        let l = schedule_config(&base, &parent, 19750).unwrap();
+        let expected_endpoint =
+            0.0003 * (0.1 + 0.45 * (1. + (std::f64::consts::PI * 279. / 400.).cos()));
+        assert!((l.lr - expected_endpoint).abs() < 1e-15);
+        assert_eq!(l.warmup, 0);
+        let mut expected = base.clone();
+        expected.lr = expected_endpoint;
+        expected.warmup = 0;
+        assert!((expected.lr - l.lr).abs() < 1e-15);
+        expected.lr = l.lr;
+        assert_eq!(l, expected);
+        let (mut a, mut b) = (Rng::new(73), Rng::new(73));
+        let pool: Vec<_> = (0..2048).collect();
+        for n in 1..=250 {
+            assert_eq!(
+                draw_indices(&pool, &base, &mut a).unwrap(),
+                draw_indices(&pool, &l, &mut b).unwrap()
+            );
+            let reference = expected_endpoint
+                * (0.1 + 0.45 * (1. + (std::f64::consts::PI * n as f64 / 1000.).cos()));
+            assert!((l.learning_rate(19750 + n) - reference).abs() < 1e-15);
+        }
+        assert_eq!(a.state, b.state);
+        assert!(l.learning_rate(19850) < base.learning_rate(19850));
     }
     #[test]
     fn recovery_unequal_target_accumulation_matches_combined_batch() {

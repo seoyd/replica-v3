@@ -1,6 +1,50 @@
 # Diagnostic repair and bounded quality recovery
 
-## R3-S4-DIAGNOSTIC-REPAIR-1.0 — current round
+## Renewed Goal 1 continuation — authorized 2026-09-17
+
+User explicitly renewed the training restriction and requested continuation through S4
+and Goal1. Baseline `52e8b88cd38e88b4ba563a27d47cfe0bc9543f83`; the closed zero-update repair
+below remains historical. No original artifact/data/raw log is replaced. Rust-only,
+own-model, no external teacher/API, actual measurement and unchanged quality thresholds
+remain required. S4 quality, S5 new-memory/restart and S6 INT4 must pass in order.
+
+First experiment, registered before execution: schedule/LR policy C versus L, starting
+from the same frozen U2 start (same general parent weights/Adam/step19750/sampler). Keep
+corpus, full250-draw tape, batch8/group8/accumulation1, first-target weight8, tokenizer,
+architecture and backend unchanged. C retains original warmup100/peak0.0003/cosine1000
+schedule. L starts at the parent step19750 endpoint LR derived from its saved config
+(approximately0.00008650922), removes warmup and uses the same1000-update cosine horizon.
+This is one LR-policy intervention; no change to Adam arithmetic or optimizer clock.
+The saved native TrainConfig fully expresses either schedule without schema changes.
+
+Each arm: at most250 new updates, input1,000,000/target250,000 tokens, work900s, RSS16GiB;
+total at most500SMALL updates. Evaluate fixed watch32/train16 at0/10/25/50/100/150/200/250.
+Stop on nonfinite/cancel/resource/time/token limits, or parent-relative watch loss≥4EM
+or ≥2new generation errors at two consecutive evaluations. A stopped arm is not a
+completed250-update result. Existing20-step control identity is checked, with no extra
+training. Preserve every result, including failures. No C/W repeat, new corpus, tiny
+memorization, final heldout or INT4 implementation during this causal comparison.
+
+Evidence for LR sensitivity requires C deterioration and better L scores at matching
+exposure/steps, with unchanged tape/weights-at-start/moments/clock. Failure to establish
+this stays UNRESOLVED; no automatic repeat/sweep or promotion to a quality claim.
+The next bounded action will be chosen from observed failures and recorded before it
+runs. Later training runs retain the original≤5000step/≤20Mtoken limits and explicit
+stopping criteria. Final heldout remains unopened until a validation-selected candidate
+is ready. Passing a diagnosis does not waive overall95%/each-category90%/invalid-citation0.
+
+Local evidence root: artifacts/goal1-renewed-20260917. Existing recovery arm/trainer/native
+checkpoint/evaluation helpers are reused; no new training framework. C/W defaults remain
+50steps; explicit --max-updates is bounded to250 and the old W arm remains limited to50.
+Actual results and source identities are recorded in EXPERIMENT_STATUS.md after execution.
+
+Observed closure: C stopped at200updates under QUALITY_GUARD (watch11/32), L completed250
+(watch15/32). Same200update comparison was C11/32 versus L14/32; train16 C8/16 versus
+L11/16. Actual policies/tapes/clocks/LR and row recount verified. New SMALL updates450,
+numeric/TINY optimizer0. Source/data/code checks passed; quality recovery NOT_ESTABLISHED.
+C/L is closed without an automatic extension, and all original evidence remains intact.
+
+## R3-S4-DIAGNOSTIC-REPAIR-1.0 — closed repair round
 
 2026-09-17, baseline main `3b671bf695ae86511273c4139d43d75bd976e490`.
 Origin `https://github.com/seoyd/replica-v3.git`. Tracked tree initially clean; 487 older

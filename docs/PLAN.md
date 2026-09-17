@@ -1,6 +1,14 @@
 # Native Goal 1 work graph
 
-현재 상태: **Q4 CLOSED_NEGATIVE / NOT_RUNNING**, GOAL1-NATIVE-TRPP-1.0 미완.
+현재 상태: **S4 IMPLEMENTING / renewed authorization**, GOAL1-NATIVE-TRPP-1.0 미완.
+2026-09-17 사용자가 학습 제한 갱신과 S4·Goal1까지 계속 진행을 명시했다.
+RF-01~03 수정은 검증·공개됐고 원격52e8b88과 일치한다. 먼저 같은 parent/자료/tape의
+제한 C/L LR-policy 비교를 완료했다. C는200updates에서watch11/32로 품질 중단,
+L은250updates에서15/32로 종료했다. 신규 합계450updates이며 S4/S5/S6는 미통과다.
+구체적인 사전 예산과 중단 조건은 QUALITY_RECOVERY_PLAN.md, 실제 실행은
+EXPERIMENT_STATUS.md에 유지한다. 아래 제한 진단 종료 기록과 실패는 보존한다.
+
+이전 상태: **Q4 CLOSED_NEGATIVE / NOT_RUNNING**.
 R3-S4-QUALITY-RECOVERY-1.0의 제한 진단을 종료했다. 일반 QA parent와 U2+250의
 실패를 같은 입력으로 재현했고, decode 오류 시 생성 기록이 사라지는 평가 결함을 고쳤다.
 학습 원인은 미확정이다. 같은 parent에서 C50/W50을 실행해 둘 다watch17/32로 종료했다.
@@ -39,7 +47,7 @@ verification. Source inspection and execution are separate evidence levels.
 | S1 | VERIFIED | src/{store,app,retrieval,model}.rs; tests/{store,runtime,retrieval,cli}.rs; logs/goal1-s1-tests.txt; logs/goal1-s1-source-digest.txt | published 4edd62c; remote matched |
 | S2 | VERIFIED | src/{data,neural,train_main}.rs; tests/{native,training}.rs; logs/goal1-s2-final-tests.txt, goal1-s2-tokenizer.txt; goal1-s2-source-digest.txt | published 6ded741; remote matched |
 | S3 | VERIFIED | src/neural/{transformer,checkpoint}.rs, src/training.rs; logs/goal1-s3-exit-tests.txt, goal1-s3-small-boundaries.txt; goal1-s3-source-digest.txt | published 23cc5b0; remote matched |
-| S4 | QUALITY_FAIL; Q4 CLOSED_NEGATIVE | U2총250update 후 일반QA56/336, 전체개발56/400을 raw log로 검산. 이번 C/W각50update watch17/32, native fresh reload 일치; 원본 checkpoints 보존. | 학습 하락 원인/복구·새 전이 미확정; final200 NOT_RUN_NOT_ELIGIBLE |
+| S4 | IMPLEMENTING; C/L CLOSED_NEGATIVE | RF-01~03 수정 검증 후 사용자 갱신 예산으로 C200/L250 실행; 동일200update watch11/32 vs14/32, L최종15/32. 원본 checkpoints 보존. | 이전 수준 복구·새 전이 미확정; final200 NOT_RUN_NOT_ELIGIBLE |
 | S5 | IMPLEMENTING | src/{model,main,app,retrieval}.rs native-only ask/generate/chat; examples/validate.rs actual CLI smoke; intermediate diagnostic4/14 correct,14/14 same-key no-model replays | prerequisite S4 pending; required five categories and fresh-process quality still FAIL |
 | S6 | BLOCKED | quantization not implemented | S4/S5 prerequisites unmet; T-N08 and complete T-I04/T-D02 pending |
 

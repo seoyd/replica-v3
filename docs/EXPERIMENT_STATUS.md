@@ -1,10 +1,54 @@
 # 진단 및 구현 상태
 
-현재 계약: R3-S4-DIAGNOSTIC-REPAIR-1.0. 기존 GOAL1-NATIVE-TRPP-1.0의 품질 기준 유지.
+현재 작업: 사용자 학습 제한 갱신에 따른 GOAL1-NATIVE-TRPP-1.0의 S4~S6 계속 구현.
 2026-09-17. 이전 R3-CUSTOMIZE-AND-DIAGNOSE-1.0 실행 이력은 아래 보존한다.
 모든 성공 표시는 구현자 확인이며 INDEPENDENT_PENDING이다.
 
-## 현재: 세 진단 경계 수정 — 2026-09-17
+## 현재: Goal1 재개 — 2026-09-17
+
+사용자가 추가 학습을 포함한 S4·Goal1 계속 진행을 명시했다. 출발 SHA는
+`52e8b88cd38e88b4ba563a27d47cfe0bc9543f83`이며 tracked dirty 없음/remote 일치를 확인했다.
+아래 RF-01~03의0update 예산은 종료된 라운드의 사실로 유지한다. 새 단계의 제한 C/L
+LR-policy 비교 계획은 QUALITY_RECOVERY_PLAN.md에 사전 기록했다. 관련7tests/clippy/release
+통과 후 source manifest `e4afa6f3e4d4ed6660a64cfe1c5ff28c4b804054686462249fcc5c39b899112a`로
+실행했다. C는200updates에서 QUALITY_GUARD로 종료, checkpoint_saved=true다.
+watch0/10/25/50/100/150/200은18/17/16/17/16/11/11 of32였다. C20 가중치는 보존된
+원래 U2+20과 정확히 일치했다. C의 입력489342/target45146tokens, work256.176s다.
+L은250updates를 완료했다. watch0/10/25/50/100/150/200/250은18/15/15/18/17/15/14/15
+of32였다. 입력613756/target57272tokens, work315.723s, SCREENING_BUDGET_REACHED,
+checkpoint_saved=true다. 신규 SMALL 합계450updates이며 numeric/TINY optimizer는0이다.
+S4_QUALITY_PASS=NO, GOAL1_READY=NO를 유지한다.
+실행 증거는 artifacts/goal1-renewed-20260917에 별도로 보존하며 원본을 덮어쓰지 않는다.
+
+### C/L 제한 비교 종료 — 검증된 음성 결과
+
+| 관측 | C | L |
+|---|---:|---:|
+| 실행 updates / 종료 model step | 200 / 19950 | 250 / 20000 |
+| 동일200updates watch / 사전 train16 | 11/32 / 8/16 | 14/32 / 11/16 |
+| 동일200updates entity / context / value | 14/26 / 21/26 / 15/26 | 19/26 / 21/26 / 16/26 |
+| 동일200updates citation exact | 25/32 | 26/32 |
+| process wall / maximum RSS bytes | 257.51s / 6333513728 | 316.71s / 6620741632 |
+| 최종 reason | QUALITY_GUARD | SCREENING_BUDGET_REACHED |
+
+LR 정책을 바꾼 군에서200update의 일부 오류가 줄었지만 parent18/32를 회복하지 못했다.
+원래 하락의 단일 원인을 확정하거나 L을 품질 통과 모델로 선정하지 않는다.
+C는 중단돼250 결과가 없으며 L250과 새로운 C250을 비교했다고 쓰지 않는다.
+이전 C/W 또는 QA32/contrast16을 반복하지 않았다. 새 final heldout도 실행하지 않았다.
+
+Rust `recovery schedule-report`가 fixture/초기상태/config 차이, 전체 계획 tape,
+각 실제 trace의 LR/model·optimizer·schedule clock/입력·target 수/사례 순서를 검산했다.
+기존 평가 row의 정답·오류로 watch/train16 및 entity/context/value/citation을 재집계했다.
+`schedule-comparison.json` 및 `schedule-comparison-detailed.json` 모두 읽기 전용 결과다.
+이 재집계의 새 모델 호출/optimizer update는0이다. train16은 전체 train 점수가 아니다.
+
+실제 학습 소스 digest는 위 e4afa6f다. 이후 기존 row의 component/train16 집계만 보강한
+최종 전달 digest는 `687e1ecdcd8665f97c6bd3db97a1dbaa675ab8a600915a1882a4754411046181`이다.
+직접8tests와 fmt/check/clippy/release가 통과했고 원본17개 파일의 해시가 계속 일치했다.
+소스는 기존 quality_recovery.rs만 변경했고 checkpoint schema/기본 trainer 수식은 유지했다.
+결과는 C/L 진단 완료이며 S4 완료가 아니다. 다음 조치는 별도 사전 계획으로 기록한다.
+
+## 이전: 세 진단 경계 수정 — 2026-09-17
 
 **RF-01~03 진단 경계의 수정과 제한 검증을 완료했다. 모델 품질은 회복되지 않았다.**
 동일 원자료 감사에서 지원 범위 내 label 모순은 발견하지 못했다. 기존400 재집계와
