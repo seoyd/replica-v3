@@ -52,7 +52,7 @@ S4_QUALITY_PASS=NO, GOAL1_READY=NO and NEXT_TRAINING_AUTHORIZED=NO remain separa
 | R2 | Existing request/support/scan and corpus grammar | Separate request obligation, whole target grammar and semantic decision; scan→audit statuses | Baseline red; independent positive/negative/unknown fixtures and existing richer-causal regression pass | Training-only limited grammar, no answer-fed support selection or product oracle |
 | R3 | evaluate_one/teacher/replay/close/arm/training caller | Shared cooperative control, remaining timeout, partial counts, latched stop, final preservation/terminal checks | Baseline-body pre-cancel red; 5 new tests pass, including real random TINY generation and final-state interruption without updates | Synchronous tensor/fsync/worker IPC can overrun; no hard-kill guarantee |
 | R4 | Same frozen U2/parent/validation, original400 and C/W traces | Existing audit extended; small Rust recount command; optional replay reference check | Data scope4092/4496 validated; existing400/C/W recount PASS; parent/failed66native calls, raw parity differences0 | No additional failures/C-W/full400 generation; auxiliary404 remains outside semantic scope |
-| R5 | Final source diff and all contract requirements | Existing plan/status updated with evidence and separate verdicts | 18 distinct related tests, fmt/check/clippy/release PASS | Independent review pending; publication receipt recorded after actual normal push |
+| R5 | Final source diff and all contract requirements | Existing plan/status updated with evidence and separate verdicts | 18 distinct related tests, fmt/check/clippy/release PASS; source normal push and remote SHA verified | Independent review pending; following documentation-only commit records publication |
 
 RF-01 content encoding is SHA256 over compact serde_json::to_vec of the ordered complete
 Vec<Episode>. IDs alone are not content identity. All records retain expected/source hashes
@@ -117,6 +117,11 @@ explicit (COMPLETED instead of null), with zero-call/normal-terminal assertions 
 Final direct checks cover this bookkeeping change; SMALL parity was not repeated.
 The original66call logs retain their executed null/no-stop terminal metadata unchanged.
 Full source/binary/artifact identities and actual paths are in EXPERIMENT_STATUS.md.
+
+Published review source commit: `e4e08fc0b8e43071437b40082fb098d4df815878`.
+Normal push to origin/main succeeded; git ls-remote returned that exact full SHA.
+The publication receipt is a following documentation-only commit, whose final SHA is
+reported separately after push; there are no source edits after the reviewed source commit.
 
 Only next hypothesis proposed: retained-Adam schedule restart/LR effect. NOT_RUN and no
 new training authorization. A separately approved C/L comparison would retain the same

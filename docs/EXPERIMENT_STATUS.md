@@ -23,7 +23,7 @@ CODE_VERDICT=FAIL로 보존하며, 아래 새 수정의 PASS는 구현자 검증
 | SEMANTIC_SCOPE | scanned4496 / validated4092 / contradicted0 / unsupported0 / ambiguous0 / out_of_scope404 |
 | HISTORICAL_LEDGER_RECOUNT | PASS — 기존400 및 C/W trace 읽기·재집계 |
 | NATIVE_REPLAY_PARITY | PASS — parent32+ABA1, 실패32+ABA1; 총66회 |
-| SOURCE_SHA_AND_WORKTREE_DIGEST | 기준3b671bf; 아래 실행/전달 digest 구분 |
+| SOURCE_SHA_AND_WORKTREE_DIGEST | 검토 소스e4e08fc0b8e43071437b40082fb098d4df815878; 아래 실행/전달 digest 구분 |
 | SMALL_OPTIMIZER_UPDATES_THIS_ROUND | 0 |
 | NUMERIC_TEST_OPTIMIZER_UPDATES | 0 — scalar Adam/accumulation 및 TINY 학습·resume 시험 미실행 |
 | MODEL_WEIGHTS_CHANGED | NO — 보존 원본17파일의 시작/종료 해시 일치 |
@@ -188,8 +188,14 @@ SHA256이며 git commit과 구별한다.
 
 R0~R4와 R5의 직접 검증을 완료했다. 기존 미추적487파일과 raw/private 증거는 로컬에
 보존한다. 공개 범위는 수정한 Rust2파일과 기존 상태/계획 문서2파일뿐이다.
-모델/Adam/DB/corpus/raw log를 staging하지 않는다. 소스 검토 commit과 최종 문서 commit은
-별도로 식별하고 정상 push 후 원격 full SHA로 확인한다. 새 독립 source 검토는 PENDING이다.
+모델/Adam/DB/corpus/raw log는 staging하지 않았다. 새 독립 source 검토는 PENDING이다.
+
+검토 source commit은 `e4e08fc0b8e43071437b40082fb098d4df815878`이다.
+`git push origin main` 성공 후 `git ls-remote origin refs/heads/main`으로 같은 full SHA를
+직접 확인했다. 기준 대비 diff는
+`git diff 3b671bf695ae86511273c4139d43d75bd976e490 e4e08fc0b8e43071437b40082fb098d4df815878`
+이다. 이 확인 기록은 후속 docs-only commit에 담는다. 그 최종 문서 commit SHA와 최종
+remote HEAD 일치는 전달 리포트에 별도 기록하며 source SHA와 혼동하지 않는다.
 
 다음에 제안하는 가설은 **Adam moments를 유지한 schedule restart의 LR 영향** 하나다.
 이번에는 NOT_RUN이며 재학습 권한도 없다. 별도 승인 시 같은 일반 QA parent의 weights,
