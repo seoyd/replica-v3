@@ -218,8 +218,10 @@ F model565a40a33ee896916a421dbee538d3f126789a67ee184039b28e7cc4224a375a,
 N model870facdd31aca3a251dfe4b111745281724517b673f2a4d38aa6267d982594ea,
 N256 modelf3802303a462575441849e91d1b00c5fe51e7cd77383cc28f533637eccf6eb1f,
 공통 tokenizer652718e4864c2f06af3a2c67dac0a5174d5e2feb1387667173902da9a8a295d4.
-F/N corpus와 policy는 `artifacts/h3-controlled-20260917/a2/F/`, `a2/N/`에 있으며
-raw는 각 `segment-00-0000/{eval-0512,cross,ordinary400,result}.json`이다.
+F/N corpus는 `artifacts/h3-controlled-20260917/a2/corpus-F/`,
+`artifacts/h3-controlled-20260917/a2/corpus-N/`의 manifest/train/validation.json이다.
+policy는 `artifacts/h3-controlled-20260917/a2/{F,N}/policy.json`,
+raw는 각 arm의 `segment-00-0000/{eval-0512,cross,ordinary400,result}.json`이다.
 N256 dev는 같은 N segment의 `eval-0256.json`, 기존 사후 CROSS/ordinary/result는
 `artifacts/state-data-result-20260917/reaudit-bound/N256/`이다.
 ordinary=`artifacts/s4-completion-20260917/binding-corpus/validation.json`, SHA
