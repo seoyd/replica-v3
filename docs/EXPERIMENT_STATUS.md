@@ -1,5 +1,30 @@
 # 진단 및 구현 상태
 
+## B4 실제 F/N 재검산 및 새 프로세스 대조 완료
+
+2026-09-18 / EXECUTED_THIS_RUN + DERIVED_FROM_EXISTING_LOGS, INDEPENDENT_PENDING.
+Source adbd83ba99a6790fd53a011fb74f40f3dbe923c2 was pushed and directly matched origin/main.
+The corrected reaudit is4,350,443bytes, readable by the unchanged bounded reader. Recount
+elapsed7.024249917s, generation0/teacher0. F dev242/entity251/event251 of256,
+CROSS459/entity501/event498 of512, ordinary176/336, auxiliary56/64; N236/252/245,
+449/504/500,174/336,55/64. Raw scores, field/base scores and paired counts match the
+existing reports. Historical panel receipt binding=ABSENT; current raw recount=VERIFIED.
+Current native, tokenizer, clock, frozen/corpus/policy and parent physical hashes agree.
+This establishes current consistency, not a newly invented historical write-time binding.
+
+F16 and N16 each registered first8 exact+first8 incorrect dev cases before free generation.
+Separate processes each executed16 generation and16 same-model teacher calls; raw token,
+bytes, prompt, actual/error, EOS and finish differences0. Elapsed4.028350750s and3.860064667s.
+The first oversized-report refusal generated0 cases and remains in the prior output/logs.
+SMALL optimizer0; cumulative TINY optimizer82/scalar0 from bounded regression runs only.
+All original final candidate/resume=false records and quality failures remain intact.
+
+Evidence: `artifacts/state-data-result-20260917/reaudit-bound/reaudit.json`,
+`F16/{registration,raw,result}.json`, `N16/{registration,raw,result}.json`, and
+`b4-bound-{recount,F16,N16}.log` in the experiment evidence root. The code, source digest and
+frozen executable identities are recorded in the preceding repair section below.
+Next: only the existing N256 post-hoc DEVELOPMENT observation; no learning or seal opening.
+
 ## 경계 수리 후속 검증 및 B4 진입
 
 2026-09-18. First source publication c7810ee4c896ef616349b7034385c64e926e91b0 matched
