@@ -1,5 +1,48 @@
 # 진단 및 구현 상태
 
+## 현재 J0 종료 — binary 평가/재개 수리의 두 결함 재현
+
+2026-09-18 / R3-BINARY-EVAL-RESUME-1.0 / EXECUTED_THIS_RUN, INDEPENDENT_PENDING.
+HEADd075382539cc5f8bf7ba6de01b8d98a8d7aa7ffb, sourced621 기준은
+62147dc5854ca07a4c0785c0f006734d62074200이며 차이는 상태 보고서뿐이다.
+main/origin seoyd/replica-v3, tracked clean, 기존 untracked 작업 보존. Rust/cargo1.98.1.
+시작 시 소유 모델 프로세스 없음. SMALL/TINY/scalar optimizer0, 생성/teacher0.
+
+격리된 기준 source의 실제 writer→파일→reader→guard consumer에서 문제 f64의 bits가
+4576864117419147264→4576864117419147263으로 바뀌고 evaluation decision digest 오류가
+발생했다(RED-BR01). 같은 기준의 별도 OS process에서 검증한 원 final step128→새
+segment step128/guard 복구→준비된 마지막 상태→실제 close가 원 segment의 없는 step
+파일을 요구해 NotFound로 실패했다(RED-BR02). 준비된128/512 라벨은 실제 updates가
+아니다. BR01은1 실패, BR02는 부모/자식 각각1 실패이며 의도한 consumer assertion이다.
+컴파일/의존/timeout 실패를 버그 재현으로 세지 않았다. J1–J3 구현/통합 실행은 아직 NOT_RUN.
+
+로컬 증거 root=`artifacts/binary-eval-resume-20260918/`: `base-red/`, `red-target/`,
+`red-br01.log`, `red-br02.log`, `entry-status.txt`, `serde-json-features.txt`,
+`native-entry-verification.txt`, `data-entry-verification.txt`.
+보존한 기준 release executable `base-train` SHA=
+80b78a1716c303524c925a69ad6d069a40076a864ac10e9c7a76673cc7502a53.
+기존 보존 manifest의6개 항목(실제 native5개+frozen1개)과 데이터/정책/raw192개 모두 OK.
+원본이나 종료 flags를 수정하지 않았다. 원격 source와 로컬 격리 시험 수정은 구분한다.
+
+REMAINING_JSON_LEDGER (SOURCE_READ):
+
+| 역할 | 현재 실제 호출 / 이번 경계 |
+| --- | --- |
+| model artifact | `neural/artifact.rs`의 native .r3m은 이미 binary; config/source legacy ID는 유지 |
+| tokenizer | `neural.rs`의 자체 학습·legacy importer 및 `transformer.rs` config ID는 JSON 호환 사용; mapping 불변 |
+| evidence/memory | canonical 사건은 `codec.rs` binary/SQLite; request/evidence의 IPC 직렬화는 별도 |
+| corpus | `data.rs`의 manifest/train/validation JSON: 명시 read-only import 후 owned binary snapshot으로 이동 |
+| evaluator | `quality_recovery.rs`의 평가 rows/teacher 및 JSON 재직렬화 identity: 이번 typed binary 전환 대상 |
+| stop/resume/close | policy/frozen 최소 snapshot, decision/native link/terminal/comparison: 이번 canonical 전환 대상 |
+| production IPC | `model.rs` framing/request/response와 request digest의 JSON: 이번 범위 밖, 유지 |
+| developer output | `check_main.rs` quick/release receipt 및 CLI 표시의 JSON: 잔존; 신규 binary 제어 입력으로 사용 금지 |
+| legacy import | `checkpoint.rs`의 명시 legacy manifest/tokenizer reader, 과거 recovery reader: read-only 감사 경계 |
+
+실제 lock의 serde_json은1.0.151이고 feature는 alloc/default/std다. float_roundtrip은
+활성화하지 않았다. 전역 reader feature를 바꾸어 과거 identity를 재정의하지 않는다.
+다음 경계는 고정 schema·LE float bits·exact bytes identity와 실제 native 참조다.
+모델 출력/품질/H3/S4/S5/S6/Goal1 개선은 이번 J0로 주장하지 않는다.
+
 ## B0–B6 종료: 진단 경계 검증 완료, H3 품질 미달 유지
 
 2026-09-18 / R3-H3-STATE-DATA-RESULT-1.0 / IMPLEMENTER_REPORT.

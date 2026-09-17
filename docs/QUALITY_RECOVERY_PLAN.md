@@ -1,5 +1,25 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: R3-BINARY-EVAL-RESUME-1.0
+
+Base source62147dc5854ca07a4c0785c0f006734d62074200, reportd075382539cc5f8bf7ba6de01b8d98a8d7aa7ffb.
+J0 is closed: both float-identity and cross-segment filename failures reproduced in an
+isolated baseline checkout. J1–J3 implement typed, schema-specific binary snapshots,
+evaluation payloads, decisions, explicit native references, segment and close receipts.
+Use the current native model loader/save, varint primitives, RunControl and scoring rules.
+New native control must not reopen JSON sidecars or hash JSON reserialization. Preserve
+the existing opaque model/tokenizer identities, weights, optimizer mathematics and DB.
+Verify continuous versus separate-process/segment TINY evaluation, time stop, resume and
+close, including the problematic diagnostic f64 and sticky cancellation/quality failures.
+TINY/scalar optimizer budget128 including failed runs; new SMALL optimizer0.
+After these boundaries pass, J4 imports/recounts existing F/N/N256 raw once and permits
+only F512 dev16+ordinary16 normal-greedy parity, selected by metadata/ID before output.
+No N256 regeneration, checkpoint sweep, learning extension, seal or candidate promotion.
+Compare equal-content uncompressed records with warmup5/timed20 or fewer, including
+durable write/sync/reload; distinguish schema deduplication from codec effects.
+J5 publishes observed identities, remaining JSON by role and one unexecuted model-test
+proposal. The repair verdict is BINARY_EVAL_RESUME_VERIFIED; model quality is unchanged.
+
 ## Closed: R3-H3-STATE-DATA-RESULT-1.0
 
 B0–B6 diagnostic scope is verified by the implementer; independent review is pending.
