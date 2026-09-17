@@ -27,8 +27,13 @@ H3 실행 source는 H2 위의 로컬 구현이며 훈련 중 수정하지 않았
 실행 source manifest digest=6daf324fb943ce39bae98dd26f93d60d423a8973bbe2b6a8a3080c4b8d40cee1,
 binary SHA256=567a67900e75571306aac1425f1aaca1d87d2632fa09ed16a02f62a0073950a8.
 정확한 실행 binary는 artifacts/harness-goal1-20260917/h3-train-frozen에 보존했다.
-종료 후 checker의 raw/EOS 검증만 강화했다. 최종 코드/보고 publication SHA는 게시 후 별도 기록한다.
-직전 검토는 SOURCE_ONLY이고 독립적인 이번 변경 검토는 아직 수행하지 않았다.
+종료 후 checker의 raw/EOS 검증만 강화했다.
+FINAL_CODE_SHA=719f331c88c6aff37cf463ca8cd96d084d7fbee7,
+REMOTE_SHA_MATCH=YES: 정상 push 후 실제 origin/main에서 같은 full SHA를 확인했다.
+이 publication 필드 갱신은 후속 보고서 전용 commit이며 코드 실행 SHA와 구별한다.
+직전 전달 검토의 source 기준은5879a3c6642211e78a0d19a91679babba5f8a6c1(SOURCE_ONLY)이고,
+이번 변경의 독립 검토는 아직 수행하지 않았다. 리뷰 diff base는
+52aaccdab8153ea34d14db5026fad810f8dcdf26이며 이번 구현 diff base와 구별한다.
 
 ### 구현 및 직접 검증 범위
 
