@@ -73,6 +73,8 @@ fn binary_stored_cleanup_cancel_fresh_process_close() {
     assert!(output.contains("NEW_TINY_UPDATES=2"));
     assert!(output.contains("Cancelled"));
     assert!(output.contains("complete=true"));
+    assert!(output.contains("NATIVE_FINAL_REUSED="));
+    assert!(!run.join("segment-00/final.r3m").exists());
     assert!(!run.join("close-stop.r3er").exists());
     assert!(!run.join("comparison.r3er").exists());
     let terminal = fs::read(run.join("segment-00/terminal.r3er")).unwrap();
@@ -178,7 +180,11 @@ fn binary_real_process_resume_and_close() {
                 fs::read(path.join("segment-00/terminal.r3er")).unwrap()
             );
             assert!(!path.join("segment-01/dev-0001.r3er").exists());
-            assert!(path.join("segment-01/step-0001.r3m").exists() || name == "final-split");
+            // The resumed segment verifies/references the already durable identical state.
+            assert!(!path.join("segment-01/step-0001.r3m").exists());
+            if name == "final-split" {
+                assert!(!path.join("segment-01/step-0002.r3m").exists());
+            }
         }
         assert_eq!(original, fs::read(path.join("parent.r3m")).unwrap());
         assert!(path.join("comparison.r3er").exists());

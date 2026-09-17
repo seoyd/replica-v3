@@ -2593,6 +2593,26 @@ fn save_native(
     let durable = checkpoint::load(&path, Device::Cpu, true)?;
     native_reference(root, name, s, &durable, index)
 }
+fn reuse_native(
+    root: &Path,
+    s: &RunSnapshot,
+    native: &CheckpointRef,
+    l: &Loaded,
+    state: &TrainingState,
+    adam: &Adam,
+    index: u32,
+) -> Result<CheckpointRef> {
+    let durable = resolve_native(root, s, native, true)?;
+    if durable.manifest.training.as_ref() != Some(state)
+        || durable.model.weight_hash()? != l.model.weight_hash()?
+        || optimizer_hash(&durable.optimizer)? != optimizer_hash(&adam.moments)?
+    {
+        return Err(bad("same-step checkpoint differs from current state"));
+    }
+    let mut reference = native.clone();
+    reference.segment = index;
+    Ok(reference)
+}
 
 // Fork budget metadata is local to the new run; parent bytes and Adam clock stay intact.
 fn fork_budget(
@@ -3434,16 +3454,24 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                 if h.quality {
                     control.observe(StopReason::QualityGuard);
                 }
-                let native = save_native(
-                    root,
-                    &format!("{name}/step-{n:04}.r3m"),
-                    &s,
-                    &mut l,
-                    &state,
-                    &adam,
-                    index,
-                    "RECOVERY_SCREENING",
-                )?;
+                let native = if let Some(native) = h
+                    .evaluations
+                    .get(&(state.step as u64, PanelKind::Dev))
+                    .and_then(|e| e.native.as_ref())
+                {
+                    reuse_native(root, &s, native, &l, &state, &adam, index)?
+                } else {
+                    save_native(
+                        root,
+                        &format!("{name}/step-{n:04}.r3m"),
+                        &s,
+                        &mut l,
+                        &state,
+                        &adam,
+                        index,
+                        "RECOVERY_SCREENING",
+                    )?
+                };
                 for &kind in kinds {
                     let mut r = h.evaluations[&(state.step as u64, kind)].clone();
                     r.native = Some(native.clone());
@@ -3584,16 +3612,31 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
     let reason = control
         .stop
         .map_or("SCREENING_BUDGET_REACHED", StopReason::name);
-    let saved = save_native(
-        root,
-        &format!("{name}/final.r3m"),
-        &s,
-        &mut l,
-        &state,
-        &adam,
-        index,
-        reason,
-    );
+    let saved = (|| {
+        if let Some(native) = h
+            .evaluations
+            .get(&(state.step as u64, PanelKind::Dev))
+            .and_then(|e| e.native.as_ref())
+        {
+            let reference = reuse_native(root, &s, native, &l, &state, &adam, index)?;
+            println!(
+                "NATIVE_FINAL_REUSED={} BYTES_WRITTEN=0 terminal_stop={reason}",
+                reference.file.locator
+            );
+            Ok(reference)
+        } else {
+            save_native(
+                root,
+                &format!("{name}/final.r3m"),
+                &s,
+                &mut l,
+                &state,
+                &adam,
+                index,
+                reason,
+            )
+        }
+    })();
     let save_error = saved.as_ref().err().map(ToString::to_string);
     if let Err(e) = &saved {
         control.classify_error(e);
