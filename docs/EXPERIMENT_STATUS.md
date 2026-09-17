@@ -6,6 +6,14 @@
 
 ## 현재: Goal1 재개 — 2026-09-17
 
+**현재 실행은 종료됐다. RESULT=PARTIAL, S4·Goal1은 미완료다.** 갱신 승인 후 실제
+SMALL3700updates/TINY16을 실행했다. 같은 원래 validation의 최고 일반 QA는
+169/336(50.30%)이며, 보조 복사64/64를 더한233/400을 S4 품질로 대체하지 않는다.
+T의 마지막 세 평가가 최고 후보를 넘지 못해 사전 중단 조건으로 닫았다. 아래 소스 수정과
+실제 학습·native 저장·재로드·생성은 검증됐지만 품질95%/분류별90%는 통과하지 못했다.
+새 final200·새 사실 기반 S5·S6는 선행 품질 조건 미충족으로 미실행이다. 학습 권한을
+다시 미승인으로 바꾸는 것이 아니라, 실패한 제한 실행을 자동 연장하지 않는 상태다.
+
 사용자가 추가 학습을 포함한 S4·Goal1 계속 진행을 명시했다. 출발 SHA는
 `52e8b88cd38e88b4ba563a27d47cfe0bc9543f83`이며 tracked dirty 없음/remote 일치를 확인했다.
 아래 RF-01~03의0update 예산은 종료된 라운드의 사실로 유지한다. 새 단계의 제한 C/L
@@ -119,8 +127,83 @@ RECOVERY_ESTABLISHED=NO, S4_QUALITY_PASS=NO, S5/S6 미완, GOAL1_READY=NO다.
 각 artifact는 artifacts/goal1-renewed-20260917/parent-p-N/final이다. 실제 corpus는
 artifacts/goal1-corpus-v9, 각 원문 generation ledger는 parent-validation-N.jsonl,
 학습 로그는 parent-p-N.txt, native inspect는 parent-N-manifest.txt다. 기존 parent,
-실패U2 및 원본 corpus를 덮어쓰지 않았다. 다음 T는 P의 관측된 개선을 출발점으로 하는
-별도 제한 학습이며 계획만 등록된 NOT_RUN이다. 독립 최종200은 아직 NOT_RUN_NOT_ELIGIBLE.
+실패U2 및 원본 corpus를 덮어쓰지 않았다. P의 검증된 소스·기록을
+`aa99fbfd7913276f1cd4e9e56f72dc215fa541a1`로 정상 push하고 실제 원격 SHA 일치를 확인했다.
+다음 T는 P의 관측된 개선을 출발점으로 하는 별도 최대2000update 학습이다. 실행 source와
+binary는 P와 동일하다. 독립 최종200은 NOT_RUN_NOT_ELIGIBLE.
+
+T 첫500update는 input1165810/target104294tokens, wall690.79s/max RSS6952665088bytes,
+step21250에서 정상 구간 종료·저장됐다. validation은233/400, ordinary169/336,
+copy64/64,24/68·22/68·11/68·49/68·63/64, 생성/UTF-8 오류0, wall43.67s였다.
+시작P1000의164/336보다5개 늘었지만 S4는 여전히 미달이다. 실제 loss0.12035898이며
+두 번째500update 구간도 plain exact resume으로 완료했다. input1164716/target104076tokens,
+wall696.89s/max RSS6674530304bytes, step21750에서 저장됐고 validation은233/400,
+ordinary169/336, copy64/64,19/68·24/68·12/68·52/68·62/64, 생성/UTF-8 오류0이었다
+(wall43.64s). EM은 같지만 category macro가 소폭 낮아T500 후보를 유지한다. 비개선1회,
+세 번째500도 input1158552/target101901tokens, wall690.79s/max RSS6543327232bytes,
+step22250에서 완료·저장했다. validation은231/400, ordinary167/336, copy64/64,
+17/68·24/68·11/68·56/68·59/64, 생성/UTF-8 오류0, wall43.37s였다.
+마지막500은 input1156825/target102655tokens, wall694.82s/max RSS6769770496bytes,
+step22750/BUDGET_REACHED에서 저장했다. validation은230/400, ordinary166/336,
+copy64/64,16/68·25/68·10/68·56/68·59/64, 생성/UTF-8 오류0, wall43.39s였다.
+최고 후보 이후 비개선3회가 되어 T를 닫았다. 신규 누계SMALL3700/TINY16이다.
+
+### T 단계 종료와 최종 대조
+
+T는 총2000updates/input4645903/target412926tokens, 학습 OS wall2773.29s,
+최대 RSS6952665088bytes였다. 각 구간900s/전체3600s, input20M/RSS16GiB 한도를
+지켰다. 새 full400 평가4회=1600generation을 모두 완료했고 평가 wall 합계174.07s,
+생성/UTF-8/빈응답 오류0이었다. P와 합쳐 새 full validation 생성은9×400=3600회다.
+P/T 실행 중 Rust 소스와 binary는 동일했고, 최종29항목 source manifest와 원본17파일
+hash가 전부 일치했다. 실제 train/evaluate 프로세스도 더 이상 실행 중이지 않다.
+
+| T 누적 updates | 일반 QA / 보조 | qa-0 / qa-1 / qa-2 / qa-3 / qa-4 | 판정 |
+|---|---|---|---|
+| 0 (P1000 재사용) | 164/336 / 64/64 | 21/68 / 22/68 / 6/68 / 52/68 / 63/64 | 기준 |
+| 500 | 169/336 / 64/64 | 24/68 / 22/68 / 11/68 / 49/68 / 63/64 | 개발 후보 선택 |
+| 1000 | 169/336 / 64/64 | 19/68 / 24/68 / 12/68 / 52/68 / 62/64 | category macro 하락 |
+| 1500 | 167/336 / 64/64 | 17/68 / 24/68 / 11/68 / 56/68 / 59/64 | 비개선2회 |
+| 2000 | 166/336 / 64/64 | 16/68 / 25/68 / 10/68 / 56/68 / 59/64 | 비개선3회 + update cap |
+
+최고 개발 후보는 artifacts/goal1-renewed-20260917/transfer-t-500/final, model step21250이다.
+원래 parent에서 선택된 계보의 추가 update는1500(P1000+T500)이고, 실제 모든 분기에서
+실행한 신규3700update와 구분한다. 원래 parent155/336 대비14개 개선은 같은 개발 split의
+관측일 뿐이다. 이전 U2 하락의 단일 원인 확정, 새로운 heldout 전이, S4 성공이 아니다.
+최고 후보의 qa-2는11/68로 여전히 낮고, 최종 checkpoint가 최고 후보도 아니다.
+운영 DB/모델을 자동 교체하지 않았으며 모든 원본과 실패 후보를 그대로 보존했다.
+
+| T artifact | physical SHA256 | manifest weights SHA256 |
+|---|---|---|
+| 500/final | 146dae22aa2792480a189d2404a5040f2fced81c97da8c8520435bca6433969b | dc0bf31c43156917a85ef0540b7fe97eb385aa1a06a7e7d1bdc8cc7ae2be9046 |
+| 1000/final | b6ab47d467add76ea685e52b4ad92e9f8cbacf18d5ea92060d5e01070ce1a383 | bcabf1ebb40adc7f90e441027d79a8470aac58a1aacaab8342c26f85f8c8d4e4 |
+| 1500/final | 834e0cc08b1d4bc8271e5078586deb50f0ab6e920ca8dabdaebcb3ae0d1a7ae8 | c5260e38bdec238e9239b6bef73333990161f4252f07dc7f68fa4418b0b13e98 |
+| 2000/final | 1205aeac9b9ad12b1b392ae996960dac3095a5d93cdcbb016c55e931c100437a | e0b6e62f274cbec353615b9ed3b3e236f6ef949d295eb930de697d2597c3b86e |
+
+위 경로의 공통 prefix는 artifacts/goal1-renewed-20260917/transfer-t-다. 실제 corpus는
+artifacts/goal1-corpus-v9, raw 학습 로그는 transfer-t-N.txt, raw 생성 ledger는
+transfer-validation-N.jsonl, native inspect 기록은 transfer-N-manifest.txt다.
+소스 commit은 aa99fbfd7913276f1cd4e9e56f72dc215fa541a1이며 T 중 소스 변경은0이다.
+실행 source/binary digest는 위 P와 동일하다. 큰 artifact/corpus/raw는 로컬 보존하고,
+마지막 publication은 상태 문서만 갱신한다. 독립 검토는 PENDING이다.
+
+| 요구/판정 | 최종 상태 |
+|---|---|
+| 갱신된 학습 권한과 한도 | 사용자 승인 반영; 개별 계획 상한/중단 기준 준수 |
+| RF-01~03 도구 수정 | 이전 검증·출판 유지; 관련 취소/clock/집계 회귀 통과 |
+| 데이터 감사 | 이전 ordinary4092/4496 제한 범위 유지; 전체20,000 의미 감사로 확대 주장하지 않음 |
+| Rust-only/자체 모델/외부 teacher·API·답변 하드코딩 금지 | 유지; 잠긴 Rust1.98/CPU·Accelerate/F32 실행 |
+| 최소 수정/재사용/실제 경로 | 기존 CLI·trainer·native artifact·평가 재사용; 새 소스 파일/의존 없음 |
+| 저장·구조·원본 보존 | format/topology/tokenizer/DB 불변; 원본17파일 및 source29항목 hash 일치 |
+| 검증 | 직접9distinct tests, fmt/check/clippy/release; P/T 실제 학습→binary 저장→새 process 생성 |
+| 개발 QA 개선 | YES, 같은 split155→169/336; 보조와 오류를 별도 계상 |
+| 성능 하락 원인 / 복구 확정 | UNRESOLVED / NOT_ESTABLISHED |
+| S4 최종 품질 / 새 facts S5 / S6 | NO / NOT_RUN_PREREQUISITE / NOT_RUN_PREREQUISITE |
+| Goal1 완료 / 독립 승인 | NO / PENDING |
+| 현재 상태 | NOT_RUNNING; T THREE_CONSECUTIVE_NON_IMPROVEMENTS, native terminal BUDGET_REACHED |
+
+같은 실패 실행을 자동 연장하지 않는다. 남은 문제는 질문·근거 선택 일반화이며 원인 미확정이다.
+그 다음 조치는 추가 update 수를 임의로 늘리기 전에, 기존 실패 row에서 일반화 경계를
+구분할 수 있는 한 가지 검증 가능한 가설을 정하는 일이다. 아직 새 실험은 등록·실행하지 않았다.
 
 ## 이전: 세 진단 경계 수정 — 2026-09-17
 

@@ -1,5 +1,9 @@
 # Diagnostic repair and bounded quality recovery
 
+Current: renewed C/L/B/P/T runs CLOSED, NOT_RUNNING. Implementation and actual training
+verified; S4 quality and Goal1 remain incomplete. T closed after three consecutive evaluations
+without a new best and its2000-update cap. No automatic extension of this negative closure.
+
 ## Renewed Goal 1 continuation — authorized 2026-09-17
 
 User explicitly renewed the training restriction and requested continuation through S4
@@ -125,6 +129,22 @@ evaluations. Each training segment≤900s plus consistent cleanup, total≤3600s
 900s/12GiB, training16GiB, nonfinite/cancel stop immediately at existing safe boundaries.
 No sweep, new corpus, memorization retest, storage/kernel/topology change or final-heldout
 selection. Negative T is not automatically extended. S4 eligibility/quality gates are unchanged.
+
+T observed closure:2000updates/input4645903/target412926tokens, training wall2773.29s and
+maximum RSS6952665088bytes. Four500-update native saves and fresh-process400 evaluations
+completed without generation/UTF-8/empty errors. Ordinary QA164→169→169→167→166 of336;
+auxiliary64/64 throughout. Macro selectsT500 (T1000 has equal EM but a lower macro).
+The last three evaluations did not beat the best, so the predeclared plateau stop applies;
+native terminal is BUDGET_REACHED at step22750. No additional run is scheduled.
+
+Renewed total3700SMALL updates (C200+L250+B250+P1000+T2000), plus16TINY exact-resume
+test updates. Best developer candidate T500 step21250 has169/336 versus original155/336,
+but four of five categories remain below90%; S4 overall95% is not met. Final200 remains
+NOT_RUN_NOT_ELIGIBLE, S5/S6 prerequisites unmet, Goal1 not complete. The observed modest
+development improvement does not establish the cause of the old U2 regression or new-fact
+transfer. Preserve every original/checkpoint/log; no source/corpus/storage change during T.
+Executed29source-manifest entries, binary and17original hashes still match. Full evidence,
+physical artifact IDs and separate verdicts are recorded in EXPERIMENT_STATUS.md.
 
 ## R3-S4-DIAGNOSTIC-REPAIR-1.0 — closed repair round
 
