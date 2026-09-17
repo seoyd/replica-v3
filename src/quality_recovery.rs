@@ -4271,6 +4271,7 @@ fn progress_arm(
     let mut last = previous["last_evaluation"].clone();
     let mut cross = Value::Null;
     let mut ordinary = Value::Null;
+    let mut ordinary_generation_ok = false;
     let mut complete = false;
     let mut panel_receipts = json!({});
     let outcome = (|| -> Result<()> {
@@ -4406,6 +4407,7 @@ fn progress_arm(
                 control.check("progress_cross_recorded")?;
                 let rows = evaluate_panel(&l, ordinary_cases, control);
                 ordinary = summarize(&rows)?;
+                ordinary_generation_ok = skill_score(&rows)?["generation_error_cases"] == 0;
                 let binding = bind_progress_panel(
                     &p,
                     "ordinary",
@@ -4548,7 +4550,7 @@ fn progress_arm(
         "cumulative_model_step":state.step,"sampler_state":state.sampler_state,"model_content_hash":model_hash,"adam_hash":adam_hash,
         "last_evaluation":last,"evaluation_decision_digest":digest(&last["decision"])?,"panel_receipts":panel_receipts,
         "verified_inputs":inputs.hashes,"cross":cross,"ordinary":ordinary,"guard_streaks":streak,"raw_development_gate":raw_gate&&control.stop.is_none()&&!cleanup,
-        "candidate_eligible":raw_gate&&control.stop.is_none()&&!cleanup,"seal":"NOT_OPENED","goal1_ready":false,"cleanup_limit_exceeded":cleanup,
+        "candidate_eligible":raw_gate&&control.stop.is_none()&&!cleanup&&ordinary_generation_ok&&last["watch"]["generation_error_cases"]==0,"seal":"NOT_OPENED","goal1_ready":false,"cleanup_limit_exceeded":cleanup,
         "resume_allowed":control.reason()==Some("TIME_BUDGET") && control.observed==[StopReason::TimeBudget] && last["final_evaluation_complete"]==true && ledger.3+control.start.elapsed().as_secs_f64()<7200. && !cleanup && result["checkpoint_saved"]==true,
         "error":outcome.as_ref().err().map(ToString::to_string)});
     result
@@ -5014,6 +5016,7 @@ fn verify_endpoint_panels(
     let policy_hash = digest(p)?;
     let model = l.model.weight_hash()?;
     let mut bindings = json!({});
+    let mut ordinary_generation_ok = false;
     for (id, file, cases, hash) in [
         (
             "cross",
@@ -5044,11 +5047,22 @@ fn verify_endpoint_panels(
             .as_array()
             .ok_or_else(|| Error::Corrupt("INCOMPLETE: final rows".into()))?;
         let score = verify_panel_and_rescore(&spec, rows, raw["bindings"].get(id), &l, legacy)?;
+        if id == "ordinary" {
+            ordinary_generation_ok = skill_score(rows)?["generation_error_cases"] == 0;
+        }
         verify_score(&raw["score"], &score)?;
         verify_score(&result[id], &score)?;
         result[id] = score;
         bindings[id] = json!({"current_file_hash":raw_hash,"current_binding":panel_binding(&spec,rows,&l)?,"verified_rows":rows,
             "historical_receipt_binding":if result["panel_receipts"].get(file).is_some(){"PRESENT"}else{"ABSENT"}});
+    }
+    if result["candidate_eligible"] == true
+        && (!ordinary_generation_ok
+            || result["last_evaluation"]["watch"]["generation_error_cases"] != 0)
+    {
+        return Err(Error::Corrupt(
+            "INTEGRITY_FAIL: candidate has non-normal final generation".into(),
+        ));
     }
     let gate = result["last_evaluation"]["dev"]["skill_pass"] == true
         && result["cross"]["skill_pass"] == true
@@ -8243,6 +8257,74 @@ mod tests {
         }
         println!(
             "T-D01/02/03/05/06/07: actual entry and owned-input fixtures; SMALL/TINY/scalar updates0"
+        );
+    }
+    #[test]
+    fn state_data_candidate_rejects_ordinary_length_end_despite_high_qa() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a0, pair) = state_fixture(dir.path());
+        let p = read_json(&pair.join("C/policy.json")).unwrap();
+        let inputs = load_verified_inputs(&a0, Some(&p)).unwrap();
+        let segment = pair.join("C/segment-00-0000");
+        let l = checkpoint::load(&segment.join("final"), Device::Cpu, true).unwrap();
+        let path = segment.join("ordinary400.json");
+        let mut panel = read_json(&path).unwrap();
+        let tokens = l.tokenizer.encode(b"xx").unwrap();
+        assert_eq!(tokens.len(), 2);
+        let row = &mut panel["rows"][0];
+        row["actual"] = json!("xx");
+        row["raw_tokens"] = json!(tokens);
+        row["raw_bytes"] = bytes_receipt(&l.tokenizer, &tokens);
+        row["raw_generated_count"] = json!(2);
+        row["eos_index"] = Value::Null;
+        row["generation"] = json!({"tokens":tokens,"generated":2,"finish":"length"});
+        row["finish_reason"] = json!("length");
+        row["exact_match"] = json!(false);
+        row["components"] = components(Some("xx"), &inputs.ordinary[0].answer, &[]);
+        let rows = panel["rows"].as_array().unwrap();
+        let score = summarize(rows).unwrap();
+        assert_eq!(score["qa"], json!([335, 336]));
+        assert_eq!(score["generation_failures"], 0); // Length end needs the full generation check.
+        assert_eq!(skill_score(rows).unwrap()["generation_error_cases"], 1);
+        let binding = bind_progress_panel(
+            &p,
+            "ordinary",
+            &inputs.ordinary,
+            &inputs.hashes["ordinary"],
+            512,
+            rows,
+            &l,
+        )
+        .unwrap();
+        panel["score"] = score.clone();
+        panel["bindings"]["ordinary"] = binding;
+        std::fs::write(&path, serde_json::to_vec(&panel).unwrap()).unwrap();
+        let result_path = segment.join("result.json");
+        let mut result = read_json(&result_path).unwrap();
+        result["ordinary"] = score;
+        result["panel_receipts"]["ordinary400.json"] =
+            json!({"sha256":file_hash(&path).unwrap(),"bindings":panel["bindings"]});
+        result["candidate_eligible"] = json!(true);
+        std::fs::write(&result_path, serde_json::to_vec(&result).unwrap()).unwrap();
+        let error = progress_close(&pair, &mut repair_control()).unwrap_err();
+        assert!(
+            error.to_string().contains("non-normal final generation"),
+            "{error}"
+        );
+        assert!(!pair.join("comparison.json").exists());
+        // A fully recorded wrong/length-ended model output still belongs in the denominator.
+        result["candidate_eligible"] = json!(false);
+        std::fs::write(&result_path, serde_json::to_vec(&result).unwrap()).unwrap();
+        progress_close(&pair, &mut repair_control()).unwrap();
+        let comparison = read_json(&pair.join("comparison.json")).unwrap();
+        assert_eq!(comparison["endpoints"][0]["ordinary"]["denominator"], 400);
+        assert_eq!(
+            comparison["endpoints"][0]["ordinary"]["qa"],
+            json!([335, 336])
+        );
+        assert_eq!(comparison["raw_development_gate"], false);
+        println!(
+            "candidate ordinary length-end regression: optimizer/generation/teacher0; QA335/336 is synthetic fixture"
         );
     }
     #[test]
