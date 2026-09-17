@@ -1,5 +1,197 @@
 # 진단 및 구현 상태
 
+## B0–B6 종료: 진단 경계 검증 완료, H3 품질 미달 유지
+
+2026-09-18 / R3-H3-STATE-DATA-RESULT-1.0 / IMPLEMENTER_REPORT.
+이번 승인 범위의 결과는 DIAGNOSTIC_BOUNDARIES_VERIFIED다. 신규 학습은 하지 않았다.
+독립 검토는 INDEPENDENT_PENDING이며 GOAL1_ACCEPTED=false다. 아래 기존 기록은 보존한다.
+
+| 판정 | 이번 결과와 한계 |
+| --- | --- |
+| CODE_VERDICT / HARNESS_BOUNDARIES | PASS / DIAGNOSTIC_BOUNDARIES_VERIFIED |
+| EVAL_GUARD_EXACTLY_ONCE | VERIFIED: 실제 평가 저장/중단/재개 경계의 RED→GREEN 및 정상 TINY 연속성 |
+| FROZEN_INPUT_BINDING / PANEL_COMPLETENESS | VERIFIED / VERIFIED: 공통 소유 데이터와 완전한 원문 panel을 먼저 검증 |
+| RAW_SCORE_AGREEMENT / HISTORICAL_RESULTS_CONFIRMED | VERIFIED / YES_FOR_CURRENT_FILES: F/N 현재 원자료 재채점 일치 |
+| HISTORICAL_RECEIPT_BINDING | ABSENT: 현재 해시가 과거 쓰기 시점의 검증 증거를 만들지는 않음 |
+| SOURCE_PROVENANCE | 기존 policy/source 값 보존; 현재 파일 binding은 이번 실행으로 검증 |
+| HISTORICAL_CANDIDATE_PROMOTION | NOT_AUTHORIZED; 원래 selected/candidate/resume/종료 기록 불변 |
+| N256_POSTHOC_STATUS | EXECUTED_THIS_RUN / DEVELOPMENT: dev raw 재사용, CROSS/ordinary 새 무학습 관측 |
+| MODEL_QUALITY_RECOVERED / H3_PASS | NO / NO: 모든 개발 panel을 함께 통과한 모델 없음 |
+| H3_SEAL | NOT_OPENED |
+| S4 / S5 / S6 / GOAL1_READY | NOT_PASSED / NOT_RUN_THIS_SCOPE / NOT_RUN_THIS_SCOPE / false |
+| INDEPENDENT_REVIEW | INDEPENDENT_PENDING |
+
+수정한 세 경계는 `src/quality_recovery.rs`에 있다. 평가 receipt는 run/policy/model/step/
+panel/evaluation 및 guard before/after/applied identity를 연결한다. 신규 optimizer 전에
+미처리 판정을 복구하고 같은 평가를 다시 소비하지 않는다. 완성된 판정의 짧은 복구는
+중단 안전 경계에서 수행하며, 동기 tensor/fsync 내부의 강제 선점은 보장하지 않는다.
+서로 다른 파일 쓰기를 하나의 transaction이라고 주장하지 않는다. 단일 command 작업
+1800초와 cleanup120초 한계를 유지하며 취소·시간·품질 사유를 함께 보존한다.
+
+`progress_baseline`, `progress_prepare`, `progress_renewal`, 신규/시간 재개 `progress_arm`,
+최종 ordinary 및 `progress_close`가 같은 frozen 검증을 거친 소유 episode를 소비한다.
+`replay_cases`도 기존 frozen corpus 검증을 재사용한다. `src/data.rs`의 기존 renewal
+생성기는 검증된 snapshot을 받아 경로를 다시 읽지 않는다. 최종/중간 raw의 순서·전체
+내용·정답·normal greedy token/strict UTF-8/EOS·native step·종료 receipt를 검증하고
+기존 scorer로 재계산한 뒤 비교와 자격을 결정한다. `src/check_main.rs`에는 해당 직접
+회귀 필터만 추가했다. 최종 후보 자격은 ordinary/watch의 생성 정상성도 별도로 요구한다.
+ordinary 정답 수가 높아도 length 종료/빈 출력/오류를 후보 통과로 숨기지 않는다.
+모델 수식/커널/tokenizer/SQLite/native tensor 포맷은 변경하지 않았다.
+
+### 같은 모델·같은 panel의 실제 결과
+
+| checkpoint | 누적 step | dev full/entity/event (각 /256) | CROSS full/entity/event (각 /512) | ordinary QA /336 | aux /64 |
+| --- | ---: | --- | --- | ---: | ---: |
+| F512 | 23798 | 242 / 251 / 251 | 459 / 501 / 498 | 176 | 56 |
+| N512 | 23798 | 236 / 252 / 245 | 449 / 504 / 500 | 174 | 55 |
+| N256 POST_HOC | 23542 | 252 / 255 / 256 | 457 / 487 / 508 | 161 | 57 |
+| 변경하지 않은 기준 | — | >=244 / >=254 / >=254 | >=487 / >=507 / >=507 | >=178 | 별도 보고 |
+
+F/N 행과 N256 dev는 DERIVED_FROM_EXISTING_LOGS: 전체 raw를 현재 frozen/native와 검산했다.
+N256 CROSS512+ordinary400는 EXECUTED_THIS_RUN: 같은 기존 step-0256 가중치로 한 번 생성했다.
+dev와 다른 step의 CROSS를 혼합하지 않았다. 모든 표의 최종 생성 오류는0이다.
+N256 dev의 높은 값만으로 수용하지 않는다. CROSS entity487/512와 ordinary161/336도
+각 기준에 못 미친다. N256 ordinary는 N512의174보다 낮으므로 early stopping으로 일반
+QA가 복구된다고 해석할 수도 없다. ordinary의 aux64는 QA336 분모에 합산하지 않았다.
+
+이 checkpoint는 기존 dev 결과를 본 뒤 선정한 사후 진단 대상이다. 과거 F/N 실험의 사전등록 승자가 아니며, 이번에는 seal·제품 승격·학습 재개를 하지 않는다.
+
+F/N dev base4/4는56/64,53/64; CROSS는 둘 다106/128이다. N256은 dev61/64,
+CROSS104/128이다. N을 treatment로 한 재계산 paired counts의 순서는
+both-wrong/gain/loss/both-correct다: CROSS [36,17,27,432], ordinary400 [155,13,16,216].
+dev gain4/loss10, base gain3/loss6이다. 순위 selected=F를 품질 합격으로 바꾸지 않았다.
+N256 CROSS 첫 차이 분류는 format32/entity10/context6/citation4/value3이며,
+전체 필드 오답 수와는 다른 통계다. ordinary QA 범주는12/68,19/68,5/68,62/68,63/64다.
+
+### 실행·테스트·보존
+
+B4 recount는7.024249917초, 모델 generation/teacher0이었다. F16/N16은 실행 전에
+고정한 dev 정답8+오답8을 각 새 프로세스로 정상 생성했고 raw token/bytes/prompt/
+actual/error/EOS/finish 차이는 각각0이었다. 실행 시간은4.028350750초와3.860064667초다.
+N256은 기존의 완전한 dev256을 검증 후 재사용하고 나머지912문항만 생성했다.
+N256 작업 시간120.021135916초, terminal=COMPLETED, observed_conditions=[]였다.
+
+NEW_SMALL_UPDATES=0, 새 학습 input/target tokens=0/0, 새 학습 노출=0.
+NEW_GENERATIONS=944/1200, 같은 자체 모델의 무학습 teacher calls=944이며 외부 teacher는 없다.
+실패한 최초 큰 보고서 consumer는 generation0에서 거부됐다. 별도 재채점은 동일 원자료만
+읽었으며 그 실패 출력도 보존했다. 추가 sweep, retry generation 또는 예산 연장은 없다.
+NEW_TINY_UPDATES=82, scalar updates=0: 직접 연속성 회귀3+3와 네 quick 실행 각각19.
+TINY generation은 통과한 테스트 목록과 해당 소스 경로로 재집계한120회(각 quick30),
+teacher108회(각27)다. 별도로 이미 취소된 native 생성 API 진입4회가 있으며 forward와
+토큰 생성은0이다. 새 경계 fixture 및 마지막 관측 중단 회귀의 generation/teacher는0이다.
+이 TINY 수치는 실행 로그와 SOURCE_READ를 결합한 재집계이며 SMALL 관측과 합산하지 않는다.
+모의128/256/512 step 라벨을 optimizer 실행 수로 세지 않았다.
+
+RED는 수정 전 실제 평가 저장 직후 시간 종료의 판정 누락1건 및 기준 소스 close의
+빈 CROSS/변경 ordinary 수용2건이다. 컴파일 실패를 RED로 세지 않았다. GREEN은
+정상 close와 시간 분할 model/Adam/sampler 정합성을 포함한 직접 state/data 회귀8개다.
+영향 quick 마지막 실행은47 PASS였다. 이후의 작은 수정은 직접8개와 fmt/clippy/release로
+확인했고, 마지막 관측 메타데이터 보강은 별도 실제 진입점 회귀1개 PASS(6.37초),
+fmt/clippy/release PASS로 확인했다. quick의 source digest를 최종 source로 소급 바꾸지 않는다.
+관측 회귀는 F16/N256에서 첫 생성 전 TIME_BUDGET, raw 해시와 불완전 종료 보존,
+자동 재시도 거부를 확인했다. 최종 후보 조건 회귀1개도 PASS(8.62초): 합성 ordinary
+QA335/336에서 length 종료가 있는 후보를 실제 close가 거부하고, 후보가 아닌 완전한
+오답 재채점은400 분모로 허용했다. 추가 optimizer/generation/teacher는0이었다.
+그 수정 후에도 fmt/clippy/release가 통과했다. 전체 무관한 테스트 suite나 모델 재평가는
+추가 실행하지 않았다. 두 후속 회귀는 이전 quick47/직접8과 별도 실행이다.
+
+원본 native6개와 데이터/정책/raw192개 보존 manifest 검증이 모두 OK였다.
+기존 untracked487개 목록도 동일하다. 운영 모델 포인터와 DB를 건드리지 않았으며,
+종료 시 소유 모델/학습/평가 프로세스는 없다. 신규 영구 파일은0개다.
+
+### source 및 로컬 검토 경로
+
+REVIEW_BASE=bf705ad823d132a2f91e3df7323d49c3c23e2ee4.
+최종 SOURCE_COMMIT=62147dc5854ca07a4c0785c0f006734d62074200; 정상 push 후 실제
+origin/main 전체 SHA 일치를 확인했다. 이 최신 절은 그 뒤의 별도 보고서 commit에 담는다.
+최종 source digest=f0a3f9d5a423d7fdba865963d28ae0788057de2be7b0fd085061de45f7c4d569.
+최종 release train SHA=80b78a1716c303524c925a69ad6d069a40076a864ac10e9c7a76673cc7502a53;
+이 바이너리는 마지막 관측 receipt/후보 조건 보강 후 빌드했으며 추가 SMALL 관측에는
+사용하지 않았다. 해당 보강이 현재 F/N/N256 raw 점수를 바꾸지는 않는다.
+
+실제 B4/B5 관측 code commit=adbd83ba99a6790fd53a011fb74f40f3dbe923c2,
+source digest=e41f53941abc1db93e8b7aa6364b1b2276175e7adf7e9040156080fd44cbfcae,
+고정 executable=`artifacts/state-data-result-20260917/repair-train-bound`, SHA=
+a2f4020b9312b822dcfff0d4296fa2f94e493d3856ed92e693fcdbd5987afeb7.
+N256 실행 당시 HEAD=f41b53adb817115808332e1636c91699037215cd는 B4 보고서 commit이며
+관측 코드는 adbd83b와 동일하다. Rust/cargo1.98.1, locked/offline Accelerate,
+VECLIB_MAXIMUM_THREADS=1/RAYON_NUM_THREADS=1이었다. 변경 executable의 동적 의존은
+기존 system/Foundation/Accelerate/iconv/objc이며 외부 모델 bridge는 없다.
+
+기존 N256 registration의 `selection` 문자열에는 F16/N16 설명이 잘못 복사돼 있다.
+그 파일의 kind/mode/indices=[]/상한912와 실제 완전한 CROSS512/ordinary400 및 결과로
+실행 범위를 확인했다. 원본을 고치지 않았다. 최종 소스에서는 설명을 분기하고 공통
+writer로 evaluator source, registration/재사용 dev/raw 파일 해시를 종료 receipt에
+직접 연결한다. 기존 관측의 해시는 별도 `observation-closure.sha256`에 현재 시점 binding으로
+남겼다. 이를 과거 receipt 보강 또는 마지막 바이너리로 재실행한 증거라고 부르지 않는다.
+
+아래 경로는 저장소 루트 `/Users/seo/Projects/Replica-v3` 기준이며 원문은 로컬에만 있다.
+
+| 자료 | 실제 경로 / SHA256 |
+| --- | --- |
+| A0 | `artifacts/h3-controlled-20260917/a0/summary.json` / afadb76c0898deb0762bfbaddd88f16e9d633c16ca144ef3e541ddd5ef293c4a |
+| frozen | `artifacts/harness-goal1-20260917/h2-baseline/frozen.json` / d3531005d3de1e76337bbdbee0454a9a0640bfaa26e8558aed2b61ca4fbf1cb7 |
+| original H3 train/dev | `artifacts/harness-goal1-20260917/h3-corpus/{train,validation}.json`; dev ca5c86f91b4defe471bf1c6c2931bcc97ac0b88e084bd5506b65b0101ebccd89 |
+| CROSS | `artifacts/h3-controlled-20260917/a0/cross-development.json` / c27bc3e35343c3c046fa2b9c944aae0601912f086fa2a739ed7900f0a6dbf28a |
+| ordinary400 | `artifacts/s4-completion-20260917/binding-corpus/validation.json` / 572b0d9d797feb2c31fa8713566853aff91ae6b994d736c399e8bad0cb3fb004 |
+| F train | `artifacts/h3-controlled-20260917/a2/corpus-F/train.json` / fe36d1a44a0dd1b6370777c23d588f1c928c0fd242ff186f66985ce027723cde |
+| N train | `artifacts/h3-controlled-20260917/a2/corpus-N/train.json` / 41aa4ead3f90d7a3e869022105ebc41e00656ddd52aff879ce9eb4766929676a |
+| F512 native | `artifacts/h3-controlled-20260917/a2/F/segment-00-0000/final` / bdc28e3f4b31ad5d600cf1c6ec0615b591deed9e26b069d9167f6a175f0a0e16 |
+| N512 native | `artifacts/h3-controlled-20260917/a2/N/segment-00-0000/final` / 734ec32aa4bfad8bce9ecf2387eae81f988cd9643b3257612f7527733d4f0bca |
+| N256 native | `artifacts/h3-controlled-20260917/a2/N/segment-00-0000/step-0256` / 3556caaf40cef53183eb25c1c4162a6b7050ffe623cc785d4a810359400e9153 |
+| N256 model content | f3802303a462575441849e91d1b00c5fe51e7cd77383cc28f533637eccf6eb1f |
+| N policy | `artifacts/h3-controlled-20260917/a2/N/policy.json` / 7ed8feeef47a05203e8982ac68aee5921d1b700835cc63e7feced0e9072db5fa |
+| tokenizer semantic | 652718e4864c2f06af3a2c67dac0a5174d5e2feb1387667173902da9a8a295d4 |
+
+원래 F/N policy와 raw는 `artifacts/h3-controlled-20260917/a2/{F,N}/` 아래에 있으며
+각 `segment-00-0000/{eval-0000,eval-0128,eval-0256,eval-0512,cross,ordinary400,result}.json`
+및 `trace.jsonl`을 보존했다. L 부모는 `artifacts/h3-controlled-20260917/a1/L/segment-00-0000/final`,
+native SHA20996fa3c4ac2a0445014bf1c0fd394cefbc34c9f64f74c4dce62ea81e17a4eb다.
+최신 관측 root=`artifacts/state-data-result-20260917/reaudit-bound`이며
+`reaudit.json`, `F16/{registration,raw,result}.json`, `N16/{registration,raw,result}.json`,
+`N256/{registration,cross,ordinary,result}.json`이 있다.
+reaudit SHA97b3fba4d8ed58dc4279d862061019d44ccd5d861fc2694fe1e00410aa057bb2,
+N256 result SHAfea60391dcaa0eadf9518d8a4ae33dd3c4aa9a20540794a293733d5c425d921a다.
+
+실제 실행한 명령은 다음과 같다. 출력은 이미 존재하므로 재실행/덮어쓰기 지시가 아니다.
+
+```sh
+VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 artifacts/state-data-result-20260917/repair-train-bound recovery progress-reaudit --experiment artifacts/h3-controlled-20260917/a2 --output artifacts/state-data-result-20260917/reaudit-bound
+VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 artifacts/state-data-result-20260917/repair-train-bound recovery progress-reaudit --experiment artifacts/h3-controlled-20260917/a2 --output artifacts/state-data-result-20260917/reaudit-bound --observe F16
+VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 artifacts/state-data-result-20260917/repair-train-bound recovery progress-reaudit --experiment artifacts/h3-controlled-20260917/a2 --output artifacts/state-data-result-20260917/reaudit-bound --observe N16
+VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 artifacts/state-data-result-20260917/repair-train-bound recovery progress-reaudit --experiment artifacts/h3-controlled-20260917/a2 --output artifacts/state-data-result-20260917/reaudit-bound --observe N256
+```
+
+로그 root=`artifacts/state-data-result-20260917`: `b1-red.log`, `b2-b3-baseline-red.log`,
+`boundaries-final.log`, `quick-bound/summary.json`, `observation-metadata-test.log`,
+`closure-{fmt,clippy,release}.log`, `candidate-generation-test.log`,
+`candidate-{fmt,clippy,release}.log`, `b4-bound-{recount,F16,N16}.log`, `b5-N256.log`.
+`preserved-{native,data}.sha256` 및 `*-preservation-final.log`는 원본 보존 근거,
+`entry-status.txt`와 untracked 목록은 시작 상태, `observation-closure.sha256`는 이번
+관측 파일의 현재 해시 목록이다. 실패/중간 로그를 지우거나 공개 업로드하지 않았다.
+
+### 이번에 답한 질문과 다음 단일 가설
+
+| 질문 | 확인한 근거 / 결론 |
+| --- | --- |
+| 기존 F/N 점수는 raw와 같은가 | 현재 frozen·native·모든 final raw 재계산 일치. 당시 receipt binding은 부재 |
+| 시간 재개가 guard를 건너뛸 수 있었나 | 실제 경계 RED로 재현했고 pending/applied 회귀 및 정상 연속성 GREEN으로 수리 확인 |
+| N 중간 향상이 다른 자료에도 있었나 | 같은 N256 dev252/CROSS457/ordinary161. 전체 gate 개선으로 일반화할 수 없음 |
+| 복사 증가와 일반 QA 하락이 함께 있었나 | 같은 frozen에서 A0 dev208/ordinary178 대비 F242/176, N236/174. trade-off 관측이며 망각 원인 확정 아님 |
+| 다음에 바꿀 한 변수는 무엇인가 | 원인은 UNRESOLVED. 기존 ordinary anchor의 학습 노출 비율을 단일 비교 변수로 검토할 근거가 생김 |
+
+다음 가설은 미등록/미실행이다. 향후 별도 승인·명시적 fork에서 같은 부모/Adam/LR/
+tokenizer/normal greedy/자료와 총 draw 수를 고정하고 ordinary anchor draw 비율 하나만
+대조할 수 있다. 제안 예산은 두 arm 각 최대128 updates(합256), dev/watch의0/64/128
+평가와 끝점 CROSS/ordinary 한 번이며 경고·중단·최종 품질 기준은 유지한다. anchor 증가가
+복사 품질을 악화시키거나 일반 QA를 보존하지 못하면 음성 결과로 닫는다. 이번 실행0이며
+새 예산·자료·seal 접근·학습 재개를 등록하거나 예약하지 않았다. tokenizer/temperature/LR가
+현재 실패의 원인이라고 확정하지 않는다.
+
+NODE=B6, STATE=CLOSED_DIAGNOSTIC_BOUNDARIES_VERIFIED, RAW_RECOUNT_STATUS=VERIFIED,
+STOP_REASON=AUTHORIZED_DIAGNOSTIC_SCOPE_COMPLETE, NEXT_DEPENDENCY=INDEPENDENT_REVIEW.
+원자료 신뢰성 확인·도구 수리와 모델 품질 미달을 별도로 판정한 상태다.
+
 ## B4 실제 F/N 재검산 및 새 프로세스 대조 완료
 
 2026-09-18 / EXECUTED_THIS_RUN + DERIVED_FROM_EXISTING_LOGS, INDEPENDENT_PENDING.
