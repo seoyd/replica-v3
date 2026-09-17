@@ -1,5 +1,22 @@
 # 진단 및 구현 상태
 
+## G0 — native storage/quality 시작 상태
+
+2026-09-18 / R3-NATIVE-STORAGE-QUALITY-1.0 / EXECUTED_THIS_RUN.
+HEAD d19f39972ab70799527b567d5ad35a02c76ead5c, source
+b18ec31bb78a8d0ef0adf985b46697a2d4993474. tracked clean, 기존 untracked487개 보존.
+Rust/cargo1.98.1, Apple M4/24GiB/macOS27.0(26A428), Accelerate/threads1/offline lock.
+소유 학습/benchmark process 없음. 기존 native/frozen6개와 data/policy/raw192개
+보존 manifest의 실제 SHA 검증 모두 OK. SMALL/TINY/scalar updates0, generation/teacher0.
+근거는 local `artifacts/native-storage-quality-20260918/{entry-status,native-entry,data-entry}.txt`.
+
+SOURCE_READ: INFERENCE/RESUME 분리와 Adam seek skip은 기존 R3MODEL 구현,
+원문 사건은 RPV3, readonly graph snapshot은 R3ARCH, 실험 기록은 R3ER다.
+제품 IPC/기존 corpus·명시 import/개발자 출력 JSON은 남아 있다. 이 기능들은 새 구현으로
+세지 않는다. G1 close의 terminal model/stop 검증 후에만 G2 승인 pair를 실행한다.
+G3 저장 probe와 G4 별도 journal은 품질 미달을 성공으로 대체하지 않는다.
+G1/G2/G3/G4=NOT_RUN, H3/S4 미통과, GOAL1_ACCEPTED=false, independent pending.
+
 ## J0–J5 최종 — BINARY_EVAL_RESUME_VERIFIED, 모델 품질 판정 불변
 
 2026-09-18 / R3-BINARY-EVAL-RESUME-1.0 / IMPLEMENTER_REPORT.

@@ -1,5 +1,45 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: R3-NATIVE-STORAGE-QUALITY-1.0
+
+Source b18ec31bb78a8d0ef0adf985b46697a2d4993474, report
+d19f39972ab70799527b567d5ad35a02c76ead5c. Preserve original artifacts and closed runs.
+Development DAG: G0 identities → G1 close boundaries → G2 anchor pair → G3 model
+storage measurement → G4 experimental journal → G5 publication/independent review.
+Product data DAG: original event → durable record → derived lookup/index → model
+evidence input → native generation → validated result event.
+
+G1 changes only experiment_record, its existing process tests and necessary checker
+filters. Test terminal-model agreement with valid alternate native files and stored
+stop rejection after a new process, preserving existing time-split regressions.
+Use direct `cargo test --locked --offline --features accelerate,test-support` filters.
+G2 extends the existing typed native runner with explicit experiment authorization;
+it never resumes an old ineligible run. Register C50/A75 from the exact F512 native
+parent, same pools/Adam/LR1e-4, batch8 anchor4/focus4 versus6/2. Each≤512 updates,
+2M input/500K supervised tokens; pair≤1024 updates and7200 command seconds, each
+segment1800s plus cleanup120s. Total SMALL generations≤7500, teachers default0
+(at most64 explicit diagnostic calls). Evaluate shared0 and each256/512 on full
+dev256/CROSS512/ordinary400; derive watch32 from ordinary. Existing joint gates and
+guard policy stay fixed; stop/cancel/budget remains sticky. No automatic extension.
+Only actual joint PASS permits one full fresh-process candidate check and the existing
+seal procedure. H4–H8 require their actual remaining authority; no budget reset.
+
+G3 reuses neural/artifact and existing Rust validation executable for F512 raw F32
+INFERENCE/RESUME and lossless zstd1/3 probes. Report component bytes, actual I/O,
+durable publication/load timings, bit/output parity, at least3 warm and fresh-process
+runs and memory limitations. No production codec/quantization or tensor changes.
+G4 permits one cohesive journal module/test, narrow archive/event-view reuse, explicit
+experimental CLI, and existing Rust measurement probes. Fix R3JRN layout before code;
+test single-writer lock, exact append/restart/idempotency, durable-prefix recovery,
+history/current/relations and same-data SQL/archive parity. Synthetic1K/10K/up to100K,
+raw/zstd1/zstd3 and64/256KiB snapshot blocks; disclose search/durability differences.
+The operating SQLite path and original evidence stay unchanged. No new daemon/engine.
+
+One heavy process, Rust1.98.1/Accelerate/threads1/offline lock, source frozen during
+learning. Record actual optimizer/generation/teacher counters, exposure, native/raw
+hashes and stop conditions. Closed stages receive explicit source/docs commits and
+normal pushes with full remote SHA verification; independent acceptance stays pending.
+
 ## Active: R3-BINARY-EVAL-RESUME-1.0
 
 Base source62147dc5854ca07a4c0785c0f006734d62074200, reportd075382539cc5f8bf7ba6de01b8d98a8d7aa7ffb.
