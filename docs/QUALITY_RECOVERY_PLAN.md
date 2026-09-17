@@ -3,8 +3,13 @@
 ## Active: R3-BINARY-EVAL-RESUME-1.0
 
 Base source62147dc5854ca07a4c0785c0f006734d62074200, reportd075382539cc5f8bf7ba6de01b8d98a8d7aa7ffb.
-J0–J3 are closed: baseline failures reproduced, then separate-process native TINY
-save/time-stop/resume/close and the stable candidate quick53 passed. J1–J3 implement typed, schema-specific binary snapshots,
+J0–J5 are closed in repair scope, with independent review pending. Baseline failures
+were reproduced; separate-process native TINY save/time-stop/resume/close and the
+stable candidate quick53 passed. Final importer changes passed five direct tests and
+native close with JSON reads denied. F/N/N256 current raw recount agrees; F512 parity
+is32/32. SMALL optimizer0, TINY97/128, scalar0; no further executions are scheduled.
+The final source is b18ec31bb78a8d0ef0adf985b46697a2d4993474, verified on origin/main.
+J1–J3 implement typed, schema-specific binary snapshots,
 evaluation payloads, decisions, explicit native references, segment and close receipts.
 Use the current native model loader/save, varint primitives, RunControl and scoring rules.
 New native control must not reopen JSON sidecars or hash JSON reserialization. Preserve
@@ -17,8 +22,10 @@ only F512 dev16+ordinary16 normal-greedy parity, selected by metadata/ID before 
 No N256 regeneration, checkpoint sweep, learning extension, seal or candidate promotion.
 Compare equal-content uncompressed records with warmup5/timed20 or fewer, including
 durable write/sync/reload; distinguish schema deduplication from codec effects.
-J5 publishes observed identities, remaining JSON by role and one unexecuted model-test
-proposal. The repair verdict is BINARY_EVAL_RESUME_VERIFIED; model quality is unchanged.
+J5 records observed identities, remaining JSON by role and one unexecuted model-test
+proposal in EXPERIMENT_STATUS. The repair verdict is BINARY_EVAL_RESUME_VERIFIED;
+model quality is unchanged. The retained execution specification above is closed,
+not authorization for another import/parity/learning run or an automatic budget reset.
 
 ## Closed: R3-H3-STATE-DATA-RESULT-1.0
 

@@ -1,5 +1,261 @@
 # 진단 및 구현 상태
 
+## J0–J5 최종 — BINARY_EVAL_RESUME_VERIFIED, 모델 품질 판정 불변
+
+2026-09-18 / R3-BINARY-EVAL-RESUME-1.0 / IMPLEMENTER_REPORT.
+RESULT=PASS_IN_REPAIR_SCOPE. 실제 평가 저장→TIME_BUDGET→별도 OS process/segment
+재개→guard 정확히 한 번 적용→close를 native TINY로 검증했다. 아래 과거 기록은
+해당 시점의 결과로 보존하며, 그때의 미실행 항목을 이번 실행으로 소급 덮지 않는다.
+
+| 최종 필드 | 결과 |
+| --- | --- |
+| BR01_BINARY_FLOAT_IDENTITY | VERIFIED: 문제 f64를 실제 writer/reader/decision/close까지 bit 단위로 보존 |
+| BR02_NATIVE_CHECKPOINT_BINDING | VERIFIED: 실제 파일 SHA/model/step/Adam/계보 검증, filename fallback 없음 |
+| END_TO_END_NEW_SEGMENT_CLOSE | VERIFIED: 서로 다른 OS process와 segment에서 연속 실행과 동일 |
+| HARNESS_BOUNDARIES / EVAL_GUARD_EXACTLY_ONCE | VERIFIED / VERIFIED |
+| FROZEN_INPUT_BINDING / PANEL_COMPLETENESS | VERIFIED / VERIFIED: 소유 binary snapshot 및 전체 raw 재채점 |
+| RAW_SCORE_AGREEMENT | VERIFIED_FOR_CURRENT_FILES: F512/N512/N256 기존 점수 일치 |
+| HISTORICAL_RECEIPT_BINDING | F/N ABSENT; N256은 기존 사후 관측 binding, 과거 사전등록 증명 아님 |
+| HISTORICAL_FLOAT_BITS | UNKNOWN / LEGACY_ROUNDTRIP_UNPROVEN |
+| HISTORICAL_CANDIDATE_PROMOTION | NOT_AUTHORIZED, 원래 종료/부적격/resume=false 보존 |
+| MODEL_OUTPUT_PARITY | F512 normal greedy dev16+ordinary16,32/32 일치 |
+| MODEL_QUALITY_IMPROVED / H3_PASS / H3_SEAL | NOT_CLAIMED / NO / NOT_OPENED |
+| S4 / S5 / S6 | NOT_PASSED / NOT_RUN_THIS_SCOPE / NOT_RUN_THIS_SCOPE |
+| GOAL1_READY / GOAL1_ACCEPTED / INDEPENDENT_REVIEW | false / false / INDEPENDENT_PENDING |
+
+### 구현과 검증한 경계
+
+새 `src/experiment_record.rs`는 학습 실행기의 한정된 schema 전용 내부 모듈이다.
+평가/input snapshot/decision/native reference/segment/comparison을 typed struct/enum과
+custom binary R3ER v1로 저장한다. JSON 문자열·동적 map을 binary에 담지 않으며
+새 identity는 exact binary bytes를 해시한다. f32/f64 LE bits, 명시적 error/tag,
+길이 상한, 중복/누락/trailing 검사와 기존 immutable publisher를 사용한다.
+`src/codec.rs`는 기존 Reader/varint/publisher의 접근 범위만 열었다. memory wire
+알고리즘과 `.r3m`, tokenizer mapping, Cargo.lock, 모델 수식/학습 조건/DB는 불변이다.
+
+`src/quality_recovery.rs`는 기존 CLI에 `recovery native`를 연결하고 strict answer
+predicate와 기존 guard 계산을 공통 사용한다. 새 controller는 binary 소유 입력만
+소비한다. 기존 corpus/frozen 검증과 scorer/native loader/RunControl을 재사용하며,
+완료 평가와 guard-before에서 pending 판정을 복구한 뒤에만 다음 optimizer를 허용한다.
+native 참조는 파일 위치와 내용 identity를 별도로 확인한다. 원 segment final과 후속
+segment step의 정당한 재참조를 연결하되 다른 run/model/tokenizer/step/Adam/counter,
+root escape/없는 참조/같은 step의 모호한 raw는 거부한다.
+
+close는 frozen snapshot→완전한 raw→실제 decode/EOS/error→strict score→guard/native/
+종료 계보를 검증한 후 comparison을 발행한다. 정상 오답은 candidate=false이며,
+손상·불완전·취소는 별도 immutable close-stop이고 정상 결과를 발행하지 않는다.
+품질/취소/save-error가 시간 종료와 함께 발생해도 재개 자격은 되살아나지 않는다.
+각 파일의 durable publication을 다중 파일 transaction이라고 부르지 않는다. 동기
+tensor/fsync 강제 선점은 없으며 generation/teacher/update/save/close 안전 경계에서
+공통 command1800초·cleanup120초를 확인한다. 이번 SMALL run/resume은 허용하지 않는다.
+
+새 `tests/experiment_record.rs`가 production 함수를 쓰는 실제 자식 process 회귀를
+실행한다. test-support의 작은 spec/fault만 사용하며 모델은 실제 random-init TINY다.
+`src/check_main.rs`는 해당 직접 unit 및 subprocess 회귀를 기존 quick에 추가했다.
+영구 신규 파일은 이 두 Rust 파일뿐이다. 기존 docs4개를 갱신했고 새 framework,
+외부 bridge, Python/외부 모델/API, 제품 정답 분기나 FakeModel을 추가하지 않았다.
+
+### 실행한 테스트, 호출 수와 실패 보존
+
+| 실행 | 관측 결과 / 증거 |
+| --- | --- |
+| 기준 source62147dc의 격리 RED-BR01 | 실제 JSON writer→reader에서 f64 bits4576864117419147264→4576864117419147263, guard identity 실패 |
+| 같은 기준의 RED-BR02 | 실제 별도 process close가 원 segment의 없는 step 파일을 요구해 NotFound; 두 논리 결함 재현 |
+| binary 직접 unit | 초기2 PASS, 보완 후3 PASS; 마지막 최신 source는5 PASS,0 FAILED |
+| 실제 subprocess 회귀 | 직접1 PASS×2, 안정 quick 안에서1 PASS; 연속/평가 직후/체크포인트 직후/최종 평가 시간 분할 |
+| 안정 quick | 한 번 실행,53 PASS; fmt/check/all-targets/clippy -D warnings PASS |
+| 최종 소스 확인 | 직접5 PASS, clippy all-targets -D warnings PASS, release build PASS; quick 재실행 없음 |
+| 최종 executable close | OS 수준 JSON/JSONL read 차단 상태에서 실제 F512 전체 close PASS |
+
+연속/세 분할 경로는 같은 TINY 부모에서 각각 실제2 updates 후 absolute step26,
+model60c60eba458a00ec2e1dbc3df55a6d4ffc2848111a25aa3d292846da43765dec,
+같은 Adam/cursor/input·target 소비/raw tokens/guard에 도달했다. 판정2건이 각각 한 번
+반영됐고 문제 f64 bits4576864117419147264도 동일하다. 취소+시간 및 품질+취소+시간
+각 경로는1 update 뒤 중단, 이후 optimizer0, 재개 거부다. 직접 close의10개 구성
+fixture는 정상 정답/오답과 누락·다른 case·잘못된 native/guard/decision·모호성·최종
+취소를 검사한다. 이 구성 fixture의 optimizer/generation은0이다. RED의128/512
+라벨은 실제 학습 횟수로 세지 않았다.
+
+SMALL/TINY/SCALAR_UPDATES=0/97/0. TINY97은 bootstrap24×2=48, 실제 subprocess
+회귀10×3=30, 기존 quick native Adam 회귀6+10+3=19의 합이며128 상한 이내다.
+SMALL 학습 input/target tokens와 신규 학습 노출은0/0/0이다. 새 binary TINY 경로는
+generation92/같은 자체 모델 teacher92(bootstrap8+subprocess84), SMALL은32/0이다.
+기존 quick의 다른 legacy/native generation 회귀 총수는 별도 계측하지 않았다.
+따라서124를 전체 테스트의 전역 generation 총수라고 주장하지 않는다. 외부 teacher0.
+원자료 import/재채점/성능 측정/최종 close의 generation/optimizer는 모두0이다.
+
+실패와 재시도도 보존했다. 첫 TINY fixture 준비는 corpus 계보 검사에서 optimizer0으로
+실패했고 previous-corpora 연결을 고친 새 출력 경로에서 준비했다. 개발 중 compile
+오류는 실행 테스트/RED로 세지 않는다. N256 최초 import는 inline score가 없는 사후
+schema 때문에 `INTEGRITY_FAIL: score auxiliary`로 중단됐다. 원본 점수 오류로 해석하지
+않고 별도 result의 required-field 검증을 추가한 뒤 같은 원자료를 다시 감사했다.
+실패 시 정상 output root나 모델 호출은 없었다. 누락/null을 default로 통과시키지 않는다.
+최종 추가 회귀는 읽은 bytes와 그 digest를 함께 소유하고, 이후 파일 변경을 이전
+parsed 값의 provenance로 잘못 붙이지 않는다는 점도 확인한다.
+
+주요 실행 명령은 기존 checker `quick --output artifacts/binary-eval-resume-20260918/quick-final`,
+`cargo test --locked --offline --features accelerate,test-support --bin replica-train binary_tests`,
+`cargo test --locked --offline --features accelerate,test-support --test experiment_record binary_real_process_resume_and_close`,
+`replica-train recovery native import/parity/bench/close`다. test threads1과
+VECLIB_MAXIMUM_THREADS=1/RAYON_NUM_THREADS=1을 사용했다. 각 quick의 정확한 argv/exit/count는
+`quick-final/summary.json` 및 `command-*.json`에 있다. source tree hash도 같이 보존했다.
+이는 개발자 검증 기록이며 새 canonical controller 입력은 아니다.
+
+### 같은 기존 raw의 재검산과 출력 동등성
+
+아래 표는 DERIVED_FROM_EXISTING_LOGS이며 재채점 실행 자체는 EXECUTED_THIS_RUN이다.
+새 학습이나 N256 추가 생성으로 얻은 개선 수치가 아니다. dev256/watch32/CROSS512/
+ordinary400를 각각 전체 ID/내용/순서와 해당 exact checkpoint step에 연결했다.
+
+| checkpoint / absolute step | dev full/entity/event /256 | CROSS full/entity/event /512 | ordinary QA /336 | aux /64 | watch /32 |
+| --- | --- | --- | ---: | ---: | ---: |
+| F512 /23798 | 242/251/251 | 459/501/498 | 176 | 56 | 15 |
+| N512 /23798 | 236/252/245 | 449/504/500 | 174 | 55 | 16 |
+| N256 POST_HOC /23542 | 252/255/256 | 457/487/508 | 161 | 57 | 16 |
+| 유지된 gate | >=244/254/254 | >=487/507/507 | >=178 | 별도 | 별도 guard |
+
+최종 생성 오류는 모두0이다. N256은 dev만 통과하고 CROSS·ordinary는 실패한다.
+선택/winner/resume/product pointer는 바꾸지 않았다. F/N HISTORICAL_RECEIPT_BINDING은
+ABSENT이고 CURRENT_RAW_RECOUNT는 VERIFIED다. N256의 기존 사후 binding도 원래의
+DEVELOPMENT 증거 수준 그대로다. 이번 binary 변환 해시는 현재 감사의 binding이다.
+serde_json1.0.151 default/std/alloc, float_roundtrip 미사용, converter source와 기존
+raw file SHA를 보존하며 과거 in-memory float bits가 복구됐다고 주장하지 않는다.
+
+F512 parity는 점수를 보기 전에 category/family/base/ID에서 dev16·ordinary16을
+고정하고 같은 native checkpoint/tokenizer/normal greedy로32번 생성했다. raw token,
+EOS/text/error/prompt identity32/32 일치, teacher0, 재시도0이다. 새 parity panel tags는
+전체 QA/dev gate를 대체하지 않는다. `F512-parity32/inputs.r3er`가 선택을 기록하고
+`j4-parity32.log`와 `parity.r3er`가 실행 결과를 기록한다.
+
+### 새 canonical binary와 잔존 JSON
+
+CANONICAL_DIAGNOSTIC_JSON_WRITES=0, 새 native reader/resume/close LEGACY_JSON_READS=0.
+TINY 재개 회귀는 `.r3er/.r3m`만 가진 디렉터리에서 완료했다. 실제 F512 close는
+추가로 OS sandbox에서 모든 `.json/.jsonl` file-read-data를 거부하고 검증했다.
+실제 policy JSON의 cat은 Operation not permitted, native close는 PASS였다.
+원본 JSON을 rename/delete하지 않았다.
+
+첫 sandbox close는 기존 RSS 관측용 `/bin/ps`가 OS 제한으로 실패해
+RESOURCE_OBSERVATION_FAILED로 정직하게 중단했다. 실패 root의 close-stop은 보존했다.
+그다음 profile은 `/bin/ps` 자식만 no-sandbox 실행을 허용하고 native process의 JSON
+읽기 차단을 유지했다. RSS gate를 끄지 않았다. 새 root에서 통과했으며 마지막 최신
+executable도 별도 root로 같은 차단 close를 통과했다. 이것은 새 canonical 경로의
+JSON 비의존 증거이며 기존 프로젝트 전체에서 JSON이 사라졌다는 주장이 아니다.
+
+| REMAINING_JSON_BY_ROLE | 현재 역할과 분리 경계 |
+| --- | --- |
+| 제품 model IPC | `model.rs` request/response framing 유지, 새 진단 상태 입력 아님 |
+| 기존 의미 ID | config/request/native prompt/tokenizer 호환 ID를 opaque typed field로 보존, 새 binary digest와 구분 |
+| corpus/frozen | `data.rs` 및 기존 recovery 입력의 JSON 유지; 명시 importer에서 검증 후 owned binary snapshot으로 변환 |
+| 과거 checkpoint/tokenizer | 기존 명시 legacy importer만 사용; `.r3m`/mapping 불변 |
+| 기존 recovery commands | 옛 이름의 JSON writer/reader 유지; native reader의 자동 fallback은 없음 |
+| teacher 계산 adapter | 기존 같은 모델 계산의 transient Value를 즉시 typed record로 변환, JSON blob/hash로 저장하지 않음 |
+| checker/developer reports | quick command/summary JSON, 사람용 출력 및 비정규 measurement 유지 |
+| 새 명시 legacy audit | F/N 성공 각1회, N256 사전검사 실패1회+수정 후 성공1회; 원본 수정/소급 승격 없음 |
+| benchmark reference | typed-json/legacy-row-json 이름의 `.dat`, 각15 durable 쓰기(워밍업 포함); canonical 상태로 사용하지 않음 |
+
+LEGACY_JSON_READS는 명시 import/benchmark/기존 quick 경로에서 발생했다. 모든 파일 읽기
+시스템콜을 전역 계측하지 않았으므로 가짜 총횟수를 기재하지 않는다. importer의 파싱과
+해시 대상은 동일하게 소유한 실제 bytes다. native canonical의0과 legacy 전역 미계측을
+구분한다. 향후 JSON 이관 순서는 필요 시 corpus의 명시 snapshot 입력, 기존 recovery
+진입점 폐기/전환, 개발자 receipt, 마지막으로 별도 IPC 호환성 검토다. 이번에는 실행하지
+않으며 model/tokenizer ID나 사용자 DB를 바꾸는 계획으로 자동 확장하지 않는다.
+
+### 동등 데이터 저장 크기·속도
+
+EXECUTED_THIS_RUN: Apple M4, RAM25769803776B(24GiB), macOS27.0 build26A428,
+Rust/cargo1.98.1 release, CPU/Accelerate, compute threads1. warmup5, timed10, 압축 없음.
+F512 dev256, raw output tokens9542. binary evaluation84869B, 같은 typed fields의 JSON
+426543B(JSON digest는 byte array)다. legacy rows942922B와 active owned cases264019B+
+binary panel84869B=348888B의 차이는 schema dedup+codec이며 순수 codec 효과가 아니다.
+full inputs.r3er4006623B는 미사용 train/다른 panel까지 포함하므로 active panel 비교에서
+분리했다. input/expected/derived output는 immutable case/tokenizer에서 재구성하고,
+기존 teacher/timing/raw 진단 필드를 삭제해서 크기를 줄이지 않았다.
+
+| 작업, ms median/p95 | binary | 같은 typed fields JSON | legacy row JSON |
+| --- | ---: | ---: | ---: |
+| encode | 0.597584/0.983916 | 0.425917/0.500792 | 0.742958/0.804042 |
+| decode | 0.384750/0.615542 | 1.969084/2.591625 | 2.578916/3.055708 |
+| hash | 0.150959/0.158792 | 0.747625/1.788500 | 1.656250/2.498417 |
+| verify | 95.605542/111.046500 | 2.723291/4.281583 | 23.898791/25.165792 |
+| durable write+sync+readback+directory sync+reload | 8.413250/8.593208 | 8.500917/8.631708 | 7.475000/8.326792 |
+
+binary가 작고 이 측정에서 decode/hash가 빠르지만 encode는 typed JSON보다 느리다.
+durable save는 일관된 속도 우위가 없다. verify는 binary의 전체 native panel 재채점,
+typed JSON의 syntax/hash, legacy JSON의 기존 verifier/scorer로 작업량이 다르므로
+semantic 검증 속도 배율을 계산하지 않는다. control/RSS 확인은 timed region 밖이다.
+관측 종료 RSS285984KiB는 peak가 아니고 allocation profiler도 사용하지 않았다.
+encode에는 검증용 temporary allocation이 포함되며 clone/peak 최소화를 달성했다고
+주장하지 않는다. 원시 ns 값과 한계는 `storage-measurement/measurement.txt`에 있다.
+
+### 재현 identity, 원본 경로와 보존
+
+SOURCE_COMMIT=b18ec31bb78a8d0ef0adf985b46697a2d4993474,
+origin/main의 같은 full SHA를 정상 push 후 직접 확인했다. J1–J3 source는
+feec27439dbc0704335ad58c7bfca7cc8733f968이다. 이 절을 추가한 commit은 REPORT_COMMIT이며
+소스 변경 없이 보고서만 게시한다. 최종 report/remote full SHA는 게시 응답에 별도 기록한다.
+source 기준62147dc5854ca07a4c0785c0f006734d62074200, 시작 report HEAD
+d075382539cc5f8bf7ba6de01b8d98a8d7aa7ffb와 이후 로컬 원본을 보존했다.
+
+실행별 소스/바이너리를 구별한다. J3 quick worktree digest는
+535ea2275e6f21616d188432d5841f956a067e1095b42b36ca51ca2bca97970f,
+debug binary는83cd09c480c602c60ae7b27c8c9bde39197c4e3a051cde832ea2cecfcb9d7df3이다.
+J4 parity/benchmark executable은5fea4ee9ec4f21bbee392b7a0b5cfe60c363c2308ad6cc45848f8d45c3a1973f,
+그때 experiment_record.rs는f8d7e5c08632e6493256ac2f72bc59fcd7601dfe1cf1a763b0fe64d43754176a다.
+J4 이후 importer의 exact consumed bytes 회귀를 추가했다. 최종 같은 파일 SHA는
+572096dad474830638986a8e8719f6ac3639e8a3af53e6cb743af03a02f601cf,
+최종 release executable은b661425d7970d7adf97533b09944bd728559b5b8918153d3776ec1f54528d6c2다.
+마지막 direct5/clippy/build/JSON-denied close는 최종 소스에 해당한다. 생성/모델 경로는
+그 수정에서 변경하지 않았으나 J4 parity를 최종 executable로 실행했다고 바꾸어 쓰지 않는다.
+
+| 기존 모델 | 로컬 상대 경로 | physical SHA256 |
+| --- | --- | --- |
+| F512 | artifacts/h3-controlled-20260917/a2/F/segment-00-0000/final | bdc28e3f4b31ad5d600cf1c6ec0615b591deed9e26b069d9167f6a175f0a0e16 |
+| N512 | artifacts/h3-controlled-20260917/a2/N/segment-00-0000/final | 734ec32aa4bfad8bce9ecf2387eae81f988cd9643b3257612f7527733d4f0bca |
+| N256 | artifacts/h3-controlled-20260917/a2/N/segment-00-0000/step-0256 | 3556caaf40cef53183eb25c1c4162a6b7050ffe623cc785d4a810359400e9153 |
+
+F model565a40a33ee896916a421dbee538d3f126789a67ee184039b28e7cc4224a375a,
+N model870facdd31aca3a251dfe4b111745281724517b673f2a4d38aa6267d982594ea,
+N256 modelf3802303a462575441849e91d1b00c5fe51e7cd77383cc28f533637eccf6eb1f,
+공통 tokenizer652718e4864c2f06af3a2c67dac0a5174d5e2feb1387667173902da9a8a295d4.
+F/N corpus와 policy는 `artifacts/h3-controlled-20260917/a2/F/`, `a2/N/`에 있으며
+raw는 각 `segment-00-0000/{eval-0512,cross,ordinary400,result}.json`이다.
+N256 dev는 같은 N segment의 `eval-0256.json`, 기존 사후 CROSS/ordinary/result는
+`artifacts/state-data-result-20260917/reaudit-bound/N256/`이다.
+ordinary=`artifacts/s4-completion-20260917/binding-corpus/validation.json`, SHA
+572b0d9d797feb2c31fa8713566853aff91ae6b994d736c399e8bad0cb3fb004.
+CROSS=`artifacts/h3-controlled-20260917/a0/cross-development.json`, SHA
+c27bc3e35343c3c046fa2b9c944aae0601912f086fa2a739ed7900f0a6dbf28a.
+frozen=`artifacts/harness-goal1-20260917/h2-baseline/frozen.json`, SHA
+d3531005d3de1e76337bbdbee0454a9a0640bfaa26e8558aed2b61ca4fbf1cb7.
+
+새 증거 root는 `artifacts/binary-eval-resume-20260918/`이다. 원자료/모델/로그는 local only다.
+`import-F512/`, `import-N512/`, `import-N256/`, `F512-parity32/`, `storage-measurement/`,
+`json-denied-final/`에 typed 결과가 있다. `red-br01.log`, `red-br02.log`,
+`j3-e2e-01.log`, `j3-e2e-02.log`, `quick-final/`, `j4-F512.log`, `j4-N512.log`,
+`j4-N256.log`, `j4-N256-repaired.log`, `j4-parity32.log`, `j4-storage-measurement.log`,
+`j5-direct-tests.log`, `j5-clippy.log`, `j5-release-build.log`, `j5-json-denied-close.log`를
+보존했다. `j4-observation-source.sha256`, `j4-final-source.sha256`,
+`final-source-binary.sha256`와 보존 실행파일이 각 관측을 식별한다.
+시작/종료의 기존 manifest 재검증에서 native/frozen6개와 data/policy/raw192개 모두
+SHA 일치했다. 사용자 DB/종료 records/dirty 작업은 건드리지 않았고 명시 파일만 stage했다.
+
+### NEXT_MODEL_TEST_PROPOSAL — anchor 샘플 비율 한 변수, 실행하지 않음
+
+현재 관측은 copy 성능 변화와 ordinary 저하가 함께 있음을 보여준다. 원인은 UNRESOLVED다.
+N256의 dev252가 CROSS/ordinary 수용으로 이어지지 않아 best-dev 선택만으로 회복을
+보장할 수 없다. tokenizer/temperature/LR 또는 망각이 원인이라고 확정하지 않는다.
+
+향후 별도 승인 후보는 같은 F512 부모·기존 F corpus·Adam·LR·tokenizer·normal greedy를
+유지하고 batch8의 anchor/focus 비율만 기존4/4 대6/2로 비교하는 것이다. 각 arm 최대128
+updates, 자동 연장 없음. 자료는 늘리지 않는다. 실행 전 두 tape와 실제 input/target
+token 예산을 등록하고 길이 조건을 맞춘다. 동일 step을 동일 token 노출이라고 부르지
+않으며 비교 가능한 노출 설계가 안 되면 시작하지 않는다. 기존 dev256/CROSS512/
+ordinary336+aux64를 시작·최종에만 확인하고 guard/cancel/deadline과 기존 최종 gate를
+그대로 적용한다. 정상 greedy 전체 조건을 모두 만족해야 후보 자격을 검토한다.
+이는 미실행 가설/대조 제안 하나이며 예산 승인·학습 예약·과거 run 재개가 아니다.
+NEXT_DEPENDENCY=independent source/evidence review와 별도 다음 실험 승인.
+
 ## J1–J3 종료 — binary 저장에서 별도 process 재개·close까지 검증
 
 2026-09-18 / EXECUTED_THIS_RUN. J4 원자료/parity/성능 검증은 다음 단계다.

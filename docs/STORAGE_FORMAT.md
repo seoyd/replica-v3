@@ -316,3 +316,16 @@ float_roundtrip. Historical in-memory float bits remain UNKNOWN/LEGACY_ROUNDTRIP
 A current binary hash does not retroactively establish an absent historical receipt.
 Imported terminals describe the completed read-only audit, never the eligibility of the
 old run; original flags/files remain unchanged and historical candidate/resume are false.
+
+The explicit importer obtains each parsed legacy record and its provenance digest from
+the same owned file bytes. It never substitutes a later re-read's hash for the bytes it
+parsed. Final-arm inline summaries and the existing post-hoc result-file schema are
+separate validated cases; missing/null required fields remain errors. The latter does
+not restore historical float bits or preregister an observed intermediate checkpoint.
+
+Measured F512 dev256 (9542 output tokens): binary evaluation84869B, same typed-fields
+JSON426543B. Legacy rows942922B versus active owned cases plus binary evaluation348888B
+is a schema-deduplication-and-codec comparison. Full input snapshot4006623B also holds
+unused training/other panels. All existing diagnostic fields are retained. Encode,
+verification and durable write were not uniformly faster; EXPERIMENT_STATUS records
+the exact workload, timing table and RSS limitations. Benchmark JSON is noncanonical.
