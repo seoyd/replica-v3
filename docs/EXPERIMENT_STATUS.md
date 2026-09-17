@@ -1,5 +1,40 @@
 # 진단 및 구현 상태
 
+## G3 — 모델 저장 측정, raw F32 기본 유지
+
+2026-09-18 / EXECUTED_THIS_RUN. 기존 F512 .r3m을 새 경로로 추론용/재개용 export했다.
+weights는 원래 native binary다. 이번 변경은 byte/timing 계측과 별도 cold probe이며
+모델 wire1/tokenizer/수식/정밀도는 바꾸지 않았다. 저장·로드·손상 직접 회귀4 PASS,
+clippy PASS. 원본 physical SHA bdc28e3f4b31ad5d600cf1c6ec0615b591deed9e26b069d9167f6a175f0a0e16
+보존. 실행 `validate native-storage-measure .../C50/parent.r3m .../model-storage`.
+
+| 실제 파일 | inference bytes | resume bytes |
+| --- | ---: | ---: |
+| raw native F32 | 38,432,768 | 115,285,312 |
+| chunk zstd1 (cold probe 전체) | 35,644,097 | 106,633,647 |
+| chunk zstd3 (cold probe 전체) | 35,672,283 | 106,551,831 |
+
+weights38,420,736B, Adam76,841,472B. inference header12,028B(그 안 directory4,972B),
+padding4B. resume header23,067B(directory15,051B),padding37B. Directory는 header에
+포함되어 이중 합산하지 않는다. Resume 파일의 inference view도 Adam 실제 읽기0B,
+총 읽기38,443,840B다. seek skip과 tensor 복사 로딩이며 mmap/zero-copy가 아니다.
+
+3회 warm ready-to-infer298.7–325.4ms, resume view441.9–485.1ms. fresh OS process를
+각3회 별도 실행했고 파일 cache cold를 주장하지 않는다. zstd1/3은 약7–8% 줄지만
+decode/read/hash가 inference168–208ms, resume499–528ms를 추가해 raw를 유지한다.
+encode/hash, tensor write, readback, file-sync, link, directory-sync, total을 분리 기록했다.
+예: resume 첫 save286.36/232.89/226.45ms, file-sync6.08ms, link1.11ms,
+directory-sync2.89ms, total756.00ms. 세부 반복 원자료는 `g3-measure.log`.
+
+Cold는1MiB chunk의 독립 zstd frame과 raw hash, 전체 길이/hash를 검증한 측정 전용
+포장이다. hot .r3m으로 복원한 전체 bytes가12/12 반복 일치했다. 기존 weights/tokenizer,
+Adam·metadata bits를 포함한다. 별도6 process에서 동일 ordinary 앞2건을 생성해
+raw logits/token/EOS/UTF-8/finish 출력 모두 일치: SMALL generations12,teacher0,updates0.
+단2건의 상대 parity이며 품질 추정이 아니다. 근거 `g3-parity-*.jsonl`.
+측정 process26.62초, OS peak footprint3,334,049,296B. probe는 whole-file buffer와
+chunk 작업공간을 사용하고 allocator cache가 누적된다. 제품 최소 RSS로 해석하지 않는다.
+BINARY_MODEL_STORAGE=VERIFIED, COLD_EXACT=MEASURED_PROTOTYPE. 모델 품질 판정 불변.
+
 ## G2 — C50 저장 실패로 pair 중단, QUALITY_INCONCLUSIVE
 
 2026-09-18 / EXECUTED_THIS_RUN. F512 부모의 anchor4/focus4 대6/2를 명시

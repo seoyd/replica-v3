@@ -406,6 +406,16 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
             )?;
             r.cargo("check", &["--all-targets"], false)?;
             r.cargo("clippy", &["--all-targets", "--", "-D", "warnings"], false)?;
+            r.cargo(
+                "test",
+                &["--lib", "neural::artifact::tests", "--", "--test-threads=1"],
+                true,
+            )?;
+            r.cargo(
+                "test",
+                &["--example", "validate", "cold_probe_exact_and_corrupt"],
+                true,
+            )?;
             for (target, filter) in [
                 ("replica-check", "harness_"),
                 ("replica-train", "harness_m"),

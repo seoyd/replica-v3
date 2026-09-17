@@ -52,6 +52,198 @@ fn native_load_audit(path: &std::path::Path, mode: &str) -> Result<()> {
         "tokenizer_native_metadata_bytes={}",
         replica_v3::neural::artifact::tokenizer_metadata_bytes(&loaded.tokenizer)
     );
+    println!("load_detail={stats:?} RSS_SNAPSHOT_KIB={}", probe_rss());
+    Ok(())
+}
+fn probe_rss() -> String {
+    Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_owned())
+        .unwrap_or_else(|| "NOT_MEASURED".into())
+}
+// Measurement-only chunk wrapper. Never accepted by the product model loader.
+fn cold_pack(raw: &[u8], level: i32) -> Result<Vec<u8>> {
+    use sha2::{Digest, Sha256};
+    let mut out = b"R3COLD\x01\x00".to_vec();
+    out.extend((raw.len() as u64).to_le_bytes());
+    out.extend(Sha256::digest(raw));
+    for block in raw.chunks(1024 * 1024) {
+        let stored = zstd::bulk::compress(block, level)?;
+        out.extend((block.len() as u32).to_le_bytes());
+        out.extend((stored.len() as u32).to_le_bytes());
+        out.extend(Sha256::digest(block));
+        out.extend(stored);
+    }
+    Ok(out)
+}
+fn cold_unpack(bytes: &[u8]) -> Result<Vec<u8>> {
+    use sha2::{Digest, Sha256};
+    let bad = || Error::Corrupt("cold probe length/hash/frame".into());
+    let mut r = replica_v3::codec::Reader::new(bytes);
+    if r.take(8)? != b"R3COLD\x01\x00" {
+        return Err(bad());
+    }
+    let total = u64::from_le_bytes(r.take(8)?.try_into().unwrap());
+    if total > 192 * 1024 * 1024 {
+        return Err(bad());
+    }
+    let digest = r.take(32)?.to_vec();
+    let mut out = Vec::with_capacity(total as usize);
+    while !r.finished() {
+        let raw = u32::from_le_bytes(r.take(4)?.try_into().unwrap()) as usize;
+        let stored = u32::from_le_bytes(r.take(4)?.try_into().unwrap()) as usize;
+        let h = r.take(32)?;
+        if raw == 0
+            || raw > 1024 * 1024
+            || stored > 2 * 1024 * 1024
+            || out.len() + raw > total as usize
+        {
+            return Err(bad());
+        }
+        let compressed = r.take(stored)?;
+        if zstd::zstd_safe::find_frame_compressed_size(compressed).map_err(|_| bad())? != stored {
+            return Err(bad());
+        }
+        let block = zstd::bulk::decompress(compressed, raw)?;
+        if block.len() != raw || Sha256::digest(&block)[..] != *h {
+            return Err(bad());
+        }
+        out.extend(block);
+    }
+    if out.len() != total as usize || Sha256::digest(&out)[..] != digest {
+        return Err(bad());
+    }
+    Ok(out)
+}
+#[test]
+fn cold_probe_exact_and_corrupt() {
+    let raw = (0..1_048_999).map(|i| (i % 251) as u8).collect::<Vec<_>>();
+    for level in [1, 3] {
+        let packed = cold_pack(&raw, level).unwrap();
+        assert_eq!(cold_unpack(&packed).unwrap(), raw);
+        for at in [0, 8, 16, 48, 56, packed.len() - 1] {
+            let mut damaged = packed.clone();
+            damaged[at] ^= 1;
+            assert!(cold_unpack(&damaged).is_err(), "{at}");
+        }
+        assert!(cold_unpack(&packed[..packed.len() - 1]).is_err());
+    }
+}
+fn native_storage_measure(source: &std::path::Path, root: &std::path::Path) -> Result<()> {
+    use replica_v3::{
+        codec::publish_new_measured,
+        neural::{artifact, hash, read_bounded},
+    };
+    use std::{collections::BTreeMap, io::Write};
+    std::fs::create_dir(root)?;
+    let loaded = artifact::load(source, candle_core::Device::Cpu, true)?;
+    let source_hash = hash(&read_bounded(source, 192 * 1024 * 1024)?);
+    for resume in [false, true] {
+        let kind = if resume { "resume" } else { "inference" };
+        let mut manifest = loaded.manifest.clone();
+        if !resume {
+            manifest.training = None;
+        }
+        let empty = BTreeMap::new();
+        for repeat in 0..3 {
+            let path = root.join(format!("{kind}-{repeat}.r3m"));
+            let (_, save) = artifact::save_with_stats(
+                &path,
+                &loaded.model,
+                &loaded.tokenizer,
+                manifest.clone(),
+                if resume { &loaded.optimizer } else { &empty },
+            )?;
+            println!("NATIVE_SAVE kind={kind} repeat={repeat} stats={save:?}");
+            for view in [false, true].into_iter().filter(|v| !v || resume) {
+                let (l, s) = artifact::load_with_stats(&path, candle_core::Device::Cpu, view)?;
+                if l.model.weight_hash()? != loaded.model.weight_hash()?
+                    || l.tokenizer.semantic_id() != loaded.tokenizer.semantic_id()
+                {
+                    return Err(Error::Corrupt("native storage identity".into()));
+                }
+                println!(
+                    "NATIVE_LOAD kind={kind} resume_view={view} repeat={repeat} file_bytes={} stats={s:?} RSS_SNAPSHOT_KIB={}",
+                    std::fs::metadata(&path)?.len(),
+                    probe_rss()
+                );
+            }
+            // A fresh OS process is not a cold filesystem cache claim.
+            let o = Command::new(std::env::current_exe()?)
+                .args([
+                    "native-load-audit",
+                    path.to_str()
+                        .ok_or_else(|| Error::Invalid("probe path UTF8".into()))?,
+                    if resume { "resume" } else { "inference" },
+                ])
+                .output()?;
+            if !o.status.success() {
+                return Err(Error::Corrupt("fresh storage probe failed".into()));
+            }
+            println!(
+                "FRESH_PROCESS repeat={repeat} {}",
+                String::from_utf8(o.stdout).map_err(|_| Error::Corrupt("probe stdout".into()))?
+            );
+        }
+        let raw = read_bounded(&root.join(format!("{kind}-0.r3m")), 192 * 1024 * 1024)?;
+        for level in [1, 3] {
+            for repeat in 0..3 {
+                let start = Instant::now();
+                let packed = cold_pack(&raw, level)?;
+                let encode = elapsed(start);
+                let file = root.join(format!("{kind}-zstd{level}-{repeat}.cold"));
+                let mut readback_ms = 0.;
+                let (_, timing) = publish_new_measured(&file, |f, p| {
+                    f.write_all(&packed)?;
+                    let read = Instant::now();
+                    if cold_unpack(&read_bounded(p, 192 * 1024 * 1024)?)? != raw {
+                        return Err(Error::Corrupt("cold exact readback".into()));
+                    }
+                    readback_ms = elapsed(read);
+                    Ok(())
+                })?;
+                let start = Instant::now();
+                let restored = cold_unpack(&read_bounded(&file, 192 * 1024 * 1024)?)?;
+                let decode = elapsed(start);
+                if restored != raw {
+                    return Err(Error::Corrupt("cold exact bytes".into()));
+                }
+                if repeat == 0 {
+                    let restored_path = root.join(format!("{kind}-zstd{level}.r3m"));
+                    replica_v3::codec::publish_new(&restored_path, |f, _| {
+                        f.write_all(&restored)?;
+                        Ok(())
+                    })?;
+                    let (_, load) = artifact::load_with_stats(
+                        &restored_path,
+                        candle_core::Device::Cpu,
+                        resume,
+                    )?;
+                    println!(
+                        "COLD_READY kind={kind} level={level} unpack_read_verify_ms={decode} hot_native_ready_ms={} materialization_requires_restored_file=true",
+                        load.ready_ms
+                    );
+                }
+                println!(
+                    "COLD_EXACT=PASS kind={kind} level={level} repeat={repeat} raw_bytes={} stored_total_bytes={} frame_overhead={} encode_hash_ms={encode} decode_read_hash_ms={decode} readback_ms={readback_ms} publication={timing:?} RSS_SNAPSHOT_KIB={}",
+                    raw.len(),
+                    packed.len(),
+                    48 + raw.len().div_ceil(1024 * 1024) * 40,
+                    probe_rss()
+                );
+            }
+        }
+    }
+    if source_hash != hash(&read_bounded(source, 192 * 1024 * 1024)?) {
+        return Err(Error::Corrupt("source changed".into()));
+    }
+    println!(
+        "SOURCE_PRESERVED={source_hash} COLD_EXACT=MEASURED_PROTOTYPE DEFAULT=RAW_F32 NEW_GENERATIONS=0 NEW_UPDATES=0 memory=bounded_whole_file_probe_plus_1MiB_chunks_no_mmap RSS_is_snapshot_not_peak cache=warm_or_OS_uncontrolled"
+    );
     Ok(())
 }
 fn export_parity(legacy: &std::path::Path, native: &std::path::Path) -> Result<()> {
@@ -1107,6 +1299,7 @@ fn smoke(checkpoint: &str, cli: &str, output: &str) -> Result<()> {
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("native-storage-measure") if args.len()==3 => native_storage_measure(std::path::Path::new(&args[1]),std::path::Path::new(&args[2])),
         Some("archive-measure") if args.len()==2 => archive_measure(std::path::Path::new(&args[1])),
         Some("archive-read-probe") if args.len()==3 => archive_read_probe(std::path::Path::new(&args[1]),&args[2]),
         Some("export-parity") if args.len()==3 => export_parity(std::path::Path::new(&args[1]),std::path::Path::new(&args[2])),

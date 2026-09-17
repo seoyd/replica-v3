@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     Error, Result,
-    codec::{Reader, publish_new, put_bytes, put_varint},
+    codec::{PublicationTiming, Reader, publish_new_measured, put_bytes, put_varint},
 };
 use candle_core::{Device, Tensor};
 use sha2::{Digest, Sha256};
@@ -16,6 +16,7 @@ use std::{
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
     path::Path,
+    time::Instant,
 };
 
 pub const WIRE_VERSION: u16 = 1;
@@ -50,6 +51,19 @@ pub struct LoadStats {
     pub model_bytes: u64,
     pub optimizer_bytes: u64,
     pub padding_bytes: u64,
+    pub directory_bytes: u64,
+    pub tensor_read_ms: f64,
+    pub tensor_hash_ms: f64,
+    pub materialize_ms: f64,
+    pub ready_ms: f64,
+}
+#[derive(Debug, Default)]
+pub struct SaveStats {
+    pub encode_hash_ms: f64,
+    pub tensor_write_ms: f64,
+    pub readback_ms: f64,
+    pub publication: PublicationTiming,
+    pub total_ms: f64,
 }
 impl LoadStats {
     pub fn bytes_read(&self) -> u64 {
@@ -72,6 +86,7 @@ struct Header {
     model_id: String,
     header_end: u64,
     total: u64,
+    directory_bytes: u64,
 }
 fn bad(s: &str) -> Error {
     Error::Corrupt(format!("native artifact: {s}"))
@@ -456,6 +471,7 @@ fn read_header(file: &mut File) -> Result<Header> {
         model_content_digest: model_id.clone(),
     };
     let expected = checkpoint::expected(&manifest);
+    let directory_start = r.position();
     let count = number(&mut r, 204)?;
     if count != expected.len() {
         return Err(bad("tensor count"));
@@ -523,6 +539,7 @@ fn read_header(file: &mut File) -> Result<Header> {
         model_id,
         header_end,
         total,
+        directory_bytes: (n - directory_start) as u64,
     })
 }
 fn read_tensors(
@@ -540,6 +557,7 @@ fn read_tensors(
     let mut optimizer = BTreeMap::new();
     let mut stats = LoadStats {
         header_bytes: h.header_end,
+        directory_bytes: h.directory_bytes,
         ..Default::default()
     };
     let mut previous = h.header_end;
@@ -562,10 +580,15 @@ fn read_tensors(
         } // never read optimizer payload in inference view.
         file.seek(SeekFrom::Start(e.offset))?;
         let mut bytes = vec![0; e.length as usize];
+        let phase = Instant::now();
         file.read_exact(&mut bytes)?;
+        stats.tensor_read_ms += phase.elapsed().as_secs_f64() * 1000.;
+        let phase = Instant::now();
         if Sha256::digest(&bytes)[..] != e.digest {
             return Err(bad("tensor checksum"));
         }
+        stats.tensor_hash_ms += phase.elapsed().as_secs_f64() * 1000.;
+        let phase = Instant::now();
         let values = bytes
             .as_chunks::<4>()
             .0
@@ -576,6 +599,7 @@ fn read_tensors(
             return Err(bad("nonfinite tensor"));
         }
         let tensor = Tensor::from_vec(values, e.shape.as_slice(), device)?;
+        stats.materialize_ms += phase.elapsed().as_secs_f64() * 1000.;
         if let Some(name) = model_name {
             stats.model_bytes += e.length;
             model.insert(name.into(), tensor);
@@ -591,14 +615,16 @@ pub fn metadata(path: &Path) -> Result<(Manifest, ByteBpe)> {
     Ok((h.manifest, h.tokenizer))
 }
 pub fn load_with_stats(path: &Path, device: Device, resume: bool) -> Result<(Loaded, LoadStats)> {
+    let start = Instant::now();
     let mut file = File::open(path)?;
     let h = read_header(&mut file)?;
-    let (weights, optimizer, stats) = read_tensors(&mut file, &h, resume, &device)?;
+    let (weights, optimizer, mut stats) = read_tensors(&mut file, &h, resume, &device)?;
     let mut model = Transformer::from_tensors(h.manifest.architecture.clone(), weights, device)?;
     if model.weights_content_id()? != h.model_id {
         return Err(bad("model content identity"));
     }
     model.bind_tokenizer(&h.tokenizer.semantic_id())?;
+    stats.ready_ms = start.elapsed().as_secs_f64() * 1000.;
     Ok((
         Loaded {
             model,
@@ -626,9 +652,20 @@ pub fn save(
     path: &Path,
     model: &Transformer,
     tokenizer: &ByteBpe,
-    mut manifest: Manifest,
+    manifest: Manifest,
     optimizer: &BTreeMap<String, Tensor>,
 ) -> Result<Manifest> {
+    save_with_stats(path, model, tokenizer, manifest, optimizer).map(|(m, _)| m)
+}
+pub fn save_with_stats(
+    path: &Path,
+    model: &Transformer,
+    tokenizer: &ByteBpe,
+    mut manifest: Manifest,
+    optimizer: &BTreeMap<String, Tensor>,
+) -> Result<(Manifest, SaveStats)> {
+    let start = Instant::now();
+    let mut stats = SaveStats::default();
     if let Some(s) = &manifest.training {
         manifest.trained_steps = s.step;
         manifest.diagnostic_only |= s.contrast16;
@@ -690,7 +727,9 @@ pub fn save(
     prefix[12..16].copy_from_slice(&(header.len() as u32).to_le_bytes());
     prefix[16..24].copy_from_slice(&total.to_le_bytes());
     prefix[24..56].copy_from_slice(&Sha256::digest(&header));
-    publish_new(path, |file, _temporary| {
+    stats.encode_hash_ms = start.elapsed().as_secs_f64() * 1000.;
+    let (manifest, timing) = publish_new_measured(path, |file, _temporary| {
+        let phase = Instant::now();
         file.write_all(&prefix)?;
         file.write_all(&header)?;
         let mut position = (PREFIX + header.len()) as u64;
@@ -705,14 +744,20 @@ pub fn save(
         }
         #[cfg(feature = "test-support")]
         crate::store::test_pause("artifact_before_publish");
+        stats.tensor_write_ms = phase.elapsed().as_secs_f64() * 1000.;
+        let phase = Instant::now();
         let verified = read_header(file)?;
         // Full readback validates every payload before publication, including Adam.
         let _ = read_tensors(file, &verified, kind == ArtifactKind::Resume, &Device::Cpu)?;
         if verified.total != total {
             return Err(bad("export total"));
         }
+        stats.readback_ms = phase.elapsed().as_secs_f64() * 1000.;
         Ok(verified.manifest)
-    })
+    })?;
+    stats.publication = timing;
+    stats.total_ms = start.elapsed().as_secs_f64() * 1000.;
+    Ok((manifest, stats))
 }
 pub fn export_inference(path: &Path, loaded: &Loaded) -> Result<Manifest> {
     let mut manifest = loaded.manifest.clone();
@@ -1137,7 +1182,7 @@ mod tests {
         assert!(load(&resume, Device::Cpu, true).is_err());
         assert_eq!(std::fs::read(&source).unwrap(), bytes);
         let absent = d.path().join("failed");
-        let result: Result<()> = publish_new(&absent, |file, _| {
+        let result: Result<()> = crate::codec::publish_new(&absent, |file, _| {
             file.write_all(b"partial")?;
             Err(bad("injected interruption before publication"))
         });

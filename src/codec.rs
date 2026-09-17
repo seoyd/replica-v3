@@ -201,6 +201,9 @@ impl<'a> Reader<'a> {
     pub fn finished(&self) -> bool {
         self.pos == self.b.len()
     }
+    pub fn position(&self) -> usize {
+        self.pos
+    }
     pub fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         let end = self
             .pos
@@ -413,11 +416,27 @@ pub fn publish_new<T>(
     path: &std::path::Path,
     write: impl FnOnce(&mut std::fs::File, &std::path::Path) -> Result<T>,
 ) -> Result<T> {
+    publish_new_measured(path, write).map(|(value, _)| value)
+}
+#[derive(Debug, Default)]
+pub struct PublicationTiming {
+    pub write_verify_ms: f64,
+    pub file_sync_ms: f64,
+    pub link_ms: f64,
+    pub directory_sync_ms: f64,
+    pub total_ms: f64,
+}
+pub fn publish_new_measured<T>(
+    path: &std::path::Path,
+    write: impl FnOnce(&mut std::fs::File, &std::path::Path) -> Result<T>,
+) -> Result<(T, PublicationTiming)> {
     use std::{
         fs::{File, OpenOptions},
         sync::atomic::{AtomicU64, Ordering},
     };
     static NEXT: AtomicU64 = AtomicU64::new(0);
+    let start = std::time::Instant::now();
+    let mut timing = PublicationTiming::default();
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -458,10 +477,19 @@ pub fn publish_new<T>(
         }
     }
     let cleanup = Owned(temporary);
+    let phase = std::time::Instant::now();
     let result = write(&mut file, &cleanup.0)?;
+    timing.write_verify_ms = phase.elapsed().as_secs_f64() * 1000.;
+    let phase = std::time::Instant::now();
     file.sync_all()?;
+    timing.file_sync_ms = phase.elapsed().as_secs_f64() * 1000.;
+    let phase = std::time::Instant::now();
     std::fs::hard_link(&cleanup.0, path)?;
+    timing.link_ms = phase.elapsed().as_secs_f64() * 1000.;
+    let phase = std::time::Instant::now();
     File::open(parent)?.sync_all()?;
+    timing.directory_sync_ms = phase.elapsed().as_secs_f64() * 1000.;
     drop(cleanup);
-    Ok(result)
+    timing.total_ms = start.elapsed().as_secs_f64() * 1000.;
+    Ok((result, timing))
 }
