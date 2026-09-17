@@ -210,6 +210,11 @@ test-support 없는 제품 release 빌드도 통과했다(release-final.log). �
 큰 corpus/checkpoint/raw 로그는 ignored artifacts에 있고 GitHub에 게시하지 않는다.
 BASE_SHA=5879a3c6642211e78a0d19a91679babba5f8a6c1.
 이번 시작 HEAD=f964a2a0308dd64852fd3d33e83e8e431373ab17; 그 위 로컬 수정으로 실행했다.
+FINAL_CODE_SHA=d31e53eda459af447eed10d87617e4ee4d11ead3.
+정상 push 뒤 실제 origin/main의 동일 full SHA를 확인했다(REMOTE_SHA_MATCH=YES).
+이번 코드·상태 변경 diff는 f964a2a0308dd64852fd3d33e83e8e431373ab17..d31e53eda459af447eed10d87617e4ee4d11ead3이다.
+이 publication 필드의 후속 commit은 보고서 전용이며 학습 source/binary 및 코드 commit과 구분한다.
+독립 검토는 아직 없으며 검토 기준5879a3c6642211e78a0d19a91679babba5f8a6c1의 SOURCE_ONLY 이력을 보존한다.
 실행 당시 코드 identity는 commit SHA 대신 다음 실제 source manifest/binary hash로 고정했다.
 
 | identity | SHA256 |
