@@ -413,6 +413,7 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                 ("replica-train", "skill_"),
                 ("replica-train", "progress_"),
                 ("replica-train", "state_data_"),
+                ("replica-train", "binary_tests"),
             ] {
                 r.cargo(
                     "test",
@@ -427,6 +428,7 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                 ("native", "legacy_checkpoint_import_roundtrip"),
                 ("runtime", "rv02_whole_evidence"),
                 ("store", "lifecycle_restart"),
+                ("experiment_record", "binary_real_process_resume_and_close"),
             ] {
                 r.cargo(
                     "test",

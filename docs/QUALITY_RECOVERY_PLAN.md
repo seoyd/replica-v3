@@ -3,8 +3,8 @@
 ## Active: R3-BINARY-EVAL-RESUME-1.0
 
 Base source62147dc5854ca07a4c0785c0f006734d62074200, reportd075382539cc5f8bf7ba6de01b8d98a8d7aa7ffb.
-J0 is closed: both float-identity and cross-segment filename failures reproduced in an
-isolated baseline checkout. J1–J3 implement typed, schema-specific binary snapshots,
+J0–J3 are closed: baseline failures reproduced, then separate-process native TINY
+save/time-stop/resume/close and the stable candidate quick53 passed. J1–J3 implement typed, schema-specific binary snapshots,
 evaluation payloads, decisions, explicit native references, segment and close receipts.
 Use the current native model loader/save, varint primitives, RunControl and scoring rules.
 New native control must not reopen JSON sidecars or hash JSON reserialization. Preserve

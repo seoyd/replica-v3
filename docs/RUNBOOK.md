@@ -643,3 +643,38 @@ observation of the existing step-0256 native artifact, reusing validated dev and
 only missing CROSS512/ordinary400. Each observation directory is create-new; failed observations
 block further generation. Maximum new calls944 with reused dev, SMALL optimizer0; no checkpoint
 sweep, seal opening, model installation, budget renewal or operating pointer change.
+
+## Binary evaluation and resume repair
+
+Use `replica-train recovery native --help` for the new canonical diagnostic path.
+`native import --policy POLICY --endpoint NATIVE --evaluation DEV_WATCH_RAW --cross CROSS_RAW
+--ordinary ORDINARY_RAW --output NEW_ROOT` performs an explicit read-only historical audit,
+verifies frozen owned data and endpoint/native/step lineage, then writes `inputs.r3er`,
+raw binary panels, terminal and comparison into a new root. Originals are never updated.
+`native close --root ROOT --terminal terminal.r3er` uses only owned binary records and
+native files. Complete wrong outputs produce candidate=false; incomplete/corrupt panels
+produce an integrity/stop record, not a successful comparison.
+
+`native run --root ROOT` and `--resume segment-00/terminal.r3er` use explicit terminal
+lineage and the same native trainer. This repair enables optimizer execution only for
+registered TINY regression specs; SMALL updates and historical resume remain disabled.
+With `test-support`, `native fixture` creates a real random-init numeric fixture and
+`fixture-fork` clones its verified native parent for continuous/split-process regressions.
+These test-only commands and fault hooks do not exist in the product/default release.
+Quick now includes the direct binary unit and subprocess tests. Its optional
+`R3ER_TEST_BOOTSTRAP` identifies an already-created, matching TINY fixture to avoid
+repeating preparation; `R3ER_TEST_OUTPUT` must be a new directory. Report actual updates
+from child logs, including fixture preparation and failed runs, against the128-call cap.
+
+`native parity --root IMPORTED_F512 --output NEW_ROOT` freezes16 dev and16 ordinary
+indices from category/family/base/ID metadata before inspecting outputs. It copies the
+same native checkpoint, runs normal greedy once per selected case and compares raw tokens,
+EOS, text, errors and prompt identity with preserved records. Parity panels have separate
+kinds and never replace full QA/H3 quality evaluation. `native bench --root IMPORTED_ROOT
+--terminal terminal.r3er --output NEW_ROOT` reports uncompressed size and timing measurements;
+these developer measurements are not machine decision input.
+
+The older named recovery/corpus/harness commands retain their legacy JSON interfaces;
+they are not an automatic fallback from native readers. Product JSON IPC and opaque
+legacy config/request IDs remain. This is a bounded evaluation/control migration, not
+whole-project JSON removal or model quality acceptance.

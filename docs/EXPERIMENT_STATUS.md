@@ -1,5 +1,43 @@
 # 진단 및 구현 상태
 
+## J1–J3 종료 — binary 저장에서 별도 process 재개·close까지 검증
+
+2026-09-18 / EXECUTED_THIS_RUN. J4 원자료/parity/성능 검증은 다음 단계다.
+BR01_BINARY_FLOAT_IDENTITY=VERIFIED, BR02_NATIVE_CHECKPOINT_BINDING=VERIFIED,
+END_TO_END_NEW_SEGMENT_CLOSE=VERIFIED. 모델 품질 개선/Goal1 승격은 주장하지 않는다.
+테스트 source worktree digest535ea2275e6f21616d188432d5841f956a067e1095b42b36ca51ca2bca97970f,
+debug binary83cd09c480c602c60ae7b27c8c9bde39197c4e3a051cde832ea2cecfcb9d7df3.
+Rust/cargo1.98.1, Accelerate, compute threads1, locked/offline. 원본 보존, SMALL optimizer0.
+
+실제 random-init TINY 준비24회×2와 연속/분할/취소 회귀10회×3, 기존 quick의
+native Adam 회귀19회를 합쳐 TINY97/128, scalar0이다. 첫 준비/회귀 이후 input binding을
+보완하면서 새 준비 디렉터리와 동일 회귀를 다시 실행했다. 실패한 fixture 초기화1건은
+native corpus lineage 검사에서 중단됐고 optimizer0이었다. 컴파일 실패를 실행 테스트로
+합산하지 않았다. 새 binary 경로의 실제 생성92/자체 teacher92; 기존 quick의 다른
+generation 회귀 호출은 별도 총계 계측하지 않았으며 이92에 포함하지 않는다.
+
+직접 unit2 PASS 후 추가 close 음성 fixture를 포함한 unit3 PASS, subprocess 회귀1 PASS를
+두 차례 실행했다. 안정된 worktree에서 quick은 한 번 실행,53 tests PASS이며 fmt/check/
+clippy -D warnings도 PASS다. 소스 정적 검사나 과거 실행 결과를 이53에 더하지 않았다.
+증거: `artifacts/binary-eval-resume-20260918/j3-unit3.log`, `j3-unit-final.log`,
+`j3-e2e-01.log`, `j3-e2e-02.log`, `quick-final/`, `quick-e2e/`.
+
+연속/평가 저장 직후 종료/checkpoint 저장 직후 종료/최종 평가 시간 분할은 서로 다른
+OS process·segment에서 완료했다. 같은 부모에서 실제2 updates 후 모델
+60c60eba458a00ec2e1dbc3df55a6d4ffc2848111a25aa3d292846da43765dec,
+Adam/cursor/token 소비/raw tokens/guard가 같고 판정은2건씩 정확히 한 번 적용됐다.
+문제 f64의4576864117419147264 bits는 raw writer→reader→decision→close에서 보존됐다.
+원 segment의 없는 step 파일을 요구하지 않으며 실제 final 또는 후속 segment의 명시
+native 참조를 검증한다. 취소+시간, 품질+취소+시간은 다음 optimizer0, resume=false다.
+complete wrong-output fixture는 integrity 오류 없이 candidate=false로 닫고, 누락/중복/
+다른 case/손상 native·raw·decision/최종 취소는 정상 comparison 발행을 거부한다.
+
+새 canonical loader의 JSON sidecar read/write는0이며, 격리 회귀 root에는 `.r3er`와
+`.r3m`만 존재한다. transient 기존 teacher 계산 adapter와 호환용 config/request ID의
+JSON 사용은 남아 있다. 기존 이름의 legacy recovery/corpus/harness writer도 그대로이며,
+새 native loader가 이 경로로 fallback하지 않는다. 저장 형식과 잔존 경계는 기존
+STORAGE_FORMAT/RUNBOOK에 기록했다. J4와 독립 검토는 아직 NOT_RUN/INDEPENDENT_PENDING.
+
 ## 현재 J0 종료 — binary 평가/재개 수리의 두 결함 재현
 
 2026-09-18 / R3-BINARY-EVAL-RESUME-1.0 / EXECUTED_THIS_RUN, INDEPENDENT_PENDING.

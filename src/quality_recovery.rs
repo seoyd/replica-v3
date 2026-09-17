@@ -5,6 +5,8 @@ use replica_v3::{model::ModelRequest, neural::checkpoint::Loaded};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, io::Write, path::PathBuf, sync::Arc, time::Duration};
+#[path = "experiment_record.rs"]
+mod experiment_record;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -217,6 +219,11 @@ impl RunControl {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Typed binary experiment records, explicit legacy import and verified native resume.
+    Native {
+        #[command(subcommand)]
+        action: experiment_record::Action,
+    },
     /// Conditional F/N registration after a closed, safe, improving A1 comparison.
     ProgressRenewal {
         #[arg(long)]
@@ -582,10 +589,13 @@ pub(super) fn summarize(rows: &[Value]) -> Result<Value> {
         first_eos += usize::from(
             row["generation"]["finish"] == "stop" && row["generation"]["generated"] == 1,
         );
-        let matched = row["actual"].is_string()
-            && row["actual"] == row["expected"]
-            && row["generation"]["finish"] == "stop"
-            && error.is_empty();
+        let matched = row["expected"].is_string()
+            && strict_answer_match(
+                row["actual"].as_str(),
+                row["expected"].as_str().unwrap_or_default(),
+                row["generation"]["finish"] == "stop",
+                !error.is_empty(),
+            );
         if row["exact_match"] != matched {
             return Err(Error::Corrupt("strict EM ledger mismatch".into()));
         }
@@ -640,6 +650,9 @@ fn registry(path: &Path) -> Result<Value> {
     )
 }
 pub fn run(command: Command) -> Result<()> {
+    if let Command::Native { action } = command {
+        return experiment_record::command(action);
+    }
     let mut budget = RunControl::command(matches!(
         &command,
         Command::Arm { .. } | Command::SkillRun { .. } | Command::ProgressArm { .. }
@@ -654,6 +667,7 @@ pub fn run(command: Command) -> Result<()> {
     }
     budget.check("command_started")?;
     let outcome = match command {
+        Command::Native { .. } => unreachable!("native command dispatched before legacy control"),
         Command::ProgressRenewal {
             experiment,
             harness,
@@ -1034,6 +1048,9 @@ fn components(actual: Option<&str>, expected: &str, provided: &[i64]) -> Value {
     json!({"entity":e.map(|e|a.is_some_and(|a|a.0==e.0)),"context":e.map(|e|a.is_some_and(|a|a.1==e.1)),"value":e.map(|e|a.is_some_and(|a|a.2==e.2)),
         "citation_exact":ids.as_ref().is_some_and(|a|Some(a)==expected_ids.as_ref()),"citation_in_provided":ids.as_ref().map(|a|a.iter().all(|id|provided.contains(id))),"citation_nonempty":ids.as_ref().is_some_and(|a|!a.is_empty())})
 }
+fn strict_answer_match(actual: Option<&str>, expected: &str, eos: bool, error: bool) -> bool {
+    actual.is_some_and(|text| text == expected) && eos && !error
+}
 pub(super) fn evaluate_one(
     loaded: &Loaded,
     e: &Episode,
@@ -1106,11 +1123,12 @@ pub(super) fn evaluate_one(
         row["prompt_digest"] = json!(digest(&prompt.token_ids)?);
         row["native_prompt_digest"] = json!(prompt.token_digest);
         row["prompt_length"] = json!(prompt.token_ids.len());
-        row["exact_match"] = json!(
-            text.as_deref() == Some(&e.answer)
-                && generated.as_ref().is_some_and(|g| g.finish == "stop")
-                && error.is_none()
-        );
+        row["exact_match"] = json!(strict_answer_match(
+            text.as_deref(),
+            &e.answer,
+            generated.as_ref().is_some_and(|g| g.finish == "stop"),
+            error.is_some()
+        ));
         row["components"] = components(text.as_deref(), &e.answer, &prompt.provided);
         row["actual"] = json!(text);
         row["generation"] = json!(generated);
@@ -3888,18 +3906,31 @@ fn progress_guard(p: &Value, e: &Value, streak: &mut [u64; 3]) -> Result<bool> {
     }
     let errors = progress_u64(&e["dev"], "generation_error_cases")?
         + progress_u64(&e["watch"], "generation_error_cases")?;
+    Ok(guard_counts(
+        [
+            progress_u64(p, "baseline_dev")?,
+            progress_u64(p, "baseline_watch")?,
+            progress_u64(p, "baseline_errors")?,
+        ],
+        [
+            progress_u64(&e["dev"], "exact_matches")?,
+            progress_u64(&e["watch"], "exact_matches")?,
+            errors,
+        ],
+        streak,
+        288,
+    ))
+}
+fn guard_counts(baseline: [u64; 3], current: [u64; 3], streak: &mut [u64; 3], total: u64) -> bool {
     let bad = [
-        progress_u64(p, "baseline_dev")?.saturating_sub(progress_u64(&e["dev"], "exact_matches")?)
-            >= 26,
-        progress_u64(p, "baseline_watch")?
-            .saturating_sub(progress_u64(&e["watch"], "exact_matches")?)
-            >= 4,
-        errors >= progress_u64(p, "baseline_errors")? + 6,
+        baseline[0].saturating_sub(current[0]) >= 26,
+        baseline[1].saturating_sub(current[1]) >= 4,
+        current[2] >= baseline[2].saturating_add(6),
     ];
     for (s, b) in streak.iter_mut().zip(bad) {
         *s = if b { *s + 1 } else { 0 };
     }
-    Ok(streak.iter().any(|n| *n >= 2) || errors * 5 >= 288)
+    streak.iter().any(|n| *n >= 2) || current[2].saturating_mul(5) >= total
 }
 fn progress_time_resume(r: &Value) -> bool {
     r["reason"] == "TIME_BUDGET"

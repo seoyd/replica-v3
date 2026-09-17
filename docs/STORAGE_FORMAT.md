@@ -245,3 +245,74 @@ lexical은 모든 단어가3자 미만인 기존 정규화 원문 prefix의 전�
 UNSUPPORTED/NOT_COMPARABLE이다. append/live transaction/동시 쓰기/recovery는
 NOT_IMPLEMENTED이다. archive와 SQLite 모두 명시된 각 snapshot의 원본 data source이며
 archive가 운영 DB의 대체 backup/recovery라고 주장하지 않는다.
+
+## Training evaluation records: R3ER v1
+
+The training executable's `recovery native` commands use custom, uncompressed binary
+records. Product memory and native `.r3m` weights/Adam/tokenizer formats are unchanged.
+`experiment_record.rs` uses the existing bounded Reader, canonical varints and immutable
+same-filesystem publisher. It is not imported by product inference.
+
+Header: magic `R3ER` (4 bytes), version u16 LE=1, record kind u8, byte-order u8=1,
+payload length u64 LE, SHA256 (32 bytes), followed by the exact typed body. The hash
+covers `R3ER-record-v1\0`, the kind byte and the body. The entire file has a separate
+physical SHA256 in every FileRef. Evaluation content excludes mutable checkpoint
+locators, decisions and its own digest. No JSON serialization participates in this hash.
+
+| Kind | Ordered typed body |
+| --- | --- |
+| 1 Inputs | contract, run/policy/frozen/source digests, parent native reference, historical/TINY flags, original-file provenance, owned Episodes, train ordinals, panel specs, immutable batch tape, evaluation steps, LR policy/offset, baseline counters, QA floor |
+| 2 Evaluation | run/input/source/model/tokenizer/architecture digests, absolute step/new updates, panel kind, expected count, ordered rows |
+| 3 Decision | run/input/dev/watch content digests, absolute step, guard-before/after counters, applied and quality-stop flags |
+| 4 Segment | run/input/segment, optional parent terminal and durable native, evaluation/native mappings, decision refs, guard, all observed stop reasons, completion/resume/candidate/save-error, actual update/generation/teacher counts, elapsed/cleanup scalars, actual draws |
+| 5 Comparison | run/input/terminal binding, independently recomputed panel scores, guard, candidate/historical flags |
+
+Fixed digests are 32 bytes. Other unsigned integers use canonical unsigned LEB128;
+signed timestamps/IDs use zigzag. Text is length-prefixed strict UTF-8. Vectors retain
+order, lengths precede allocation, option/boolean tags accept only 0/1. Scalar tags
+0/1 hold IEEE754 f32/f64 LE bits, preserving signed zero and subnormals. Tags2/3 preserve
+nonfinite failure bits; successful teacher/diagnostic scalars must be finite.
+Unknown version/kind/option tags, overflow, extra trailing bytes and duplicate membership
+are rejected. Bounds: file128MiB, owned cases16384, panel rows512, tokens per row2048,
+text262144 bytes, evidence IDs256, tape512, terminal chain64. Actual row limits also
+must match the owned request and tokenizer preparation. Production panels remain
+Dev256/Watch32/Cross512/Ordinary400, with ordinary336 QA and64 auxiliary frozen at import.
+Panel tags0–3 identify these four panels. Tags4/5 are explicit DevParity16/OrdinaryParity16;
+they cannot satisfy the ordinary H3/S4 close gates. TINY test specs are restricted to
+native TINY profiles and cannot become product candidates.
+
+An owned Episode contains the exact request, evidence, answer and metadata. EvalRow
+references its ordinal/content digest and records typed prompt hashes/length/provided/
+excluded IDs, raw tokens, EOS position, finish/error/completion/interruption, timeout,
+generation timing/KV/workspace/retention observations and all existing teacher diagnostic
+values. Actual text and bytes are reconstructed using the bound tokenizer, without
+trimming or lossy decode. Gold is used only after native generation. Integer counters,
+entity/event/base4/4 and QA/auxiliary scores are independently derived from fixed panels.
+
+CheckpointRef binds relative locator, physical SHA256, run/segment, actual model/tokenizer/
+architecture, absolute step, optional Adam digest and input/target/sampler counters.
+Absence of Adam denotes an inference-only reference and cannot resume. The resolver
+loads the actual native file, checks these identities and reads its physical hash again.
+Root escape and symlink escape are rejected; there is no filename or JSON fallback.
+Original segment final and later segment step files can have different physical hashes
+while binding the same evaluation model/step. Explicit lineage permits that re-reference.
+
+Evaluation, decision, native preservation and terminal publication are separate durable
+writes, not a multi-file transaction. Completed pending decisions are resolved before
+another update; applied decisions must reproduce the same before/after state exactly.
+Earlier evaluation decisions cannot be omitted when a later optimizer clock is observed.
+Time-only resumable stops preserve the tape cursor. Cancellation, quality, integrity,
+partial evaluation and save errors cannot become clean time resumes. A close failure
+publishes a separate immutable `close-stop.r3er`; it blocks a later normal close.
+Cooperative checks cover generation, teacher, update, preservation and close. Synchronous
+tensor work and fsync are not forcibly preempted; command1800s and cleanup120s are bounds
+checked at safe boundaries, not hard real-time guarantees.
+
+Legacy JSON is read only by explicit import/audit and noncanonical measurement tools.
+Original file digests and policy/data/native lineage are retained in the owned snapshot;
+imported evaluation source fields identify their exact historical raw file. The import
+report records converter source, serde_json1.0.151 default/std/alloc and the absence of
+float_roundtrip. Historical in-memory float bits remain UNKNOWN/LEGACY_ROUNDTRIP_UNPROVEN.
+A current binary hash does not retroactively establish an absent historical receipt.
+Imported terminals describe the completed read-only audit, never the eligibility of the
+old run; original flags/files remain unchanged and historical candidate/resume are false.

@@ -43,7 +43,7 @@ pub fn decode_varint(bytes: &[u8]) -> Result<(u64, usize)> {
     }
     Err(corrupt("varint overflow"))
 }
-pub(crate) fn put_bytes(out: &mut Vec<u8>, b: &[u8]) {
+pub fn put_bytes(out: &mut Vec<u8>, b: &[u8]) {
     put_varint(out, b.len() as u64);
     out.extend_from_slice(b);
 }
@@ -190,18 +190,18 @@ fn envelope(body: &[u8], compression: Compression, version: u16) -> Result<Vec<u
     out.extend_from_slice(stored);
     Ok(out)
 }
-pub(crate) struct Reader<'a> {
+pub struct Reader<'a> {
     b: &'a [u8],
     pos: usize,
 }
 impl<'a> Reader<'a> {
-    pub(crate) fn new(b: &'a [u8]) -> Self {
+    pub fn new(b: &'a [u8]) -> Self {
         Self { b, pos: 0 }
     }
-    pub(crate) fn finished(&self) -> bool {
+    pub fn finished(&self) -> bool {
         self.pos == self.b.len()
     }
-    pub(crate) fn take(&mut self, n: usize) -> Result<&'a [u8]> {
+    pub fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         let end = self
             .pos
             .checked_add(n)
@@ -213,10 +213,10 @@ impl<'a> Reader<'a> {
         self.pos = end;
         Ok(out)
     }
-    pub(crate) fn byte(&mut self) -> Result<u8> {
+    pub fn byte(&mut self) -> Result<u8> {
         Ok(self.take(1)?[0])
     }
-    pub(crate) fn var(&mut self) -> Result<u64> {
+    pub fn var(&mut self) -> Result<u64> {
         let (v, n) = decode_varint(&self.b[self.pos..])?;
         self.pos += n;
         Ok(v)
@@ -233,14 +233,14 @@ impl<'a> Reader<'a> {
             Ok(n)
         }
     }
-    pub(crate) fn opt<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<Option<T>> {
+    pub fn opt<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<Option<T>> {
         match self.byte()? {
             0 => Ok(None),
             1 => f(self).map(Some),
             _ => Err(corrupt("option tag")),
         }
     }
-    pub(crate) fn bytes(&mut self, max: usize) -> Result<Vec<u8>> {
+    pub fn bytes(&mut self, max: usize) -> Result<Vec<u8>> {
         let n = usize::try_from(self.var()?).map_err(|_| corrupt("length overflow"))?;
         if n > max {
             return Err(corrupt("field too large"));
@@ -264,7 +264,7 @@ impl<'a> Reader<'a> {
             timeout_ms: self.var()?,
         })
     }
-    pub(crate) fn bool(&mut self) -> Result<bool> {
+    pub fn bool(&mut self) -> Result<bool> {
         match self.byte()? {
             0 => Ok(false),
             1 => Ok(true),
@@ -409,7 +409,7 @@ pub fn decode(bytes: &[u8]) -> Result<Event> {
 
 /// Immutable file publication. The callback must validate the complete owned file before return.
 /// A directory-sync failure after publication can leave the destination present; no power-loss guarantee.
-pub(crate) fn publish_new<T>(
+pub fn publish_new<T>(
     path: &std::path::Path,
     write: impl FnOnce(&mut std::fs::File, &std::path::Path) -> Result<T>,
 ) -> Result<T> {
