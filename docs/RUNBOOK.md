@@ -623,3 +623,23 @@ get/graph 중앙값은 약6% 느렸다. 저장용 읽기 전용 archive 기본�
 validate archive-measure NEW_DIRECTORY는 사용자 DB가 아닌 별도10,000건 합성 fixture만
 만들어 비교한다. validate archive-read-probe PATH sqlite|archive는 새 프로세스 open과
 첫 조회를 측정하며 OS cache를 강제로 비우지 않는다. 상세 실측은 EXPERIMENT_STATUS.md.
+# Read-only state/data/result repair observations
+
+After the boundary quick checks pass, use the existing training executable's explicit
+legacy mode. Preserve original experiment directories; the output must be new.
+
+```sh
+VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 target/release/replica-train recovery progress-reaudit --experiment artifacts/h3-controlled-20260917/a2 --output artifacts/state-data-result-20260917/reaudit
+VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 target/release/replica-train recovery progress-reaudit --experiment artifacts/h3-controlled-20260917/a2 --output artifacts/state-data-result-20260917/reaudit --observe F16
+VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 target/release/replica-train recovery progress-reaudit --experiment artifacts/h3-controlled-20260917/a2 --output artifacts/state-data-result-20260917/reaudit --observe N16
+VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 target/release/replica-train recovery progress-reaudit --experiment artifacts/h3-controlled-20260917/a2 --output artifacts/state-data-result-20260917/reaudit --observe N256
+```
+
+Reaudit checks immutable policies, frozen inputs, native endpoints and all existing complete
+raw panels, then independently rescores. It grants no historical candidate/resume permission.
+Observations require the completed reaudit receipt. F16/N16 register the first eight exact
+and eight incorrect dev rows before generation. N256 is a single post-hoc DEVELOPMENT
+observation of the existing step-0256 native artifact, reusing validated dev and generating
+only missing CROSS512/ordinary400. Each observation directory is create-new; failed observations
+block further generation. Maximum new calls944 with reused dev, SMALL optimizer0; no checkpoint
+sweep, seal opening, model installation, budget renewal or operating pointer change.

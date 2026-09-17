@@ -412,6 +412,7 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                 ("replica-train", "repair_rf"),
                 ("replica-train", "skill_"),
                 ("replica-train", "progress_"),
+                ("replica-train", "state_data_"),
             ] {
                 r.cargo(
                     "test",

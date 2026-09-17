@@ -1,5 +1,60 @@
 # 진단 및 구현 상태
 
+## 현재: 상태·자료·raw 판정 경계 수리 — B0/B1/B2/B3 검증 종료
+
+2026-09-18 / R3-H3-STATE-DATA-RESULT-1.0 / IMPLEMENTER_REPORT, INDEPENDENT_PENDING.
+Entry source bf705ad823d132a2f91e3df7323d49c3c23e2ee4, main, origin seoyd/replica-v3;
+tracked clean, original untracked work retained. No active model process at entry.
+Installed Rust/cargo1.98.1, locked offline Accelerate builds. New SMALL optimizer calls0.
+Source, native model content/physical hashes and execution binaries remain separate identities.
+
+SD-01: the actual progress-arm evaluation boundary now records a policy/model/step/panel/
+evaluation key, durable guard-before, computed guard-after and the applied identity.
+Pending complete decisions reconcile before the next optimizer, including time resume;
+applied decisions validate without incrementing streaks again. Zero/parent evaluation is
+excluded from streak consumption. Partial, ambiguous legacy or conflicting digest/model/
+clock state fails closed. Quality/time/cancel observations remain sticky. Immutable raw,
+decision sidecar and terminal digest are linked; separate writes are not called a filesystem
+transaction. Existing cooperative tensor/fsync limits still apply.
+
+SD-02: baseline, prepare, renewal, new/resumed arm, final ordinary and close now share
+frozen-byte/manifest/policy validation and owned data. Ordinary336+aux64/watch32, H3 dev256,
+CROSS512, A0/frozen, source/current train/dev and A2 parent comparison identities are checked.
+The existing renewal generator takes the already verified corpus snapshot rather than
+reopening its path; generation/data grammar is unchanged. replay_cases reuses the same
+frozen corpus binding. No user corpus, model, storage format or model mathematics changed.
+
+SD-03: complete ordered raw rows bind original question/evidence/answer/metadata, prepared
+prompt, tokenizer-decoded bytes, EOS/finish/error and component scores before rescoring.
+First byte/field mismatch is independently recalculated from raw bytes. New panel/file
+receipts bind source split, model, tokenizer, policy, evaluator source and native step.
+Intermediate dev/watch and final CROSS/ordinary are verified before ranking. Original
+endpoint cancellation/incompleteness/quality stops cannot be waived by close. Strict close
+rejects absent receipts; explicit read-only reaudit records current bindings without
+backfilling historical files. Failed close emits a separate failure receipt, never success.
+
+RED: evaluation raw-save→TIME_BUDGET lost the pending guard in the unchanged extracted
+orchestration (b1-red.log). A separate baseline-source checkout with fixture helpers and
+regressions, leaving its close implementation unchanged, accepted both empty CROSS arrays
+and changed ordinary content (b2-b3-baseline-red.log,2 failed assertions). These are dynamic
+reproductions, not compilation failures and not evidence of actual F/N score contamination.
+GREEN: seven direct state/data/panel regression tests pass, including positive complete close,
+normal TINY native time-split model/Adam/sampler parity, corrupt pending decisions, duplicate
+application, simultaneous stops, all entry data rejection, renewal pre-generation rejection,
+raw tampering and sticky read-only legacy handling. Fixture labels128/256/512 are not actual
+optimizer calls. This run's direct regressions used3 actual TINY optimizer calls; SMALL0.
+The final quick harness executes46 passing tests,0 failed/ignored, with source unchanged;
+its TINY optimizer calls are19 (existing LR10+renewal6 and new time-split3), scalar0.
+Total through B3: actual TINY22, scalar0, SMALL0. Initial fixture-validation/clippy failures
+are retained; they are not classified as the original boundary defects.
+
+Quick source digest f0884561e1c9091d7a905ab836393bc41c1d82910661899ed75b6aec2d33cb1c.
+Evidence root: `artifacts/state-data-result-20260917/` (local only), including entry-status,
+preserved native/data SHA manifests, all RED/GREEN logs, isolated baseline-source reproduction
+and quick/summary.json. CODE/HARNESS checked scope PASS; B4 actual F/N recount and bounded
+fresh-process observations remain next, followed only conditionally by N256 post-hoc diagnosis.
+H3 quality, seal, S4/S5/S6 and Goal1 are not promoted by these tests. No new learning experiment.
+
 현재 작업: R3-H3-CONTROLLED-PROGRESS-1.0의 A0→C/L→조건부 F/N→품질 수용.
 2026-09-17. 이전 R3-CUSTOMIZE-AND-DIAGNOSE-1.0 실행 이력은 아래 보존한다.
 모든 성공 표시는 구현자 확인이며 INDEPENDENT_PENDING이다.

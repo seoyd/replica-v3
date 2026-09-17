@@ -51,6 +51,8 @@ pub(super) struct RunControl {
     #[cfg(test)]
     elapsed_override: Option<Duration>,
     #[cfg(test)]
+    time_boundary: Option<&'static str>,
+    #[cfg(test)]
     #[allow(clippy::type_complexity)]
     hook: Option<Box<dyn FnMut(&str, &Arc<AtomicBool>)>>,
 }
@@ -81,6 +83,8 @@ impl RunControl {
             teacher_calls: 0,
             #[cfg(test)]
             elapsed_override: None,
+            #[cfg(test)]
+            time_boundary: None,
             #[cfg(test)]
             hook: None,
         })
@@ -144,6 +148,10 @@ impl RunControl {
     }
     pub(super) fn check(&mut self, boundary: &str) -> Result<()> {
         #[cfg(test)]
+        if self.time_boundary == Some(boundary) {
+            self.elapsed_override = Some(self.deadline.duration_since(self.start));
+        }
+        #[cfg(test)]
         if let Some(hook) = &mut self.hook {
             hook(boundary, &self.cancel);
         }
@@ -179,7 +187,7 @@ impl RunControl {
     pub(super) fn classify_error(&mut self, e: &Error) {
         if matches!(e, Error::Cancelled) {
             self.observe(StopReason::Cancelled);
-        } else if self.stop.is_none() {
+        } else if matches!(e, Error::Corrupt(_)) || self.stop.is_none() {
             self.observe(StopReason::IntegrityFail);
         }
     }
@@ -242,6 +250,15 @@ pub enum Command {
     ProgressClose {
         #[arg(long)]
         experiment: PathBuf,
+    },
+    /// Recount immutable legacy panels; never changes historical eligibility or resumes learning.
+    ProgressReaudit {
+        #[arg(long)]
+        experiment: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, value_parser=["F16","N16","N256"])]
+        observe: Option<String>,
     },
     /// A0 only: immutable H3 parent replay, ordinary QA, token/QK/exposure and crossed development.
     ProgressBaseline {
@@ -629,7 +646,9 @@ pub fn run(command: Command) -> Result<()> {
     ))?;
     if matches!(
         &command,
-        Command::ProgressBaseline { .. } | Command::ProgressArm { .. }
+        Command::ProgressBaseline { .. }
+            | Command::ProgressArm { .. }
+            | Command::ProgressReaudit { .. }
     ) {
         budget.deadline = budget.start + Duration::from_secs(1800);
     }
@@ -652,6 +671,18 @@ pub fn run(command: Command) -> Result<()> {
             resume,
         } => progress_arm(&experiment, &arm, resume.as_deref(), &mut budget),
         Command::ProgressClose { experiment } => progress_close(&experiment, &mut budget),
+        Command::ProgressReaudit {
+            experiment,
+            output,
+            observe,
+        } => {
+            if let Some(observe) = observe {
+                progress_observe(&experiment, &output, &observe, &mut budget)
+            } else {
+                std::fs::create_dir(&output)?;
+                progress_close_to(&experiment, &output.join("reaudit.json"), true, &mut budget)
+            }
+        }
         Command::ProgressBaseline {
             baseline,
             run,
@@ -1480,12 +1511,7 @@ fn replay_cases(f: &Frozen, panel: &str) -> Result<(Vec<Episode>, Value)> {
         "watch" => (f.watch.clone(), None),
         "failures" => (f.failures.clone(), None),
         "all" => {
-            let (manifest, _, validation) = data::load(&f.corpus)?;
-            if manifest.validation.sha256 != f.validation_hash {
-                return Err(Error::Corrupt(
-                    "frozen/current validation binding mismatch".into(),
-                ));
-            }
+            let (manifest, _, validation) = load_frozen_corpus(f)?;
             (validation, Some(manifest.validation.sha256))
         }
         _ => return Err(Error::Invalid("unknown recovery replay panel".into())),
@@ -1501,6 +1527,127 @@ fn replay_cases(f: &Frozen, panel: &str) -> Result<(Vec<Episode>, Value)> {
         "input_source":if panel=="all" {"validated_current_snapshot"} else {"frozen_panel"}
     });
     Ok((cases, binding))
+}
+
+fn load_frozen_corpus(f: &Frozen) -> Result<(data::CorpusManifest, Vec<Episode>, Vec<Episode>)> {
+    let (m, train, validation) = data::load(&f.corpus)?;
+    if m.validation.sha256 != f.validation_hash || m.train.sha256 != f.train_hash {
+        return Err(Error::Corrupt(
+            "FROZEN_INPUT_MISMATCH: frozen/current validation binding mismatch or train".into(),
+        ));
+    }
+    Ok((m, train, validation))
+}
+fn verified_ordinary(
+    baseline: &Path,
+    expected: Option<&Value>,
+) -> Result<(Frozen, Vec<Episode>, Vec<Episode>, String)> {
+    let bytes = neural::read_bounded(&baseline.join("frozen.json"), 16 * 1024 * 1024)?;
+    let hash = neural::hash(&bytes);
+    if expected.is_some_and(|h| h != &hash) {
+        return Err(Error::Corrupt(
+            "FROZEN_INPUT_MISMATCH: A0/frozen digest".into(),
+        ));
+    }
+    let f: Frozen = serde_json::from_slice(&bytes)?;
+    let (_, train, cases) = load_frozen_corpus(&f)?;
+    let qa = cases
+        .iter()
+        .filter(|e| !e.family.starts_with("copy/"))
+        .count();
+    let unique: BTreeSet<_> = cases.iter().map(|e| &e.id).collect();
+    if f.version != 1
+        || f.watch.len() != 32
+        || cases.len() != 400
+        || qa != 336
+        || unique.len() != 400
+        || f.watch.iter().map(|e| &e.id).collect::<BTreeSet<_>>().len() != 32
+        || f.watch.iter().any(|e| {
+            cases
+                .iter()
+                .find(|c| c.id == e.id)
+                .is_none_or(|c| digest(c).ok() != digest(e).ok())
+        })
+    {
+        return Err(Error::Corrupt(
+            "FROZEN_INPUT_MISMATCH: ordinary336/aux64/watch32 membership".into(),
+        ));
+    }
+    Ok((f, train, cases, hash))
+}
+struct VerifiedProgressInputs {
+    a0: Value,
+    frozen: Frozen,
+    manifest: data::CorpusManifest,
+    train: Vec<Episode>,
+    dev: Vec<Episode>,
+    ordinary: Vec<Episode>,
+    cross: Vec<Episode>,
+    hashes: Value,
+}
+fn load_verified_inputs(a0: &Path, policy: Option<&Value>) -> Result<VerifiedProgressInputs> {
+    let bytes = neural::read_bounded(&a0.join("summary.json"), 16 * 1024 * 1024)?;
+    let a: Value = serde_json::from_slice(&bytes)?;
+    if policy.is_some_and(|p| p["a0_hash"] != neural::hash(&bytes)) {
+        return Err(Error::Corrupt("FROZEN_INPUT_MISMATCH: policy/A0".into()));
+    }
+    let (f, _, ordinary, frozen_hash) =
+        verified_ordinary(&progress_path(&a, "baseline")?, Some(&a["baseline_hash"]))?;
+    let p = policy.unwrap_or(&a);
+    let (manifest, train, dev) = data::load(&progress_path(p, "corpus")?)?;
+    let cross_bytes = neural::read_bounded(&a0.join("cross-development.json"), 16 * 1024 * 1024)?;
+    let cross_hash = neural::hash(&cross_bytes);
+    let cross: Vec<Episode> = serde_json::from_slice(&cross_bytes)?;
+    if manifest.train.sha256 != p["train_hash"]
+        || manifest.validation.sha256 != p["dev_hash"]
+        || a["cross"]["file_sha256"] != cross_hash
+        || policy.is_some_and(|p| p["cross_hash"] != cross_hash)
+        || dev.len() != 256
+        || cross.len() != 512
+        || dev.iter().map(|e| &e.id).collect::<BTreeSet<_>>().len() != 256
+        || cross.iter().map(|e| &e.id).collect::<BTreeSet<_>>().len() != 512
+    {
+        return Err(Error::Corrupt(
+            "FROZEN_INPUT_MISMATCH: corpus/CROSS identity".into(),
+        ));
+    }
+    if p["node"] == "A2" {
+        let receipt = progress_path(p, "parent_receipt")?;
+        let parent_policy = receipt
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| Error::Corrupt("parent policy path".into()))?
+            .join("policy.json");
+        let r = read_json(&receipt)?;
+        let parent = read_json(&parent_policy)?;
+        let prior = parent_policy
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| Error::Corrupt("prior experiment".into()))?;
+        if parent["node"] != "A1"
+            || r["policy_sha256"] != file_hash(&parent_policy)?
+            || p["parent_receipt_sha256"] != file_hash(&receipt)?
+            || p["parent_comparison_hash"] != file_hash(&prior.join("comparison.json"))?
+        {
+            return Err(Error::Corrupt(
+                "FROZEN_INPUT_MISMATCH: A2 parent/policy/comparison".into(),
+            ));
+        }
+        load_verified_inputs(&progress_path(&parent, "a0")?, Some(&parent))?;
+    }
+    let hashes = json!({"a0":neural::hash(&bytes),"frozen":frozen_hash,"ordinary":f.validation_hash,
+        "train":manifest.train.sha256,"dev":manifest.validation.sha256,"cross":cross_hash,
+        "ordinary_cases":digest(&ordinary)?,"watch_cases":digest(&f.watch)?,"dev_cases":digest(&dev)?,"cross_cases":digest(&cross)?});
+    Ok(VerifiedProgressInputs {
+        a0: a,
+        frozen: f,
+        manifest,
+        train,
+        dev,
+        ordinary,
+        cross,
+        hashes,
+    })
 }
 
 // Independent semantic check: only serialized question, original records and status/time.
@@ -3367,7 +3514,8 @@ fn progress_prepare(
 ) -> Result<()> {
     control.check("progress_prepare")?;
     let checked = verified_harness(harness)?;
-    let a = read_json(&a0.join("summary.json"))?;
+    let inputs = load_verified_inputs(a0, None)?;
+    let a = inputs.a0;
     let parent = progress_path(&a, "parent")?;
     let receipt_path = parent.parent().unwrap().join("result.json");
     let receipt = read_json(&receipt_path)?;
@@ -3378,7 +3526,8 @@ fn progress_prepare(
         .as_ref()
         .ok_or_else(|| Error::Invalid("fork needs native Adam".into()))?;
     let corpus = progress_path(&a, "corpus")?;
-    let (manifest, episodes, _) = data::load(&corpus)?;
+    let manifest = inputs.manifest;
+    let episodes = inputs.train;
     if a["a0_pass"] != true
         || a["contract"] != PROGRESS_CONTRACT
         || a["parent_file_sha256"] != file_hash(&parent)?
@@ -3532,13 +3681,14 @@ fn progress_renewal(
             "A2 requires closed safe improving A1 endpoint, not another sweep".into(),
         ));
     }
+    let end = &comparison["endpoints"][selected];
+    let segment = progress_path(end, "segment")?;
+    let mut p = read_json(&segment.parent().unwrap().join("policy.json"))?;
+    let inputs = load_verified_inputs(&progress_path(&p, "a0")?, Some(&p))?;
     let ledger = progress_ledger(root)?;
     if ledger.0 > 1024 {
         return Err(Error::Invalid("A1 update ledger".into()));
     }
-    let end = &comparison["endpoints"][selected];
-    let segment = progress_path(end, "segment")?;
-    let mut p = read_json(&segment.parent().unwrap().join("policy.json"))?;
     if end["policy_sha256"] != file_hash(&segment.parent().unwrap().join("policy.json"))?
         || end["checkpoint_file_sha256"] != file_hash(&segment.join("final"))?
     {
@@ -3557,19 +3707,14 @@ fn progress_renewal(
     {
         return Err(Error::Corrupt("A2 native parent tensor/Adam/clock".into()));
     }
-    let a0 = progress_path(&p, "a0")?;
-    let a = read_json(&a0.join("summary.json"))?;
-    let original = progress_path(&p, "corpus")?;
-    let (_, old, dev) = data::load(&original)?;
-    let mut heldout: Vec<Episode> =
-        serde_json::from_value(read_json(&a0.join("cross-development.json"))?)?;
-    heldout.extend(dev);
-    let frozen = load(&progress_path(&a, "baseline")?.join("frozen.json"))?;
-    let (_, _, ordinary) = data::load(&frozen.corpus)?;
-    heldout.extend(ordinary);
+    let mut heldout = inputs.cross;
+    heldout.extend(inputs.dev.clone());
+    heldout.extend(inputs.ordinary);
+    let original_data = (inputs.manifest, inputs.train, inputs.dev);
+    control.check("progress_renewal_data_verified")?;
     std::fs::create_dir(output)?;
-    let mut generated = data::renewed_copy_curricula(&original, &heldout, output, seed)?;
-    let tapes = progress_renewal_tapes(&old, state.sampler_state)?;
+    let mut generated = data::renewed_copy_curricula(&original_data, &heldout, output, seed)?;
+    let tapes = progress_renewal_tapes(&original_data.1, state.sampler_state)?;
     p["node"] = json!("A2");
     p["run_id"] = json!(output);
     p["parent"] = json!(segment.join("final"));
@@ -3754,6 +3899,139 @@ fn progress_time_resume(r: &Value) -> bool {
         && r["new_updates"].as_u64().is_some_and(|n| n <= 512)
 }
 
+// The same durable evaluation boundary is used by new execution and time resume.
+#[derive(Clone, Serialize, Deserialize)]
+struct EvaluationDecision {
+    key: String,
+    evaluation_digest: String,
+    panel_digest: String,
+    before: [u64; 3],
+    after: Option<[u64; 3]>,
+    quality_stop: Option<bool>,
+    applied: Option<String>,
+}
+fn evaluation_identity(p: &Value, e: &Value) -> Result<(String, String, String)> {
+    let mut raw = e.clone();
+    raw.as_object_mut()
+        .ok_or_else(|| Error::Corrupt("evaluation object".into()))?
+        .remove("decision");
+    let content = digest(&raw)?;
+    let panel = digest(&json!([e["dev_rows"], e["watch_rows"]]))?;
+    let key = digest(&json!([
+        p["run_id"],
+        digest(p)?,
+        e["model_content_hash"],
+        e["new_updates"],
+        panel,
+        content
+    ]))?;
+    Ok((key, content, panel))
+}
+fn reconcile_evaluation_decision(
+    p: &Value,
+    n: usize,
+    model: &str,
+    last: &mut Value,
+    streak: &mut [u64; 3],
+    control: &mut RunControl,
+) -> Result<bool> {
+    if last.is_null() || last["new_updates"] == 0 {
+        return Ok(false); // Registered parent observation does not consume a guard streak.
+    }
+    let step = progress_u64(last, "new_updates")? as usize;
+    if last["final_evaluation_complete"] != true
+        || step > n
+        || (step == n && last["model_content_hash"] != model)
+    {
+        return Err(Error::Corrupt(
+            "INTEGRITY_FAIL: incomplete/step/model evaluation".into(),
+        ));
+    }
+    let mut decision: EvaluationDecision = serde_json::from_value(last["decision"].clone())
+        .map_err(|_| Error::Corrupt("AMBIGUOUS_GUARD_STATE".into()))?;
+    let (key, content, panel) = evaluation_identity(p, last)?;
+    if (
+        decision.key.as_str(),
+        decision.evaluation_digest.as_str(),
+        decision.panel_digest.as_str(),
+    ) != (key.as_str(), content.as_str(), panel.as_str())
+    {
+        return Err(Error::Corrupt(
+            "INTEGRITY_FAIL: evaluation decision digest".into(),
+        ));
+    }
+    let mut after = decision.before;
+    let stop = progress_guard(p, last, &mut after)?;
+    if let Some(applied) = &decision.applied {
+        if applied != &key
+            || decision.after != Some(after)
+            || decision.quality_stop != Some(stop)
+            || *streak != after
+        {
+            return Err(Error::Corrupt("INTEGRITY_FAIL: applied guard state".into()));
+        }
+    } else {
+        if step != n
+            || *streak != decision.before
+            || decision.after.is_some()
+            || decision.quality_stop.is_some()
+        {
+            return Err(Error::Corrupt("INTEGRITY_FAIL: pending guard state".into()));
+        }
+        decision.after = Some(after);
+        decision.quality_stop = Some(stop);
+        decision.applied = Some(key);
+        *streak = after;
+        last["decision"] = serde_json::to_value(decision)?;
+    }
+    if stop {
+        control.observe(StopReason::QualityGuard);
+    }
+    Ok(stop)
+}
+#[allow(clippy::too_many_arguments)]
+fn progress_evaluation_boundary(
+    p: &Value,
+    n: usize,
+    model: &str,
+    evaluation: Option<Value>,
+    last: &mut Value,
+    streak: &mut [u64; 3],
+    segment: &Path,
+    control: &mut RunControl,
+    checkpoint: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    if let Some(e) = evaluation {
+        *last = e;
+        if last["final_evaluation_complete"] == true {
+            let (key, evaluation_digest, panel_digest) = evaluation_identity(p, last)?;
+            last["decision"] = serde_json::to_value(EvaluationDecision {
+                key,
+                evaluation_digest,
+                panel_digest,
+                before: *streak,
+                after: None,
+                quality_stop: None,
+                applied: None,
+            })?;
+        }
+        save(&segment.join(format!("eval-{n:04}.json")), last)?;
+        control.check("progress_eval_recorded")?;
+    }
+    let pending =
+        !last.is_null() && last["new_updates"] != 0 && last["decision"]["applied"].is_null();
+    reconcile_evaluation_decision(p, n, model, last, streak, control)?;
+    if pending {
+        save(
+            &segment.join(format!("decision-{n:04}.json")),
+            &last["decision"],
+        )?;
+        checkpoint()?;
+        let _ = control.check("progress_eval_checkpoint");
+    }
+    control.stop_result()
+}
+
 fn progress_arm(
     root: &Path,
     arm: &str,
@@ -3772,6 +4050,7 @@ fn progress_arm(
     let output = root.join(arm);
     let policy_path = output.join("policy.json");
     let p = read_json(&policy_path)?;
+    let inputs = load_verified_inputs(&progress_path(&p, "a0")?, Some(&p))?;
     for (i, a) in arms.iter().enumerate() {
         if pair["policy_hashes"][i]
             != file_hash(&root.join(a.as_str().unwrap()).join("policy.json"))?
@@ -3809,9 +4088,12 @@ fn progress_arm(
     if p["node"] == "A2" && p["coordinates_hash"] != file_hash(&output.join("coordinates.json"))? {
         return Err(Error::Corrupt("renewal replay coordinates changed".into()));
     }
-    let a = read_json(&a0.join("summary.json"))?;
-    let frozen = load(&progress_path(&a, "baseline")?.join("frozen.json"))?;
-    let (manifest, episodes, dev) = data::load(&progress_path(&p, "corpus")?)?;
+    let frozen = &inputs.frozen;
+    let manifest = &inputs.manifest;
+    let episodes = &inputs.train;
+    let dev = &inputs.dev;
+    let ordinary_cases = &inputs.ordinary;
+    let cross_cases = &inputs.cross;
     if p["train_hash"] != manifest.train.sha256 || p["dev_hash"] != manifest.validation.sha256 {
         return Err(Error::Corrupt("frozen experiment corpus changed".into()));
     }
@@ -3831,6 +4113,8 @@ fn progress_arm(
         if !progress_time_resume(&previous)
             || previous["policy_sha256"] != pair["policy_hashes"][arm_index]
             || previous["checkpoint_file_sha256"] != file_hash(&path.join("final"))?
+            || previous["evaluation_decision_digest"]
+                != digest(&previous["last_evaluation"]["decision"])?
         {
             return Err(Error::Invalid("only matching clean time stop may resume; closed/failed parent requires explicit fork".into()));
         }
@@ -3892,7 +4176,7 @@ fn progress_arm(
             "fork/resume tensor, Adam, clock or tape mismatch".into(),
         ));
     }
-    let framed = samples(&episodes, &l.tokenizer, 512)?;
+    let framed = samples(episodes, &l.tokenizer, 512)?;
     let c = progress_config(&initial);
     c.validate(l.model.config.context)?;
     if resume.is_some() && serde_json::to_value(&state.config)? != serde_json::to_value(&c)? {
@@ -3944,6 +4228,7 @@ fn progress_arm(
     let mut cross = Value::Null;
     let mut ordinary = Value::Null;
     let mut complete = false;
+    let mut panel_receipts = json!({});
     let outcome = (|| -> Result<()> {
         if last.is_null() {
             if p["node"] == "A2" {
@@ -3957,6 +4242,19 @@ fn progress_arm(
                 {
                     return Err(Error::Corrupt("derived A2 zero provenance".into()));
                 }
+                let parent_policy_path = path
+                    .parent()
+                    .and_then(Path::parent)
+                    .ok_or_else(|| Error::Corrupt("zero parent policy".into()))?
+                    .join("policy.json");
+                let parent_policy = read_json(&parent_policy_path)?;
+                let parent_inputs = load_verified_inputs(
+                    &progress_path(&parent_policy, "a0")?,
+                    Some(&parent_policy),
+                )?;
+                verify_progress_evaluation(&parent_policy, &last, &parent_inputs, &l, true)?;
+                last.as_object_mut().unwrap().remove("bindings");
+                last.as_object_mut().unwrap().remove("decision");
                 last["derived_parent_new_updates"] = last["new_updates"].clone();
                 last["new_updates"] = json!(0);
                 last["evidence_level"] = p["zero_evaluation"].clone();
@@ -3972,26 +4270,67 @@ fn progress_arm(
                 "final_evaluation_complete":true,"model_content_hash":p["initial_model_hash"],"evidence_level":"DERIVED_FROM_A0_IDENTICAL_MODEL",
                 "dev_file_hash":file_hash(&a0.join("normal-dev.json"))?,"watch_file_hash":file_hash(&a0.join("watch32.json"))?});
             }
-            save(&segment.join("eval-0000.json"), &last)?;
+            verify_progress_evaluation(&p, &last, &inputs, &l, true)?;
+            bind_progress_evaluation(&p, &mut last, &inputs, &l)?;
+            record_bound_panel(&segment.join("eval-0000.json"), &last, &mut panel_receipts)?;
         }
         loop {
-            control.check("progress_next_boundary")?;
             let n = state.step - start;
+            if last["new_updates"] == n && n > 0 {
+                verify_progress_evaluation(&p, &last, &inputs, &l, false)?;
+            }
+            progress_evaluation_boundary(
+                &p,
+                n,
+                &l.model.weight_hash()?,
+                None,
+                &mut last,
+                &mut streak,
+                &segment,
+                control,
+                || {
+                    save_arm(
+                        &mut l,
+                        &state,
+                        &adam,
+                        &segment.join(format!("step-{n:04}")),
+                        "RECOVERY_SCREENING",
+                    )
+                },
+            )?;
+            control.check("progress_next_boundary")?;
             if [128, 256, 512].contains(&n)
                 && (last["new_updates"] != n || last["final_evaluation_complete"] != true)
             {
                 l.model.refresh_identity()?;
-                last = skill_evaluation(&l, &dev, &frozen.watch, control)?;
-                last["watch"] = skill_score(
-                    last["watch_rows"]
+                let mut evaluation = skill_evaluation(&l, dev, &frozen.watch, control)?;
+                evaluation["watch"] = skill_score(
+                    evaluation["watch_rows"]
                         .as_array()
                         .ok_or_else(|| Error::Corrupt("watch rows".into()))?,
                 )?;
-                last["new_updates"] = json!(n);
-                last["model_content_hash"] = json!(l.model.weight_hash()?);
-                save(&segment.join(format!("eval-{n:04}.json")), &last)?;
-                control.check("progress_eval_recorded")?;
-                let guarded = progress_guard(&p, &last, &mut streak)?;
+                evaluation["new_updates"] = json!(n);
+                evaluation["model_content_hash"] = json!(l.model.weight_hash()?);
+                bind_progress_evaluation(&p, &mut evaluation, &inputs, &l)?;
+                progress_evaluation_boundary(
+                    &p,
+                    n,
+                    &l.model.weight_hash()?,
+                    Some(evaluation),
+                    &mut last,
+                    &mut streak,
+                    &segment,
+                    control,
+                    || {
+                        save_arm(
+                            &mut l,
+                            &state,
+                            &adam,
+                            &segment.join(format!("step-{n:04}")),
+                            "RECOVERY_SCREENING",
+                        )
+                    },
+                )?;
                 println!(
                     "NODE={} ARM={arm} eval update={n} dev={}/256 entity={} event={} watch={}/32 errors={}+{} streak={streak:?}",
                     p["node"],
@@ -4002,35 +4341,40 @@ fn progress_arm(
                     last["dev"]["generation_error_cases"],
                     last["watch"]["generation_error_cases"]
                 );
-                save_arm(
-                    &mut l,
-                    &state,
-                    &adam,
-                    &segment.join(format!("step-{n:04}")),
-                    "RECOVERY_SCREENING",
-                )?;
-                control.check("progress_eval_checkpoint")?;
-                if guarded {
-                    control.observe(StopReason::QualityGuard);
-                    return control.stop_result();
-                }
             }
             if n == 512 {
-                let cases: Vec<Episode> =
-                    serde_json::from_value(read_json(&a0.join("cross-development.json"))?)?;
-                let rows = evaluate_panel(&l, &cases, control);
+                let rows = evaluate_panel(&l, cross_cases, control);
                 cross = progress_copy_score(&rows, 512)?;
-                save(
+                let binding = bind_progress_panel(
+                    &p,
+                    "cross",
+                    cross_cases,
+                    &inputs.hashes["cross"],
+                    state.step,
+                    &rows,
+                    &l,
+                )?;
+                record_bound_panel(
                     &segment.join("cross.json"),
-                    &json!({"policy":"normal_greedy_v1","score":cross,"rows":rows}),
+                    &json!({"policy":"normal_greedy_v1","score":cross,"rows":rows,"bindings":{"cross":binding}}),
+                    &mut panel_receipts,
                 )?;
                 control.check("progress_cross_recorded")?;
-                let (_, _, cases) = data::load(&frozen.corpus)?;
-                let rows = evaluate_panel(&l, &cases, control);
+                let rows = evaluate_panel(&l, ordinary_cases, control);
                 ordinary = summarize(&rows)?;
-                save(
+                let binding = bind_progress_panel(
+                    &p,
+                    "ordinary",
+                    ordinary_cases,
+                    &inputs.hashes["ordinary"],
+                    state.step,
+                    &rows,
+                    &l,
+                )?;
+                record_bound_panel(
                     &segment.join("ordinary400.json"),
-                    &json!({"policy":"normal_greedy_v1","score":ordinary,"rows":rows}),
+                    &json!({"policy":"normal_greedy_v1","score":ordinary,"rows":rows,"bindings":{"ordinary":binding}}),
+                    &mut panel_receipts,
                 )?;
                 control.check("progress_ordinary_recorded")?;
                 complete = rows.len() == 400
@@ -4124,6 +4468,14 @@ fn progress_arm(
     let adam_hash = optimizer_hash(&adam.moments)?;
     log.sync_all()?;
     let trace_hash = file_hash(&segment.join("trace.jsonl"))?;
+    for n in [0, 128, 256, 512] {
+        let name = format!("eval-{n:04}.json");
+        let path = segment.join(&name);
+        if path.exists() {
+            let raw = read_json(&path)?;
+            panel_receipts[&name] = json!({"sha256":file_hash(&path)?,"bindings":raw["bindings"]});
+        }
+    }
     let mut checkpoint_hash = Value::Null;
     let mut result = finish_arm(control, complete, |reason| {
         save_arm(&mut l, &state, &adam, &segment.join("final"), reason)?;
@@ -4150,9 +4502,10 @@ fn progress_arm(
         "segment_updates":state.step-segment_start.0,"segment_input_tokens":state.consumed_tokens-segment_start.1,"segment_target_tokens":state.target_tokens-segment_start.2,
         "segment_elapsed_seconds":control.start.elapsed().as_secs_f64(),"additional_input_tokens":state.consumed_tokens-start_input,"additional_target_tokens":state.target_tokens-start_target,
         "cumulative_model_step":state.step,"sampler_state":state.sampler_state,"model_content_hash":model_hash,"adam_hash":adam_hash,
-        "last_evaluation":last,"cross":cross,"ordinary":ordinary,"guard_streaks":streak,"raw_development_gate":raw_gate&&control.stop.is_none()&&!cleanup,
+        "last_evaluation":last,"evaluation_decision_digest":digest(&last["decision"])?,"panel_receipts":panel_receipts,
+        "verified_inputs":inputs.hashes,"cross":cross,"ordinary":ordinary,"guard_streaks":streak,"raw_development_gate":raw_gate&&control.stop.is_none()&&!cleanup,
         "candidate_eligible":false,"seal":"NOT_OPENED","goal1_ready":false,"cleanup_limit_exceeded":cleanup,
-        "resume_allowed":control.reason()==Some("TIME_BUDGET") && control.observed==[StopReason::TimeBudget] && ledger.3+control.start.elapsed().as_secs_f64()<7200. && !cleanup && result["checkpoint_saved"]==true,
+        "resume_allowed":control.reason()==Some("TIME_BUDGET") && control.observed==[StopReason::TimeBudget] && last["final_evaluation_complete"]==true && ledger.3+control.start.elapsed().as_secs_f64()<7200. && !cleanup && result["checkpoint_saved"]==true,
         "error":outcome.as_ref().err().map(ToString::to_string)});
     result
         .as_object_mut()
@@ -4220,20 +4573,491 @@ fn progress_pair_delta(a: &[Value], b: &[Value]) -> Result<Value> {
         json!({"case_order":["both_wrong","treatment_gain","treatment_loss","both_correct"],"cases":cells,"base_all_views":groups,"base_count":bases.len(),"statistical_superiority":"NOT_CLAIMED"}),
     )
 }
+struct PanelSpec<'a> {
+    id: &'a str,
+    cases: &'a [Episode],
+    split_hash: &'a str,
+    policy_hash: &'a str,
+    source: &'a str,
+    model: &'a str,
+    step: usize,
+}
+fn panel_binding(spec: &PanelSpec<'_>, rows: &[Value], l: &Loaded) -> Result<Value> {
+    let completed = rows
+        .iter()
+        .filter(|r| r["generation_completed"] == true && r["interruption"].is_null())
+        .count();
+    Ok(
+        json!({"version":"native-panel-v1","panel_id":spec.id,"expected_count":spec.cases.len(),
+        "completed_count":completed,"ordered_id_digest":digest(&spec.cases.iter().map(|e|&e.id).collect::<Vec<_>>())?,
+        "case_content_digest":digest(spec.cases)?,"dataset_digest":spec.split_hash,
+        "model_hash":spec.model,"tokenizer_hash":l.tokenizer.semantic_id(),"model_step":spec.step,
+        "policy_hash":spec.policy_hash,"decoding":"normal_greedy_v1","evaluator_source":spec.source,
+        "raw_rows_digest":digest(rows)?,"complete":rows.len()==spec.cases.len() && completed==spec.cases.len(),
+        "terminal":if rows.len()==spec.cases.len() && completed==spec.cases.len(){"COMPLETE"}else{"INCOMPLETE"}}),
+    )
+}
+fn verify_panel_and_rescore(
+    spec: &PanelSpec<'_>,
+    rows: &[Value],
+    binding: Option<&Value>,
+    l: &Loaded,
+    legacy: bool,
+) -> Result<Value> {
+    if rows.len() != spec.cases.len() || rows.is_empty() {
+        return Err(Error::Corrupt(format!(
+            "INCOMPLETE: {} expected{} actual{}",
+            spec.id,
+            spec.cases.len(),
+            rows.len()
+        )));
+    }
+    verify_historical_rows(spec.cases, rows)?;
+    let actual_binding = panel_binding(spec, rows, l)?;
+    if let Some(binding) = binding {
+        if binding != &actual_binding {
+            return Err(Error::Corrupt(
+                "INTEGRITY_FAIL: panel receipt/model/step/digest".into(),
+            ));
+        }
+    } else if !legacy {
+        return Err(Error::Corrupt(
+            "INTEGRITY_FAIL: missing panel receipt; explicit READ_ONLY_REAUDIT required".into(),
+        ));
+    }
+    let mut verified = rows.to_vec();
+    for ((row, original), e) in verified.iter_mut().zip(rows).zip(spec.cases) {
+        if row["id"] != e.id
+            || row["scene"] != scene(e)
+            || row["family"] != e.family
+            || row["category"] != e.category
+        {
+            return Err(Error::Corrupt(
+                "INTEGRITY_FAIL: ordered membership/metadata".into(),
+            ));
+        }
+        if row["generation_started"] != true
+            || row["generation_completed"] != true
+            || row.get("interruption") != Some(&Value::Null)
+        {
+            return Err(Error::Corrupt(
+                "INCOMPLETE: interrupted/not executed row".into(),
+            ));
+        }
+        let prompt = l.tokenizer.prepare(
+            &e.request,
+            l.model.config.context as u32,
+            &l.model.config.id()?,
+        )?;
+        let raw: Vec<u32> = serde_json::from_value(row["raw_tokens"].clone())?;
+        let eos = raw.iter().position(|id| *id == EOS);
+        let bytes_ids: Vec<_> = raw
+            .iter()
+            .copied()
+            .take_while(|id| *id >= neural::SPECIALS as u32)
+            .collect();
+        if row["request_digest"] != digest(&e.request)?
+            || row["prompt_digest"] != digest(&prompt.token_ids)?
+            || row["native_prompt_digest"] != prompt.token_digest
+            || row["provided"] != json!(prompt.provided)
+            || row["excluded"] != json!(prompt.excluded)
+            || row["prompt_length"] != prompt.token_ids.len()
+            || row["eos_index"] != json!(eos)
+            || row["raw_generated_count"] != raw.len()
+            || row["raw_bytes"] != bytes_receipt(&l.tokenizer, &bytes_ids)
+        {
+            return Err(Error::Corrupt(
+                "INTEGRITY_FAIL: raw prompt/token/bytes/EOS".into(),
+            ));
+        }
+        let control_token = raw
+            .iter()
+            .any(|id| *id < neural::SPECIALS as u32 && *id != EOS);
+        if eos.is_some_and(|i| i + 1 != raw.len())
+            || raw.len() > e.request.limits.max_tokens as usize
+        {
+            return Err(Error::Corrupt("INTEGRITY_FAIL: generation sequence".into()));
+        }
+        let decoded = l.tokenizer.decode(&bytes_ids);
+        if let Some(t) = row.get("teacher_forced_diagnostic_after_generation")
+            && t.get("first_difference_field").is_some()
+        {
+            let bytes = l.tokenizer.decode_bytes(&bytes_ids)?;
+            let position = e
+                .answer
+                .as_bytes()
+                .iter()
+                .zip(&bytes)
+                .position(|(a, b)| a != b)
+                .or_else(|| {
+                    (e.answer.len() != bytes.len()).then_some(e.answer.len().min(bytes.len()))
+                });
+            if t["first_byte_difference"] != json!(position)
+                || t["first_difference_field"] != json!(position.map(|n| field_at(&e.answer, n)))
+            {
+                return Err(Error::Corrupt(
+                    "INTEGRITY_FAIL: first raw difference field".into(),
+                ));
+            }
+        }
+        if !control_token && (eos.is_some() || raw.len() == e.request.limits.max_tokens as usize) {
+            let finish = if eos.is_some() { "stop" } else { "length" };
+            let text = decoded.as_ref().ok();
+            let error = decoded.as_ref().err().map(ToString::to_string);
+            if row["actual"] != json!(text)
+                || row["error"] != json!(error)
+                || row["error_class"] != json!(error.as_ref().map(|_| "strict_utf8"))
+                || row["generation"]["finish"] != finish
+                || row["finish_reason"] != finish
+                || row["generation"]["tokens"] != json!(bytes_ids)
+                || row["generation"]["generated"] != raw.len()
+            {
+                return Err(Error::Corrupt(
+                    "INTEGRITY_FAIL: decode/finish/error mismatch".into(),
+                ));
+            }
+        } else if !row["actual"].is_null()
+            || !row["generation"].is_null()
+            || !row["error"].is_string()
+            || (control_token && row["error_class"] != "control_token")
+        {
+            return Err(Error::Corrupt(
+                "INTEGRITY_FAIL: failed generation receipt".into(),
+            ));
+        }
+        let exact = decoded.as_ref().ok().is_some_and(|s| s == &e.answer)
+            && eos.is_some()
+            && !control_token
+            && row.get("error") == Some(&Value::Null)
+            && row["finish_reason"] == "stop";
+        let c = components(row["actual"].as_str(), &e.answer, &prompt.provided);
+        let whitespace = row["actual"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty() && s.trim().is_empty());
+        if original["exact_match"] != exact
+            || original["components"] != c
+            || original["whitespace_only"] != whitespace
+        {
+            return Err(Error::Corrupt(
+                "INTEGRITY_FAIL: raw score/components mismatch".into(),
+            ));
+        }
+        row["exact_match"] = json!(exact);
+        row["components"] = c;
+    }
+    match spec.id {
+        "ordinary" => summarize(&verified),
+        "cross" => progress_copy_score(&verified, spec.cases.len()),
+        _ => skill_score(&verified),
+    }
+}
+fn verify_score(recorded: &Value, derived: &Value) -> Result<()> {
+    // Floating teacher aggregates are JSON round trips; strict integer scores/gates must match exactly.
+    for (key, value) in derived
+        .as_object()
+        .ok_or_else(|| Error::Corrupt("score object".into()))?
+    {
+        if value.is_f64() {
+            if recorded[key]
+                .as_f64()
+                .zip(value.as_f64())
+                .is_none_or(|(a, b)| (a - b).abs() > 1e-12)
+            {
+                return Err(Error::Corrupt(format!("INTEGRITY_FAIL: score {key}")));
+            }
+        } else if recorded[key] != *value {
+            return Err(Error::Corrupt(format!("INTEGRITY_FAIL: score {key}")));
+        }
+    }
+    Ok(())
+}
+fn record_bound_panel(path: &Path, value: &Value, receipts: &mut Value) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(value)?;
+    neural::write_new(path, &bytes)?;
+    receipts[path.file_name().unwrap().to_str().unwrap()] =
+        json!({"sha256":neural::hash(&bytes),"bindings":value["bindings"]});
+    Ok(())
+}
+fn verify_progress_evaluation(
+    p: &Value,
+    e: &Value,
+    inputs: &VerifiedProgressInputs,
+    l: &Loaded,
+    legacy: bool,
+) -> Result<()> {
+    let n = progress_u64(e, "new_updates")? as usize;
+    let model = e["model_content_hash"]
+        .as_str()
+        .ok_or_else(|| Error::Corrupt("evaluation model".into()))?;
+    let policy_hash = digest(p)?;
+    for (id, cases, hash) in [
+        ("dev", inputs.dev.as_slice(), inputs.hashes["dev"].as_str()),
+        (
+            "watch",
+            inputs.frozen.watch.as_slice(),
+            inputs.hashes["frozen"].as_str(),
+        ),
+    ] {
+        let spec = PanelSpec {
+            id,
+            cases,
+            split_hash: hash.unwrap(),
+            policy_hash: &policy_hash,
+            source: p["source_digest"].as_str().unwrap_or("UNKNOWN"),
+            model,
+            step: progress_u64(&p["initial_state"], "step")? as usize + n,
+        };
+        let rows = e[format!("{id}_rows")]
+            .as_array()
+            .ok_or_else(|| Error::Corrupt("missing evaluation rows".into()))?;
+        let derived = verify_panel_and_rescore(&spec, rows, e["bindings"].get(id), l, legacy)?;
+        verify_score(&e[id], &derived)?;
+    }
+    if e["final_evaluation_complete"] != true {
+        return Err(Error::Corrupt("INCOMPLETE: dev/watch evaluation".into()));
+    }
+    Ok(())
+}
+fn bind_progress_panel(
+    p: &Value,
+    id: &str,
+    cases: &[Episode],
+    hash: &Value,
+    step: usize,
+    rows: &[Value],
+    l: &Loaded,
+) -> Result<Value> {
+    panel_binding(
+        &PanelSpec {
+            id,
+            cases,
+            split_hash: hash
+                .as_str()
+                .ok_or_else(|| Error::Corrupt("panel split hash".into()))?,
+            policy_hash: &digest(p)?,
+            source: p["source_digest"].as_str().unwrap_or("UNKNOWN"),
+            model: &l.model.weight_hash()?,
+            step,
+        },
+        rows,
+        l,
+    )
+}
+fn bind_progress_evaluation(
+    p: &Value,
+    e: &mut Value,
+    inputs: &VerifiedProgressInputs,
+    l: &Loaded,
+) -> Result<()> {
+    let step = progress_u64(&p["initial_state"], "step")? as usize
+        + progress_u64(e, "new_updates")? as usize;
+    for (id, cases, hash) in [
+        ("dev", inputs.dev.as_slice(), &inputs.hashes["dev"]),
+        (
+            "watch",
+            inputs.frozen.watch.as_slice(),
+            &inputs.hashes["frozen"],
+        ),
+    ] {
+        e["bindings"][id] = bind_progress_panel(
+            p,
+            id,
+            cases,
+            hash,
+            step,
+            e[format!("{id}_rows")]
+                .as_array()
+                .ok_or_else(|| Error::Corrupt("evaluation rows".into()))?,
+            l,
+        )?;
+    }
+    Ok(())
+}
+fn read_panel(path: &Path) -> Result<(Value, String)> {
+    let bytes = neural::read_bounded(path, 16 * 1024 * 1024)?;
+    Ok((serde_json::from_slice(&bytes)?, neural::hash(&bytes)))
+}
+fn verify_panel_file(
+    result: &Value,
+    path: &Path,
+    raw: &Value,
+    raw_hash: &str,
+    legacy: bool,
+) -> Result<()> {
+    let name = path.file_name().unwrap().to_str().unwrap();
+    if let Some(receipt) = result["panel_receipts"].get(name) {
+        if receipt["sha256"] != raw_hash || receipt["bindings"] != raw["bindings"] {
+            return Err(Error::Corrupt(
+                "INTEGRITY_FAIL: raw file digest/binding".into(),
+            ));
+        }
+    } else if !legacy {
+        return Err(Error::Corrupt(
+            "INTEGRITY_FAIL: absent raw file receipt; READ_ONLY_REAUDIT only".into(),
+        ));
+    }
+    Ok(())
+}
+fn verify_endpoint_panels(
+    p: &Value,
+    result: &mut Value,
+    segment: &Path,
+    inputs: &VerifiedProgressInputs,
+    legacy: bool,
+    control: &mut RunControl,
+) -> Result<()> {
+    control.check("verify_endpoint_panels")?;
+    let l = checkpoint::load(&segment.join("final"), Device::Cpu, true)?;
+    let state = l
+        .manifest
+        .training
+        .as_ref()
+        .ok_or_else(|| Error::Corrupt("native endpoint training state".into()))?;
+    if result["model_content_hash"] != l.model.weight_hash()?
+        || result["adam_hash"] != optimizer_hash(&l.optimizer)?
+        || result["cumulative_model_step"] != state.step
+        || result["sampler_state"] != state.sampler_state
+        || result["new_updates"]
+            .as_u64()
+            .and_then(|n| p["initial_state"]["step"].as_u64().map(|start| start + n))
+            != Some(state.step as u64)
+        || p["tokenizer_hash"] != l.tokenizer.semantic_id()
+    {
+        return Err(Error::Corrupt(
+            "INTEGRITY_FAIL: endpoint native/model/Adam/step/tokenizer".into(),
+        ));
+    }
+    let evaluation = &result["last_evaluation"];
+    verify_progress_evaluation(p, evaluation, inputs, &l, legacy)?;
+    if evaluation["new_updates"] != result["new_updates"]
+        || evaluation["model_content_hash"] != result["model_content_hash"]
+    {
+        return Err(Error::Corrupt(
+            "INTEGRITY_FAIL: endpoint evaluation identity".into(),
+        ));
+    }
+    if !legacy {
+        if result["evaluation_decision_digest"] != digest(&evaluation["decision"])? {
+            return Err(Error::Corrupt(
+                "INTEGRITY_FAIL: terminal decision binding".into(),
+            ));
+        }
+        let mut copy = evaluation.clone();
+        let mut streak: [u64; 3] = serde_json::from_value(result["guard_streaks"].clone())?;
+        let mut decision_control = RunControl::new(
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(1),
+            u64::MAX,
+        )?;
+        let stop = reconcile_evaluation_decision(
+            p,
+            progress_u64(result, "new_updates")? as usize,
+            &l.model.weight_hash()?,
+            &mut copy,
+            &mut streak,
+            &mut decision_control,
+        )?;
+        if stop
+            && !result["control"]["observed_conditions"]
+                .as_array()
+                .is_some_and(|v| v.contains(&json!("QUALITY_GUARD")))
+        {
+            return Err(Error::Corrupt(
+                "INTEGRITY_FAIL: missing sticky quality stop".into(),
+            ));
+        }
+    }
+    let policy_hash = digest(p)?;
+    let model = l.model.weight_hash()?;
+    let mut bindings = json!({});
+    for (id, file, cases, hash) in [
+        (
+            "cross",
+            "cross.json",
+            inputs.cross.as_slice(),
+            &inputs.hashes["cross"],
+        ),
+        (
+            "ordinary",
+            "ordinary400.json",
+            inputs.ordinary.as_slice(),
+            &inputs.hashes["ordinary"],
+        ),
+    ] {
+        let path = segment.join(file);
+        let (raw, raw_hash) = read_panel(&path)?;
+        verify_panel_file(result, &path, &raw, &raw_hash, legacy)?;
+        let spec = PanelSpec {
+            id,
+            cases,
+            split_hash: hash.as_str().unwrap(),
+            policy_hash: &policy_hash,
+            source: p["source_digest"].as_str().unwrap_or("UNKNOWN"),
+            model: &model,
+            step: state.step,
+        };
+        let rows = raw["rows"]
+            .as_array()
+            .ok_or_else(|| Error::Corrupt("INCOMPLETE: final rows".into()))?;
+        let score = verify_panel_and_rescore(&spec, rows, raw["bindings"].get(id), &l, legacy)?;
+        verify_score(&raw["score"], &score)?;
+        verify_score(&result[id], &score)?;
+        result[id] = score;
+        bindings[id] = json!({"current_file_hash":raw_hash,"current_binding":panel_binding(&spec,rows,&l)?,"verified_rows":rows,
+            "historical_receipt_binding":if result["panel_receipts"].get(file).is_some(){"PRESENT"}else{"ABSENT"}});
+    }
+    let gate = result["last_evaluation"]["dev"]["skill_pass"] == true
+        && result["cross"]["skill_pass"] == true
+        && result["ordinary"]["qa"][0]
+            .as_u64()
+            .is_some_and(|n| n >= p["anchor_floor"].as_u64().unwrap_or(u64::MAX))
+        && progress_endpoint_safe(result);
+    if result["raw_development_gate"] != gate {
+        return Err(Error::Corrupt(
+            "INTEGRITY_FAIL: derived endpoint gate".into(),
+        ));
+    }
+    result["current_reaudit"] = json!({"verified_inputs":inputs.hashes,"panels":bindings,
+        "source_provenance":p["source_digest"],"historical_candidate_promotion":"NOT_AUTHORIZED"});
+    Ok(())
+}
 fn progress_close(root: &Path, control: &mut RunControl) -> Result<()> {
+    let result = progress_close_to(root, &root.join("comparison.json"), false, control);
+    if let Err(e) = &result {
+        let _ = save(
+            &root.join("close-integrity-failure.json"),
+            &json!({"status":if e.to_string().contains("INCOMPLETE"){"INCOMPLETE"}else{"INTEGRITY_FAIL"},
+            "error":e.to_string(),"comparison_eligible":false,"candidate_eligible":false,"new_small_updates":0}),
+        );
+    }
+    result
+}
+fn progress_close_to(
+    root: &Path,
+    output: &Path,
+    legacy: bool,
+    control: &mut RunControl,
+) -> Result<()> {
     control.check("progress_close")?;
     let pair = read_json(&root.join("pair.json"))?;
     let mut ends = Vec::new();
     let mut evals = Vec::new();
     let mut policies = Vec::new();
     let mut traces = Vec::new();
-    for arm in pair["arms"]
+    for (arm_index, arm) in pair["arms"]
         .as_array()
         .ok_or_else(|| Error::Corrupt("pair arms".into()))?
+        .iter()
+        .enumerate()
     {
         let name = arm.as_str().ok_or_else(|| Error::Corrupt("arm".into()))?;
         let dir = root.join(name);
         let p = read_json(&dir.join("policy.json"))?;
+        if pair["policy_hashes"][arm_index] != file_hash(&dir.join("policy.json"))? {
+            return Err(Error::Corrupt(
+                "INTEGRITY_FAIL: registered close policy".into(),
+            ));
+        }
         let mut entries = std::fs::read_dir(&dir)?
             .map(|e| e.map(|e| e.path()))
             .collect::<std::io::Result<Vec<_>>>()?;
@@ -4242,7 +5066,8 @@ fn progress_close(root: &Path, control: &mut RunControl) -> Result<()> {
         let mut evaluations = BTreeMap::new();
         let mut last = Value::Null;
         let mut trace = Vec::new();
-        let (_, episodes, _) = data::load(&progress_path(&p, "corpus")?)?;
+        let inputs = load_verified_inputs(&progress_path(&p, "a0")?, Some(&p))?;
+        let episodes = &inputs.train;
         for segment in entries {
             last = read_json(&segment.join("result.json"))?;
             if last["policy_sha256"] != file_hash(&dir.join("policy.json"))?
@@ -4289,7 +5114,33 @@ fn progress_close(root: &Path, control: &mut RunControl) -> Result<()> {
             for n in [0, 128, 256, 512] {
                 let path = segment.join(format!("eval-{n:04}.json"));
                 if path.exists() {
-                    evaluations.insert(n, read_json(&path)?);
+                    let (e, raw_hash) = read_panel(&path)?;
+                    let native = if n == 0 {
+                        progress_path(&p, "parent")?
+                    } else {
+                        segment.join(format!("step-{n:04}"))
+                    };
+                    let l = checkpoint::load(&native, Device::Cpu, false)?;
+                    if e["new_updates"] != n || e["model_content_hash"] != l.model.weight_hash()? {
+                        return Err(Error::Corrupt(
+                            "INTEGRITY_FAIL: evaluation native model/step".into(),
+                        ));
+                    }
+                    if l.manifest.training.as_ref().is_none_or(|s| {
+                        s.step
+                            != progress_u64(&p["initial_state"], "step").unwrap_or(u64::MAX)
+                                as usize
+                                + n
+                    }) {
+                        return Err(Error::Corrupt(
+                            "INTEGRITY_FAIL: native evaluation clock".into(),
+                        ));
+                    }
+                    verify_panel_file(&last, &path, &e, &raw_hash, legacy)?;
+                    verify_progress_evaluation(&p, &e, &inputs, &l, legacy)?;
+                    if evaluations.insert(n, e).is_some() {
+                        return Err(Error::Corrupt("duplicate evaluation step".into()));
+                    }
                 }
             }
             last["segment"] = json!(segment);
@@ -4297,6 +5148,19 @@ fn progress_close(root: &Path, control: &mut RunControl) -> Result<()> {
         if last.is_null() || last["reason"] == "TIME_BUDGET" {
             return Err(Error::Invalid(
                 "both arms must close before comparison".into(),
+            ));
+        }
+        let endpoint_segment = progress_path(&last, "segment")?;
+        verify_endpoint_panels(&p, &mut last, &endpoint_segment, &inputs, legacy, control)?;
+        let n = progress_u64(&last, "new_updates")? as usize;
+        let evaluation = evaluations
+            .get(&n)
+            .ok_or_else(|| Error::Corrupt("INCOMPLETE: endpoint raw evaluation".into()))?;
+        if evaluation_identity(&p, evaluation)?
+            != evaluation_identity(&p, &last["last_evaluation"])?
+        {
+            return Err(Error::Corrupt(
+                "INTEGRITY_FAIL: result/evaluation content".into(),
             ));
         }
         ends.push(last);
@@ -4332,7 +5196,12 @@ fn progress_close(root: &Path, control: &mut RunControl) -> Result<()> {
             std::cmp::Reverse(d["generation_error_cases"].as_u64().unwrap_or(u64::MAX)),
         )
     };
-    let accepted = (0..2).find(|i| safe(&ends[*i]) && ends[*i]["raw_development_gate"] == true);
+    let accepted = (0..2).find(|i| {
+        !legacy
+            && safe(&ends[*i])
+            && ends[*i]["candidate_eligible"] == true
+            && ends[*i]["raw_development_gate"] == true
+    });
     let selected = accepted.or_else(|| {
         (0..2)
             .filter(|i| {
@@ -4395,14 +5264,14 @@ fn progress_close(root: &Path, control: &mut RunControl) -> Result<()> {
     let mut final_pairs = Value::Null;
     if safe(&ends[0]) && safe(&ends[1]) {
         final_pairs = json!({});
-        for (name, file) in [("cross", "cross.json"), ("ordinary", "ordinary400.json")] {
-            let a = read_json(&progress_path(&ends[0], "segment")?.join(file))?;
-            let b = read_json(&progress_path(&ends[1], "segment")?.join(file))?;
+        for name in ["cross", "ordinary"] {
+            let a = &ends[0]["current_reaudit"]["panels"][name];
+            let b = &ends[1]["current_reaudit"]["panels"][name];
             final_pairs[name] = progress_pair_delta(
-                a["rows"]
+                a["verified_rows"]
                     .as_array()
                     .ok_or_else(|| Error::Corrupt("final panel rows".into()))?,
-                b["rows"]
+                b["verified_rows"]
                     .as_array()
                     .ok_or_else(|| Error::Corrupt("final panel rows".into()))?,
             )?;
@@ -4410,10 +5279,14 @@ fn progress_close(root: &Path, control: &mut RunControl) -> Result<()> {
     }
     control.seal_terminal()?;
     save(
-        &root.join("comparison.json"),
+        output,
         &json!({"contract":PROGRESS_CONTRACT,"node":pair["node"],"paired":paired,"policies_same_exposure":exposure_equal,
         "endpoints":ends,"selected_index":selected,"selected_arm":selected.map(|i|&pair["arms"][i]),"raw_development_gate":accepted.is_some(),"actual_common_prefix_updates":common_prefix,"final_paired":final_pairs,
-        "next":if accepted.is_some(){"A3_FRESH_PROCESS_THEN_SEAL"}else if selected.is_some() && pair["node"]=="A1"{"A2_CONDITIONAL"}else{"H3_BUDGET_CLOSED"},
+        "mode":if legacy{"READ_ONLY_REAUDIT"}else{"BOUND_PANEL_CLOSE"},"evidence_level":"DERIVED_FROM_EXISTING_LOGS",
+        "historical_receipt_binding":if ends.iter().any(|r|r["panel_receipts"].is_null()){"ABSENT"}else{"PRESENT"},"current_raw_recount":"VERIFIED",
+        "source_sha":source_commit()?,"execution_binary_sha256":file_hash(&std::env::current_exe()?)?,
+        "historical_candidate_promotion":"NOT_AUTHORIZED","new_small_updates":0,
+        "next":if legacy{"DIAGNOSTIC_ONLY_NO_PROMOTION"}else if accepted.is_some(){"A3_FRESH_PROCESS_THEN_SEAL"}else if selected.is_some() && pair["node"]=="A1"{"A2_CONDITIONAL"}else{"H3_BUDGET_CLOSED"},
         "endpoint_exposure_equal":ends[0]["new_updates"]==ends[1]["new_updates"],"h3_seal":"NOT_OPENED","s4":"NOT_PASSED","goal1_ready":false,"control":control.receipt()}),
     )?;
     println!(
@@ -4423,6 +5296,180 @@ fn progress_close(root: &Path, control: &mut RunControl) -> Result<()> {
         paired.len()
     );
     Ok(())
+}
+
+fn progress_observe(
+    root: &Path,
+    output: &Path,
+    kind: &str,
+    control: &mut RunControl,
+) -> Result<()> {
+    let recount = read_json(&output.join("reaudit.json"))?;
+    if recount["current_raw_recount"] != "VERIFIED" || recount["mode"] != "READ_ONLY_REAUDIT" {
+        return Err(Error::Invalid(
+            "verified read-only B4 recount required before observations".into(),
+        ));
+    }
+    let (arm, n) = match kind {
+        "F16" => ("F", 512),
+        "N16" => ("N", 512),
+        "N256" => ("N", 256),
+        _ => return Err(Error::Invalid("bounded observation only".into())),
+    };
+    let p = read_json(&root.join(arm).join("policy.json"))?;
+    let inputs = load_verified_inputs(&progress_path(&p, "a0")?, Some(&p))?;
+    let endpoint = recount["endpoints"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|r| r["arm"] == arm))
+        .ok_or_else(|| Error::Corrupt("recount endpoint".into()))?;
+    if endpoint["policy_sha256"] != file_hash(&root.join(arm).join("policy.json"))? {
+        return Err(Error::Corrupt(
+            "FROZEN_INPUT_MISMATCH: observation policy".into(),
+        ));
+    }
+    for previous in ["F16", "N16", "N256"] {
+        let path = output.join(previous).join("result.json");
+        if path.exists() && read_json(&path)?["status"] != "VERIFIED" {
+            return Err(Error::Invalid(
+                "prior observation failed; no further generation".into(),
+            ));
+        }
+    }
+    let segment = progress_path(endpoint, "segment")?;
+    let native = segment.join(if n == 512 {
+        "final".into()
+    } else {
+        format!("step-{n:04}")
+    });
+    if !native.is_file() {
+        return Err(Error::Invalid("NOT_RUN_CHECKPOINT_MISSING".into()));
+    }
+    let l = checkpoint::load(&native, Device::Cpu, true)?;
+    let state = l
+        .manifest
+        .training
+        .as_ref()
+        .ok_or_else(|| Error::Corrupt("observed native state".into()))?;
+    if state.step != progress_u64(&p["initial_state"], "step")? as usize + n
+        || l.tokenizer.semantic_id() != p["tokenizer_hash"]
+    {
+        return Err(Error::Corrupt("observation checkpoint lineage".into()));
+    }
+    let old = read_json(&segment.join(format!("eval-{n:04}.json")))?;
+    if old["model_content_hash"] != l.model.weight_hash()? {
+        return Err(Error::Corrupt("observation raw/model".into()));
+    }
+    verify_progress_evaluation(&p, &old, &inputs, &l, true)?;
+    let dir = output.join(kind);
+    std::fs::create_dir(&dir)?; // No retry can overwrite or silently spend the same allowance again.
+    let indices: Vec<usize> = if n == 512 {
+        let rows = old["dev_rows"].as_array().unwrap();
+        [true, false]
+            .into_iter()
+            .flat_map(|correct| {
+                rows.iter()
+                    .enumerate()
+                    .filter(move |(_, r)| r["exact_match"] == correct)
+                    .take(8)
+                    .map(|(i, _)| i)
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+    save(
+        &dir.join("registration.json"),
+        &json!({"kind":kind,"mode":if n==256{"POST_HOC_DIAGNOSTIC"}else{"FRESH_PROCESS_RAW_PARITY"},
+        "checkpoint":native,"native_sha256":file_hash(&native)?,"model_hash":l.model.weight_hash()?,"tokenizer":l.tokenizer.semantic_id(),"step":state.step,
+        "policy_sha256":file_hash(&root.join(arm).join("policy.json"))?,"verified_inputs":inputs.hashes,
+        "source_sha":source_commit()?,"binary_sha256":file_hash(&std::env::current_exe()?)?,"selection":"first8 exact and first8 incorrect in frozen dev order; fixed before generation; not quality estimate",
+        "indices":indices,"maximum_new_generations":if n==256{912}else{16},"new_small_updates":0,
+        "post_hoc_notice":"이 checkpoint는 기존 dev 결과를 본 뒤 선정한 사후 진단 대상이다. 과거 F/N 실험의 사전등록 승자가 아니며, 이번에는 seal·제품 승격·학습 재개를 하지 않는다."}),
+    )?;
+    let mut report = json!({"kind":kind,"dev":old["dev"],"new_small_updates":0,"seal":"NOT_OPENED","candidate_eligible":false,"resume_allowed":false,
+        "evidence_level":"EXECUTED_THIS_RUN","dev_evidence":"DERIVED_FROM_EXISTING_LOGS","generation_budget":if n==256{912}else{16}});
+    let outcome = (|| -> Result<()> {
+        if n == 512 {
+            let selected: Vec<_> = indices.iter().map(|i| inputs.dev[*i].clone()).collect();
+            let rows = evaluate_panel(&l, &selected, control);
+            save(&dir.join("raw.json"), &rows)?;
+            control.check("fresh_parity_recorded")?;
+            let spec = PanelSpec {
+                id: "dev",
+                cases: &selected,
+                split_hash: inputs.hashes["dev"].as_str().unwrap(),
+                policy_hash: &digest(&p)?,
+                source: "CURRENT_OBSERVATION",
+                model: &l.model.weight_hash()?,
+                step: state.step,
+            };
+            verify_panel_and_rescore(&spec, &rows, None, &l, true)?;
+            let mut differences = Vec::new();
+            for (row, i) in rows.iter().zip(&indices) {
+                for key in [
+                    "raw_tokens",
+                    "raw_bytes",
+                    "actual",
+                    "error",
+                    "error_class",
+                    "finish_reason",
+                    "eos_index",
+                    "prompt_digest",
+                ] {
+                    if row[key] != old["dev_rows"][*i][key] {
+                        differences.push(json!({"index":i,"field":key}));
+                    }
+                }
+            }
+            report["raw_differences"] = json!(differences);
+            if !differences.is_empty() {
+                return Err(Error::Corrupt("fresh-process raw parity".into()));
+            }
+        } else {
+            for (id, cases, hash) in [
+                ("cross", inputs.cross.as_slice(), &inputs.hashes["cross"]),
+                (
+                    "ordinary",
+                    inputs.ordinary.as_slice(),
+                    &inputs.hashes["ordinary"],
+                ),
+            ] {
+                control.check("posthoc_next_panel")?;
+                let rows = evaluate_panel(&l, cases, control);
+                let spec = PanelSpec {
+                    id,
+                    cases,
+                    split_hash: hash.as_str().unwrap(),
+                    policy_hash: &digest(&p)?,
+                    source: "CURRENT_POST_HOC_OBSERVATION",
+                    model: &l.model.weight_hash()?,
+                    step: state.step,
+                };
+                let binding = panel_binding(&spec, &rows, &l)?;
+                save(
+                    &dir.join(format!("{id}.json")),
+                    &json!({"rows":rows,"binding":binding,"new_small_updates":0}),
+                )?;
+                control.check("posthoc_panel_recorded")?;
+                report[id] = verify_panel_and_rescore(&spec, &rows, Some(&binding), &l, false)?;
+            }
+        }
+        Ok(())
+    })();
+    if let Err(e) = &outcome {
+        control.classify_error(e);
+    }
+    let _ = control.seal_terminal();
+    report["control"] = control.receipt();
+    report["status"] = json!(if outcome.is_ok() && control.stop.is_none() {
+        "VERIFIED"
+    } else {
+        "FAILED_OR_INCOMPLETE"
+    });
+    report["error"] = json!(outcome.as_ref().err().map(ToString::to_string));
+    save(&dir.join("result.json"), &report)?;
+    println!("{report}");
+    outcome.and(control.stop_result())
 }
 
 fn optimizer_hash(tensors: &BTreeMap<String, Tensor>) -> Result<String> {
@@ -4910,8 +5957,8 @@ fn progress_baseline(
 ) -> Result<()> {
     let [baseline, run, inference, corpus, harness] = paths;
     control.check("progress_a0_start")?;
+    let (frozen, ordinary_train, ordinary, baseline_hash) = verified_ordinary(baseline, None)?;
     let checked = verified_harness(harness)?;
-    let frozen = load(&baseline.join("frozen.json"))?;
     let receipt = read_json(&run.join("result.json"))?;
     let policy_path = run
         .parent()
@@ -4961,7 +6008,7 @@ fn progress_baseline(
         "inference_path":inference,"inference_sha256":file_hash(inference)?,"model_hash":l.model.weight_hash()?,
         "optimizer_hash":optimizer_hash(&l.optimizer)?,"tokenizer_hash":l.tokenizer.semantic_id(),"state":state,
         "policy_sha256":file_hash(&policy_path)?,"corpus":corpus,"train_hash":manifest.train.sha256,"dev_hash":manifest.validation.sha256,
-        "baseline":baseline,"baseline_hash":file_hash(&baseline.join("frozen.json"))?,
+        "baseline":baseline,"baseline_hash":baseline_hash,
         "normal_policy":"normal_greedy_v1","actual_new_updates":0,"seal":"NOT_OPENED","a0_pass":false,"goal1_ready":false});
     let outcome = (|| -> Result<()> {
         let prior = receipt["last_evaluation"]["dev_rows"]
@@ -5009,7 +6056,6 @@ fn progress_baseline(
         if !differences.is_empty() {
             return Err(Error::Corrupt("A0 normal replay changed".into()));
         }
-        let (_, ordinary_train, ordinary) = data::load(&frozen.corpus)?;
         let original = evaluate_panel(&l, &ordinary, control);
         report["ordinary_parent"] = summarize(&original)?;
         save(
@@ -6853,6 +7899,770 @@ fn arm_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn state_fixture(root: &Path) -> (PathBuf, PathBuf) {
+        let mut l = repair_loaded();
+        let ordinary: Vec<_> = (0..400)
+            .map(|i| {
+                let mut e = repair_episode(&format!("ordinary/{i}"));
+                if i >= 336 {
+                    e.family = format!("copy/{i}");
+                }
+                e.request.limits.max_tokens = 2;
+                e
+            })
+            .collect();
+        let mut f = repair_frozen(root, &ordinary, &l);
+        f.watch = ordinary[..32].to_vec();
+        let baseline = root.join("baseline");
+        std::fs::create_dir(&baseline).unwrap();
+        save(&baseline.join("frozen.json"), &f).unwrap();
+        let dev: Vec<_> = (0..256)
+            .map(|i| {
+                let mut e = repair_episode(&format!("dev/{i}"));
+                e.request.limits.max_tokens = 2;
+                e
+            })
+            .collect();
+        let corpus = root.join("h3");
+        let m = repair_corpus(&corpus, &dev);
+        let cross: Vec<_> = (0..512)
+            .map(|i| {
+                let mut e = repair_episode(&format!("cross/{i}"));
+                e.request.limits.max_tokens = 2;
+                e
+            })
+            .collect();
+        let a0 = root.join("a0");
+        std::fs::create_dir(&a0).unwrap();
+        save(&a0.join("cross-development.json"), &cross).unwrap();
+        save(&a0.join("summary.json"),&json!({"baseline":baseline,"baseline_hash":file_hash(&baseline.join("frozen.json")).unwrap(),
+            "corpus":corpus,"train_hash":m.train.sha256,"dev_hash":m.validation.sha256,"cross":{"file_sha256":file_hash(&a0.join("cross-development.json")).unwrap()}})).unwrap();
+        let mut state = TrainingState {
+            contrast16: false,
+            parent_checkpoint_hash: None,
+            config: TrainConfig {
+                seq_len: 32,
+                max_steps: 512,
+                warmup: 0,
+                ..Default::default()
+            },
+            step: 0,
+            consumed_tokens: 0,
+            target_tokens: 0,
+            sampler_state: 17,
+            corpus_hash: m.train.sha256.clone(),
+            validation_hash: m.validation.sha256.clone(),
+            previous_corpora: vec![l.tokenizer.train_hash.clone()],
+            initial_weight_hash: l.manifest.initial_weight_hash.clone(),
+            train_loss: None,
+            validation_loss: None,
+        };
+        let adam = Adam::new(&l.model.vars).unwrap();
+        let parent = root.join("parent");
+        save_arm(&mut l, &state, &adam, &parent, "RECOVERY_SCREENING").unwrap();
+        let pair = root.join("pair");
+        std::fs::create_dir(&pair).unwrap();
+        let mut hashes = Vec::new();
+        for arm in ["C", "L"] {
+            let dir = pair.join(arm);
+            std::fs::create_dir(&dir).unwrap();
+            let p = json!({"node":"A1","run_id":pair,"contract":PROGRESS_CONTRACT,"arm":arm,"a0":a0,"a0_hash":file_hash(&a0.join("summary.json")).unwrap(),
+                "corpus":corpus,"train_hash":m.train.sha256,"dev_hash":m.validation.sha256,"cross_hash":file_hash(&a0.join("cross-development.json")).unwrap(),
+                "parent":parent,"initial_model_hash":l.model.weight_hash().unwrap(),"initial_adam_hash":optimizer_hash(&adam.moments).unwrap(),"initial_state":state,
+                "tokenizer_hash":l.tokenizer.semantic_id(),"source_digest":neural::hash(b"synthetic fixture source"),"lr_policy":arm,"lr_offset":0,
+                "tape":(0..512).map(|_|json!([[0],17])).collect::<Vec<_>>(),"denominators":vec![[1,1];512],"tape_hash":"fixture","denominators_hash":"fixture",
+                "anchor_floor":178,"baseline_dev":0,"baseline_watch":0,"baseline_errors":0});
+            save(&dir.join("policy.json"), &p).unwrap();
+            hashes.push(file_hash(&dir.join("policy.json")).unwrap());
+            let inputs = load_verified_inputs(&a0, Some(&p)).unwrap();
+            let segment = dir.join("segment-00-0000");
+            std::fs::create_dir(&segment).unwrap();
+            let mut receipts = json!({});
+            let mut last = Value::Null;
+            for n in [0, 128, 256, 512] {
+                let dr: Vec<_> = dev.iter().map(|e| state_row(&l, e)).collect();
+                let wr: Vec<_> = f.watch.iter().map(|e| state_row(&l, e)).collect();
+                last = json!({"new_updates":n,"model_content_hash":l.model.weight_hash().unwrap(),"final_evaluation_complete":true,
+                    "dev":skill_score(&dr).unwrap(),"watch":skill_score(&wr).unwrap(),"dev_rows":dr,"watch_rows":wr});
+                bind_progress_evaluation(&p, &mut last, &inputs, &l).unwrap();
+                if n > 0 {
+                    let (key, evaluation_digest, panel_digest) =
+                        evaluation_identity(&p, &last).unwrap();
+                    last["decision"] = serde_json::to_value(EvaluationDecision {
+                        key,
+                        evaluation_digest,
+                        panel_digest,
+                        before: [0; 3],
+                        after: None,
+                        quality_stop: None,
+                        applied: None,
+                    })
+                    .unwrap();
+                    reconcile_evaluation_decision(
+                        &p,
+                        n,
+                        &l.model.weight_hash().unwrap(),
+                        &mut last,
+                        &mut [0; 3],
+                        &mut repair_control(),
+                    )
+                    .unwrap();
+                }
+                record_bound_panel(
+                    &segment.join(format!("eval-{n:04}.json")),
+                    &last,
+                    &mut receipts,
+                )
+                .unwrap();
+                if n > 0 {
+                    let mut s = state.clone();
+                    s.step = n;
+                    save_arm(
+                        &mut l,
+                        &s,
+                        &adam,
+                        &segment.join(format!("step-{n:04}")),
+                        "RECOVERY_SCREENING",
+                    )
+                    .unwrap();
+                }
+            }
+            let mut scores = json!({});
+            for (id, file, cases, hash) in [
+                (
+                    "cross",
+                    "cross.json",
+                    cross.as_slice(),
+                    &inputs.hashes["cross"],
+                ),
+                (
+                    "ordinary",
+                    "ordinary400.json",
+                    ordinary.as_slice(),
+                    &inputs.hashes["ordinary"],
+                ),
+            ] {
+                let rows: Vec<_> = cases.iter().map(|e| state_row(&l, e)).collect();
+                let binding = bind_progress_panel(&p, id, cases, hash, 512, &rows, &l).unwrap();
+                let score = if id == "cross" {
+                    progress_copy_score(&rows, 512).unwrap()
+                } else {
+                    summarize(&rows).unwrap()
+                };
+                record_bound_panel(&segment.join(file),&json!({"policy":"normal_greedy_v1","rows":rows,"score":score,"bindings":{id:binding}}),&mut receipts).unwrap();
+                scores[id] = score;
+            }
+            let mut trace = String::new();
+            for n in 0..512 {
+                trace.push_str(&format!("{}\n",json!({"new_update":n+1,"indices":[0],"sampler_state":17,"input_tokens":1,"target_tokens":1,
+                "ids":["train/0"],"optimizer_step":n+1,"lr_bits":progress_lr(arm,n+1).unwrap().to_bits(),"ce":0.,"objective":0.,"gradient_norm":0.,"update_norm":0.})));
+            }
+            std::fs::write(segment.join("trace.jsonl"), trace).unwrap();
+            let mut final_state = state.clone();
+            final_state.step = 512;
+            save_arm(
+                &mut l,
+                &final_state,
+                &adam,
+                &segment.join("final"),
+                "SCREENING_BUDGET_REACHED",
+            )
+            .unwrap();
+            let r = json!({"arm":arm,"policy_sha256":hashes.last().unwrap(),"checkpoint_file_sha256":file_hash(&segment.join("final")).unwrap(),
+                "exposure":{"trace_sha256":file_hash(&segment.join("trace.jsonl")).unwrap()},"segment_updates":512,"new_updates":512,"cumulative_model_step":512,"sampler_state":17,
+                "last_evaluation":last,"model_content_hash":l.model.weight_hash().unwrap(),"adam_hash":optimizer_hash(&adam.moments).unwrap(),"cross":scores["cross"],"ordinary":scores["ordinary"],
+                "raw_development_gate":false,"candidate_eligible":false,"resume_allowed":false,"reason":"SCREENING_BUDGET_REACHED","comparison_eligible":true,"cleanup_limit_exceeded":false,
+                "checkpoint_saved":true,"save_error":null,"final_evaluation_complete":true,"control":{"terminal_reason":"COMPLETED","observed_conditions":[]},"panel_receipts":receipts,
+                "evaluation_decision_digest":digest(&last["decision"]).unwrap(),"guard_streaks":[0,0,0]});
+            save(&segment.join("result.json"), &r).unwrap();
+            state.step = 0;
+        }
+        save(
+            &pair.join("pair.json"),
+            &json!({"node":"A1","arms":["C","L"],"policy_hashes":hashes}),
+        )
+        .unwrap();
+        (a0, pair)
+    }
+    fn state_row(l: &Loaded, e: &Episode) -> Value {
+        // Serialized oracle fixture only: no inference or optimizer, never a model-quality observation.
+        let prompt = l
+            .tokenizer
+            .prepare(
+                &e.request,
+                l.model.config.context as u32,
+                &l.model.config.id().unwrap(),
+            )
+            .unwrap();
+        let tokens = l.tokenizer.encode(e.answer.as_bytes()).unwrap();
+        let mut raw = tokens.clone();
+        raw.push(EOS);
+        json!({"id":e.id,"scene":scene(e),"family":e.family,"category":e.category,"question":e.request.input,"generated_question":e.request.input,
+            "evidence":e.request.evidence,"generated_evidence":e.request.evidence,"expected":e.answer,"actual":e.answer,"raw_tokens":raw,"raw_bytes":bytes_receipt(&l.tokenizer,&tokens),
+            "raw_generated_count":raw.len(),"eos_index":raw.len()-1,"provided":prompt.provided,"excluded":prompt.excluded,"prompt_length":prompt.token_ids.len(),
+            "request_digest":digest(&e.request).unwrap(),"prompt_digest":digest(&prompt.token_ids).unwrap(),"native_prompt_digest":prompt.token_digest,
+            "generation":{"tokens":tokens,"generated":raw.len(),"finish":"stop"},"finish_reason":"stop","generation_started":true,"generation_completed":true,
+            "error":null,"error_class":null,"interruption":null,"whitespace_only":false,"components":components(Some(&e.answer),&e.answer,&prompt.provided),"exact_match":true})
+    }
+    #[test]
+    fn state_data_frozen_all_entries_reject_content_and_partition_changes() {
+        for mutation in 0..8 {
+            let dir = tempfile::tempdir().unwrap();
+            let (a0, pair) = state_fixture(dir.path());
+            let p = read_json(&pair.join("C/policy.json")).unwrap();
+            let before = load_verified_inputs(&a0, Some(&p)).unwrap();
+            assert_eq!(
+                (before.ordinary.len(), before.dev.len(), before.cross.len()),
+                (400, 256, 512)
+            );
+            if mutation < 4 {
+                let mut cases = before.ordinary.clone();
+                match mutation {
+                    0 => cases[0].request.input.push('x'),
+                    1 => cases[0].answer.push('x'),
+                    2 => cases[0].request.evidence.truncated = true,
+                    _ => {
+                        cases[0].family = "copy/changed".into();
+                        cases[336].family = "qa/changed".into();
+                    }
+                }
+                repair_corpus(&before.frozen.corpus, &cases);
+                assert!(data::load(&before.frozen.corpus).is_ok());
+                let baseline = progress_path(&before.a0, "baseline").unwrap();
+                let missing = dir.path().join("absent");
+                let out = dir.path().join("never-created");
+                let err = progress_baseline(
+                    [&baseline, &missing, &missing, &missing, &missing],
+                    &out,
+                    1,
+                    &mut repair_control(),
+                )
+                .unwrap_err();
+                assert!(err.to_string().contains("FROZEN_INPUT_MISMATCH"), "{err}");
+                assert!(!out.exists());
+            } else if mutation == 4 {
+                let path = progress_path(&before.a0, "baseline")
+                    .unwrap()
+                    .join("frozen.json");
+                let mut f = read_json(&path).unwrap();
+                f["registry"]["changed"] = json!(true);
+                std::fs::write(path, serde_json::to_vec(&f).unwrap()).unwrap();
+            } else if mutation == 5 {
+                let mut cases = before.dev.clone();
+                cases[0].request.input.push('x');
+                repair_corpus(&progress_path(&p, "corpus").unwrap(), &cases);
+            } else {
+                let mut cross = before.cross.clone();
+                if mutation == 6 {
+                    cross.swap(0, 1);
+                } else {
+                    cross.pop();
+                }
+                std::fs::write(
+                    a0.join("cross-development.json"),
+                    serde_json::to_vec(&cross).unwrap(),
+                )
+                .unwrap();
+            }
+            assert!(load_verified_inputs(&a0, Some(&p)).is_err());
+            let mut c = repair_control();
+            let err = progress_arm(&pair, "C", None, &mut c).unwrap_err();
+            assert!(err.to_string().contains("FROZEN_INPUT_MISMATCH"), "{err}");
+            assert_eq!(c.generation_calls, 0);
+            assert!(progress_close(&pair, &mut repair_control()).is_err());
+            assert!(!pair.join("comparison.json").exists());
+        }
+        println!(
+            "T-D01/02/03/05/06/07: actual entry and owned-input fixtures; SMALL/TINY/scalar updates0"
+        );
+    }
+    #[test]
+    fn state_data_complete_close_and_raw_negative_fixtures() {
+        for mutation in 0..11 {
+            let dir = tempfile::tempdir().unwrap();
+            let (_, pair) = state_fixture(dir.path());
+            if mutation > 0 {
+                for arm in ["C", "L"] {
+                    let segment = pair.join(arm).join("segment-00-0000");
+                    let file = if mutation == 2 {
+                        "ordinary400.json"
+                    } else {
+                        "cross.json"
+                    };
+                    let path = segment.join(file);
+                    let mut raw = read_json(&path).unwrap();
+                    match mutation {
+                        1 => raw["rows"] = json!([]),
+                        2 | 3 => {
+                            raw["rows"].as_array_mut().unwrap().pop();
+                        }
+                        4 => raw["rows"][1] = raw["rows"][0].clone(),
+                        5 => raw["rows"][0]["expected"] = json!("different"),
+                        6 => raw["rows"].as_array_mut().unwrap().swap(0, 1),
+                        7 => raw["rows"][0]["actual"] = json!("wrong"),
+                        8 => raw["bindings"]["cross"]["model_hash"] = json!("other model"),
+                        9 => raw["rows"][0]["eos_index"] = Value::Null,
+                        10 => raw["rows"][0]["error"] = json!("invalid UTF-8"),
+                        _ => unreachable!(),
+                    }
+                    std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+                    // Even freshly forged file receipts do not override frozen membership or tokenizer checks.
+                    if mutation != 9 {
+                        let rp = segment.join("result.json");
+                        let mut result = read_json(&rp).unwrap();
+                        result["panel_receipts"][file] =
+                            json!({"sha256":file_hash(&path).unwrap(),"bindings":raw["bindings"]});
+                        std::fs::write(rp, serde_json::to_vec(&result).unwrap()).unwrap();
+                    }
+                }
+            }
+            let result = progress_close(&pair, &mut repair_control());
+            if mutation == 0 {
+                result.unwrap();
+                assert!(pair.join("comparison.json").is_file());
+            } else {
+                assert!(result.is_err(), "mutation{mutation}");
+                assert!(!pair.join("comparison.json").exists());
+            }
+        }
+        println!(
+            "T-P01..06/08/09 final public close fixtures; labels512, actual optimizer/generation calls0"
+        );
+    }
+    #[test]
+    fn state_data_renewal_rejects_changed_source_before_generation() {
+        for split in ["train", "dev"] {
+            let dir = tempfile::tempdir().unwrap();
+            let (a0, pair) = state_fixture(dir.path());
+            progress_close(&pair, &mut repair_control()).unwrap();
+            let p = read_json(&pair.join("C/policy.json")).unwrap();
+            let input = load_verified_inputs(&a0, Some(&p)).unwrap();
+            let corpus = progress_path(&p, "corpus").unwrap();
+            let mut manifest = input.manifest;
+            let mut cases = if split == "train" {
+                input.train
+            } else {
+                input.dev
+            };
+            cases[0].answer.push('x');
+            let bytes = serde_json::to_vec(&cases).unwrap();
+            let target = if split == "train" {
+                &mut manifest.train
+            } else {
+                &mut manifest.validation
+            };
+            std::fs::write(corpus.join(&target.file), &bytes).unwrap();
+            target.sha256 = neural::hash(&bytes);
+            target.bytes = bytes.len();
+            std::fs::write(
+                corpus.join("manifest.json"),
+                serde_json::to_vec(&manifest).unwrap(),
+            )
+            .unwrap();
+            assert!(data::load(&corpus).is_ok());
+            let files: BTreeMap<_, _> = [
+                "Cargo.lock",
+                "src/training.rs",
+                "src/quality_recovery.rs",
+                "src/neural/transformer.rs",
+            ]
+            .into_iter()
+            .map(|p| (p, file_hash(Path::new(p)).unwrap()))
+            .collect();
+            let harness = dir.path().join("fixture-harness.json");
+            save(&harness,&json!({"result":"CHECKED_SCOPE_PASS","source_unchanged":true,"source_files":files})).unwrap();
+            let out = dir.path().join("never-generated");
+            let mut c = repair_control();
+            let error = progress_renewal(&pair, &harness, &out, 1, &mut c).unwrap_err();
+            assert!(
+                error.to_string().contains("FROZEN_INPUT_MISMATCH"),
+                "{error}"
+            );
+            assert!(!out.exists());
+            assert_eq!(c.generation_calls, 0);
+        }
+    }
+    #[test]
+    fn state_data_legacy_reaudit_sticky_cancel_and_error_denominator() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, pair) = state_fixture(dir.path());
+        for arm in ["C", "L"] {
+            let segment = pair.join(arm).join("segment-00-0000");
+            for name in [
+                "eval-0000.json",
+                "eval-0128.json",
+                "eval-0256.json",
+                "eval-0512.json",
+                "cross.json",
+                "ordinary400.json",
+            ] {
+                let path = segment.join(name);
+                let mut raw = read_json(&path).unwrap();
+                raw.as_object_mut().unwrap().remove("bindings");
+                std::fs::write(path, serde_json::to_vec(&raw).unwrap()).unwrap();
+            }
+            let path = segment.join("result.json");
+            let mut r = read_json(&path).unwrap();
+            r.as_object_mut().unwrap().remove("panel_receipts");
+            r["last_evaluation"]
+                .as_object_mut()
+                .unwrap()
+                .remove("bindings");
+            r["reason"] = json!("CANCELLED");
+            r["comparison_eligible"] = json!(false);
+            r["control"] =
+                json!({"terminal_reason":"CANCELLED","observed_conditions":["CANCELLED"]});
+            std::fs::write(path, serde_json::to_vec(&r).unwrap()).unwrap();
+        }
+        let original = file_hash(&pair.join("C/segment-00-0000/result.json")).unwrap();
+        assert!(progress_close(&pair, &mut repair_control()).is_err());
+        assert!(!pair.join("comparison.json").exists());
+        let out = dir.path().join("reaudit.json");
+        progress_close_to(&pair, &out, true, &mut repair_control()).unwrap();
+        let report = read_json(&out).unwrap();
+        assert_eq!(report["selected_index"], Value::Null);
+        assert_eq!(report["historical_receipt_binding"], "ABSENT");
+        assert_eq!(report["endpoints"][0]["candidate_eligible"], false);
+        assert_eq!(report["endpoints"][0]["resume_allowed"], false);
+        assert_eq!(
+            original,
+            file_hash(&pair.join("C/segment-00-0000/result.json")).unwrap()
+        );
+        let l = repair_loaded();
+        let mut e = repair_episode("invalid-output/0");
+        e.request.limits.max_tokens = 3;
+        let mut row = state_row(&l, &e);
+        let tokens = l.tokenizer.encode(&[0xea, 0xb0]).unwrap();
+        let mut raw = tokens.clone();
+        raw.push(EOS);
+        let error = l.tokenizer.decode(&tokens).unwrap_err().to_string();
+        row["actual"] = Value::Null;
+        row["error"] = json!(error);
+        row["error_class"] = json!("strict_utf8");
+        row["raw_tokens"] = json!(raw);
+        row["raw_bytes"] = bytes_receipt(&l.tokenizer, &tokens);
+        row["raw_generated_count"] = json!(raw.len());
+        row["eos_index"] = json!(raw.len() - 1);
+        row["generation"] = json!({"tokens":tokens,"generated":raw.len(),"finish":"stop"});
+        row["exact_match"] = json!(false);
+        row["components"] = components(None, &e.answer, &[]);
+        let spec = PanelSpec {
+            id: "dev",
+            cases: &[e],
+            split_hash: "test",
+            policy_hash: "test",
+            source: "test",
+            model: "test",
+            step: 0,
+        };
+        let score = verify_panel_and_rescore(&spec, &[row], None, &l, true).unwrap();
+        assert_eq!(score["denominator"], 1);
+        assert_eq!(score["invalid_utf8"], 1);
+        assert_eq!(score["exact_matches"], 0);
+        println!(
+            "T-P07/09/10 sticky cancellation, strict UTF8 denominator, read-only legacy; optimizer/generation0"
+        );
+    }
+    #[test]
+    fn state_data_guard_time_after_raw_and_checkpoint() {
+        for boundary in ["progress_eval_recorded", "progress_eval_checkpoint"] {
+            let dir = tempfile::tempdir().unwrap();
+            let p = json!({"run_id":"isolated","baseline_dev":208,"baseline_watch":18,"baseline_errors":2});
+            let e = json!({"new_updates":256,"model_content_hash":"fixture-model","final_evaluation_complete":true,
+                "dev":{"denominator":256,"exact_matches":180,"generation_error_cases":0},
+                "watch":{"denominator":32,"exact_matches":18,"generation_error_cases":0},"dev_rows":[],"watch_rows":[]});
+            let mut last = Value::Null;
+            let mut streak = [1, 0, 0];
+            let mut c = repair_control();
+            c.time_boundary = Some(boundary);
+            assert!(
+                progress_evaluation_boundary(
+                    &p,
+                    256,
+                    "fixture-model",
+                    Some(e),
+                    &mut last,
+                    &mut streak,
+                    dir.path(),
+                    &mut c,
+                    || Ok(())
+                )
+                .is_err()
+            );
+            let terminal = finish_arm(&mut c, false, |_| Ok(()));
+            let mut resumed = repair_control();
+            let result = progress_evaluation_boundary(
+                &p,
+                256,
+                "fixture-model",
+                None,
+                &mut last,
+                &mut streak,
+                dir.path(),
+                &mut resumed,
+                || Ok(()),
+            );
+            assert!(
+                result.is_err(),
+                "pending guard lost after {boundary}: {terminal}"
+            );
+            assert!(resumed.observed.contains(&StopReason::QualityGuard));
+            assert_eq!(streak, [2, 0, 0]);
+        }
+        println!("T-G01/T-G02 mock evaluation labels128/256; actual TINY/scalar/SMALL updates0");
+    }
+    #[test]
+    fn state_data_guard_idempotence_corruption_and_simultaneous_cancel() {
+        let dir = tempfile::tempdir().unwrap();
+        let p =
+            json!({"run_id":"fixture","baseline_dev":208,"baseline_watch":18,"baseline_errors":2});
+        let e = json!({"new_updates":128,"model_content_hash":"model","final_evaluation_complete":true,"dev_rows":[],"watch_rows":[],
+            "dev":{"denominator":256,"exact_matches":180,"generation_error_cases":0},"watch":{"denominator":32,"exact_matches":18,"generation_error_cases":0}});
+        let mut c = repair_control();
+        c.time_boundary = Some("progress_eval_recorded");
+        let mut last = Value::Null;
+        let mut streak = [0; 3];
+        assert!(
+            progress_evaluation_boundary(
+                &p,
+                128,
+                "model",
+                Some(e.clone()),
+                &mut last,
+                &mut streak,
+                dir.path(),
+                &mut c,
+                || Ok(())
+            )
+            .is_err()
+        );
+        let persisted = serde_json::to_vec(&last).unwrap();
+        let mut resumed = repair_control();
+        progress_evaluation_boundary(
+            &p,
+            128,
+            "model",
+            None,
+            &mut last,
+            &mut streak,
+            dir.path(),
+            &mut resumed,
+            || Ok(()),
+        )
+        .unwrap();
+        assert_eq!(streak, [1, 0, 0]);
+        for _ in 0..2 {
+            progress_evaluation_boundary(
+                &p,
+                128,
+                "model",
+                None,
+                &mut last,
+                &mut streak,
+                dir.path(),
+                &mut resumed,
+                || panic!("duplicate checkpoint"),
+            )
+            .unwrap();
+            assert_eq!(streak, [1, 0, 0]);
+        }
+        for (field, value) in [
+            ("final_evaluation_complete", json!(false)),
+            ("new_updates", json!(256)),
+            ("model_content_hash", json!("wrong")),
+            ("dev", json!({})),
+        ] {
+            let mut bad: Value = serde_json::from_slice(&persisted).unwrap();
+            bad[field] = value;
+            assert!(
+                progress_evaluation_boundary(
+                    &p,
+                    128,
+                    "model",
+                    None,
+                    &mut bad,
+                    &mut [0; 3],
+                    dir.path(),
+                    &mut repair_control(),
+                    || panic!("invalid checkpoint")
+                )
+                .is_err()
+            );
+        }
+        let another = tempfile::tempdir().unwrap();
+        let mut cancelled = repair_control();
+        cancelled.time_boundary = Some("progress_eval_checkpoint");
+        cancelled.hook = Some(Box::new(|boundary, cancel| {
+            if boundary == "progress_eval_checkpoint" {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        }));
+        let mut last = Value::Null;
+        let mut streak = [1, 0, 0];
+        assert!(
+            progress_evaluation_boundary(
+                &p,
+                128,
+                "model",
+                Some(e),
+                &mut last,
+                &mut streak,
+                another.path(),
+                &mut cancelled,
+                || Ok(())
+            )
+            .is_err()
+        );
+        let terminal = finish_arm(&mut cancelled, false, |_| Ok(()));
+        for reason in [
+            StopReason::QualityGuard,
+            StopReason::TimeBudget,
+            StopReason::Cancelled,
+        ] {
+            assert!(cancelled.observed.contains(&reason));
+        }
+        assert!(!progress_time_resume(&terminal));
+        println!(
+            "T-G03/04/05: repeated resume, corrupt receipts, simultaneous stop; actual updates0"
+        );
+    }
+    #[test]
+    fn state_data_time_split_native_optimizer_and_sampler_continuity() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut l = repair_loaded();
+        let c = TrainConfig {
+            seq_len: 32,
+            warmup: 0,
+            max_steps: 100,
+            microbatch: 1,
+            accumulation: 1,
+            ..Default::default()
+        };
+        let framed = samples(&[repair_episode("tiny-boundary")], &l.tokenizer, 32).unwrap();
+        let batch = batch(&framed, &[0], &Device::Cpu).unwrap();
+        let update = |l: &Loaded, adam: &mut Adam, step| {
+            let (_, loss, _) = response_loss(
+                &l.model.forward(&batch.input, Some(&batch.valid)).unwrap(),
+                &batch,
+                1.,
+            )
+            .unwrap();
+            let g = loss.backward().unwrap();
+            let grads = l
+                .model
+                .vars
+                .iter()
+                .map(|(k, v)| (k.clone(), g.get(v).unwrap().detach()))
+                .collect();
+            adam.step_constant(&l.model.vars, &grads, &c, step, 3e-5)
+                .unwrap();
+        };
+        let mut adam = Adam::new(&l.model.vars).unwrap();
+        update(&l, &mut adam, 18);
+        l.model.refresh_identity().unwrap();
+        let state = TrainingState {
+            contrast16: false,
+            parent_checkpoint_hash: None,
+            config: c.clone(),
+            step: 18,
+            consumed_tokens: 100,
+            target_tokens: 20,
+            sampler_state: 987,
+            corpus_hash: l.tokenizer.train_hash.clone(),
+            validation_hash: "3".repeat(64),
+            previous_corpora: vec![],
+            initial_weight_hash: l.manifest.initial_weight_hash.clone(),
+            train_loss: None,
+            validation_loss: None,
+        };
+        let p = json!({"run_id":"tiny-split","baseline_dev":208,"baseline_watch":18,"baseline_errors":2});
+        let model = l.model.weight_hash().unwrap();
+        let e = json!({"new_updates":128,"model_content_hash":model,"final_evaluation_complete":true,"dev_rows":[],"watch_rows":[],
+            "dev":{"denominator":256,"exact_matches":180,"generation_error_cases":0},"watch":{"denominator":32,"exact_matches":18,"generation_error_cases":0}});
+        let mut control = repair_control();
+        control.time_boundary = Some("progress_eval_recorded");
+        let mut last = Value::Null;
+        let mut streak = [0; 3];
+        assert!(
+            progress_evaluation_boundary(
+                &p,
+                128,
+                &model,
+                Some(e),
+                &mut last,
+                &mut streak,
+                dir.path(),
+                &mut control,
+                || panic!("time interrupted before evaluation checkpoint")
+            )
+            .is_err()
+        );
+        let native = dir.path().join("final");
+        let terminal = finish_arm(&mut control, false, |reason| {
+            save_arm(&mut l, &state, &adam, &native, reason)
+        });
+        assert_eq!(terminal["reason"], "TIME_BUDGET");
+        let mut restored = checkpoint::load(&native, Device::Cpu, true).unwrap();
+        let mut restored_adam = Adam {
+            moments: std::mem::take(&mut restored.optimizer),
+        };
+        let mut resumed = repair_control();
+        progress_evaluation_boundary(
+            &p,
+            128,
+            &restored.model.weight_hash().unwrap(),
+            None,
+            &mut last,
+            &mut streak,
+            dir.path(),
+            &mut resumed,
+            || {
+                save_arm(
+                    &mut restored,
+                    &state,
+                    &restored_adam,
+                    &dir.path().join("evaluation-native"),
+                    "RECOVERY_SCREENING",
+                )
+            },
+        )
+        .unwrap();
+        for _ in 0..2 {
+            progress_evaluation_boundary(
+                &p,
+                128,
+                &restored.model.weight_hash().unwrap(),
+                None,
+                &mut last,
+                &mut streak,
+                dir.path(),
+                &mut resumed,
+                || panic!("double application"),
+            )
+            .unwrap();
+        }
+        assert_eq!(streak, [1, 0, 0]);
+        update(&l, &mut adam, 19);
+        update(&restored, &mut restored_adam, 19);
+        assert_eq!(
+            l.model.weight_hash().unwrap(),
+            restored.model.weight_hash().unwrap()
+        );
+        assert_eq!(
+            optimizer_hash(&adam.moments).unwrap(),
+            optimizer_hash(&restored_adam.moments).unwrap()
+        );
+        let mut a = Rng {
+            state: state.sampler_state,
+        };
+        let mut b = Rng {
+            state: restored.manifest.training.unwrap().sampler_state,
+        };
+        assert_eq!(a.next_u64(), b.next_u64());
+        println!(
+            "T-G06 actual_TINY_optimizer_calls=3 SMALL=0; evaluation label128, initial mock native clock17; time-split model/Adam/sampler equal"
+        );
+    }
     fn repair_control() -> RunControl {
         RunControl::new(
             Arc::new(AtomicBool::new(false)),
@@ -8990,7 +10800,8 @@ mod tests {
         .unwrap();
         let output = dir.path().join("pair");
         std::fs::create_dir(&output).unwrap();
-        let report = data::renewed_copy_curricula(&root, &dev, &output, 82119).unwrap();
+        let original = data::load(&root).unwrap();
+        let report = data::renewed_copy_curricula(&original, &dev, &output, 82119).unwrap();
         assert_eq!(report["arms"]["F"]["focus_views"], 512);
         assert_eq!(report["arms"]["N"]["focus_views"], 2048);
         let (_, f, _) = data::load(&output.join("corpus-F")).unwrap();
@@ -9047,7 +10858,7 @@ mod tests {
         }
         let again = dir.path().join("again");
         std::fs::create_dir(&again).unwrap();
-        data::renewed_copy_curricula(&root, &dev, &again, 82119).unwrap();
+        data::renewed_copy_curricula(&original, &dev, &again, 82119).unwrap();
         assert_eq!(
             file_hash(&output.join("corpus-N/train.json")).unwrap(),
             file_hash(&again.join("corpus-N/train.json")).unwrap()

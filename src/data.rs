@@ -2406,13 +2406,13 @@ fn crossed_copy_panel(
 }
 /// F is a fixed balanced quarter of N. Both use the same grammar and 128-stratum schedule.
 pub fn renewed_copy_curricula(
-    original: &Path,
+    original: &(CorpusManifest, Vec<Episode>, Vec<Episode>),
     heldout: &[Episode],
     output: &Path,
     seed: u64,
 ) -> Result<serde_json::Value> {
     use serde_json::json;
-    let (parent, old, dev) = load(original)?;
+    let (parent, old, dev) = original;
     if old.len() != 4096 || dev.len() != 256 {
         return Err(Error::Invalid("original H3 curriculum required".into()));
     }
@@ -2420,8 +2420,8 @@ pub fn renewed_copy_curricula(
     if focus.len() != 2048 {
         return Err(Error::Invalid(format!("renewal capacity: {meta}")));
     }
-    check_split(&old, &focus)?;
-    check_split(&focus, &dev)?;
+    check_split(old, &focus)?;
+    check_split(&focus, dev)?;
     let mut report = json!({"generator":meta,"original_train_hash":parent.train.sha256,"seed":seed,"arms":{},"optimizer_updates":0});
     for (arm, count) in [("F", 512), ("N", 2048)] {
         let dir = output.join(format!("corpus-{arm}"));
@@ -2431,7 +2431,7 @@ pub fn renewed_copy_curricula(
         check_split(&train, heldout)?;
         let manifest=CorpusManifest {version:1,scope:parent.scope.clone(),permission:"project synthetic training; original anchors preserved".into(),
             generator:"controlled-renewal-H3-v1".into(),seed,split_rule:"holdout full entity excluded; old seal partition reserved; original train binding/raw disjoint; base views kept together".into(),
-            train:save_split(&dir,"train",&train)?,validation:save_split(&dir,"validation",&dev)?};
+            train:save_split(&dir,"train",&train)?,validation:save_split(&dir,"validation",dev)?};
         write_new(
             &dir.join("manifest.json"),
             &serde_json::to_vec_pretty(&manifest)?,

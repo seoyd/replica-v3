@@ -1,5 +1,42 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: R3-H3-STATE-DATA-RESULT-1.0
+
+Continue from bf705ad823d132a2f91e3df7323d49c3c23e2ee4. New SMALL optimizer calls are zero;
+the closed C/L and F/N budgets, failed quality gates and resume=false remain immutable.
+Repair only the shared evaluation/guard transition, frozen owned-data loading, and
+complete raw-panel/receipt verification followed by independent strict rescoring.
+Use existing RunControl, scorer, native loader and checker; retain model mathematics,
+tokenizer, normal greedy/strict UTF-8, tensor/storage formats and original artifacts.
+
+B0 preserves actual source/artifact identities. B1 must reproduce time interruption after
+raw publication and after checkpoint/decision publication, reconcile pending decisions
+before another optimizer call, avoid duplicate streak application, retain simultaneous
+quality/time/cancel reasons, and demonstrate normal short TINY native continuity.
+B2 binds A0/frozen/ordinary, source and current arm corpora, CROSS and policy lineage at
+baseline, renewal, new/resumed arm, final ordinary and close. Evaluators and the renewal
+generator consume the verified owned snapshots. B3 requires ordered complete dev256,
+watch32, CROSS512 and ordinary336+aux64; raw tokenizer/EOS/error consistency, independent
+field/base/strict rescoring and endpoint status precede any comparison or eligibility.
+Malformed/contradictory receipts are integrity failures; partial execution is incomplete;
+ordinary model errors remain in the full denominator. Historical missing bindings are
+explicit READ_ONLY_REAUDIT, never backfilled receipts or retroactive candidate promotion.
+
+After boundary regressions pass, B4 recounts unchanged F/N panels and permits one fresh
+process per final model with at most16 predetermined dev cases. B5 optionally inspects
+only the existing N256 native checkpoint, after lineage/preservation checks: reuse valid
+dev256 raw and generate its missing CROSS512/ordinary400 once. This is post-hoc DEVELOPMENT,
+not a preregistered winner, resume authorization, seal opening or product promotion.
+Aggregate new generation cap1200 (retries included), optimizer0; report teacher calls
+separately. Each command≤1800s plus cleanup≤120s, one heavy process, no automatic extension.
+The implementation below reuses dev and hence needs at most944 new generations.
+
+B6 records source/dirty/binary/native/raw provenance, RED/GREEN and positive regressions,
+derived versus newly executed observations, any post-hoc limits and one unresolved next
+hypothesis. Publish only related sources/tests/docs with verified remote SHA. Boundary
+verification, historical raw agreement, H3/S4/S5/S6 and Goal1 remain separate verdicts;
+independent review is pending. No new learning experiment is authorized by this repair.
+
 ## Closed: R3-H3-CONTROLLED-PROGRESS-1.0
 
 A0/A1/A2 are implemented, checked and executed. All four arms reached512 new updates;
