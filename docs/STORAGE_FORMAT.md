@@ -1,5 +1,71 @@
 # B0 storage format v1
 
+## Experimental R3JRN v1 (fixed before implementation)
+
+Separate explicit snapshot+journal paths; product ask remains SQLite. R3ARCH and
+RPV3 bytes are unchanged. One exclusive OS file lock for the writer; readers hold
+a shared lock. Max100,000 total events,256MiB canonical and512MiB decoded event
+bytes; max256 events/4MiB decoded transaction, max512MiB journal. No rotation/GC.
+
+All offsets below are bytes, integers unsigned LE; reserved bytes must be zero.
+
+| header offset | size | meaning |
+| --- | ---: | --- |
+| 0 | 8 | `R3JRN\0\0\0` |
+| 8 | 2 | version1 |
+| 10 | 1 | event reader schema2 (accepts wire1/2) |
+| 11 | 1 | byte order1 (LE) |
+| 12 | 4 | header length224 |
+| 16 | 16 | caller-provided store identity |
+| 32 | 32 | exact base snapshot SHA256 |
+| 64 | 32 | base canonical source digest |
+| 96 | 8 | max raw transaction4MiB |
+| 104 | 8 | max file512MiB |
+| 112 | 32 | recovery source file hash; zero for new store |
+| 144 | 8 | recovery source verified prefix end; zero for new store |
+| 152 | 40 | reserved zero |
+| 192 | 32 | SHA256(header[0..192]) |
+
+| transaction header offset | size | meaning |
+| --- | ---: | --- |
+| 0 | 8 | `R3TXN\0\0\0` |
+| 8 | 8 | full frame length:128+stored+56 |
+| 16 | 8 | consecutive commit sequence, starts1 |
+| 24 | 16 | request key; unique per journal |
+| 40 | 32 | previous frame digest; zero for first |
+| 72 | 4 | event count1..256 |
+| 76 | 4 | raw body length |
+| 80 | 4 | stored body length |
+| 84 | 1 | codec0 raw /1 zstd single bounded frame |
+| 85 | 11 | reserved zero |
+| 96 | 32 | SHA256(exact raw transaction body) |
+| 128 | stored | body: each u32 length + exact RPV3 event bytes |
+| 128+stored | 8 | trailer `R3COMMIT` |
+| +8 | 8 | repeated full frame length |
+| +16 | 8 | repeated sequence |
+| +24 | 32 | SHA256(transaction header + stored body) |
+
+Append validates the complete ordered batch with existing Event/link/head/request
+rules before writing; file sync succeeds before derived view/ACK. Same request
+and exact encoded body returns the existing commit, conflict otherwise. Assigned
+ID/time are supplied by this explicit import API and included in content identity.
+Complete prefix only is replayed. Partial EOF header/body/trailer is preserved,
+reported, and disallows append; malformed complete frame/checksum/sequence stops
+at that offset with no resync. Recovery explicitly publishes a new journal with
+source hash/prefix range and copies verified frames; old bytes remain unchanged.
+No real power-loss proof: std sync_all differs from SQLite macOS fullfsync.
+DURABILITY_NOT_EQUIVALENT. Checksums are not authentication. Derived metadata,
+versions and bounded BFS reuse Archive; committed journal bodies are a bounded
+in-memory overlay. No duplicate payload persisted in a second index.
+
+Snapshot export measurement permits64KiB/256KiB blocks and raw/zstd1/zstd3 inside
+existing R3ARCH wire1 and2MiB block maximum. A single larger event occupies its
+own bounded block. Default archive export remains2MiB/zstd3. No dictionary.
+
+Model storage remains R3MODEL wire1 raw F32. Timing fields are process-local
+instrumentation, not new wire fields. Measurement-only R3COLD wrapper is rejected
+by the product loader; only byte-exact restored .r3m files are loaded.
+
 Frozen before implementation. Canonical memory is one SQLite database, application_id
 0x52505633, user_version=1, projection/normalization version=1. No dictionary or
 payload deduplication. records(id INTEGER PRIMARY KEY, body BLOB) is append-only.

@@ -439,6 +439,8 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                 ("runtime", "rv02_whole_evidence"),
                 ("store", "lifecycle_restart"),
                 ("experiment_record", "binary_"),
+                ("journal", "journal_"),
+                ("store", "retraction_restore_and_db_free_archive"),
             ] {
                 r.cargo(
                     "test",

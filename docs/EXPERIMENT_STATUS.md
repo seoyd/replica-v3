@@ -1,5 +1,63 @@
 # 진단 및 구현 상태
 
+## G4 — 분리된 graph journal 원형 검증
+
+2026-09-18 / EXECUTED_THIS_RUN. R3JRN v1 writer/reader를 추가하고 기존 Archive의
+Event/link/head 검증, version/current/as_of, 방향별 bounded BFS를 공유한다.
+운영 SQLite와 product ask는 변경하지 않았다. snapshot의 exact file/source hash,
+연속 sequence/previous digest, 요청/본문 hash, commit trailer를 검사한다. 단일
+writer lock 및 sync 후 ACK, 같은 request/content 재시도의 동일 commit 반환,
+부분 tail/중간 손상에서 verified prefix만 조회하고 새 파일로 명시 recovery를 검증했다.
+원장 tail을 자동 truncate/삭제하지 않는다. 원문은 기존 RPV3 bytes 그대로다.
+
+직접 journal5 PASS, 기존 archive literal/손상3 PASS, SQLite/archive version/BFS
+회귀1 PASS, 별도 canonical CLI process1 PASS. 최초 회귀는 같은 사건의 복원 edge
+순서 차이를 발견했고 공유 projection의 정렬을 고친 뒤 통과했다. 실제 child를
+fsync 후 ACK 전 exit91하고 새 process에서 재시도/조회했다. header/body/trailer
+절단은 독립 파일 fixture이며 실제 장치 정전 시험으로 주장하지 않는다.
+
+최종 크기·지연 원자료는 local `artifacts/native-storage-quality-20260918/`의
+`g4-final-{1000,10000,100000}.log`, stores=`graph-final-{1000,10000,100000}/`.
+이전 `g4-measure-*`는 캐시를 먼저 데우던 parity 순서 문제를 발견한 개발 측정으로
+보존했다. 최종판은 추가 archive lookup 없이 같은 SQL 결과와 대조한다. 각 반복의
+사건 기록 시각은 실제 SQL 할당값이며 각 비교 안에서는 동일 canonical bytes다.
+
+| 사건 수 | SQLite DB+SHM (WAL checkpoint 후0) | base100+raw journal | base100+zstd3 journal |
+| --- | ---: | ---: | ---: |
+| 1,000 | 962,560 | 145,963 | 47,970 |
+| 10,000 | 7,802,880 | 1,456,281 | 366,027 |
+| 100,000 | 74,145,792 | 14,821,974 | 3,574,980 |
+
+각 raw/zstd1/zstd3에서 사건 전체 bytes와 관계 inventory100% 일치. 100K payload
+19,237,000B, 평균192B, facts3,000/retractions1,000/explicit relations4,000/전체 파생
+edges8,000. 반복·장문 한국어와 고정 RNG의 불규칙 ASCII를 사용했다. 기존 Event는
+UTF-8 payload만 허용하므로 invalid UTF-8를 몰래 지원한 것으로 보고하지 않는다.
+보존/선택 성능은 이 synthetic workload에만 해당하며 일상 대화 평균이 아니다.
+
+100K의64/256KiB×raw/zstd1/zstd3 snapshot6개도 동일 source/edge를 검증했다.
+256KiB/zstd3 전체5,007,464B = header144 + block directory2,860 + record offset
+index2,000,000 + stored blocks3,004,460. Dictionary0. journal은 base15,867B +
+header224B +999 frame header/trailer183,816B +stored bodies이며, body 안의 event
+length4B×99,900은 압축 전 구조 비용으로 이미 body에 포함된다. 중복 합산하지 않는다.
+Journal persistent adjacency/lexical index/backup0, RAM에서 metadata·versions·edges와
+canonical overlay를 재구축한다. SQLite의 table별 dbstat/FTS/relations/indices 및
+checkpoint 전 WAL과 이후 SHM 크기도 원자료에 분리 기록했다.
+
+100K에서100-event durable commit P50/P95: SQLite7.832/17.991ms,
+journal raw4.018/4.984ms,zstd3 4.013/4.971ms. 초기100개는 snapshot에 있어 journal
+999commit, SQLite1000commit이다. durability는 NOT_EQUIVALENT(std sync_all 대
+SQLite FULL+macOS fullfsync), 기능은 FTS/동시성/트랜잭션 범위가 달라 DB 전체의
+우월성 비교가 아니다. 동일 query100건의 journal zstd3 P50/P95(ms):
+get .001083/.001375,history .002500/.003000,as_of .001333/.001833,
+4-hop BFS .005250/.005833. 다른 후보의 동일 항목도 로그에 있다. query 순서는
+SQL→archive→journal이고 OS cache를 비우지 않았다. 영구/일반적 지연 보장 아님.
+각 profile warm index rebuild3회와 fresh process3회를 수행했다. 100K 측정 전체
+OS peak footprint156,893,808B; RAM BTreeMap allocator 비용은 따로 분리 측정하지
+않았고 persistent bytes와 합쳐 작은 RAM 사용을 주장하지 않는다. mmap 없음.
+
+GRAPH_JOURNAL=VERIFIED_PROTOTYPE. 저장 exact, 해당 조회 parity PASS; 일반 검색
+recall/false-positive와 모델 ANSWER 품질은 NOT_RUN. 이번 G4 모델 호출/학습0.
+
 ## G3 — 모델 저장 측정, raw F32 기본 유지
 
 2026-09-18 / EXECUTED_THIS_RUN. 기존 F512 .r3m을 새 경로로 추론용/재개용 export했다.

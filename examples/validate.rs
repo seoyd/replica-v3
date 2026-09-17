@@ -1299,6 +1299,11 @@ fn smoke(checkpoint: &str, cli: &str, output: &str) -> Result<()> {
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("journal-measure") if args.len()==3 => journal_measure(std::path::Path::new(&args[1]),args[2].parse().map_err(|_|Error::Invalid("journal measure count".into()))?),
+        Some("journal-read-probe") if args.len()==3 => {
+            let start=Instant::now();let j=replica_v3::journal::Journal::open(std::path::Path::new(&args[1]),std::path::Path::new(&args[2]),false)?;
+            println!("FRESH_JOURNAL events={} commits={} replay_ms={} RSS_SNAPSHOT_KIB={} tail={:?}",j.view().event_count(),j.last().sequence,elapsed(start),probe_rss(),j.tail());Ok(())
+        },
         Some("native-storage-measure") if args.len()==3 => native_storage_measure(std::path::Path::new(&args[1]),std::path::Path::new(&args[2])),
         Some("archive-measure") if args.len()==2 => archive_measure(std::path::Path::new(&args[1])),
         Some("archive-read-probe") if args.len()==3 => archive_read_probe(std::path::Path::new(&args[1]),&args[2]),
@@ -2683,6 +2688,286 @@ fn archive_latency(label: &str, mut values: Vec<f64>) {
         values[0],
         values[values.len() - 1]
     );
+}
+fn journal_measure(root: &std::path::Path, count: usize) -> Result<()> {
+    use replica_v3::{archive::Archive, journal::Journal, retrieval::GraphDirection};
+    if ![1000, 10000, 100000].contains(&count) {
+        return Err(Error::Invalid("journal workload count".into()));
+    }
+    std::fs::create_dir(root)?;
+    let db = root.join("synthetic.db");
+    let mut sql = Store::init(&db)?;
+    let snapshot = root.join("base100.r3a");
+    let mut timings = Vec::new();
+    let mut all = Vec::new();
+    let mut rng = replica_v3::neural::transformer::Rng::new(89171);
+    for start in (0..count).step_by(100) {
+        let mut events = Vec::new();
+        for i in start..start + 100 {
+            let group = i / 100;
+            let n = i % 100;
+            let first = (group * 100 + 1) as i64;
+            let slot = Slot {
+                entity: format!("장치-{group}"),
+                predicate: "방향".into(),
+                context: "실험".into(),
+            };
+            let text = match n {
+                0 | 3 => "오른쪽\0 원문".into(),
+                1 => "왼쪽 정정".into(),
+                20 => "보존하는 긴 한국어 관측 원문. ".repeat(300),
+                21..=29 => (0..240)
+                    .map(|_| char::from(b' ' + (rng.next_u64() % 95) as u8))
+                    .collect::<String>(),
+                _ => format!("반복 관측 {n}: 원문과 관계를 보존한다."),
+            };
+            let mut e = Event::observation(
+                "synthetic",
+                &format!("session-{group}"),
+                "generated-rust",
+                text.into_bytes(),
+            );
+            e.observed_at = Some(i as i64);
+            e.kind = match n {
+                0 | 1 | 3 => Kind::Fact {
+                    slot,
+                    previous: match n {
+                        0 => None,
+                        1 => Some(first),
+                        _ => Some(first + 2),
+                    },
+                    restored_from: (n == 3).then_some(first),
+                    valid_from: Some(10),
+                    valid_until: None,
+                },
+                2 => Kind::Retraction {
+                    slot,
+                    previous: first + 1,
+                    valid_from: Some(10),
+                    valid_until: None,
+                },
+                15..=18 => Kind::Relation {
+                    relation: RelationKind::Precedes,
+                    from: first + n as i64 - 5,
+                    to: first + n as i64 - 4,
+                    evidence: vec![first],
+                },
+                _ => Kind::Observation { question: None },
+            };
+            events.push(e);
+        }
+        let t = Instant::now();
+        all.extend(sql.import(events)?);
+        timings.push(elapsed(t));
+        if start == 0 {
+            sql.export_archive(&snapshot, Compression::Raw)?;
+        }
+        if (start + 100).is_multiple_of(10000) {
+            println!(
+                "NODE=G4 STATE=BUILDING_SQL events={}/{} elapsed_last_commit_ms={} RSS_SNAPSHOT_KIB={}",
+                start + 100,
+                count,
+                timings.last().unwrap(),
+                probe_rss()
+            );
+        }
+    }
+    archive_latency("sqlite_durable_commit_100_events", timings);
+    let sizes = sql.storage_sizes()?;
+    println!("SQLITE_BEFORE_CHECKPOINT {sizes:?}");
+    let c = rusqlite::Connection::open(&db)?;
+    c.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+    drop(c);
+    println!("SQLITE_AFTER_CHECKPOINT {:?}", sql.storage_sizes()?);
+    let full_path = root.join("full.r3a");
+    sql.export_archive(&full_path, Compression::Raw)?;
+    let full = Archive::open(&full_path)?;
+    let payload: usize = all.iter().map(|e| e.payload.len()).sum();
+    println!(
+        "WORKLOAD records={count} payload_bytes={payload} average_payload={} facts={} retractions={} explicit_relations={} all_derived_edges={} scope=synthetic sessions={} payload_distribution=repeated_Korean_long_Korean_and_deterministic_irregular_ASCII binary_invalid_UTF8=NOT_SUPPORTED_BY_EVENT_SCHEMA",
+        payload / count,
+        count * 3 / 100,
+        count / 100,
+        count * 4 / 100,
+        full.relation_inventory().count(),
+        count / 100
+    );
+    for block in [65536, 262144] {
+        for level in [None, Some(1), Some(3)] {
+            let path = root.join(format!("snapshot-{block}-{level:?}.r3a"));
+            let start = Instant::now();
+            let info = sql.export_archive_profile(&path, block, level)?;
+            let publish = elapsed(start);
+            let start = Instant::now();
+            let a = Archive::open(&path)?;
+            let read = elapsed(start);
+            if a.info.source_identity != full.info.source_identity
+                || a.relation_inventory().ne(full.relation_inventory())
+            {
+                return Err(Error::Corrupt("snapshot profile parity".into()));
+            }
+            println!(
+                "SNAPSHOT block={block} level={level:?} durable_export_ms={publish} replay_ms={read} info={info:?}"
+            );
+        }
+    }
+    let bodies = all
+        .iter()
+        .skip(100)
+        .map(|e| full.canonical_body(e.id))
+        .collect::<Result<Vec<_>>>()?;
+    for level in [None, Some(1), Some(3)] {
+        let path = root.join(format!("journal-{level:?}.r3j"));
+        Journal::create(&snapshot, &path, [42; 16])?;
+        let mut j = Journal::open(&snapshot, &path, true)?;
+        let mut times = Vec::new();
+        // Same commit cardinality as SQL; base100 is already in the snapshot.
+        for (i, chunk) in bodies.chunks(100).enumerate() {
+            let t = Instant::now();
+            j.append((i as u128 + 1).to_le_bytes(), chunk.to_vec(), level)?;
+            times.push(elapsed(t));
+        }
+        archive_latency(
+            &format!("journal_{level:?}_durable_commit_100_events"),
+            times,
+        );
+        let total = j.file_bytes()? + std::fs::metadata(&snapshot)?.len();
+        println!(
+            "JOURNAL level={level:?} snapshot_bytes={} journal_bytes={} total_persisted_bytes={total} header=224 transaction_headers_and_trailers={} event_length_index={} dictionaries=0 backup=0 lexical_index=0 persistent_adjacency=0 committed={}",
+            std::fs::metadata(&snapshot)?.len(),
+            j.file_bytes()?,
+            j.last().sequence * 184,
+            (count - 100) * 4,
+            j.last().sequence
+        );
+        drop(j);
+        let mut starts = Vec::new();
+        for repeat in 0..3 {
+            let t = Instant::now();
+            let j = Journal::open(&snapshot, &path, false)?;
+            starts.push(elapsed(t));
+            if j.tail().is_some() || j.view().event_count() != count {
+                return Err(Error::Corrupt("journal replay completeness".into()));
+            }
+            if repeat == 0 {
+                for e in &all {
+                    if j.view().get(e.id)? != *e
+                        || j.view().canonical_body(e.id)? != full.canonical_body(e.id)?
+                    {
+                        return Err(Error::Corrupt("journal exact event parity".into()));
+                    }
+                }
+                if j.view().relation_inventory().ne(full.relation_inventory()) {
+                    return Err(Error::Corrupt("journal edge parity".into()));
+                }
+                let mut get = [Vec::new(), Vec::new(), Vec::new()];
+                let mut history = get.clone();
+                let mut current = get.clone();
+                let mut graph = get.clone();
+                for i in 0..100 {
+                    let group = (i * 7919) % (count / 100);
+                    let id = (group * 100 + 11) as i64;
+                    let slot = Slot {
+                        entity: format!("장치-{group}"),
+                        predicate: "방향".into(),
+                        context: "실험".into(),
+                    };
+                    let mut q = Search::new("synthetic", "");
+                    q.history = true;
+                    q.session = Some(format!("session-{group}"));
+                    q.valid_at = 10;
+                    let mut expected_graph = None;
+                    for (k, v) in [None, Some(&full), Some(j.view())].into_iter().enumerate() {
+                        let t = Instant::now();
+                        let e = if let Some(v) = v {
+                            v.get(id)?
+                        } else {
+                            sql.get(id)?
+                        };
+                        get[k].push(elapsed(t));
+                        if e != all[id as usize - 1] {
+                            return Err(Error::Corrupt("get parity".into()));
+                        }
+                        let t = Instant::now();
+                        let h = if let Some(v) = v {
+                            v.history("synthetic", &slot)?
+                        } else {
+                            sql.history("synthetic", &slot)?
+                        };
+                        history[k].push(elapsed(t));
+                        if h.len() != 4 {
+                            return Err(Error::Corrupt("history count".into()));
+                        }
+                        let t = Instant::now();
+                        let c = if let Some(v) = v {
+                            v.current("synthetic", &slot, Some(h[3].recorded_at), 10)?
+                        } else {
+                            sql.current("synthetic", &slot, Some(h[3].recorded_at), 10)?
+                        };
+                        current[k].push(elapsed(t));
+                        if c.as_ref() != Some(&h[3]) {
+                            return Err(Error::Corrupt("as_of/current parity".into()));
+                        }
+                        let t = Instant::now();
+                        let g = if let Some(v) = v {
+                            v.directed_graph(&q, &[id], GraphDirection::Outgoing)?
+                        } else {
+                            sql.directed_graph(&q, &[id], GraphDirection::Outgoing)?
+                        };
+                        graph[k].push(elapsed(t));
+                        if let Some(expected) = &expected_graph {
+                            if &g != expected {
+                                return Err(Error::Corrupt("bounded4hop parity".into()));
+                            }
+                        } else {
+                            expected_graph = Some(g);
+                        }
+                    }
+                }
+                for (name, values) in [
+                    ("get", get),
+                    ("history", history),
+                    ("as_of", current),
+                    ("BFS_4hop", graph),
+                ] {
+                    for (i, values) in values.into_iter().enumerate() {
+                        archive_latency(
+                            &format!("{level:?}_{}_{}", ["sqlite", "archive", "journal"][i], name),
+                            values,
+                        );
+                    }
+                }
+                println!(
+                    "EXACT_EVENT_PARITY={count}/{count} EXACT_EDGE_PARITY=PASS CURRENT_HISTORY_AS_OF_BFS=PASS RSS_SNAPSHOT_KIB={} in_memory_overlay_canonical_bytes={} derived_indexes=rebuilt_in_RAM_BTreeMap_allocator_overhead_not_separately_measured",
+                    probe_rss(),
+                    bodies.iter().map(Vec::len).sum::<usize>()
+                );
+            }
+            let o = Command::new(std::env::current_exe()?)
+                .args([
+                    "journal-read-probe",
+                    snapshot.to_str().unwrap(),
+                    path.to_str().unwrap(),
+                ])
+                .output()?;
+            if !o.status.success() {
+                return Err(Error::Corrupt("fresh journal process".into()));
+            }
+            println!(
+                "repeat={repeat} {}",
+                String::from_utf8(o.stdout)
+                    .map_err(|_| Error::Corrupt("journal probe stdout".into()))?
+            );
+        }
+        archive_latency(
+            &format!("journal_{level:?}_warm_start_index_rebuild"),
+            starts,
+        );
+    }
+    println!(
+        "STORAGE_PRESERVATION=VERIFIED RETRIEVAL_PARITY=VERIFIED_FOR_FIXED_QUERIES ANSWER_QUALITY=NOT_RUN MODEL_CALLS=0 DURABILITY_NOT_EQUIVALENT SQLite_FULL_fullfsync_vs_std_sync_all archive_readonly_journal_singlewriter cache=OS_uncontrolled no_mmap no_dictionary no_backups created_only_synthetic=true"
+    );
+    Ok(())
 }
 fn archive_measure(root: &std::path::Path) -> Result<()> {
     use replica_v3::{archive::Archive, neural::transformer::Rng, retrieval::GraphDirection};

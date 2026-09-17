@@ -87,6 +87,11 @@ pub struct Archive {
     meta: BTreeMap<i64, Meta>,
     versions: BTreeMap<Vec<u8>, Vec<i64>>,
     edges: BTreeMap<i64, Vec<RelationStep>>,
+    requests: BTreeSet<(String, [u8; 16])>,
+    results: BTreeSet<i64>,
+    overlay: BTreeMap<i64, Vec<u8>>,
+    overlay_decoded: u64,
+    overlay_bytes: u64,
     cache: RefCell<BlockCache>,
     pub info: ArchiveInfo,
     pub index_rebuild_ms: f64,
@@ -119,16 +124,14 @@ fn flush_block(
     file: &mut File,
     raw: &mut Vec<u8>,
     blocks: &mut Vec<Block>,
-    compression: Compression,
+    level: Option<i32>,
 ) -> Result<()> {
     if raw.is_empty() {
         return Ok(());
     }
-    let compressed = if matches!(compression, Compression::Auto) {
-        Some(zstd::bulk::compress(raw, 3)?)
-    } else {
-        None
-    };
+    let compressed = level
+        .map(|level| zstd::bulk::compress(raw, level))
+        .transpose()?;
     let (codec, stored) = match &compressed {
         Some(c) if c.len() < raw.len() => (1, c.as_slice()),
         _ => (0, raw.as_slice()),
@@ -147,6 +150,23 @@ fn flush_block(
 }
 impl Store {
     pub fn export_archive(&self, path: &Path, compression: Compression) -> Result<ArchiveInfo> {
+        self.export_archive_profile(
+            path,
+            BLOCK_BYTES,
+            matches!(compression, Compression::Auto).then_some(3),
+        )
+    }
+    pub fn export_archive_profile(
+        &self,
+        path: &Path,
+        block_bytes: usize,
+        level: Option<i32>,
+    ) -> Result<ArchiveInfo> {
+        if ![64 * 1024, 256 * 1024, BLOCK_BYTES].contains(&block_bytes)
+            || level.is_some_and(|v| ![1, 3].contains(&v))
+        {
+            return Err(Error::Invalid("archive block/compression profile".into()));
+        }
         let tx = self.conn.unchecked_transaction()?;
         let (count, bound): (i64, i64) = tx.query_row(
             "SELECT count(*),coalesce(max(id),0) FROM records",
@@ -162,7 +182,7 @@ impl Store {
             file.write_all(&[0u8; PREFIX])?;
             let mut blocks = Vec::new();
             let mut index = Vec::with_capacity(count as usize);
-            let mut raw = Vec::with_capacity(BLOCK_BYTES);
+            let mut raw = Vec::with_capacity(block_bytes);
             let mut canonical_bytes = 0u64;
             let mut decoded_bytes = 0u64;
             let mut payload_bytes = 0u64;
@@ -201,8 +221,8 @@ impl Store {
                 }
                 payload_bytes += event.payload.len() as u64;
                 canonical_hash(&mut digest, id, body);
-                if raw.len() + body.len() > BLOCK_BYTES {
-                    flush_block(file, &mut raw, &mut blocks, compression)?;
+                if raw.len() + body.len() > block_bytes {
+                    flush_block(file, &mut raw, &mut blocks, level)?;
                 }
                 index.push((
                     id,
@@ -214,7 +234,7 @@ impl Store {
                 ));
                 raw.extend_from_slice(body);
             }
-            flush_block(file, &mut raw, &mut blocks, compression)?;
+            flush_block(file, &mut raw, &mut blocks, level)?;
             if index.len() != count as usize || last_id != bound {
                 return Err(bad("snapshot changed"));
             }
@@ -243,7 +263,7 @@ impl Store {
             let mut prefix = [0u8; PREFIX];
             prefix[..8].copy_from_slice(MAGIC);
             prefix[8..10].copy_from_slice(&1u16.to_le_bytes());
-            prefix[10] = u8::from(matches!(compression, Compression::Auto));
+            prefix[10] = u8::from(level.is_some());
             prefix[11] = 2; // Schema2 also reads unchanged schema1 canonical bodies.
             prefix[12..16].copy_from_slice(&(directory.len() as u32).to_le_bytes());
             prefix[16..24].copy_from_slice(&total.to_le_bytes());
@@ -407,6 +427,11 @@ impl Archive {
             meta: BTreeMap::new(),
             versions: BTreeMap::new(),
             edges: BTreeMap::new(),
+            requests: BTreeSet::new(),
+            results: BTreeSet::new(),
+            overlay: BTreeMap::new(),
+            overlay_decoded: 0,
+            overlay_bytes: 0,
             cache: RefCell::new(BlockCache::default()),
             info,
             index_rebuild_ms: 0.,
@@ -423,9 +448,9 @@ impl Archive {
         let mut previous_time = i64::MIN;
         let mut payload_bytes = 0u64;
         let mut decoded_bytes = 0u64;
-        let mut requests = BTreeSet::new();
-        let mut results = BTreeSet::new();
-        for &id in self.index.keys() {
+        self.requests.clear();
+        self.results.clear();
+        for id in self.index.keys().copied().collect::<Vec<_>>() {
             let body = self.canonical_body(id)?;
             decoded_bytes += u64::from(u32_at(&body, 8));
             if decoded_bytes > self.info.decoded_event_bytes {
@@ -447,40 +472,14 @@ impl Archive {
             store::validate_links_with(&e, |id| self.get(id), current)
                 .map_err(|e| bad(&e.to_string()))?;
             if e.request_key
-                .is_some_and(|key| !requests.insert((e.scope.clone(), key)))
-                || e.kind.input().is_some_and(|input| !results.insert(input))
+                .is_some_and(|key| !self.requests.insert((e.scope.clone(), key)))
+                || e.kind
+                    .input()
+                    .is_some_and(|input| !self.results.insert(input))
             {
                 return Err(bad("duplicate request/result"));
             }
-            for (from, to, relation) in e.edges() {
-                let edge = RelationStep {
-                    from,
-                    to,
-                    relation,
-                    origin: e.id,
-                };
-                self.edges.entry(from).or_default().push(edge.clone());
-                if to != from {
-                    self.edges.entry(to).or_default().push(edge);
-                }
-            }
-            if let Some(key) = &slot {
-                self.versions.entry(key.clone()).or_default().push(id);
-            }
-            let (from, until) = e.kind.validity();
-            self.meta.insert(
-                id,
-                Meta {
-                    scope: e.scope,
-                    session: e.session,
-                    recorded: e.recorded_at,
-                    slot,
-                    kind: e.kind.tag(),
-                    question: matches!(e.kind, Kind::Observation { question: Some(_) }),
-                    from,
-                    until,
-                },
-            );
+            self.project(&e);
         }
         if format!("{:x}", digest.finalize()) != self.info.source_identity
             || previous_time != self.info.snapshot_recorded_at
@@ -495,6 +494,128 @@ impl Archive {
         self.index_rebuild_ms = start.elapsed().as_secs_f64() * 1000.;
         Ok(())
     }
+    fn project(&mut self, e: &Event) {
+        let id = e.id;
+        let slot = e.kind.slot().map(|s| s.key(&e.scope));
+        for (from, to, relation) in e.edges() {
+            let edge = RelationStep {
+                from,
+                to,
+                relation,
+                origin: e.id,
+            };
+            for id in [Some(from), (to != from).then_some(to)]
+                .into_iter()
+                .flatten()
+            {
+                let edges = self.edges.entry(id).or_default();
+                let key = |e: &RelationStep| (e.origin, e.from, e.to, e.relation as u8);
+                let at = edges.partition_point(|old| key(old) <= key(&edge));
+                edges.insert(at, edge.clone());
+            }
+        }
+        if let Some(key) = &slot {
+            self.versions.entry(key.clone()).or_default().push(id);
+        }
+        let (from, until) = e.kind.validity();
+        self.meta.insert(
+            id,
+            Meta {
+                scope: e.scope.clone(),
+                session: e.session.clone(),
+                recorded: e.recorded_at,
+                slot,
+                kind: e.kind.tag(),
+                question: matches!(e.kind, Kind::Observation { question: Some(_) }),
+                from,
+                until,
+            },
+        );
+    }
+    pub fn event_count(&self) -> usize {
+        self.meta.len()
+    }
+    pub fn ids(&self) -> impl Iterator<Item = i64> + '_ {
+        self.meta.keys().copied()
+    }
+    // Validate a bounded transaction without changing the committed graph view.
+    pub(crate) fn prepare_overlay(&self, bodies: &[Vec<u8>]) -> Result<Vec<Event>> {
+        if bodies.is_empty() || bodies.len() > 256 || self.meta.len() + bodies.len() > MAX_RECORDS {
+            return Err(bad("overlay count"));
+        }
+        let mut pending = BTreeMap::<i64, Event>::new();
+        let mut heads = BTreeMap::new();
+        let mut requests = BTreeSet::new();
+        let mut results = BTreeSet::new();
+        let mut previous = self
+            .meta
+            .last_key_value()
+            .map(|(&id, m)| (id, m.recorded))
+            .unwrap_or((0, i64::MIN));
+        let mut raw = self.info.canonical_bytes + self.overlay_bytes;
+        let mut decoded = self.info.decoded_event_bytes + self.overlay_decoded;
+        for body in bodies {
+            let e = codec::decode(body)?;
+            raw += body.len() as u64;
+            decoded += u64::from(u32_at(body, 8));
+            if raw > MAX_CANONICAL
+                || decoded > MAX_DECODED
+                || e.id <= previous.0
+                || e.recorded_at < previous.1
+            {
+                return Err(bad("overlay order/byte bound"));
+            }
+            let slot = e.kind.slot().map(|s| s.key(&e.scope));
+            let current = slot.as_ref().and_then(|key| {
+                heads
+                    .get(key)
+                    .copied()
+                    .or_else(|| self.versions.get(key).and_then(|v| v.last()).copied())
+            });
+            store::validate_links_with(
+                &e,
+                |id| {
+                    pending
+                        .get(&id)
+                        .cloned()
+                        .map(Ok)
+                        .unwrap_or_else(|| self.get(id))
+                },
+                current,
+            )?;
+            if let Some(key) = e.request_key {
+                let key = (e.scope.clone(), key);
+                if self.requests.contains(&key) || !requests.insert(key) {
+                    return Err(bad("duplicate event request"));
+                }
+            }
+            if let Some(input) = e.kind.input()
+                && (self.results.contains(&input) || !results.insert(input))
+            {
+                return Err(bad("duplicate result"));
+            }
+            if let Some(slot) = slot {
+                heads.insert(slot, e.id);
+            }
+            previous = (e.id, e.recorded_at);
+            pending.insert(e.id, e);
+        }
+        Ok(pending.into_values().collect())
+    }
+    pub(crate) fn apply_overlay(&mut self, events: Vec<Event>, bodies: Vec<Vec<u8>>) {
+        for (e, body) in events.into_iter().zip(bodies) {
+            self.project(&e);
+            if let Some(key) = e.request_key {
+                self.requests.insert((e.scope.clone(), key));
+            }
+            if let Some(input) = e.kind.input() {
+                self.results.insert(input);
+            }
+            self.overlay_decoded += u64::from(u32_at(&body, 8));
+            self.overlay_bytes += body.len() as u64;
+            self.overlay.insert(e.id, body);
+        }
+    }
     pub fn io_counts(&self) -> (u64, u64) {
         let c = self.cache.borrow();
         (c.read_bytes, c.decoded_bytes)
@@ -506,6 +627,9 @@ impl Archive {
             .flat_map(|(&id, edges)| edges.iter().filter(move |edge| edge.from == id))
     }
     pub fn canonical_body(&self, id: i64) -> Result<Vec<u8>> {
+        if let Some(body) = self.overlay.get(&id) {
+            return Ok(body.clone());
+        }
         let l = self
             .index
             .get(&id)
@@ -580,7 +704,7 @@ impl Archive {
         let e = self
             .latest(
                 &slot.key(scope),
-                self.info.snapshot_id,
+                self.meta.last_key_value().map_or(0, |(&id, _)| id),
                 as_of.unwrap_or(i64::MAX),
             )
             .map(|id| self.get(id))
@@ -625,7 +749,7 @@ impl Archive {
         let deadline = Instant::now() + Duration::from_millis(100);
         let mut seeds = Vec::new();
         let mut bundle = EvidenceBundle::default();
-        for &id in self.index.keys().rev() {
+        for &id in self.meta.keys().rev() {
             if Instant::now() >= deadline {
                 bundle.truncated = true;
                 break;

@@ -147,8 +147,20 @@ enum Commands {
     Archive {
         #[arg(long)]
         path: PathBuf,
+        /// Explicit experimental journal overlay; never opens the default database.
+        #[arg(long)]
+        journal: Option<PathBuf>,
         #[command(subcommand)]
         command: Archives,
+    },
+    /// Experimental snapshot+journal store, separate from product ask/SQLite.
+    Journal {
+        #[arg(long)]
+        snapshot: PathBuf,
+        #[arg(long)]
+        path: PathBuf,
+        #[command(subcommand)]
+        command: Journals,
     },
     Record {
         #[command(flatten)]
@@ -249,6 +261,9 @@ enum Archives {
         id: i64,
         #[arg(long)]
         metadata: bool,
+        /// Export the exact RPV3 envelope, including assigned ID/time.
+        #[arg(long, conflicts_with = "metadata")]
+        canonical: bool,
     },
     History {
         #[arg(long)]
@@ -297,6 +312,27 @@ enum Archives {
         history: bool,
         #[arg(long)]
         lexical_only: bool,
+    },
+}
+#[derive(Subcommand)]
+enum Journals {
+    Init {
+        #[arg(long)]
+        store_id: String,
+    },
+    Inspect,
+    Append {
+        #[arg(long)]
+        request: String,
+        /// Files containing exact, already assigned RPV3 event envelopes in commit order.
+        #[arg(long, required = true)]
+        events: Vec<PathBuf>,
+        #[arg(long,default_value="raw",value_parser=["raw","zstd1","zstd3"])]
+        codec: String,
+    },
+    Recover {
+        #[arg(long)]
+        output: PathBuf,
     },
 }
 fn input_bytes(input: Input) -> Result<Vec<u8>> {
@@ -360,9 +396,75 @@ fn default_db() -> Result<PathBuf> {
 }
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    if let Commands::Journal {
+        snapshot,
+        path,
+        command,
+    } = cli.command
+    {
+        use replica_v3::journal::Journal;
+        if let Journals::Init { store_id } = command {
+            return Journal::create(&snapshot, &path, parse_key(&store_id)?);
+        }
+        let mut journal =
+            Journal::open(&snapshot, &path, matches!(command, Journals::Append { .. }))?;
+        match command {
+            Journals::Inspect => println!(
+                "committed={:?} events={} tail={:?} bytes={} experimental=true durability=NOT_EQUIVALENT",
+                journal.last(),
+                journal.view().event_count(),
+                journal.tail(),
+                journal.file_bytes()?
+            ),
+            Journals::Recover { output } => journal.recover_to(&output)?,
+            Journals::Append {
+                request,
+                events,
+                codec,
+            } => {
+                if events.len() > 256 {
+                    return Err(Error::Invalid("journal event count".into()));
+                }
+                let mut bodies = Vec::new();
+                let mut bytes = 0;
+                for p in events {
+                    let body = replica_v3::neural::read_bounded(
+                        &p,
+                        replica_v3::codec::MAX_BODY + replica_v3::codec::HEADER,
+                    )?;
+                    bytes += body.len() + 4;
+                    if bytes > 4 * 1024 * 1024 {
+                        return Err(Error::Invalid("journal transaction byte bound".into()));
+                    }
+                    bodies.push(body);
+                }
+                let level = match codec.as_str() {
+                    "zstd1" => Some(1),
+                    "zstd3" => Some(3),
+                    _ => None,
+                };
+                println!(
+                    "ACK {:?}",
+                    journal.append(parse_key(&request)?, bodies, level)?
+                );
+            }
+            Journals::Init { .. } => unreachable!(),
+        }
+        return Ok(());
+    }
     // Archive read commands return before default_db/Store::open: they need no SQLite file.
-    if let Commands::Archive { path, command } = cli.command {
+    if let Commands::Archive {
+        path,
+        journal,
+        command,
+    } = cli.command
+    {
         if let Archives::Export { compression } = command {
+            if journal.is_some() {
+                return Err(Error::Invalid(
+                    "journal overlay is read-only in archive commands".into(),
+                ));
+            }
             let db = cli.db.map(Ok).unwrap_or_else(default_db)?;
             let info = Store::open(db)?.export_archive(
                 &path,
@@ -375,14 +477,51 @@ fn run() -> Result<()> {
             println!("{}", serde_json::to_string(&info)?);
             return Ok(());
         }
-        let archive = replica_v3::archive::Archive::open(&path)?;
+        let overlay = journal
+            .map(|j| replica_v3::journal::Journal::open(&path, &j, false))
+            .transpose()?;
+        let base = if overlay.is_none() {
+            Some(replica_v3::archive::Archive::open(&path)?)
+        } else {
+            None
+        };
+        let archive = overlay
+            .as_ref()
+            .map(|j| j.view())
+            .or(base.as_ref())
+            .expect("one explicit evidence view");
+        if let Some(j) = &overlay {
+            if let Some(tail) = j.tail() {
+                eprintln!(
+                    "verified_prefix={} damaged_tail={tail:?}; writes disabled",
+                    j.last().end
+                );
+            }
+            if matches!(command, Archives::Inspect) {
+                println!(
+                    "journal_committed={:?} total_events={}",
+                    j.last(),
+                    j.view().event_count()
+                );
+            }
+        }
         match command {
             Archives::Inspect => println!(
                 "{}\nindex_rebuild_ms={:.3} live_sqlite_replacement=false",
                 serde_json::to_string(&archive.info)?,
                 archive.index_rebuild_ms
             ),
-            Archives::Show { id, metadata } => {
+            Archives::Show {
+                id,
+                metadata,
+                canonical,
+            } => {
+                if canonical {
+                    std::io::stdout()
+                        .lock()
+                        .write_all(&archive.canonical_body(id)?)?;
+                    return Ok(());
+                }
                 let e = archive.get(id)?;
                 if metadata {
                     display(&e)
@@ -730,7 +869,7 @@ fn run() -> Result<()> {
         | Commands::Restore { .. }
         | Commands::ModelWorker { .. }
         | Commands::Generate { .. } => unreachable!(),
-        Commands::Archive { .. } => unreachable!(),
+        Commands::Archive { .. } | Commands::Journal { .. } => unreachable!(),
     }
     Ok(())
 }

@@ -2,6 +2,14 @@
 
 ## Active: R3-NATIVE-STORAGE-QUALITY-1.0
 
+Execution closure: G1 boundaries verified; G2 halted at C50+256 on native save
+validation failure, A75 NOT_RUN, QUALITY_INCONCLUSIVE. Do not restart this pair or
+reuse its remaining budget automatically. The fork-budget boundary has a direct
+zero-update native save/reload regression. Original failure/terminal remain intact.
+G3 native storage/cold exact probes verified; raw F32 remains the default. G4 is an
+explicit single-writer prototype, independent of model quality. H3/S4 remain below
+acceptance, seal NOT_OPENED, S5/S6 and Goal1 acceptance remain unfulfilled.
+
 Source b18ec31bb78a8d0ef0adf985b46697a2d4993474, report
 d19f39972ab70799527b567d5ad35a02c76ead5c. Preserve original artifacts and closed runs.
 Development DAG: G0 identities → G1 close boundaries → G2 anchor pair → G3 model

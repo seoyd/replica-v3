@@ -4,6 +4,7 @@ pub mod app;
 pub mod archive;
 pub mod codec;
 pub mod event;
+pub mod journal;
 pub mod model;
 pub mod neural;
 pub mod retrieval;

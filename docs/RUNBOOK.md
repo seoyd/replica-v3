@@ -1,5 +1,43 @@
 # Replica v3 B0 runbook
 
+## Explicit experimental graph journal
+
+Product `ask` still uses SQLite. These commands only use the supplied snapshot and
+journal; they do not initialize, migrate or dual-write the operating database.
+Build with installed stable Rust and the existing offline lock. `test-support` is
+only for fault-injection regressions, never enable it in a product release.
+
+```sh
+replica-v3 journal --snapshot SNAPSHOT.r3a --path NEW.r3j init --store-id 00112233445566778899aabbccddeeff00
+replica-v3 journal --snapshot SNAPSHOT.r3a --path NEW.r3j append --request 01010101010101010101010101010101 --events EVENT.rpv3 --codec raw
+replica-v3 journal --snapshot SNAPSHOT.r3a --path NEW.r3j inspect
+replica-v3 archive --path SNAPSHOT.r3a --journal NEW.r3j show 1 --canonical
+replica-v3 archive --path SNAPSHOT.r3a --journal NEW.r3j history --scope SCOPE --entity ENTITY --predicate PREDICATE --context CONTEXT
+replica-v3 journal --snapshot SNAPSHOT.r3a --path DAMAGED.r3j recover --output RECOVERED.r3j
+```
+
+`--events` accepts exact assigned RPV3 envelopes, in commit order, at most256 events
+and4MiB per transaction. `archive show --canonical` exports an exact envelope;
+ordinary `show` retains its original payload output. Supply new IDs/times with the
+existing Rust Event/codec API. This is an explicit experimental append/import API,
+not an automatic source-DB replication service. The snapshot's existing IDs cannot
+be appended again. Same request plus identical encoded content returns the prior
+commit; a changed body conflicts. Scope/head/reference checks run before append.
+
+EOF tail is retained and queries expose only the verified prefix, with a diagnostic.
+The writer refuses a damaged tail. Explicit recovery creates a new file and binds
+the old file hash and verified byte range; it never truncates the original. Readers
+hold shared locks and the single writer holds an exclusive lock. File sync is not
+claimed equivalent to SQLite's macOS fullfsync or a tested power-loss guarantee.
+Journal views share archive's bounded history/current/graph semantics and lack its
+unsupported full SQLite FTS/BM25 facilities. Derived indexes rebuild in RAM.
+
+Direct commands: `cargo test --locked --offline --features accelerate,test-support
+--test journal -- --test-threads=1`; existing quick also selects these regressions.
+Measurement-only `validate journal-measure NEW_DIRECTORY 1000|10000|100000` creates
+synthetic stores. `validate native-storage-measure SOURCE.r3m NEW_DIRECTORY` measures
+native model and cold probes. Neither changes defaults or the source artifact.
+
 This project is Rust only. The user's later instructions override the MLX suggestion
 in the implementation instruction: use the installed stable Rust (verified 1.98.1), no Python bridge, no external inference API,
 no canned product answers, and defer model/runtime installation until a later task.
