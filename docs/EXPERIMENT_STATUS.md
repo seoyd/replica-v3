@@ -1,5 +1,144 @@
 # 진단 및 구현 상태
 
+## D4 최종 — 수리·저장·정식 pair 실행 완료, 모델 품질 미달
+
+MODE=IMPLEMENT; CONTRACT=R3-DURABILITY-PAIR-RESTART-1.0; RESULT=PARTIAL.
+2026-09-18 / EXECUTED_THIS_RUN. D0–D4의 인가된 실행을 종료했다. 코드·저장 경계는
+검증됐으며 실제 두 arm도 끝났지만 H3/S4/Goal1 품질을 통과한 것은 아니다.
+SOURCE_COMMIT=50a0fb72f552cc130fbd5598019222c7a7bd95fe.
+REPORT_COMMIT은 이 절을 추가하는 report-only commit이며 source와 구분한다. source와 D2 report
+ea27a00f94dbe3621bb1f2c575f5de7632cc5fcc는 정상 push/remote full SHA 일치를
+실제로 확인했다. 최종 report의 remote 확인은 로컬 `d4-publication.log`에 보존한다.
+
+### 실제 모델 결과와 판정
+
+같은 F51223798 weights/Adam, 고정801 tokenizer/F32/CPU Accelerate/threads1,
+실제 constant LR1e-4에서 anchor/focus4:4와6:2만 비교했다. 각각 절대 step24310까지
+512 updates를 실행했다. dev/CROSS/ordinary는 각각256/512/400 전체를 정상 greedy로
+생성했고 watch32는 ordinary의 같은 모델 부분집합이다. 첫 행은 기존 raw를 이번에
+재채점한 기준점이며 새 생성이 아니다. +256은 중간 관측, +512가 고정 primary endpoint다.
+
+| 같은 checkpoint | dev full/entity/event (각 /256) | CROSS full/entity/event (각 /512) | ordinary QA /336 | aux /64 | dev/CROSS/ordinary 오류 |
+| --- | --- | --- | ---: | ---: | --- |
+| F512 부모, 기존 raw | 242 / 251 / 251 | 459 / 501 / 498 | 176 | 56 | 0 / 0 / 0 |
+| C50-R +256 | 244 / 250 / 251 | 464 / 503 / 498 | 179 | 54 | 0 / 0 / 0 |
+| C50-R +512 | 241 / 247 / 251 | 461 / 497 / 502 | 170 | 50 | 1 / 0 / 0 |
+| A75-R +256 | 245 / 250 / 252 | 460 / 497 / 501 | 182 | 52 | 0 / 0 / 0 |
+| A75-R +512 | 240 / 247 / 250 | 462 / 499 / 500 | 181 | 53 | 1 / 0 / 0 |
+
+모든 panel에서 EOS 수는 계획 분모와 같았다. EOS가 있어도 생성 오류가 있는 출력은
+정답으로 세지 않았다. 최종 dev 각1건은 error/empty이며 raw 그대로 보존했다.
+최종 watch는 C50-R17/32, A75-R19/32다. 같은 오류를 watch와 ordinary에서 별개의
+모델 호출로 합산하지 않는다. 기존 guard hard stop은 발생하지 않았다. 두 command는
+STOP=[], complete=true, resume=false, COMMAND_FINALIZATION=Complete로 exit0 종료했다.
+정해진512회를 다 쓴 SCREENING_BUDGET_REACHED이며 자동 연장은 없다.
+
+새 process의 `recovery native anchor-report`가 command/segment/native/4panel 연결과
+fixed expected·token/EOS/error를 다시 검증했다. raw 재채점이 저장된 comparison과
+일치하며 report도 exit0이다. 결과는 STUDY_COMPLETE_QUALITY_FAIL, 두 candidate=false.
+정상적인 낮은 품질 결과를 integrity failure로 바꾸지 않았다.
+
+| paired C50-R → A75-R, +512 | 둘 다 오답 | gain | loss | 둘 다 정답 |
+| --- | ---: | ---: | ---: | ---: |
+| dev256 | 15 | 0 | 1 | 240 |
+| CROSS512 | 45 | 6 | 5 | 456 |
+| ordinary400 (QA+aux) | 148 | 32 | 18 | 202 |
+
+ordinary의 paired 표는400 전체이며 QA336 점수에 aux를 합친 지표로 승격하지 않는다.
+A75-R의 QA181은 보존 하한178을 넘고 C50-R보다11개 높다. 그러나 dev·CROSS 요소별
+조건과 오류0을 충족하지 못했다. 이번 한 부모·한 고정 tape 비교는6:2의 제한된 QA
+보존 관측이며 지능 회복·특정 수식/LR/망각 원인의 확정 근거가 아니다. 중간256의 더
+높은 값을 사후 후보로 바꾸지 않았다. 추가 변수 시험과 학습은 실행하지 않는다.
+
+| 최종 필드 | 판정 |
+| --- | --- |
+| JOURNAL_RETRY_ACK | VERIFIED_AT_SYNC_ALL_BOUNDARY |
+| PERSISTED_CLOSE_STOP / COMMAND_CLOSE_STOP | IMPLEMENTER_VERIFIED: fresh process·다른 arm·report 차단 |
+| COMMAND_FINALIZATION | IMPLEMENTER_VERIFIED: 실패/누락 certificate 차단, 실제 두 정상 command 확인 |
+| FORK_METADATA | VERIFIED: validator와 실제23798→24054→24310 writer/reader 경로 |
+| SMALL_SAVE_PREFLIGHT | PASS: 실제 연속2 대 새 process1+1, exact weights/Adam/state |
+| C50_RUN / A75_RUN | COMPLETE_512 / COMPLETE_512, 저장·close 정상 |
+| MODEL_PAIR | STUDY_COMPLETE_QUALITY_FAIL |
+| ANCHOR_PRESERVED | C50-R FAIL170/336; A75-R QA_FLOOR_PASS181/336; joint candidate 아님 |
+| RAW_H3 | VERIFIED_RECOUNT; JOINT_GATE_NOT_MET |
+| H3_SEAL | NOT_OPENED; 추가 fresh candidate 전 패널 생성 NOT_RUN(선행 gate 미달) |
+| S4 / S5 / S6 | NOT_PASSED / NOT_RUN_THIS_SCOPE / NOT_RUN_THIS_SCOPE |
+| GOAL1_READY / GOAL1_ACCEPTED | false / false |
+| INDEPENDENT_ACCEPTED | false; PENDING_EXTERNAL_REVIEW |
+
+### 실제 소비량·시험·한계
+
+| 실행 | SMALL updates | input tokens | target tokens | anchor/focus draws | 새 generation / teacher |
+| --- | ---: | ---: | ---: | --- | --- |
+| 저장 preflight 연속2+분할1+1 | 4 | 9,998 | 1,096 | 16 / 16 | 4 / 0 |
+| C50-R | 512 | 1,225,844 | 138,636 | 2,048 / 2,048 | 2,336 / 0 |
+| A75-R | 512 | 1,254,182 | 131,625 | 3,072 / 1,024 | 2,336 / 0 |
+| 이번 합계 | 1,028 | 2,490,024 | 271,357 | 5,136 / 3,088 | 4,676 / 0 |
+
+pair 각 군의 unique views는 anchor2048/focus512, unique scene bases는2048/128이다.
+토큰 노출은 비율에 따라 달랐으며 동일 token compute 비교라고 부르지 않는다.
+한 모델에1,028회를 누적한 것이 아니다. 과거 실패 C50의256회는 이전 실행으로 남긴다.
+예산 SMALL1028/generation7500, arm별2M input/500K target를 넘지 않았다.
+모델 작업 시작 기록00:42:45UTC부터 완료 후 확인01:25:02UTC까지2537초(명령 사이 대기와
+재채점 포함)로7200초 이내다. 각 arm terminal 측정은1063.263s/1029.313s이며 마지막
+close/publication 시간은 제외한다. command finalization의 elapsed는 별도 binary에
+있으며 단일1800초 중단을 맞지 않았다. fsync/tensor 강제 선점 보장은 하지 않는다.
+
+선택 직접 회귀와 최종 quick: 통과 test invocations25 / test executions93 / 고유73.
+quick 자체는19 invocations/74 executions/고유73(겹친 filter1)이다. RED 두 번은 격리된
+기준 소스의 의도한 assertion 실패이며 수정 후 통과했고, 별도 compile 실패1은 테스트
+통과/RED로 세지 않았다. filtered-zero0. fmt/check/clippy/release PASS. 학습 이후 소스
+수정이나 추가 학습·생성·테스트 실행은 없고, D4는 무학습 raw 검산과 원본/hash 확인이다.
+이번 TINY79/scalar0; 직접/native fixture generation156/teacher152, 기타 기존 quick의
+미계측 generation/teacher는 UNKNOWN이다. 이를 SMALL 또는 전체 호출0으로 쓰지 않는다.
+
+journal poison unit은 실행당 신규 실패1·retry 실패1·reopen 성공1의 sync helper 호출을
+검사했고, poisoned 재사용/conflict/read-only 추가 호출0을 확인했다. 직접 회귀와 quick에서
+각각 실행했다. retry의 새 frame bytes는0이며 Commit/파일 bytes 동일성 assertion을 통과했다.
+이는 sync_all 호출 경계 검증이다. 장치 정전/F_FULLFSYNC 동등성, 신규 throughput/latency
+benchmark는 NOT_RUN이며 기존 G3/G4의 수치를 새 실측으로 바꾸지 않는다.
+
+### Candidate·체크포인트·인가된 로컬 증거
+
+Root=`artifacts/durability-pair-restart-20260918/`. Source diff는
+`candidate-source.diff`(기준2e4121035→50a0fb7, src/tests), source SHA는 `source.sha`다.
+변경 파일은 기존 `src/journal.rs`, `src/experiment_record.rs`, `src/check_main.rs`,
+두 직접 test 파일과 QUALITY_RECOVERY_PLAN/RUNBOOK/STORAGE_FORMAT/이 상태 문서뿐이다.
+새 영구 파일·의존성 없음. 실제 바이너리 `d2-train`의 SHA256은
+b89540d30c89d96e96c0a8302053f259f48a292120856deaae32030d7d760822로 학습 전후 동일하다.
+
+LAST_DURABLE_NATIVE(모두115,285,312bytes, weights+Adam/state, absolute24310):
+
+| 경로(root 기준) | 실제 전체 파일 SHA-256 |
+| --- | --- |
+| attempt-R/C50-R/segment-00/step-0512.r3m | 0ee89cfb340aab06ae09b528acb4dd80cbc7b05b894aae7e47b349527725863f |
+| attempt-R/A75-R/segment-00/step-0512.r3m | 50b927dd41771c39ca5e7138ca28aaf8193a96460eff9a2aae92ed444015f09c |
+
+각 +256 native도 같은 segment의 `step-0256.r3m`으로 실제 존재한다. 4개의 새 정식
+native bytes 합계461,141,248이며 최종 terminal 발행에서는 검증된 +512 파일을 재사용해
+추가 model bytes0이었다. 이를 전체 실험 디스크 크기나 IO benchmark로 해석하지 않는다.
+terminal/command/comparison과 각 step panel raw는 같은 segment의 `.r3er`에 있다.
+소유 입력·정책·tape는 각 arm의 `inputs.r3er`, 원래 F512 복사본은 `parent.r3m`이다.
+원래 corpus 위치는 `artifacts/h3-controlled-20260917/a2/corpus-F/`,
+`artifacts/goal1-corpus-v9/`, ordinary는
+`artifacts/s4-completion-20260917/binding-corpus/validation.json`이며 자동 변환/수정하지 않았다.
+
+실행 증거: `d3-C50-R.log`, `d3-A75-R.log`, `d4-pair-report.log`, 앞선 D1/D2 로그,
+`d4-originals-verified.log`, `d4-execution-verified.log`, `d4-status.txt`.
+ORIGINALS_UNCHANGED: 원래 실패 pair manifest11/11 OK, 동결 실행/source3/3 OK,
+시작과 최종 git status 동일. 소유 heavy process는 종료됐다. 원본 실패의 endpoint 부재와
+resume=false를 보존했고 모델 포인터·운영 DB를 바꾸지 않았다. 원자료·모델·로그는 Git에
+올리지 않는다. 새 canonical command/인가/preflight는 typed R3ER이며 run의 새 JSON쓰기0,
+legacy JSON읽기0. 준비 시 기존 corpus/policy의 read-only import, 기존 개발 보고/IPC의
+JSON 잔존은 아래 G5 저장 경계 표와 같다.
+
+DERIVED_FROM_EXISTING_LOGS: 기존 F512/실패 C50 수치와 이전 저장 benchmark.
+SOURCE_ONLY/UNRESOLVED: 두 수리 결함이 과거 모델 부진의 원인이었다는 인과는 확인하지
+않았다. 실제 이번 경계는 RED→GREEN 및 native 실행으로 검증했다.
+REMAINING: H3 joint 품질·독립 seal·S4/S5/S6·Goal1과 외부 독립 수용.
+인가된 수리와 단일 비교의 미실행 필수 단계는 없으며, 다음 학습은 이 닫힌 예산으로
+자동 실행하지 않는다.
+
 ## D2 완료 — 실제 SMALL 저장·새 process 재개 동일성 PASS
 
 2026-09-18 / EXECUTED_THIS_RUN. Source50a0fb72f552cc130fbd5598019222c7a7bd95fe를

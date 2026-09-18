@@ -1,6 +1,18 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: R3-DURABILITY-PAIR-RESTART-1.0
+## Closed: R3-DURABILITY-PAIR-RESTART-1.0
+
+D0–D4 execution is closed on source50a0fb72f552cc130fbd5598019222c7a7bd95fe.
+Journal retry ACK and command finalization regressions passed; real SMALL continuous2
+versus fresh-process1+1 matched exactly. The separate C50-R/A75-R attempt completed
+512 updates each with verified native endpoints at24310 and complete raw recount.
+C50-R: dev241/256, CROSS461/512, ordinary170/336, one dev generation error.
+A75-R: dev240/256, CROSS462/512, ordinary181/336, one dev generation error.
+Both joint gates fail. MODEL_PAIR=STUDY_COMPLETE_QUALITY_FAIL; H3 seal NOT_OPENED.
+New SMALL1028/1028, generation4676/7500, teacher0; TINY79/128, scalar0.
+No automatic extension, intermediate-point promotion, further candidate generation,
+H4–H8 execution or Goal1 acceptance. Original failure pair11/11 hashes unchanged.
+The retained specification below records this completed attempt, not another run grant.
 
 D0 starts at source2e4121035aabd11918d64875285661ad8e3a8f91 and report
 1ea5abe9ae63e12ee8a7e9e8e6731b6b274d07fb. Preserve the failed
