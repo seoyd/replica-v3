@@ -1683,12 +1683,9 @@ pub fn prepare(
     }
     check_split(&train, &validation)?;
     let manifest=CorpusManifest{version:1,scope:if local.is_empty(){"SYNTHETIC_ONLY"}else{"SYNTHETIC_AND_EXPLICIT_LOCAL"}.into(),permission:"project-generated; supplied paths explicitly authorized for training".into(),generator:revision.into(),seed,split_rule:"episode first; disjoint entity binding, template family and sequence; final test created independently".into(),train:native::split("train",&train),validation:native::split("validation",&validation)};
-    native::write(
-        root,
-        &native::from_episodes(manifest.clone(), train, validation.clone())?,
-        true,
-    )?;
-    println!("{}", serde_json::to_string_pretty(&manifest)?);
+    let corpus = native::from_episodes(manifest, train, validation.clone())?;
+    native::write(root, &corpus, true)?;
+    println!("{}", serde_json::to_string_pretty(&corpus.manifest)?);
     if matches!(
         profile,
         "counterfactual" | "evidence-first" | "record-copy" | "entity-cue" | "field-cue"
@@ -1846,12 +1843,9 @@ pub fn binding_pairs(source: &Path, output: &Path) -> Result<()> {
         "Same training count; {changed} existing two-current-record QA0/QA2 cases become query/value pairs; other cases and validation bytes unchanged; parent train={parent_train}; {}",
         manifest.split_rule
     );
-    native::write(
-        output,
-        &native::from_episodes(manifest.clone(), train, validation)?,
-        true,
-    )?;
-    println!("{}", serde_json::to_string_pretty(&manifest)?);
+    let corpus = native::from_episodes(manifest, train, validation)?;
+    native::write(output, &corpus, true)?;
+    println!("{}", serde_json::to_string_pretty(&corpus.manifest)?);
     Ok(())
 }
 pub fn qa_pairs(source: &Path, output: &Path, groups: usize) -> Result<()> {
@@ -1996,12 +1990,9 @@ pub fn qa_pairs(source: &Path, output: &Path, groups: usize) -> Result<()> {
         manifest.train.sha256, manifest.validation.sha256, manifest.split_rule
     );
     manifest.generator.push_str("/qa-binding-pairs-v1");
-    native::write(
-        output,
-        &native::from_episodes(manifest.clone(), train, validation)?,
-        true,
-    )?;
-    println!("{}", serde_json::to_string_pretty(&manifest)?);
+    let corpus = native::from_episodes(manifest, train, validation)?;
+    native::write(output, &corpus, true)?;
+    println!("{}", serde_json::to_string_pretty(&corpus.manifest)?);
     Ok(())
 }
 /// A diagnostic subset of existing QA bytes, never a new heldout benchmark.
@@ -2030,12 +2021,9 @@ pub fn qa_subset(source: &Path, output: &Path, count: usize) -> Result<()> {
         "MEMORIZATION_DIAGNOSTIC_ONLY; first {count} nonempty non-copy QA from each existing split; episodes unchanged; parent train={} validation={}; {}",
         manifest.train.sha256, manifest.validation.sha256, manifest.split_rule
     );
-    native::write(
-        output,
-        &native::from_episodes(manifest.clone(), train, validation)?,
-        true,
-    )?;
-    println!("{}", serde_json::to_string_pretty(&manifest)?);
+    let corpus = native::from_episodes(manifest, train, validation)?;
+    native::write(output, &corpus, true)?;
+    println!("{}", serde_json::to_string_pretty(&corpus.manifest)?);
     Ok(())
 }
 /// Materialized H3 education, isolated from inference. Reuses the existing corpus format.
