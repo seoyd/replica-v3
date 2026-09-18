@@ -1,5 +1,40 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: R3-QUALITY-RECOVERY-BOUNDED-BRIDGE-1.0
+
+Base source e08687eff768dd8b6426accebdfe148d3ce8b556, report HEAD
+92c6ca1e0f12135c83a4f3bc334039332672bb83. Preserve the failed C512 publication,
+T0, successful replacement-01, native corpora/checkpoints and original raw.
+R0 preservation → R1 shared512 terminal capacity and registered observation root
+→ R2 direct Record/publisher/process regressions → R3 diagnostic-only C512 audit
+→ conditionally one new T-SCREEN → R6 bounded result/publication. No C retraining,
+old terminal reconstruction, replacement-02 or restored historical eligibility.
+
+R3 loads the entire native/Adam/objective state, binds original panel memberships,
+and rescores olddev256/CROSS512/ordinary400/newdev256/conditional144 independently.
+Exact prompt-token conflicts block learning. Metadata-selected normal generation
+is limited to32 cases each for parent/C; cached/full comparisons use only the still
+correct free prefix before the first error, with abs1e-4 + rel1e-3 per-logit tolerance
+and a declared near-tie rule. This diagnostic cannot issue a resume certificate.
+
+Only verified inputs, successful original parent evidence, numeric parity and the
+two repaired boundaries authorize a separate T-SCREEN from A75-R24310, retaining
+the existing T corpus, Adam, tokenizer, default loss/first weight8, constant1e-4 LR,
+F32 CPU Accelerate threads1 and batch8=anchor6/focus2. The first1/fresh resume counts
+toward512. Freeze OLD64/CROSS64/QA32/NEW64 by metadata before learning. At32/64/128,
+stop for OLD/CROSS loss>=12 once or>=8 twice, QA loss>=4 twice, or total errors>=5
+and>=parent+4. Runtime/data/save/nonfinite/cancel errors stop immediately. At128
+and256, extend only for NEW gain>=8 and base4>=2, OLD/CROSS loss<=4, QA loss<=2,
+and no outstanding execution error. Otherwise close the research honestly.
+At512, evaluate all1568 final cases; reuse ordinary watch rows without double calls.
+
+New ceilings: SMALL512, TINY128, generation4096, own diagnostic/teacher192
+(R3 forward<=64), model wall7200s, each command1800s with cleanup reservation120s.
+Compile/test time is separate. No automatic budget renewal, historical C promotion,
+best-midpoint selection or additional H4–H8 training. H3 joint, S4/S5/S6 and Goal1
+remain separate and unpassed until their actual independent acceptance criteria.
+The closed attempt below retains its original failed status and consumed budget.
+
 ## Closed failed attempt: R3-BRIDGE-EVIDENCE-RESTART-1.0
 
 B1/B2 direct boundary repairs passed at frozen source

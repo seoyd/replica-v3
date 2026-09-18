@@ -14,6 +14,7 @@ const MAX_FILE: usize = 128 * 1024 * 1024;
 const MAX_CASES: usize = 16384;
 const MAX_ROWS: usize = 512;
 const MAX_TOKENS: usize = 2048;
+const MAX_SEGMENT_UPDATES: usize = 512;
 const MAX_TEXT: usize = 262144;
 const CONTRACT: &str = "R3-BINARY-EVAL-RESUME-1.0";
 const ANCHOR_CONTRACT: &str = "R3-NATIVE-STORAGE-QUALITY-1.0";
@@ -23,6 +24,7 @@ const OBJECTIVE_CONTRACT: &str = "R3-DATA-BINARY-AND-TARGET-LOSS-1.0";
 const NATIVE_CORPUS_CONTRACT: &str = "R3-NATIVE-CORPUS-OBJECTIVE-BINDING-1.0";
 const BRIDGE_CONTRACT: &str = "R3-QUALITY-FIRST-BRIDGE-1.0";
 const BRIDGE_RESTART_CONTRACT: &str = "R3-BRIDGE-EVIDENCE-RESTART-1.0";
+const BOUNDED_BRIDGE_CONTRACT: &str = "R3-QUALITY-RECOVERY-BOUNDED-BRIDGE-1.0";
 
 fn bad(s: &str) -> Error {
     Error::Corrupt(format!("R3ER: {s}"))
@@ -541,7 +543,7 @@ impl RunSnapshot {
         let panels = (0..n)
             .map(|_| PanelSpec::decode(r))
             .collect::<Result<Vec<_>>>()?;
-        let n = count(r, 512)?;
+        let n = count(r, MAX_SEGMENT_UPDATES)?;
         let mut tape = Vec::with_capacity(n);
         for _ in 0..n {
             tape.push(Draw {
@@ -1378,6 +1380,33 @@ struct SegmentReceipt {
     objective_metrics: Option<Vec<[f64; 8]>>,
 }
 impl SegmentReceipt {
+    // Disposable schema-capacity value, never an execution receipt or future weights.
+    fn capacity_value(draws: Vec<Draw>, rates: bool, metrics: bool) -> Self {
+        let count = draws.len();
+        Self {
+            run: [0; 32],
+            binding: [0; 32],
+            segment: 0,
+            parent: None,
+            native: None,
+            evaluations: vec![],
+            decisions: vec![],
+            guard: [0; 3],
+            stop: vec![],
+            complete: false,
+            resume: false,
+            candidate: false,
+            save_error: Some("SCHEMA_CAPACITY_ONLY_NOT_EXECUTION_EVIDENCE".into()),
+            updates: count as u64,
+            generations: 0,
+            teachers: 0,
+            elapsed: Scalar::F64(0.),
+            cleanup: Scalar::F64(0.),
+            draws,
+            lr_bits: rates.then(|| vec![1e-4f64.to_bits(); count]),
+            objective_metrics: metrics.then(|| vec![[0.; 8]; count]),
+        }
+    }
     fn encode(&self, b: &mut Vec<u8>) {
         b.extend(self.run);
         b.extend(self.binding);
@@ -1470,7 +1499,10 @@ impl SegmentReceipt {
         let teachers = r.var()?;
         let elapsed = Scalar::decode(r)?;
         let cleanup = Scalar::decode(r)?;
-        let n = count(r, 512)?;
+        let n = count(r, MAX_SEGMENT_UPDATES)?;
+        if r.remaining() < n * 4 {
+            return Err(bad("truncated segment draws"));
+        }
         let mut draws = Vec::with_capacity(n);
         for _ in 0..n {
             draws.push(Draw {
@@ -1481,15 +1513,32 @@ impl SegmentReceipt {
             });
         }
         let lr_bits = if with_rates {
-            let n = count(r, if with_metrics { 512 } else { 256 })?;
-            Some(
-                (0..n)
-                    .map(|_| Ok(u64::from_le_bytes(r.take(8)?.try_into().unwrap())))
-                    .collect::<Result<Vec<_>>>()?,
-            )
+            let n = count(r, MAX_SEGMENT_UPDATES)?;
+            if n != draws.len() {
+                return Err(bad("segment LR/draw count mismatch"));
+            }
+            // Validate the complete byte span before allocating the bounded LR vector.
+            let bytes = r.take(n.checked_mul(8).ok_or_else(|| bad("LR byte overflow"))?)?;
+            let rates = bytes
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|b| u64::from_le_bytes(*b))
+                .collect::<Vec<_>>();
+            if rates
+                .iter()
+                .any(|b| !f64::from_bits(*b).is_finite() || f64::from_bits(*b) <= 0.)
+            {
+                return Err(bad("segment LR must be finite and positive"));
+            }
+            Some(rates)
         } else {
             None
         };
+        let draw_count = draws.len();
+        if updates < draw_count as u64 {
+            return Err(bad("segment cumulative update clock"));
+        }
         Ok(Self {
             run,
             binding,
@@ -1512,7 +1561,13 @@ impl SegmentReceipt {
             draws,
             lr_bits,
             objective_metrics: if with_metrics {
-                let n = count(r, 512)?;
+                let n = count(r, MAX_SEGMENT_UPDATES)?;
+                if n != draw_count {
+                    return Err(bad("segment metrics/draw count mismatch"));
+                }
+                if r.remaining() < n * 8 * 5 {
+                    return Err(bad("truncated segment metrics"));
+                }
                 let mut rows = Vec::with_capacity(n);
                 for _ in 0..n {
                     let mut row = [0.; 8];
@@ -1652,6 +1707,7 @@ impl ComparisonReceipt {
 #[derive(Clone, Debug, Serialize)]
 #[allow(clippy::large_enum_variant)] // Bodies own their vectors; avoid an extra allocation per terminal read.
 enum Record {
+    ArtifactAudit(Box<ArtifactAudit>),
     PreparationMeasure {
         bindings: [Hash; 5],
         rows: Vec<PreparationTiming>,
@@ -1692,6 +1748,159 @@ enum Record {
         final_digest: Hash,
     },
     TrainProbe(TrainProbe),
+}
+// Diagnostic evidence only: it cannot be consumed as a terminal or resume certificate.
+#[derive(Clone, Debug, Serialize)]
+struct PrefixCheck {
+    model: u8,
+    ordinal: u32,
+    position: u32,
+    gold: u32,
+    full: u32,
+    cached: u32,
+    // max_abs, gold-minus-full-argmax, gold-minus-cached-argmax, full top-two gap.
+    values: [f64; 4],
+}
+#[derive(Clone, Debug, Serialize)]
+struct ArtifactAudit {
+    source: Hash,
+    binary: Hash,
+    input: FileRef,
+    native: CheckpointRef,
+    originals: Vec<FileRef>,
+    selection: Vec<u32>,
+    fresh: Vec<(u8, EvalRow)>,
+    numeric: Vec<PrefixCheck>,
+    panels: Vec<(PanelKind, Score)>,
+    // Generation entered/returned, diagnostic forward entered/returned.
+    calls: [u64; 4],
+    elapsed: Scalar,
+    complete: bool,
+    stop: Vec<StopReason>,
+    error: Option<String>,
+}
+impl ArtifactAudit {
+    fn encode(&self, b: &mut Vec<u8>) {
+        string(b, BOUNDED_BRIDGE_CONTRACT);
+        b.extend(self.source);
+        b.extend(self.binary);
+        self.input.encode(b);
+        self.native.encode(b);
+        put_varint(b, self.originals.len() as u64);
+        for r in &self.originals {
+            r.encode(b);
+        }
+        integers(b, &self.selection);
+        put_varint(b, self.fresh.len() as u64);
+        for (model, row) in &self.fresh {
+            b.push(*model);
+            row.encode(b);
+        }
+        put_varint(b, self.numeric.len() as u64);
+        for row in &self.numeric {
+            b.push(row.model);
+            for n in [row.ordinal, row.position, row.gold, row.full, row.cached] {
+                put_varint(b, n.into());
+            }
+            for n in row.values {
+                Scalar::F64(n).encode(b);
+            }
+        }
+        put_varint(b, self.panels.len() as u64);
+        for (k, s) in &self.panels {
+            b.push(k.tag());
+            s.encode(b);
+        }
+        for n in self.calls {
+            put_varint(b, n);
+        }
+        self.elapsed.encode(b);
+        b.push(u8::from(self.complete));
+        put_varint(b, self.stop.len() as u64);
+        for s in &self.stop {
+            b.push(stop_tag(*s));
+        }
+        optional(b, self.error.as_ref(), |b, s| string(b, s));
+    }
+    fn decode(r: &mut Reader<'_>) -> Result<Self> {
+        if text(r)? != BOUNDED_BRIDGE_CONTRACT {
+            return Err(bad("diagnostic contract"));
+        }
+        let source = digest_read(r)?;
+        let binary = digest_read(r)?;
+        let input = FileRef::decode(r)?;
+        let native = CheckpointRef::decode(r)?;
+        let n = count(r, 4096)?;
+        let originals = (0..n).map(|_| FileRef::decode(r)).collect::<Result<_>>()?;
+        let selection = integers_read(r, 32)?;
+        let n = count(r, 64)?;
+        let fresh = (0..n)
+            .map(|_| Ok((r.byte()?, EvalRow::decode(r)?)))
+            .collect::<Result<Vec<_>>>()?;
+        let n = count(r, 20)?;
+        let mut numeric = Vec::with_capacity(n);
+        for _ in 0..n {
+            let model = r.byte()?;
+            let ordinal = u32_read(r)?;
+            let position = u32_read(r)?;
+            let gold = u32_read(r)?;
+            let full = u32_read(r)?;
+            let cached = u32_read(r)?;
+            let mut values = [0.; 4];
+            for v in &mut values {
+                *v = Scalar::decode(r)?.finite()?;
+            }
+            numeric.push(PrefixCheck {
+                model,
+                ordinal,
+                position,
+                gold,
+                full,
+                cached,
+                values,
+            });
+        }
+        let n = count(r, 6)?;
+        let panels = (0..n)
+            .map(|_| Ok((PanelKind::read(r)?, Score::decode(r)?)))
+            .collect::<Result<_>>()?;
+        let calls = [r.var()?, r.var()?, r.var()?, r.var()?];
+        let elapsed = Scalar::decode(r)?;
+        let complete = r.bool()?;
+        let n = count(r, 8)?;
+        let stop = (0..n).map(|_| stop_read(r)).collect::<Result<Vec<_>>>()?;
+        let error = r.opt(text)?;
+        if calls.iter().any(|n| *n > 64)
+            || calls[1] > calls[0]
+            || calls[3] > calls[2]
+            || elapsed.finite()? < 0.
+            || fresh.iter().any(|(m, _)| *m > 1)
+            || numeric.iter().any(|v| v.model > 1)
+            || complete
+                && (error.is_some()
+                    || !stop.is_empty()
+                    || calls[0] != calls[1]
+                    || calls[2] != calls[3])
+        {
+            return Err(bad("diagnostic status/counters"));
+        }
+        Ok(Self {
+            source,
+            binary,
+            input,
+            native,
+            originals,
+            selection,
+            fresh,
+            numeric,
+            panels,
+            calls,
+            elapsed,
+            complete,
+            stop,
+            error,
+        })
+    }
 }
 #[derive(Clone, Debug, Serialize)]
 struct PreparationTiming {
@@ -2163,6 +2372,10 @@ impl Record {
     fn encode(&self) -> Result<Vec<u8>> {
         let mut body = Vec::new();
         let kind = match self {
+            Self::ArtifactAudit(v) => {
+                v.encode(&mut body);
+                30
+            }
             Self::BridgeReplacement {
                 source_sha,
                 source,
@@ -2382,6 +2595,7 @@ impl Record {
         }
         let mut r = Reader::new(&bytes[HEADER..]);
         let record = match kind {
+            30 => Self::ArtifactAudit(Box::new(ArtifactAudit::decode(&mut r)?)),
             24 => {
                 let bindings = [
                     digest_read(&mut r)?,
@@ -3936,7 +4150,7 @@ fn exposure_report(root: &Path, control: &mut RunControl) -> Result<()> {
     );
     Ok(())
 }
-fn bridge_origins(s: &RunSnapshot) -> Result<()> {
+fn bridge_origins(s: &RunSnapshot, observation: Option<&Path>) -> Result<()> {
     for o in s.origins.iter().filter(|o| o.role.starts_with("bridge-")) {
         if unhex(&file_hash(Path::new(&o.original.locator))?)? != o.original.digest {
             return Err(bad("bridge frozen origin changed"));
@@ -3950,6 +4164,7 @@ fn bridge_origins(s: &RunSnapshot) -> Result<()> {
         let Record::BridgeReplacement {
             source,
             binary,
+            root,
             old_root,
             old_binary,
             preserved,
@@ -3961,6 +4176,17 @@ fn bridge_origins(s: &RunSnapshot) -> Result<()> {
         else {
             return Err(bad("replacement registration kind"));
         };
+        let inferred = s
+            .origins
+            .iter()
+            .find(|o| o.role == "bridge-observation-final")
+            .and_then(|o| Path::new(&o.original.locator).parent());
+        let actual = observation
+            .or(inferred)
+            .ok_or_else(|| bad("replacement observation locator absent"))?;
+        if actual.canonicalize()? != Path::new(&root) {
+            return Err(bad("REGISTERED_OBSERVATION_ROOT_MISMATCH"));
+        }
         if source != s.source
             || s.origins
                 .iter()
@@ -3977,6 +4203,45 @@ fn bridge_origins(s: &RunSnapshot) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn register_bridge_replacement(
+    output: &Path,
+    old_root: &Path,
+    old_source: Hash,
+    old_binary: FileRef,
+) -> Result<FileRef> {
+    let mut preserved = std::fs::read_dir(old_root)?
+        .map(|e| {
+            let e = e?;
+            if !e.file_type()?.is_file() {
+                return Err(bad("replacement preservation expects flat observation"));
+            }
+            reference(old_root, &e.file_name().to_string_lossy())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    preserved.sort_by(|a, b| a.locator.cmp(&b.locator));
+    let parent = output
+        .parent()
+        .ok_or_else(|| bad("replacement registration root"))?
+        .canonicalize()?;
+    let name = output.file_name().ok_or_else(|| bad("replacement name"))?;
+    let mut registered = publish(
+        &parent,
+        &format!("{}.r3er", name.to_string_lossy()),
+        &Record::BridgeReplacement {
+            source_sha: source_commit()?,
+            source: evaluator_source(),
+            binary: unhex(&file_hash(&std::env::current_exe()?)?)?,
+            root: parent.join(name).display().to_string(),
+            old_root: old_root.canonicalize()?.display().to_string(),
+            old_source,
+            old_binary,
+            preserved,
+        },
+    )?;
+    registered.locator = parent.join(&registered.locator).display().to_string();
+    Ok(registered)
 }
 
 #[allow(clippy::too_many_arguments)] // One explicit replacement, retaining its failed predecessor.
@@ -4011,37 +4276,13 @@ fn bridge_observe_prepare(
     if previous_start.binary != unhex(&file_hash(previous_binary)?)? {
         return Err(bad("replacement original observation binary"));
     }
-    let mut preserved = std::fs::read_dir(replacement_of)?
-        .map(|e| {
-            let e = e?;
-            if !e.file_type()?.is_file() {
-                return Err(bad(
-                    "replacement preservation expects original flat observation",
-                ));
-            }
-            reference(replacement_of, &e.file_name().to_string_lossy())
-        })
-        .collect::<Result<Vec<_>>>()?;
-    preserved.sort_by(|a, b| a.locator.cmp(&b.locator));
-    let registration_root = output
-        .parent()
-        .ok_or_else(|| bad("replacement registration root"))?;
-    let registered_root = registration_root.canonicalize()?.join("replacement-01");
-    let registration = publish(
-        registration_root,
-        "replacement-01.r3er",
-        &Record::BridgeReplacement {
-            source_sha: source_commit()?,
-            source: evaluator_source(),
-            binary: unhex(&file_hash(&std::env::current_exe()?)?)?,
-            root: registered_root.display().to_string(),
-            old_root: replacement_of.canonicalize()?.display().to_string(),
-            old_source: old_attempt.source,
-            old_binary: FileRef {
-                locator: previous_binary.canonicalize()?.display().to_string(),
-                digest: previous_start.binary,
-            },
-            preserved,
+    let registration = register_bridge_replacement(
+        output,
+        replacement_of,
+        old_attempt.source,
+        FileRef {
+            locator: previous_binary.canonicalize()?.display().to_string(),
+            digest: previous_start.binary,
         },
     )?;
     let old = read_inputs(parent)?;
@@ -4225,11 +4466,7 @@ fn bridge_observe_prepare(
     s.origins.push(Origin {
         role: "bridge-replacement-registration".into(),
         original: FileRef {
-            locator: registration_root
-                .join(&registration.locator)
-                .canonicalize()?
-                .display()
-                .to_string(),
+            locator: registration.locator,
             digest: registration.digest,
         },
     });
@@ -4297,15 +4534,14 @@ fn bridge_observe(root: &Path, control: &mut RunControl) -> Result<()> {
     if !s.bridge() || !s.historical || s.source != evaluator_source() {
         return Err(bad("bridge observation source/mode"));
     }
-    if !s.tiny_spec
-        && !s
-            .origins
-            .iter()
-            .any(|o| o.role == "bridge-replacement-registration")
+    if !s
+        .origins
+        .iter()
+        .any(|o| o.role == "bridge-replacement-registration")
     {
         return Err(bad("bridge requires explicit replacement registration"));
     }
-    bridge_origins(&s)?;
+    bridge_origins(&s, Some(root))?;
     if read_preflight_outcome(root)?.is_some() {
         return Err(bad("bridge observation already attempted"));
     }
@@ -4452,11 +4688,11 @@ fn bridge_payload(
 }
 
 fn bridge_prepare(observation: &Path, output: &Path, control: &mut RunControl) -> Result<()> {
+    let old = read_inputs(observation)?;
+    bridge_origins(&old, Some(observation))?;
     read_preflight_outcome(observation)?
         .ok_or_else(|| bad("bridge parent observation absent"))?
         .require_current_success()?;
-    let old = read_inputs(observation)?;
-    bridge_origins(&old)?;
     if !old.bridge() || !old.historical || old.source != evaluator_source() {
         return Err(bad("bridge parent observation identity"));
     }
@@ -4633,13 +4869,13 @@ fn bridge_prepare(observation: &Path, output: &Path, control: &mut RunControl) -
 }
 
 fn bridge_observe_report(root: &Path, control: &mut RunControl) -> Result<()> {
+    let s = read_inputs(root)?;
+    bridge_origins(&s, Some(root))?;
     let outcome =
         read_preflight_outcome(root)?.ok_or_else(|| bad("bridge observation intent missing"))?;
-    let s = read_inputs(root)?;
     if !s.bridge() || !s.historical {
         return Err(bad("bridge observation report mode"));
     }
-    bridge_origins(&s)?;
     let l = resolve_native(root, &s, &s.parent, true)?;
     let previous = s
         .origins
@@ -4677,6 +4913,13 @@ fn bridge_observe_report(root: &Path, control: &mut RunControl) -> Result<()> {
         };
         print_anchor_panel(&s, &e, &l)?;
         if let Some((old_root, old)) = &previous {
+            if !old_root.join(format!("{}.r3er", kind.name())).exists() {
+                println!(
+                    "PREDECESSOR_RAW_PARITY panel={} NOT_RUN_MISSING_ORIGINAL_RAW OLD_COMMAND_UNCHANGED=true",
+                    kind.name()
+                );
+                continue;
+            }
             let Record::Evaluation(prior) = read_record(
                 old_root,
                 &reference(old_root, &format!("{}.r3er", kind.name()))?,
@@ -4762,6 +5005,567 @@ fn bridge_probe_indices(s: &RunSnapshot) -> Result<Vec<u32>> {
         out.extend(indices);
     }
     Ok(out)
+}
+
+fn absolute_reference(path: &Path) -> Result<FileRef> {
+    Ok(FileRef {
+        locator: path.canonicalize()?.display().to_string(),
+        digest: unhex(&file_hash(path)?)?,
+    })
+}
+fn exact_training_inputs(episodes: &[Episode], l: &Loaded) -> Result<()> {
+    let framed = samples(
+        episodes,
+        &l.tokenizer,
+        l.manifest
+            .training
+            .as_ref()
+            .ok_or_else(|| bad("input audit state"))?
+            .config
+            .seq_len,
+    )?;
+    if framed.len() != episodes.len() {
+        return Err(bad("input audit dropped episodes"));
+    }
+    let mut seen: BTreeMap<Hash, Vec<usize>> = BTreeMap::new();
+    for (i, sample) in framed.iter().enumerate() {
+        let prompt = &sample.tokens[..sample.response_start];
+        let prepared = l.tokenizer.prepare(
+            &episodes[i].request,
+            l.model.config.context as u32,
+            &l.model.config.id()?,
+        )?;
+        if prompt != prepared.token_ids {
+            println!(
+                "INPUT_FRAMING_MISMATCH id={} training_prompt_tokens={} product_prompt_tokens={} training_hash={} product_hash={} seq_len={} context={}",
+                episodes[i].id,
+                prompt.len(),
+                prepared.token_ids.len(),
+                hex(&token_hash(prompt)),
+                hex(&token_hash(&prepared.token_ids)),
+                l.manifest.training.as_ref().unwrap().config.seq_len,
+                l.model.config.context
+            );
+            return Err(bad("training/generation prompt token mismatch"));
+        }
+        let bucket = seen.entry(token_hash(prompt)).or_default();
+        for j in bucket.iter().copied() {
+            let old = &framed[j];
+            if prompt == &old.tokens[..old.response_start]
+                && sample.tokens[sample.response_start..] != old.tokens[old.response_start..]
+            {
+                println!(
+                    "DATA_CONFLICT first={} second={} prompt={}",
+                    episodes[j].id,
+                    episodes[i].id,
+                    hex(&token_hash(prompt))
+                );
+                return Err(bad("DATA_CONFLICT exact prompt with differing target"));
+            }
+        }
+        bucket.push(i);
+    }
+    println!(
+        "EXACT_INPUT_AUDIT cases={} conflicts=0 TOKEN_HASH_COLLISIONS_CHECKED_BY_IDS=true",
+        episodes.len()
+    );
+    Ok(())
+}
+fn bridge_diagnostic_selection(s: &RunSnapshot) -> Result<Vec<u32>> {
+    let mut out = Vec::new();
+    for k in [
+        PanelKind::LegacyDev,
+        PanelKind::Cross,
+        PanelKind::Ordinary,
+        PanelKind::Dev,
+    ] {
+        let mut strata: BTreeMap<(usize, String, usize), Vec<u32>> = BTreeMap::new();
+        for i in &panel(s, k)?.cases {
+            let e = &s.cases[*i as usize];
+            // Category/family/length only; no generated output or correctness is consulted.
+            let family = e
+                .family
+                .split("/replica-")
+                .next()
+                .unwrap_or(&e.family)
+                .to_owned();
+            strata
+                .entry((e.category, family, e.request.input.len() / 32))
+                .or_default()
+                .push(*i);
+        }
+        for v in strata.values_mut() {
+            v.sort_by_key(|i| hash(s.cases[*i as usize].id.as_bytes()));
+        }
+        let mut selected = Vec::new();
+        for row in 0..panel(s, k)?.cases.len() {
+            for v in strata.values() {
+                if let Some(i) = v.get(row) {
+                    selected.push(*i);
+                    if selected.len() == 8 {
+                        break;
+                    }
+                }
+            }
+            if selected.len() == 8 {
+                break;
+            }
+        }
+        out.extend(selected);
+    }
+    Ok(out)
+}
+fn bridge_regression_pattern(e: &Episode, row: &EvalRow, l: &Loaded) -> Result<(String, String)> {
+    let (actual, abnormal) = row_output(row, l)?;
+    let Some(a) = actual else {
+        return Ok((
+            row.error_class.clone().unwrap_or("UNKNOWN_OUTPUT".into()),
+            "unknown".into(),
+        ));
+    };
+    let first = a
+        .bytes()
+        .zip(e.answer.bytes())
+        .position(|(a, b)| a != b)
+        .unwrap_or(a.len().min(e.answer.len()));
+    let field = if a == e.answer {
+        "none"
+    } else {
+        field_at(&e.answer, first)
+    };
+    let class = if abnormal {
+        "GENERATION_ERROR"
+    } else if a == e.answer && row.finish == Finish::Eos {
+        "STRICT_EXACT"
+    } else if a.is_empty() {
+        "EMPTY"
+    } else if row.finish == Finish::Length {
+        "LENGTH_STOP"
+    } else if fields(a.as_str()).is_none()
+        && fields(&e.answer).is_some()
+        && a.split_once("입니다. [event:")
+            .is_some_and(|(value, tail)| {
+                !value.is_empty() && tail.ends_with(']') && citations(&a).is_ok()
+            })
+    {
+        let value = a.split_once("입니다. [event:").unwrap().0;
+        let expected = fields(&e.answer).unwrap().2;
+        // Auxiliary grammar-based classification only; strict EM is never repaired.
+        if value == expected {
+            if citations(&a).ok() == citations(&e.answer).ok() {
+                "SHORT_QA_FORMAT_VALUE_AND_CITATION_MATCH"
+            } else {
+                "SHORT_QA_FORMAT_VALUE_MATCH_WRONG_CITATION"
+            }
+        } else if e
+            .request
+            .evidence
+            .items
+            .iter()
+            .any(|v| fields(&v.original_excerpt).is_some_and(|f| f.2 == value))
+        {
+            "SHORT_QA_FORMAT_OTHER_SUPPLIED_VALUE"
+        } else {
+            "SHORT_QA_FORMAT_WRONG_VALUE_OR_DIGITS"
+        }
+    } else if fields(&a).is_none() {
+        "UNKNOWN_FORMAT"
+    } else if citations(&a).ok() != citations(&e.answer).ok() {
+        "WRONG_CITATION_OR_RECORD"
+    } else if let (Some(x), Some(y)) = (fields(&a), fields(&e.answer)) {
+        if x.0 != y.0 {
+            "WRONG_ENTITY"
+        } else if x.1 != y.1 {
+            "WRONG_CONTEXT"
+        } else if x.2 != y.2
+            && e.request
+                .evidence
+                .items
+                .iter()
+                .any(|v| fields(&v.original_excerpt).is_some_and(|f| f.2 == x.2))
+        {
+            "OTHER_SUPPLIED_VALUE"
+        } else if x.2 != y.2 {
+            "WRONG_VALUE_OR_DIGITS"
+        } else {
+            "FORMAT_OR_EOS"
+        }
+    } else {
+        "UNKNOWN_FORMAT"
+    };
+    Ok((class.into(), field.into()))
+}
+fn audit_forward(
+    a: &mut ArtifactAudit,
+    output: &Path,
+    control: &mut RunControl,
+    forward: impl FnOnce() -> Result<Tensor>,
+) -> Result<Tensor> {
+    control.check("artifact_diagnostic_before_forward")?;
+    if a.calls[2] >= 64 || control.teacher_calls >= control.teacher_limit {
+        return Err(bad("diagnostic forward cap"));
+    }
+    a.calls[2] += 1;
+    control.teacher_calls += 1;
+    a.elapsed = Scalar::F64(control.start.elapsed().as_secs_f64());
+    publish(
+        output,
+        &format!("forward-entry-{:02}.r3er", a.calls[2]),
+        &Record::ArtifactAudit(Box::new(a.clone())),
+    )?;
+    let result = forward();
+    a.calls[3] += 1;
+    publish(
+        output,
+        &format!("forward-return-{:02}.r3er", a.calls[3]),
+        &Record::ArtifactAudit(Box::new(a.clone())),
+    )?;
+    result
+}
+fn diagnostic_prefix(
+    a: &mut ArtifactAudit,
+    output: &Path,
+    control: &mut RunControl,
+    l: &Loaded,
+    e: &Episode,
+    row: &EvalRow,
+    model: u8,
+) -> Result<()> {
+    let framed = samples(
+        std::slice::from_ref(e),
+        &l.tokenizer,
+        l.model.config.context,
+    )?;
+    let sample = framed
+        .first()
+        .ok_or_else(|| bad("diagnostic sample omitted"))?;
+    let prompt = l.tokenizer.prepare(
+        &e.request,
+        l.model.config.context as u32,
+        &l.model.config.id()?,
+    )?;
+    if sample.tokens[..sample.response_start] != prompt.token_ids {
+        return Err(bad("same-prefix framing mismatch"));
+    }
+    let gold = &sample.tokens[sample.response_start..];
+    let position = (0..gold.len())
+        .find(|i| row.tokens.get(*i) != gold.get(*i))
+        .unwrap_or(gold.len() - 1);
+    let mut prefix = prompt.token_ids;
+    prefix.extend_from_slice(&row.tokens[..position]); // only the identical pre-error free prefix
+    let scope = "bounded-first-error";
+    let mut cache = l.model.cache(scope);
+    let pre = Tensor::new(&prefix[..prefix.len() - 1], &Device::Cpu)?.unsqueeze(0)?;
+    let last = Tensor::new(&prefix[prefix.len() - 1..], &Device::Cpu)?.unsqueeze(0)?;
+    let all = Tensor::new(prefix.as_slice(), &Device::Cpu)?.unsqueeze(0)?;
+    let _ = audit_forward(a, output, control, || {
+        l.model.forward_cached(&pre, &mut cache, scope)
+    })?;
+    let cached = audit_forward(a, output, control, || {
+        l.model.forward_cached(&last, &mut cache, scope)
+    })?;
+    let full = audit_forward(a, output, control, || l.model.forward(&all, None))?.narrow(
+        1,
+        prefix.len() - 1,
+        1,
+    )?;
+    let parity = compare(&full, &cached)?; // existing abs1e-4 + rel1e-3 per-logit rule
+    let fv = full.flatten_all()?.to_vec1::<f32>()?;
+    let cv = cached.flatten_all()?.to_vec1::<f32>()?;
+    let full_id = full.argmax(2)?.flatten_all()?.to_vec1::<u32>()?[0];
+    let cached_id = cached.argmax(2)?.flatten_all()?.to_vec1::<u32>()?[0];
+    let top = fv[full_id as usize];
+    let second = fv
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != full_id as usize)
+        .map(|(_, v)| *v)
+        .max_by(f32::total_cmp)
+        .unwrap();
+    let gap = f64::from(top - second);
+    let tie = 2. * (1e-4 + 1e-3 * f64::from(top.abs().max(second.abs())));
+    if full_id != cached_id && gap > tie {
+        return Err(bad("cached/uncached argmax mismatch outside near tie"));
+    }
+    let values = [
+        parity["max_abs"]
+            .as_f64()
+            .ok_or_else(|| bad("numeric result"))?,
+        f64::from(fv[gold[position] as usize] - top),
+        f64::from(cv[gold[position] as usize] - cv[cached_id as usize]),
+        gap,
+    ];
+    a.numeric.push(PrefixCheck {
+        model,
+        ordinal: row.ordinal,
+        position: position as u32,
+        gold: gold[position],
+        full: full_id,
+        cached: cached_id,
+        values,
+    });
+    println!(
+        "PREFIX_NUMERIC model={model} ordinal={} first_error_token={position} full={full_id} cached={cached_id} gold={} max_abs={} gold_margin_full={} gold_margin_cached={} top_gap={gap} near_tie_threshold={tie} prompt_equal=true",
+        row.ordinal, gold[position], values[0], values[1], values[2]
+    );
+    control.check("artifact_diagnostic_after_forward")
+}
+fn bridge_artifact_audit(
+    root: &Path,
+    checkpoint_name: &str,
+    expected: &str,
+    output: &Path,
+    control: &mut RunControl,
+) -> Result<()> {
+    let s = read_inputs(root)?;
+    if !s.bridge() || s.arm_name() != "C-COPYMATCH" || s.historical {
+        return Err(bad("diagnostic requires preserved C run"));
+    }
+    bridge_origins(&s, None)?;
+    let path = owned_path(root, checkpoint_name, true)?;
+    if file_hash(&path)? != expected {
+        return Err(bad("diagnostic expected physical checkpoint"));
+    }
+    let l = checkpoint::load(&path, Device::Cpu, true)?;
+    let n = native_reference(root, checkpoint_name, &s, &l, 1)?;
+    let parent = resolve_native(root, &s, &s.parent, true)?;
+    let state = l
+        .manifest
+        .training
+        .as_ref()
+        .ok_or_else(|| bad("diagnostic native state"))?;
+    let updates = s.tape.len();
+    if n.step != s.parent.step + updates as u64
+        || n.tokenizer != s.parent.tokenizer
+        || n.architecture != s.parent.architecture
+        || n.counters
+            != [
+                s.parent.counters[0] + s.tape.iter().map(|d| d.input).sum::<u64>(),
+                s.parent.counters[1] + s.tape.iter().map(|d| d.target).sum::<u64>(),
+                s.tape.last().ok_or_else(|| bad("empty tape"))?.sampler,
+            ]
+        || state.resume_binding.as_ref() != Some(&objective_binding(&s, state, &l.tokenizer)?)
+    {
+        return Err(bad("diagnostic native/objective/parent/tape/clock"));
+    }
+    let mut expected_state = parent.manifest.training.clone().unwrap();
+    fork_budget(
+        &mut expected_state,
+        s.parent.step,
+        s.parent.counters[0],
+        updates,
+        2_000_000,
+    )?;
+    if state.config != expected_state.config
+        || state.corpus_hash != expected_state.corpus_hash
+        || state.validation_hash != expected_state.validation_hash
+    {
+        return Err(bad("diagnostic native training config changed"));
+    }
+    checkpoint::validate_metadata(&l.manifest, &l.tokenizer)?;
+    let original_terminal = root.join("segment-01/terminal.r3er");
+    if original_terminal.exists() || root.join("segment-01/command.r3er").exists() {
+        return Err(bad("diagnostic expects unchanged failed C finalization"));
+    }
+    let train = s
+        .train
+        .iter()
+        .map(|i| s.cases[*i as usize].clone())
+        .collect::<Vec<_>>();
+    let temporal = if s.tiny_spec {
+        train.clone()
+    } else {
+        data::native::read(&origin_path(&s, "bridge-temporal-corpus")?)?.train
+    };
+    let framed = samples(&train, &l.tokenizer, state.config.seq_len)?;
+    for d in &s.tape {
+        if d.input
+            != d.indices
+                .iter()
+                .map(|i| framed[*i as usize].tokens.len() as u64 - 1)
+                .sum::<u64>()
+            || d.target
+                != d.indices
+                    .iter()
+                    .map(|i| {
+                        (framed[*i as usize].tokens.len() - framed[*i as usize].response_start)
+                            as u64
+                    })
+                    .sum::<u64>()
+        {
+            return Err(bad("diagnostic actual tape token counts"));
+        }
+    }
+    let mut originals = vec![
+        absolute_reference(&path)?,
+        absolute_reference(&root.join("parent.r3m"))?,
+    ];
+    for o in &s.origins {
+        if Path::new(&o.original.locator).is_file() {
+            let mut path = PathBuf::from(&o.original.locator);
+            if o.role == "execution-binary" && unhex(&file_hash(&path)?)? != o.original.digest {
+                path = root
+                    .parent()
+                    .and_then(Path::parent)
+                    .ok_or_else(|| bad("preserved execution root"))?
+                    .join("executed-replica-train");
+            }
+            let r = absolute_reference(&path)?;
+            if r.digest != o.original.digest {
+                return Err(bad("diagnostic origin digest changed"));
+            }
+            originals.push(r);
+        }
+    }
+    let mut panels = Vec::new();
+    let mut raw = BTreeMap::new();
+    for kind in [
+        PanelKind::LegacyDev,
+        PanelKind::Cross,
+        PanelKind::Ordinary,
+        PanelKind::Dev,
+        PanelKind::Conditional,
+    ] {
+        let name = format!("segment-01/{}-{updates:04}.r3er", kind.name());
+        let p = root.join(&name);
+        let r = reference(root, &name)?;
+        let Record::Evaluation(e) = read_record(root, &r)? else {
+            return Err(bad("diagnostic panel kind"));
+        };
+        if e.source != s.source || e.step != n.step || e.model != n.model {
+            return Err(bad("diagnostic raw source/endpoint"));
+        }
+        panels.push((kind, rescore(&s, &e, &l, true)?));
+        print_anchor_panel(&s, &e, &l)?;
+        let mut classes: BTreeMap<String, u64> = BTreeMap::new();
+        let mut first: BTreeMap<String, u64> = BTreeMap::new();
+        for row in &e.rows {
+            let (class, field) =
+                bridge_regression_pattern(&s.cases[row.ordinal as usize], row, &l)?;
+            *classes.entry(class).or_default() += 1;
+            *first.entry(field).or_default() += 1;
+            raw.insert(row.ordinal, row.clone());
+        }
+        println!(
+            "C512_RAW_RECOUNT panel={} classes={classes:?} first_byte_error_fields={first:?} STRICT_METRIC_UNCHANGED=true",
+            kind.name()
+        );
+        originals.push(absolute_reference(&p)?);
+    }
+    let teacher = read_verified_bridge_teacher(root, "final-probe", &s, &n)?;
+    for r in &teacher.files {
+        originals.push(absolute_reference(&root.join(&r.locator))?);
+    }
+    print_bridge_teacher(&teacher, n.step)?;
+    println!(
+        "C512_ARTIFACT=VERIFIED file={} model={} Adam={} step={} HISTORICAL_COMMAND=FAILED_PUBLICATION_UNCHANGED HISTORICAL_TOTAL_USAGE=UNKNOWN C512_PROMOTION=false C512_TRAIN_RESUME=false",
+        hex(&n.file.digest),
+        hex(&n.model),
+        hex(&n.adam.unwrap()),
+        n.step
+    );
+    let selection = bridge_diagnostic_selection(&s)?;
+    std::fs::create_dir(output)?;
+    std::fs::copy(std::env::current_exe()?, output.join("executed-binary"))?;
+    originals.push(absolute_reference(&output.join("executed-binary"))?);
+    let mut a = ArtifactAudit {
+        source: evaluator_source(),
+        binary: unhex(&file_hash(&std::env::current_exe()?)?)?,
+        input: absolute_reference(&root.join("inputs.r3er"))?,
+        native: n,
+        originals,
+        selection,
+        fresh: vec![],
+        numeric: vec![],
+        panels,
+        calls: [0; 4],
+        elapsed: Scalar::F64(control.start.elapsed().as_secs_f64()),
+        complete: false,
+        stop: vec![],
+        error: None,
+    };
+    publish(
+        output,
+        "audit-start.r3er",
+        &Record::ArtifactAudit(Box::new(a.clone())),
+    )?;
+    println!(
+        "DIAGNOSTIC_SELECTION ordinals={:?} policy=category/family/length/hash NORMAL_GREEDY_LIMIT=64 PREFIX_CASES_PER_MODEL=10 FORWARD_LIMIT=64 ABS=0.0001 REL=0.001 NEAR_TIE=2*(ABS+REL*top_magnitude)",
+        a.selection
+    );
+    control.generation_limit = 64;
+    control.teacher_limit = 64;
+    let outcome = (|| -> Result<()> {
+        // A failed input audit still preserves the independent native/raw recount.
+        exact_training_inputs(&train, &l)?;
+        exact_training_inputs(&temporal, &l)?;
+        for (model, loaded) in [(0u8, &parent), (1u8, &l)] {
+            for (i, ordinal) in a.selection.clone().into_iter().enumerate() {
+                let case = &s.cases[ordinal as usize];
+                let entry_name = format!("generation-entry-{model}-{i:02}.r3er");
+                let row =
+                    evaluate_row_with_entry(loaded, case, ordinal, control, false, true, || {
+                        a.calls[0] += 1;
+                        publish(
+                            output,
+                            &entry_name,
+                            &Record::ArtifactAudit(Box::new(a.clone())),
+                        )?;
+                        Ok(())
+                    })?;
+                a.calls[1] += 1;
+                a.fresh.push((model, row.clone()));
+                publish(
+                    output,
+                    &format!("generation-row-{model}-{i:02}.r3er"),
+                    &Record::ArtifactAudit(Box::new(a.clone())),
+                )?;
+                control.check("artifact_diagnostic_generation_returned")?;
+                if model == 1 {
+                    let prior = raw
+                        .get(&ordinal)
+                        .ok_or_else(|| bad("diagnostic original row absent"))?;
+                    if row.tokens != prior.tokens
+                        || row.finish != prior.finish
+                        || row.error != prior.error
+                        || row.eos != prior.eos
+                    {
+                        return Err(bad("C512 fresh/raw token/EOS/error mismatch"));
+                    }
+                }
+                let pattern = bridge_regression_pattern(case, &row, loaded)?;
+                println!(
+                    "FRESH_DIAGNOSTIC model={model} ordinal={ordinal} exact={} pattern={pattern:?}",
+                    row_output(&row, loaded)?.0.as_deref() == Some(case.answer.as_str())
+                );
+                if i < 10 {
+                    diagnostic_prefix(&mut a, output, control, loaded, case, &row, model)?;
+                }
+            }
+        }
+        Ok(())
+    })();
+    if let Err(e) = &outcome {
+        control.classify_error(e);
+        a.error = Some(e.to_string());
+    }
+    a.stop = control.observed.clone();
+    a.elapsed = Scalar::F64(control.start.elapsed().as_secs_f64());
+    a.complete = outcome.is_ok() && a.stop.is_empty();
+    publish(
+        output,
+        "audit-final.r3er",
+        &Record::ArtifactAudit(Box::new(a.clone())),
+    )?;
+    println!(
+        "C512_DIAGNOSTIC complete={} calls={:?} seconds={} STOP={:?} ERROR={:?} HISTORICAL_COMMAND_STILL_FAILED=true RESUME_AUTHORIZATION=false NEW_SMALL_UPDATES=0",
+        a.complete,
+        a.calls,
+        a.elapsed.finite()?,
+        a.stop,
+        a.error
+    );
+    outcome
 }
 // Teacher-only observations use existing typed rows; started=false/tokens=[] means
 // no free generation was performed. retained=[foil index,gold ID,foil ID].
@@ -5796,6 +6600,17 @@ fn resolve_native(root: &Path, s: &RunSnapshot, n: &CheckpointRef, resume: bool)
 
 #[derive(Subcommand)]
 pub enum Action {
+    /// One bounded audit of the preserved failed C endpoint. Never repairs its command.
+    BridgeArtifactAudit {
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long)]
+        checkpoint: String,
+        #[arg(long)]
+        expected: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
     #[cfg(feature = "test-support")]
     FixtureBridge {
         #[arg(long)]
@@ -6123,6 +6938,12 @@ pub(super) fn command(action: Action) -> Result<()> {
     let mut control = RunControl::command(matches!(action, Action::Run { .. }))?;
     control.deadline = control.start + Duration::from_secs(1800);
     match action {
+        Action::BridgeArtifactAudit {
+            root,
+            checkpoint,
+            expected,
+            output,
+        } => bridge_artifact_audit(&root, &checkpoint, &expected, &output, &mut control),
         #[cfg(feature = "test-support")]
         Action::FixtureBridge {
             from,
@@ -6207,6 +7028,29 @@ pub(super) fn command(action: Action) -> Result<()> {
                         locator: binary.canonicalize()?.display().to_string(),
                         digest: unhex(&file_hash(&binary)?)?,
                     },
+                });
+                // Test-sized predecessor is explicitly incomplete (no generation/teacher).
+                // Registration uses the production publisher and verifier, never a tiny bypass.
+                let previous = output.with_extension("previous");
+                std::fs::create_dir(&previous)?;
+                std::fs::copy(from.join(&n.file.locator), previous.join("parent.r3m"))?;
+                publish(
+                    &previous,
+                    "inputs.r3er",
+                    &Record::Inputs(Box::new(s.clone())),
+                )?;
+                let registered = register_bridge_replacement(
+                    &output,
+                    &previous,
+                    s.source,
+                    FileRef {
+                        locator: binary.canonicalize()?.display().to_string(),
+                        digest: unhex(&file_hash(&binary)?)?,
+                    },
+                )?;
+                s.origins.push(Origin {
+                    role: "bridge-replacement-registration".into(),
+                    original: registered,
                 });
             }
             s.validate()?;
@@ -8762,7 +9606,7 @@ fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
             return Err(bad("cooldown identical parent/data/tape/source"));
         }
         if s.bridge() {
-            bridge_origins(&other)?;
+            bridge_origins(&other, None)?;
             let l = resolve_native(root, s, &s.parent, true)?;
             for (i, (x, y)) in other.cases.iter().zip(&s.cases).enumerate() {
                 if !(2048..2560).contains(&i) || other.arm_name() == s.arm_name() {
@@ -9098,6 +9942,9 @@ fn read_preflight_outcome(root: &Path) -> Result<Option<PreflightOutcome>> {
     };
     if start.root != root.canonicalize()?.to_string_lossy() {
         return Err(bad("verification attempt moved outside registered root"));
+    }
+    if start.scope == 3 {
+        bridge_origins(&read_inputs(root)?, Some(root))?;
     }
     for r in start
         .inputs
@@ -9995,7 +10842,7 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
         let dir = root.join(arm);
         let s = read_inputs(&dir)?;
         if bridge {
-            bridge_origins(&s)?;
+            bridge_origins(&s, None)?;
         }
         if let Err(e) = arm_commands(&dir, &s) {
             println!(
@@ -10613,6 +11460,13 @@ fn train_probe(
 }
 fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Result<()> {
     let s = read_inputs(root)?;
+    // Pure, discarded capacity check using the actual terminal encoder; no future receipt.
+    Record::Segment(SegmentReceipt::capacity_value(
+        s.tape.clone(),
+        s.continuation() || s.path_parity(),
+        s.objective.is_some(),
+    ))
+    .encode()?;
     #[cfg(feature = "test-support")]
     if s.tiny_spec && s.origins.iter().any(|o| o.role == "test-verification") {
         let p = read_preflight_outcome(
@@ -12569,6 +13423,177 @@ fn fixture_check(roots: &[PathBuf]) -> Result<()> {
 #[cfg(test)]
 mod binary_tests {
     use super::*;
+    #[test]
+    fn segment_capacity_record_publisher_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        for metrics in [false, true] {
+            for count in [0, 1, 2, 255, 256, 257, 511, 512] {
+                let draws = vec![
+                    Draw {
+                        indices: vec![0],
+                        sampler: 1,
+                        input: 2,
+                        target: 1
+                    };
+                    count
+                ];
+                let record = Record::Segment(SegmentReceipt::capacity_value(draws, true, metrics));
+                let file = publish(
+                    dir.path(),
+                    &format!("synthetic-{metrics}-{count}.r3er"),
+                    &record,
+                )
+                .unwrap_or_else(|e| panic!("metrics={metrics} count={count}: {e}"));
+                let bytes = std::fs::read(dir.path().join(&file.locator)).unwrap();
+                let read = read_record(dir.path(), &file).unwrap();
+                assert_eq!(bytes, read.encode().unwrap());
+                for index in [6, 7] {
+                    let mut invalid = bytes.clone();
+                    invalid[index] = 255;
+                    assert!(Record::decode(&invalid).is_err());
+                }
+                let mut trailing = bytes.clone();
+                trailing.push(0);
+                assert!(Record::decode(&trailing).is_err());
+                assert!(
+                    matches!(read, Record::Segment(t) if t.draws.len()==count && t.lr_bits.as_ref().unwrap().len()==count)
+                );
+            }
+        }
+        println!(
+            "SYNTHETIC_TERMINAL_CAPACITY writer/publisher/reader counts=0,1,2,255,256,257,511,512 OPTIMIZER_CALLS=0"
+        );
+    }
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn artifact_input_conflict_and_registered_identity_fail_closed() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("observation");
+        command(Action::FixtureBridge {
+            from: PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap()),
+            output: root.clone(),
+            continuous: false,
+            observation: true,
+        })
+        .unwrap();
+        let s = read_inputs(&root).unwrap();
+        bridge_origins(&s, Some(&root)).unwrap();
+        let l = resolve_native(&root, &s, &s.parent, true).unwrap();
+        let e = s.cases[s.train[0] as usize].clone();
+        exact_training_inputs(&[e.clone(), e.clone()], &l).unwrap();
+        let mut changed = e.clone();
+        changed.answer.push(' ');
+        assert!(
+            exact_training_inputs(&[e, changed], &l)
+                .unwrap_err()
+                .to_string()
+                .contains("DATA_CONFLICT")
+        );
+        for field in 0..3 {
+            let mut changed = s.clone();
+            match field {
+                0 => changed.source[0] ^= 1,
+                1 => {
+                    changed
+                        .origins
+                        .iter_mut()
+                        .find(|o| o.role == "bridge-replacement-registration")
+                        .unwrap()
+                        .original
+                        .digest[0] ^= 1
+                }
+                _ => {
+                    changed
+                        .origins
+                        .iter_mut()
+                        .find(|o| o.role == "execution-binary")
+                        .unwrap()
+                        .original
+                        .digest[0] ^= 1
+                }
+            }
+            assert!(bridge_origins(&changed, Some(&root)).is_err());
+        }
+        println!(
+            "STATIC_CONFLICT_AND_REGISTRY_IDENTITY OPTIMIZER_CALLS=0 GENERATIONS=0 FORWARDS=0"
+        );
+    }
+    #[test]
+    fn segment_capacity_rejects_mismatch_nonfinite_and_forged_bounds() {
+        let draw = Draw {
+            indices: vec![0],
+            sampler: 1,
+            input: 2,
+            target: 1,
+        };
+        for metrics in [false, true] {
+            for (draws, rates) in [(512, 511), (511, 512), (513, 513)] {
+                let mut t =
+                    SegmentReceipt::capacity_value(vec![draw.clone(); draws], true, metrics);
+                t.lr_bits = Some(vec![1e-4f64.to_bits(); rates]);
+                assert!(
+                    Record::Segment(t).encode().is_err(),
+                    "draws={draws} rates={rates}"
+                );
+            }
+            for rate in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1., 0.] {
+                let mut t = SegmentReceipt::capacity_value(vec![draw.clone()], true, metrics);
+                t.lr_bits = Some(vec![rate.to_bits()]);
+                assert!(Record::Segment(t).encode().is_err());
+            }
+            let mut t = SegmentReceipt::capacity_value(vec![draw.clone(); 2], true, metrics);
+            if metrics {
+                t.objective_metrics.as_mut().unwrap().pop();
+                assert!(Record::Segment(t.clone()).encode().is_err());
+                t.objective_metrics = Some(vec![[0.; 8]; 2]);
+            }
+            let encoded = Record::Segment(t).encode().unwrap();
+            for removed in [1, 8, 16] {
+                assert!(Record::decode(&encoded[..encoded.len() - removed]).is_err());
+                assert!(
+                    SegmentReceipt::decode(
+                        &mut Reader::new(&encoded[HEADER..encoded.len() - removed]),
+                        true,
+                        metrics
+                    )
+                    .is_err()
+                );
+            }
+        }
+        let mut empty = Vec::new();
+        SegmentReceipt::capacity_value(vec![], true, false).encode(&mut empty);
+        for forged in [513, u64::MAX] {
+            let mut bytes = empty[..empty.len() - 2].to_vec();
+            put_varint(&mut bytes, forged); // draws count, no attacker-sized allocation
+            bytes.push(0);
+            assert!(SegmentReceipt::decode(&mut Reader::new(&bytes), true, false).is_err());
+        }
+        // Equal-sized positive rates are schema-valid but not an authorized LR policy.
+        let from = std::env::var_os("R3ER_TEST_BOOTSTRAP")
+            .map(PathBuf::from)
+            .unwrap();
+        let mut s = read_inputs(&from).unwrap();
+        s.contract = BRIDGE_CONTRACT.into();
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = SegmentReceipt::capacity_value(vec![draw; 2], true, false);
+        t.run = s.run;
+        t.binding = s.binding();
+        t.save_error = None;
+        t.lr_bits = Some(vec![2e-4f64.to_bits(); 2]);
+        let r = publish(
+            dir.path(),
+            "synthetic-wrong-policy.r3er",
+            &Record::Segment(t),
+        )
+        .unwrap();
+        assert!(
+            segment(dir.path(), &r, &s)
+                .unwrap_err()
+                .to_string()
+                .contains("actual LR bits/horizon/cursor")
+        );
+        println!("NEGATIVE_CAPACITY_AND_POLICY OPTIMIZER_CALLS=0");
+    }
     #[cfg(feature = "test-support")]
     #[test]
     fn bridge_teacher_raw_mutations_and_64_row_schema() {

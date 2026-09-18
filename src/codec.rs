@@ -204,6 +204,9 @@ impl<'a> Reader<'a> {
     pub fn position(&self) -> usize {
         self.pos
     }
+    pub fn remaining(&self) -> usize {
+        self.b.len() - self.pos
+    }
     pub fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         let end = self
             .pos

@@ -1,5 +1,42 @@
 # 진단 및 구현 상태
 
+## R0–R2 — bounded bridge 경계 수정, 모델 실행 전
+
+R3-QUALITY-RECOVERY-BOUNDED-BRIDGE-1.0 / 2026-09-19.
+시작 HEAD92c6ca1e0f12135c83a4f3bc334039332672bb83, 기준 소스
+e08687eff768dd8b6426accebdfe148d3ce8b556. Rust/Cargo1.98.1, 기존 lock 사용.
+기존 C512 실패 및 T0, 원문/체크포인트/raw/로컬 파일을 보존했다.
+
+FB01: kind14와 metrics 변형의 draws/LR/metrics 상한을512로 일치시켰다.
+실제 Record→create-new publisher→sync/readback의0/1/2/255/256/257/511/512
+합성 capacity 시험이며 optimizer0이다. 513, count 불일치, 잘림, 비유한/
+비양수 LR, 위조 bounds와 실제 정책에 다른 LR는 거부한다. 기존 decoder의
+257 및511 실패를 각각 실제 Record/publisher 경로에서 재현했고(이전 LR 상한
+격리 주입, optimizer0), 수정 후 두 직접 unit 시험이 통과했다.
+
+FB02: 등록 observation root의 canonical 경로를 observe/prepare/report에서
+공통 검증한다. TINY도 실제 replacement 등록과 별도 teacher 파일/scope3
+proof를 사용한다. 복사본 B의 세 진입점 거부, 원 위치 A 별칭의 정상 실행,
+읽기 전용 보고, teacher 실패 보존, 첫1+fresh1/연속2의 기존 모델·Adam·close
+회귀가 실제 통과했다. 직접 process 시험4개 뒤 실행한 관련 quick은
+15명령/18개 고유 테스트 PASS(0-test 없음). 해당 quick의 TINY44회와 선행
+직접 process의8회를 합쳐 이번 실제 TINY52/128, scalar0이다. 반복 invocation을
+새 고유 테스트로 더하지 않는다. 강제 종료 시험의 미확정 생성/teacher tail은
+UNKNOWN이며 SMALL 사용량과 합치지 않는다.
+
+초기 quick은 새 unit fixture 두 개가 같은 프로세스의 취소 핸들러를 중복
+등록해 FAIL했다. CLI fixture를 각각 별도 process에서 실행하도록 수정한 뒤
+위 quick 전체가 통과했다. 이 실패는 보존하며 PASS 숫자에 넣지 않는다.
+
+C512 독립 감사 경로를 기존 native loader/scorer/teacher 순수 verifier에
+연결했다. 과거 terminal/command를 만들지 않는 별도 진단이다. 이 절 작성
+시점 SMALL updates/generation/diagnostic forward 모두0, C 감사와 T-SCREEN은
+NOT_RUN이다. 품질·H3/S4/S5/S6/Goal1 상태도 변경하지 않았다.
+
+허용된 신규 로컬 증거 root:
+`artifacts/quality-recovery-bounded-bridge-20260919/`.
+기존 실패 원본은 아래 B4/B5 절의 경로에 그대로 보존한다.
+
 ## B4/B5 — C512 terminal 발행 실패, T와 pair 비교 차단
 
 R3-BRIDGE-EVIDENCE-RESTART-1.0 / 2026-09-19. **RESULT=PARTIAL**.

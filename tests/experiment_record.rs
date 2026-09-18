@@ -162,6 +162,69 @@ fn conditional_root_registration_survives_missing_child() {
     println!("ROOT_REGISTRATION_REGRESSION TINY_UPDATES=0 SMALL_UPDATES=0");
 }
 #[test]
+fn bridge_registered_observation_rejects_prestart_copy_in_fresh_processes() {
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
+    let root = d.path().join("observation");
+    call(
+        &[
+            "fixture-bridge",
+            "--from",
+            p(&bootstrap),
+            "--output",
+            p(&root),
+            "--observation",
+        ],
+        None,
+        true,
+        &d.path().join("prepare.log"),
+    );
+    assert!(root.with_extension("r3er").is_file());
+    let copied = d.path().join("copied-observation");
+    copy_fixture(&root, &copied);
+    let original = evidence_manifest(&root);
+    let before = evidence_manifest(&copied);
+    let study = d.path().join("must-not-be-created");
+    for args in [
+        vec!["bridge-observe", "--root", p(&copied)],
+        vec!["bridge-observe-report", "--root", p(&copied)],
+        vec![
+            "bridge-prepare",
+            "--observation",
+            p(&copied),
+            "--output",
+            p(&study),
+        ],
+    ] {
+        let out = call(&args, None, false, &d.path().join("rejected.log"));
+        let log = String::from_utf8_lossy(&out.stdout);
+        assert!(log.contains("REGISTERED_OBSERVATION_ROOT_MISMATCH"));
+        assert!(!log.contains("GENERATION_API_ENTRY="));
+        assert!(!log.contains("TEACHER_API_ENTRY="));
+        assert_eq!(before, evidence_manifest(&copied));
+        assert_eq!(original, evidence_manifest(&root));
+        assert!(!study.exists());
+    }
+    let alias = root.join(".");
+    call(
+        &["bridge-observe", "--root", p(&alias)],
+        None,
+        true,
+        &d.path().join("observe.log"),
+    );
+    let complete = evidence_manifest(&root);
+    call(
+        &["bridge-observe-report", "--root", p(&alias)],
+        None,
+        true,
+        &d.path().join("report.log"),
+    );
+    assert_eq!(complete, evidence_manifest(&root));
+    println!(
+        "REGISTERED_ROOT_REAL_LAYOUT TINY_UPDATES=0 GENERATIONS=2 TEACHERS=2 REJECTED_COPY_CALLS=0"
+    );
+}
+#[test]
 fn bridge_observation_teacher_receipt_survives_fresh_read_and_cannot_retry() {
     let d = tempfile::tempdir().unwrap();
     let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());

@@ -417,6 +417,30 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
             r.cargo("check", &["--all-targets"], false)?;
             r.cargo("clippy", &["--all-targets", "--", "-D", "warnings"], false)?;
             if *bridge_receipts {
+                // Each CLI fixture installs its process cancellation handler once.
+                r.cargo(
+                    "test",
+                    &[
+                        "--bin",
+                        "replica-train",
+                        "artifact_input_conflict_",
+                        "--",
+                        "--test-threads=1",
+                    ],
+                    true,
+                )?;
+                r.cargo(
+                    "test",
+                    &[
+                        "--bin",
+                        "replica-train",
+                        "segment_capacity_",
+                        "--",
+                        "--test-threads=1",
+                        "--nocapture",
+                    ],
+                    true,
+                )?;
                 r.cargo(
                     "test",
                     &[

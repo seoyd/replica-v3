@@ -1,5 +1,19 @@
 # B0 storage format v1
 
+## Terminal count compatibility and diagnostic evidence
+
+R3ER kind14 and the objective-metrics variant use a common512 segment limit for
+draws, actual LR bits and optional metrics. Their wire layout is unchanged. Readers
+from before the bounded-bridge repair reject kind14 LR counts257–512; this is not
+a tensor/model format migration. Present LR/metrics vectors must match segment
+draw count, with finite positive rates; policy/tape/native clock verification is
+separate from schema capacity. A parser limit grants no execution budget.
+
+Diagnostic-only R3ER kind30 binds a preserved failed-run native, original file
+references, metadata selection, raw recount, fresh rows, same-prefix numeric checks
+and entered/returned call counts. It is never a terminal, command or resume proof.
+Existing R3MODEL/R3CORP/R3TOK and product SQLite/IPC formats remain unchanged.
+
 ## R3CORP v1 source corpus and native default
 
 `data::native` is train-only. Its Episode codec is shared with existing R3ER;

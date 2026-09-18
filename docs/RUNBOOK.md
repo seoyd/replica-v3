@@ -1,5 +1,22 @@
 # Replica v3 B0 runbook
 
+## Preserved C512 diagnostic
+
+Use `replica-train recovery native bridge-artifact-audit --root OLD_C_ROOT
+--checkpoint segment-01/step-0512.r3m --expected PHYSICAL_SHA --output NEW_ROOT`
+only on the preserved failed C512 arm. This reads native weights/Adam/objective,
+fixed binary corpora and original raw; it does not create missing old terminals.
+The output contains typed diagnostic records and a copy of the actual executable.
+At most32 metadata-selected cases per parent/C are generated, with at most64 own
+numeric forwards. Inputs, counters, raw token parity and cache tolerance fail closed.
+A failed diagnostic grants no learning permission or retry. Build/test time and
+diagnostic wall/call counts are reported separately. Use Accelerate and one thread.
+
+Direct boundary check: existing `replica-check quick --bridge-receipts --output
+NEW_CHECK_ROOT`, with the registered `R3ER_TEST_BOOTSTRAP` TINY fixture. Synthetic
+terminal capacity records use actual publishers but perform zero optimizer calls.
+CLI fixture unit tests run in separate processes because each owns a cancel handler.
+
 ## Closed target-loss study and train cache prototype
 
 BASE512/SPAN512 is complete with both joint gates failed. Preserve the registered
