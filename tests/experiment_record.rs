@@ -240,6 +240,76 @@ fn cooldown_actual_lr_continuous_and_fresh_process_resume() {
     );
 }
 #[test]
+fn objective_policy_same_filename_different_weights_rejected_before_work() {
+    use candle_core::{Device, Tensor};
+    use replica_v3::neural::{artifact, checkpoint};
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
+    let root = d.path().join("native");
+    call(
+        &[
+            "fixture-native-corpus",
+            "--from",
+            p(&bootstrap),
+            "--output",
+            p(&root),
+        ],
+        None,
+        true,
+        &d.path().join("prepare.log"),
+    );
+    let parent = root.join("parent.r3m");
+    let renamed = d.path().join("renamed.r3m");
+    fs::copy(&parent, &renamed).unwrap();
+    let loaded = checkpoint::load(&renamed, Device::Cpu, true).unwrap();
+    checkpoint::ResumeBinding::require_default(
+        loaded.manifest.training.as_ref().unwrap(),
+        &loaded.tokenizer,
+    )
+    .unwrap();
+    let original_model = loaded.model.weight_hash().unwrap();
+    assert_eq!(fs::read(&parent).unwrap(), fs::read(&renamed).unwrap());
+
+    // A valid alternative artifact, not a checksum-corrupted byte stream.
+    // Only this isolated fixture is replaced; the registered parent stays fixed.
+    let var = loaded.model.vars.values().next().unwrap();
+    let mut values = var.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    values[0] += 0.25;
+    var.set(&Tensor::from_vec(values, var.dims(), &Device::Cpu).unwrap())
+        .unwrap();
+    let alternate = d.path().join("alternate.r3m");
+    artifact::save(
+        &alternate,
+        &loaded.model,
+        &loaded.tokenizer,
+        loaded.manifest.clone(),
+        &loaded.optimizer,
+    )
+    .unwrap();
+    fs::copy(&alternate, &parent).unwrap();
+    let valid_alternate = checkpoint::load(&parent, Device::Cpu, true).unwrap();
+    assert_ne!(valid_alternate.model.weight_hash().unwrap(), original_model);
+    assert_eq!(valid_alternate.manifest.training, loaded.manifest.training);
+    let out = call(
+        &["run", "--root", p(&root)],
+        None,
+        false,
+        &d.path().join("rejected.log"),
+    );
+    let log = String::from_utf8_lossy(&out.stdout);
+    assert!(log.contains("native physical digest"), "{log}");
+    for forbidden in [
+        "ACTUAL_TINY_UPDATE=",
+        "ACTUAL_SMALL_UPDATE=",
+        "TRAIN_PROBE_API_ENTRY=",
+    ] {
+        assert!(!log.contains(forbidden), "{log}");
+    }
+    assert!(!root.join("segment-00").exists());
+    assert!(!root.join("comparison.r3er").exists());
+    println!("OBJECTIVE_REPLACEMENT_TINY_UPDATES=0 SMALL_UPDATES=0 GENERATIONS=0 TEACHERS=0");
+}
+#[test]
 fn objective_policy_native_fresh_resume_and_zero_span_parity() {
     let d = tempfile::tempdir().unwrap();
     let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
