@@ -1,6 +1,15 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: R3-NATIVE-CORPUS-OBJECTIVE-BINDING-1.0
+## Closed: R3-NATIVE-CORPUS-OBJECTIVE-BINDING-1.0
+
+N0–N5 implementation and bounded observations completed. Exact objective resume,
+native source/default paths and SMALL input parity verified. Conditional full0/144
+for each fixed model is a negative diagnostic, not recovery. Actual quality SMALL0,
+parity SMALL4, generation320, own teacher288, TINY optimizer108, scalar0. Warm3 and
+fresh-process3 preparation measurements completed; no overall training throughput
+experiment. No remaining model-call budget or implicit next learning authorization.
+One aux-preservation hypothesis is proposed only in EXPERIMENT_STATUS. H3/S4/S5/S6
+and Goal1 remain unaccepted, seal unopened. Details below retain the closed scope.
 
 Base source af63823346ebb6e11cc23451a8ba0c704eb34039, report
 5c35c8c452f6d6790f121af2e2a9e018cc01641c. Preserve all historical studies,

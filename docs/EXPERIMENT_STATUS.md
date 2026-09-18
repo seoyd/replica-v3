@@ -1,5 +1,126 @@
 # 진단 및 구현 상태
 
+## N5 최종 결과와 검토 전달
+
+R3-NATIVE-CORPUS-OBJECTIVE-BINDING-1.0 / N0–N5 계약 범위 PASS.
+저장·재개 구현 검증과 가중치 고정 진단을 마쳤으며 모델 품질 회복은 아니다.
+최종 candidate source=`a89fbc977ed9421489a43fc4b4eb6f42a5ebbd25`.
+이 SHA의 정상 push와 실제 remote full SHA 일치를 확인했다. 이 절은 이후
+report-only 변경이며 독립 검토/Goal1 승인을 부여하지 않는다.
+
+PATH_PARITY 실행 source=b1565eb26d289086f3d195165a8d1ff5aa1852e6,
+조건부 generation source=45d41267d7aae408ca3fd88b61937cad368a42ef,
+최종 quick/측정 source=fde0601e799893c357fdfc9c49bbed4616dc317c.
+그 후 runtime source 변경은 corpus 변환의 stdout이 이전 manifest 대신 실제 저장한
+manifest를 표시하도록 한 수정이다(`5f46807b20113ba2817071fcc998dd853ad38f3c`).
+canonical bytes/모델/학습 결과는 바뀌지 않았다.
+해당 source에서 corpus 단위2개, 기본 generator50/50 및 subset16/16 CLI→native
+reader, clippy/all-targets와 release를 다시 통과했다. SMALL/TINY optimizer 추가0.
+마지막 candidate는 기존 test 파일에 같은 이름의 유효한 다른 weights를 넣는 직접
+회귀1개만 추가했다. 새 process가 native physical digest 오류로 segment 생성/모델
+작업 전에 거부했고, 이름만 바꾼 동일 파일은 내장 default binding 검사를 통과했다.
+이 회귀와 fmt/clippy는 PASS, 신규 optimizer/generation/teacher 모두0이며
+`n5-same-filename.log`에 보존했다. 최종 candidate의 runtime source는 위5f46807과 같다.
+최종 binary=`delivered-runner`, SHA
+8e2168d3bb2a13138bdaac3b58e67fd0c156874b866f53b1ab34e7318ff07bc2.
+이 CLI fixture는 학습에 넣지 않았다. 원 source/실패/로그와487개 기존 untracked는
+보존하며, 원본 checkpoint/corpus/policy 등록8개 hash를 재대조했다.
+
+### 동등 source 저장과 준비 실측
+
+EXECUTED_THIS_RUN. Apple M4, Rust/Cargo1.98.1, offline locked release/Accelerate/F32,
+compute threads1. 각 format warm3 및 format마다 fresh-process3, 순서를 순환했다.
+fresh process는 OS cache cold가 아니다. 공통 model/reference setup은 약1.3초이며
+아래 first-batch-ready에서 분리했다. 소규모3회 관측으로 일반 성능 우위를 주장하지
+않는다. 파일마다 create-new/hash 확인/fsync를 수행했고 JSON3개와 native1개의
+publication 비용을 구분했다. 측정 도중 원본 보존 hash 검사1회가 겹친 환경의
+관측값이며 독점 CPU/OS-cold benchmark로 해석하지 않는다.
+
+전체 train2560/dev256 원문·metadata 비교. ms는 min / median / max다.
+
+| 전체 source | bytes | warm first batch ms | fresh first batch ms | fresh peak RSS MiB min/median/max |
+| --- | ---: | --- | --- | --- |
+| 원 JSON3파일 | 4,633,037 | 146.817 / 147.052 / 148.200 | 148.407 / 148.762 / 149.304 | 234.44 / 234.70 / 236.13 |
+| R3CORP raw | 3,086,269 | 160.943 / 161.541 / 162.677 | 164.039 / 164.493 / 165.304 | 232.02 / 234.23 / 234.58 |
+| R3CORP Zstd3 | 365,282 | 146.970 / 147.132 / 148.167 | 148.829 / 149.296 / 150.442 | 228.11 / 228.86 / 229.63 |
+
+별도 train-only cache 비교. source와 정보 범위가 같지 않으며 원문 대체물이 아니다.
+
+| train2560 derivative | bytes | warm first batch ms | fresh first batch ms | fresh peak RSS MiB min/median/max |
+| --- | ---: | --- | --- | --- |
+| R3TOK raw | 1,726,385 | 10.136 / 10.191 / 11.442 | 10.025 / 10.273 / 10.351 | 213.53 / 214.05 / 214.39 |
+| 같은 R3TOK Zstd3 | 158,644 | 8.224 / 8.281 / 8.686 | 8.124 / 8.160 / 8.215 | 213.56 / 213.69 / 215.23 |
+
+각3회 fresh의 분리 단계 median(ms):
+
+| 경로 | read | physical hash | decode+integrity | tokenize | 첫 batch | steady batch | encode | verify | durable publish |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| JSON | .480 | 8.186 | 14.901 | 125.207 | .019 | .0036 | 10.581 | 14.838 | 23.073 |
+| native raw | .304 | 5.336 | 32.411 | 126.266 | .016 | .0038 | 20.074 | 32.692 | 9.442 |
+| native Zstd3 | .115 | .644 | 24.092 | 124.429 | .017 | .0037 | 17.186 | 23.833 | 9.193 |
+| cache raw | .193 | 2.997 | 7.062 | 0 | .016 | .0050 | 7.563 | 4.322 | 8.336 |
+| cache Zstd3 | .051 | .280 | 7.813 | 0 | .013 | .0052 | 9.097 | 4.939 | 7.227 |
+
+batch는 같은 등록 tape2개다. 표의 단계 median 합이 ready median과 같을 필요는 없다.
+warm RSS는 전체15개 측정이 공유한 process peak260.672MiB로, 경로별 peak가 아니다.
+fresh peak도 공통 model/reference setup을 포함한다. sampled RSS는 별도로 raw에 있다.
+모든 단계의 warm/fresh min/median/range는 `n5-summary.txt`, 개별 timing/binding은
+`n5-warm/measurement.r3er`와15개 `n5-fresh-*/measurement.r3er`, 외부 time -l 원문은
+각 .log에 있다. Rust 집계 소스/바이너리는 같은 로컬 evidence root에 보존했다.
+JSON/native/cold/cache 전체 logical sample/target/mask/order/role와 실제 batch가
+동일함을 매 측정에서 검사했다. native raw는 더 작지만 준비는 느렸고, native Zstd3는
+JSON과 비슷했다. cache 개선을 전체 학습 가속 또는 정답률 향상으로 부르지 않는다.
+TOTAL_TRAINING_THROUGHPUT_IMPROVEMENT=NOT_RUN.
+
+선택한 보존 집합 합계13,975,727 bytes = 원 JSON4,633,037 + native raw3,086,269
++ native Zstd3 365,282 + cache raw1,726,385 + cold158,644 + completion72
++ 실행 snapshot/policy4,006,038. origin mapping/record index는 native 안에 포함,
+dictionary0. 모델·동일 파일의 작업용 복사·진단 raw·benchmark exports는 이 소계 밖에
+추가 보존되므로 프로젝트 총 디스크 사용량이 줄었다고 주장하지 않는다. 원본 .r3m
+115,285,312→default v2 115,285,632의320-byte 증가는 header/alignment이고 weights
+및 Adam 감소가 아니다. 별도 provenance corpus20000/400도 native로 무손실 import했다.
+
+### 요구사항 최종 대조와 판정
+
+| 필드 | 판정·실행 근거 |
+| --- | --- |
+| CODE_VERDICT | PASS; 관련 quick15개, 추가 replacement process1개 및 최종 CLI/단위2개/clippy/release |
+| OBJECTIVE_RESUME_BOUND | PASS; standalone default/Span, unsupported0 optimizer, 실제 process parity |
+| LEGACY_MIGRATION | VERIFIED; v1 unknown 거부, A75/S의 정책 증명 이관, v1/v2 raw16/16 동일 |
+| NATIVE_CORPUS_DEFAULT | PASS; loader/generator/transform/train/eval/prepare/cache 실제 연결 |
+| TRAIN_EVAL_JSON_READS | native source 경로0 (격리 실행+의존 코드 검사); OS syscall 추적은 NOT_AVAILABLE |
+| LOSSLESS_EPISODE_PARITY | PASS; F2560/256, provenance20000/400, native 이동/원본 비의존 |
+| TOKEN_BATCH_PARITY | PASS; train2560/790401 tokens 및 mask/target/annotation/순서 |
+| WEIGHTS_PARITY | PASS; 실제 SMALL2 대1+fresh1, 마지막 durable step24312 |
+| STORAGE_MEASURED | PASS; full-source와 train-only cache의 warm3/fresh3 분리 |
+| CURRENT_CONDITIONAL_DIAGNOSTIC | COMPLETE_NEGATIVE; 두 모델 각각0/144, 근본 원인 UNRESOLVED |
+| NEXT_MODEL_EXPERIMENT | aux anchor replay 단일 가설 PROPOSAL_ONLY, 실행0 |
+| H3 / S4 | NO / NO; 기존 미달 유지, 이번 수용 평가 아님 |
+| S5 / S6 / GOAL1_READY | NO / NO / NO; seal NOT_OPENED, GOAL1_ACCEPTED=false |
+| INDEPENDENT_REVIEW | PENDING |
+
+실행량: SMALL 품질0/경로4, SMALL generation320/teacher288, TINY optimizer108,
+scalar optimizer0. TINY 생성/teacher는 각 직접 회귀의 로그로 분리하며 SMALL320에
+합산하지 않는다. 과거 실패/UNKNOWN tail은 수정하지 않는다. 기존 원문 기억/SQLite,
+graph, 모델 수식/tokenizer/정밀도/optimizer 식은 그대로다. 새 영구 Rust 모듈은
+`src/native_corpus.rs` 하나다. 제품 IPC·config 입력·명시 legacy reader·사람용 보고의
+JSON은 남아 있으며 전 프로젝트 JSON0이 아니다. 계약 요구사항을 마지막으로 대조했다.
+
+변경 파일: `src/neural/{checkpoint,artifact}.rs`, `src/{training,contrast,data,
+native_corpus,train_main,quality_recovery,experiment_record,token_cache,check_main}.rs`,
+`tests/experiment_record.rs`와 기존 NATIVE_MODEL/STORAGE_FORMAT/RUNBOOK/
+QUALITY_RECOVERY_PLAN/EXPERIMENT_STATUS 문서. 외부 모델/teacher/API나 답변 하드코딩,
+신규 범용 framework는 추가하지 않았다.
+
+허용된 읽기 전용 원자료 root는 `/Users/seo/Projects/Replica-v3/artifacts/native-corpus-objective-20260918/`.
+원본 부모는 `artifacts/durability-pair-restart-20260918/attempt-R/A75-R/segment-00/step-0512.r3m`,
+BASE/SPAN은 `artifacts/data-binary-target-loss-20260918/study/{B-BASE,S-SPAN}/segment-00/step-0512.r3m`,
+source JSON은 `artifacts/h3-controlled-20260917/a2/corpus-F/` 및 `artifacts/goal1-corpus-v9/`.
+candidate diff는 새 root의 `candidate.diff` (base af638233→sourcea89fbc9),
+실행·원자료 위치와 정확한 hashes는 위 절과 `n0-originals.sha256`, `n3-*.log`,
+`conditional/`, `n4-*.log`, `n5-*.log`에 있다. 원자료/weights/DB/corpus/target/임시 지시문은
+commit/push하지 않는다. 이 보고 다음에 게시되는 report commit은 source와 별개다.
+
 ## N4 — 조건부 반응 진단 완료, 품질 회복 아님
 
 EXECUTED_THIS_RUN / DEVELOPMENT / 가중치 고정. 생성 source는
