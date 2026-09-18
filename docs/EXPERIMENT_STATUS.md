@@ -35,6 +35,44 @@ paired 표가 모두 일치했다. 새 SMALL generation/optimizer0. 오류의 �
 새 연구는 최종 A75-R 부모의 K-KEEP/D-DECAY256씩이며 이전 C50/A75와 preflight4를
 반복하지 않는다. 모델 품질·S4/S5/S6·Goal1 수용은 그대로 미완료다.
 
+### P3 source 및 직접 수치 검증
+
+P1/P2 commit7cd0a58bc989373ec8494fdf99131c7850ad0f37를 정상 push했고
+실제 remote full SHA 일치를 확인했다. P3는 기존 run/trainer/Adam/native 경로에
+K constant1e-4 / D horizon256 cosine1e-4→1e-5 정책만 추가한다. 실제 Adam에 전달한
+f64 LR bits를 typed segment에 저장하고 new_updates/cumulative step/tape와 재검증한다.
+full TrainingState와 weights/Adam/cursor 비교의 TINY 연속2 대 새 process1+1 PASS
+(p3-cooldown-process-3.log,4 updates/0 generations). scalar endpoint/midpoint 독립식
+1 test PASS(p3-scalar.log), scalar optimizer0. 첫 fixture 경로 불일치 실행은0 updates,
+그다음 CLI 인자 실패는4 updates였다. 이 실패를 지우거나 성공에 합산하지 않았다.
+새 공통 verification 경로의 PV01 직접 회귀도 PASS(p3-pv-process.log,TINY4/gen16).
+현재 누적 TINY77/128, scalar optimizer0, SMALL optimizer/generation0이다.
+최종 quick는 P2의 한 번으로 유지하며, P3 변경에는 관련 직접 테스트·clippy·release를
+별도로 적용한다. P2 quick source와 P3 source를 같은 검증으로 합산하지 않는다.
+최종 source에서 두 process 회귀를 다시 실행해 각각 PASS했다(p3-final-lr-process.log,
+p3-final-pv-process.log). 추가 TINY8을 포함한 총85/128, scalar optimizer0이다.
+최종 clippy와 test-support 없는 train/product release build PASS. 새 source digest는
+926952e2ef451b67fb85d2699fd0bc001e285b47bd03d270eca478fa14bee071,
+실행 binary SHA는 c3cc1587754f6c674805bce2d1d8c6e31bd12251cf6302622d3e48f6a4861f65다.
+
+P3 등록은 p3-prepare.log에서 exit0. 실제 부모 step24310 / model
+dfc3efb664351578340e39d3cfc95b90f270541041d4641d72d6f41a53871b11 / Adam
+fb0dc94572db5a6dfc05951217a20b1021c62193dd09e81263498bea5b303e19,
+sampler6741870243436089013를 확인했다. 기존512 draws를 재현·대조하고 이어지는256을
+고정했다. 각 군의 입력627563/정답65772 tokens로 각각1M/250K 이하다.
+step1/128/256 metadata 검사는 실제 업데이트 없이 validator로 통과했다.
+study/K-KEEP 및 study/D-DECAY의 binary inputs와 parent.r3m이 원래 연구와 분리된다.
+
+부모 정상 생성16개(dev8/ordinary8, metadata-only 선택)가 실제 raw token/EOS/error와
+모두 일치했다. Started/partial/proof/final을 같은 경로로 검증했다(p3-parent-parity.log).
+실제 SMALL generation16,completed16,interrupted0,관측tokens525,teacher0,optimizer0.
+final 기록 시간 lower bound44.542827458s, publication 이후 관측44.5498985s와
+보수적120s reserve를 구분한다. 표본16은 전체 품질 점수 추정이 아니다.
+추가 raw 오류 분류(p3-parent-error-classification.log,새 generation0)에서도 기존 점수와
+paired 결과가 일치했다. 양군의 dev 오류 각각1은 ordinal2772, tokens49, EOS48,
+strict_utf8 실패다. zero tokens/decoded empty가 아니라 decode 실패에 따른 actual 부재다.
+P3 준비는 IMPLEMENTER_VERIFIED이며 실제 K/D 학습은 아직 NOT_RUN이다.
+
 ## D4 최종 — 수리·저장·정식 pair 실행 완료, 모델 품질 미달
 
 MODE=IMPLEMENT; CONTRACT=R3-DURABILITY-PAIR-RESTART-1.0; RESULT=PARTIAL.

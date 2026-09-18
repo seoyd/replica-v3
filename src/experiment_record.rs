@@ -344,6 +344,8 @@ enum RunPurpose {
     Anchor,
     SaveContinuous,
     SaveSplit,
+    LrContinuous,
+    LrSplit,
 }
 impl RunPurpose {
     fn tag(self) -> u8 {
@@ -351,6 +353,8 @@ impl RunPurpose {
             Self::Anchor => 0,
             Self::SaveContinuous => 1,
             Self::SaveSplit => 2,
+            Self::LrContinuous => 3,
+            Self::LrSplit => 4,
         }
     }
     fn read(r: &mut Reader<'_>) -> Result<Self> {
@@ -358,6 +362,8 @@ impl RunPurpose {
             0 => Ok(Self::Anchor),
             1 => Ok(Self::SaveContinuous),
             2 => Ok(Self::SaveSplit),
+            3 => Ok(Self::LrContinuous),
+            4 => Ok(Self::LrSplit),
             _ => Err(bad("unknown run purpose")),
         }
     }
@@ -538,7 +544,7 @@ impl RunSnapshot {
         if let Some(a) = &self.authorization {
             a.encode(b);
         }
-        if self.contract == RESTART_CONTRACT {
+        if matches!(self.contract.as_str(), RESTART_CONTRACT | COOLDOWN_CONTRACT) {
             b.push(self.purpose.tag());
         }
     }
@@ -567,7 +573,7 @@ impl RunSnapshot {
         }
         b.push(u8::from(self.historical));
         b.push(u8::from(self.tiny_spec));
-        if self.contract == RESTART_CONTRACT {
+        if matches!(self.contract.as_str(), RESTART_CONTRACT | COOLDOWN_CONTRACT) {
             b.extend(self.source);
             for o in &self.origins {
                 string(&mut b, &o.role);
@@ -623,7 +629,7 @@ impl RunSnapshot {
         } else {
             None
         };
-        let purpose = if contract == RESTART_CONTRACT {
+        let purpose = if matches!(contract.as_str(), RESTART_CONTRACT | COOLDOWN_CONTRACT) {
             RunPurpose::read(r)?
         } else {
             RunPurpose::Anchor
@@ -654,10 +660,12 @@ impl RunSnapshot {
         Ok(s)
     }
     fn validate(&self) -> Result<()> {
-        if self.preflight()
-            && (self.contract != RESTART_CONTRACT
-                || self.tape.len() != 2
-                || !self.eval_steps.is_empty())
+        if matches!(
+            self.purpose,
+            RunPurpose::SaveContinuous | RunPurpose::SaveSplit
+        ) && (self.contract != RESTART_CONTRACT
+            || self.tape.len() != 2
+            || !self.eval_steps.is_empty())
         {
             return Err(bad("preflight purpose/update/evaluation bounds"));
         }
@@ -674,7 +682,9 @@ impl RunSnapshot {
             }
         }
         if self.contract
-            != if self.contract == RESTART_CONTRACT
+            != if self.cooldown() {
+                COOLDOWN_CONTRACT
+            } else if self.contract == RESTART_CONTRACT
                 && (self.authorization.is_some() || self.tiny_spec)
             {
                 RESTART_CONTRACT
@@ -685,7 +695,7 @@ impl RunSnapshot {
             }
             || self.parent.run != self.run
             || self.cases.is_empty()
-            || self.lr_policy > 1
+            || self.lr_policy > if self.cooldown() { 3 } else { 1 }
             || self.panels.len() != 4
             || self
                 .panels
@@ -706,6 +716,21 @@ impl RunSnapshot {
             || (self.historical && !self.tape.is_empty())
         {
             return Err(bad("run snapshot identity/membership/budget"));
+        }
+        if self.cooldown()
+            && (self.historical
+                || !matches!(self.lr_policy, 2 | 3)
+                || self.lr_offset != 0
+                || !matches!(self.purpose, RunPurpose::LrContinuous | RunPurpose::LrSplit)
+                || self.tape.len() != if self.tiny_spec { 2 } else { 256 }
+                || self.eval_steps
+                    != if self.tiny_spec {
+                        vec![]
+                    } else {
+                        vec![128, 256]
+                    })
+        {
+            return Err(bad("cooldown fixed horizon/policy/purpose"));
         }
         for p in &self.panels {
             let expected = match p.kind {
@@ -733,26 +758,41 @@ impl RunSnapshot {
             if self.historical
                 || self.tiny_spec
                 || !matches!(a.anchors, 4 | 6)
-                || self.parent.step != 23798
+                || self.parent.step != if self.cooldown() { 24310 } else { 23798 }
                 || self.parent.adam.is_none()
                 || self.parent.file.digest != a.expected_parent
-                || self.lr_policy != 1
-                || self.lr_offset != 1024
+                || !self.cooldown() && (self.lr_policy != 1 || self.lr_offset != 1024)
+                || self.cooldown() && a.anchors != 6
                 || self.anchor_floor != 178
                 || self.train.len() != 2560
                 || a.pools[0].len() != 2048
                 || a.pools[1].len() != 512
                 || all != (0..2560).collect()
-                || self.tape.len() != if self.preflight() { 2 } else { 512 }
+                || self.tape.len()
+                    != if self.preflight() {
+                        2
+                    } else if self.cooldown() {
+                        256
+                    } else {
+                        512
+                    }
                 || self.eval_steps
                     != if self.preflight() {
                         vec![]
+                    } else if self.cooldown() {
+                        vec![128, 256]
                     } else {
                         vec![256, 512]
                     }
                 || self.preflight() && (self.contract != RESTART_CONTRACT || a.anchors != 4)
-                || self.tape.iter().map(|d| d.input).sum::<u64>() > 2_000_000
-                || self.tape.iter().map(|d| d.target).sum::<u64>() > 500_000
+                || self.tape.iter().map(|d| d.input).sum::<u64>()
+                    > if self.cooldown() {
+                        1_000_000
+                    } else {
+                        2_000_000
+                    }
+                || self.tape.iter().map(|d| d.target).sum::<u64>()
+                    > if self.cooldown() { 250_000 } else { 500_000 }
             {
                 return Err(bad("anchor experiment authorization/pools/budget"));
             }
@@ -780,10 +820,23 @@ impl RunSnapshot {
         Ok(())
     }
     fn preflight(&self) -> bool {
-        self.purpose != RunPurpose::Anchor
+        matches!(
+            self.purpose,
+            RunPurpose::SaveContinuous | RunPurpose::SaveSplit
+        ) || self.cooldown() && self.tiny_spec
+    }
+    fn cooldown(&self) -> bool {
+        self.contract == COOLDOWN_CONTRACT
     }
     fn arm_name(&self) -> &'static str {
         match self.purpose {
+            RunPurpose::LrContinuous | RunPurpose::LrSplit => {
+                if self.lr_policy == 2 {
+                    "K-KEEP"
+                } else {
+                    "D-DECAY"
+                }
+            }
             RunPurpose::SaveContinuous => "preflight-A",
             RunPurpose::SaveSplit => "preflight-B",
             RunPurpose::Anchor => match &self.authorization {
@@ -1285,6 +1338,8 @@ struct SegmentReceipt {
     elapsed: Scalar,
     cleanup: Scalar,
     draws: Vec<Draw>,
+    // Actual Adam arguments, distinct from the inherited config LR. None is legacy.
+    lr_bits: Option<Vec<u64>>,
 }
 impl SegmentReceipt {
     fn encode(&self, b: &mut Vec<u8>) {
@@ -1325,8 +1380,14 @@ impl SegmentReceipt {
                 put_varint(b, n);
             }
         }
+        if let Some(rates) = &self.lr_bits {
+            put_varint(b, rates.len() as u64);
+            for bits in rates {
+                b.extend(bits.to_le_bytes());
+            }
+        }
     }
-    fn decode(r: &mut Reader<'_>) -> Result<Self> {
+    fn decode(r: &mut Reader<'_>, with_rates: bool) -> Result<Self> {
         let run = digest_read(r)?;
         let binding = digest_read(r)?;
         let segment = u32_read(r)?;
@@ -1375,6 +1436,16 @@ impl SegmentReceipt {
                 target: r.var()?,
             });
         }
+        let lr_bits = if with_rates {
+            let n = count(r, 256)?;
+            Some(
+                (0..n)
+                    .map(|_| Ok(u64::from_le_bytes(r.take(8)?.try_into().unwrap())))
+                    .collect::<Result<Vec<_>>>()?,
+            )
+        } else {
+            None
+        };
         Ok(Self {
             run,
             binding,
@@ -1395,6 +1466,7 @@ impl SegmentReceipt {
             elapsed,
             cleanup,
             draws,
+            lr_bits,
         })
     }
 }
@@ -1532,6 +1604,8 @@ enum Record {
 }
 #[derive(Clone, Debug, Serialize)]
 struct VerificationStart {
+    // 0: two-step save parity; 1: registered parent parity; 2: one joint candidate confirmation.
+    scope: u8,
     root: String,
     pair: Hash,
     source: Hash,
@@ -1565,7 +1639,7 @@ impl VerificationStart {
         put_varint(b, self.generation_limit);
         put_varint(b, self.seconds_limit);
     }
-    fn decode(r: &mut Reader<'_>) -> Result<Self> {
+    fn decode(r: &mut Reader<'_>, scope: u8) -> Result<Self> {
         let root = text(r)?;
         let pair = digest_read(r)?;
         let source = digest_read(r)?;
@@ -1573,7 +1647,15 @@ impl VerificationStart {
         let inputs = [FileRef::decode(r)?, FileRef::decode(r)?];
         let commands = [FileRef::decode(r)?, FileRef::decode(r)?];
         let natives = [FileRef::decode(r)?, FileRef::decode(r)?];
-        let n = count(r, 4)?;
+        let n = count(
+            r,
+            match scope {
+                0 => 4,
+                1 => 16,
+                2 => 1168,
+                _ => return Err(bad("verification scope")),
+            },
+        )?;
         let order = (0..n)
             .map(|_| Ok((r.byte()?, u32_read(r)?)))
             .collect::<Result<Vec<_>>>()?;
@@ -1587,6 +1669,7 @@ impl VerificationStart {
             return Err(bad("verification intent bounds"));
         }
         Ok(Self {
+            scope,
             root,
             pair,
             source,
@@ -1622,7 +1705,7 @@ impl VerificationRow {
             row: r.opt(EvalRow::decode)?,
             elapsed: Scalar::decode(r)?,
         };
-        if v.index >= 4 || v.elapsed.finite()? < 0. {
+        if v.index >= 1168 || v.elapsed.finite()? < 0. {
             return Err(bad("verification row bounds"));
         }
         Ok(v)
@@ -1674,7 +1757,7 @@ impl VerificationFinal {
     }
     fn decode(r: &mut Reader<'_>) -> Result<Self> {
         let start = FileRef::decode(r)?;
-        let n = count(r, 4)?;
+        let n = count(r, 1168)?;
         let rows = (0..n)
             .map(|_| FileRef::decode(r))
             .collect::<Result<Vec<_>>>()?;
@@ -1691,11 +1774,11 @@ impl VerificationFinal {
         let stop = (0..n).map(|_| stop_read(r)).collect::<Result<Vec<_>>>()?;
         let error = r.opt(text)?;
         let save_error = r.opt(text)?;
-        if entries > 4
+        if entries > 1168
             || completed + interrupted > entries
             || teachers != 0
             || elapsed.finite()? < 0.
-            || tokens > 4 * MAX_TOKENS as u64
+            || tokens > 1168 * MAX_TOKENS as u64
             || succeeded
                 && (proof.is_none()
                     || unknown_tail
@@ -1730,32 +1813,43 @@ struct PreflightReceipt {
     source: Hash,
     binary: Hash,
     commands: [FileRef; 2],
-    panels: [FileRef; 2],
+    panels: Vec<FileRef>,
     elapsed: Scalar,
     generations: u64,
 }
 impl PreflightReceipt {
-    fn encode(&self, b: &mut Vec<u8>) {
+    fn encode(&self, b: &mut Vec<u8>, extended: bool) {
         b.extend(self.pair);
         b.extend(self.source);
         b.extend(self.binary);
-        for r in self.commands.iter().chain(&self.panels) {
+        for r in &self.commands {
+            r.encode(b);
+        }
+        if extended {
+            put_varint(b, self.panels.len() as u64);
+        }
+        for r in &self.panels {
             r.encode(b);
         }
         self.elapsed.encode(b);
         put_varint(b, self.generations);
     }
-    fn decode(r: &mut Reader<'_>) -> Result<Self> {
+    fn decode(r: &mut Reader<'_>, extended: bool) -> Result<Self> {
+        let pair = digest_read(r)?;
+        let source = digest_read(r)?;
+        let binary = digest_read(r)?;
+        let commands = [FileRef::decode(r)?, FileRef::decode(r)?];
+        let n = if extended { count(r, 3)? } else { 2 };
         let p = Self {
-            pair: digest_read(r)?,
-            source: digest_read(r)?,
-            binary: digest_read(r)?,
-            commands: [FileRef::decode(r)?, FileRef::decode(r)?],
-            panels: [FileRef::decode(r)?, FileRef::decode(r)?],
+            pair,
+            source,
+            binary,
+            commands,
+            panels: (0..n).map(|_| FileRef::decode(r)).collect::<Result<_>>()?,
             elapsed: Scalar::decode(r)?,
             generations: r.var()?,
         };
-        if p.elapsed.finite()? < 0. || p.generations > 8 {
+        if p.elapsed.finite()? < 0. || p.generations > if extended { 1168 } else { 8 } || n == 0 {
             return Err(bad("preflight observation bounds"));
         }
         Ok(p)
@@ -1766,11 +1860,13 @@ impl Record {
         let mut body = Vec::new();
         let kind = match self {
             Self::Inputs(v) => {
-                if v.contract == RESTART_CONTRACT {
+                if matches!(v.contract.as_str(), RESTART_CONTRACT | COOLDOWN_CONTRACT) {
                     body.push(u8::from(v.authorization.is_some()));
                 }
                 v.encode(&mut body);
-                if v.contract == RESTART_CONTRACT {
+                if v.cooldown() {
+                    13
+                } else if v.contract == RESTART_CONTRACT {
                     8
                 } else if v.authorization.is_some() {
                     6
@@ -1788,7 +1884,7 @@ impl Record {
             }
             Self::Segment(v) => {
                 v.encode(&mut body);
-                4
+                if v.lr_bits.is_some() { 14 } else { 4 }
             }
             Self::Comparison(v) => {
                 v.encode(&mut body);
@@ -1799,12 +1895,16 @@ impl Record {
                 7
             }
             Self::Preflight(v) => {
-                v.encode(&mut body);
-                9
+                let extended = v.generations > 8 || v.panels.len() != 2;
+                v.encode(&mut body, extended);
+                if extended { 16 } else { 9 }
             }
             Self::VerificationStart(v) => {
+                if v.scope != 0 {
+                    body.push(v.scope);
+                }
                 v.encode(&mut body);
-                10
+                if v.scope == 0 { 10 } else { 15 }
             }
             Self::VerificationRow(v) => {
                 v.encode(&mut body);
@@ -1854,21 +1954,28 @@ impl Record {
         }
         let mut r = Reader::new(&bytes[HEADER..]);
         let record = match kind {
-            1 | 6 | 8 => {
-                let authorized = if kind == 8 { r.bool()? } else { kind == 6 };
+            1 | 6 | 8 | 13 => {
+                let authorized = if matches!(kind, 8 | 13) {
+                    r.bool()?
+                } else {
+                    kind == 6
+                };
                 let s = RunSnapshot::decode(&mut r, authorized)?;
-                if (kind == 8) != (s.contract == RESTART_CONTRACT) {
+                if (kind == 8) != (s.contract == RESTART_CONTRACT) || (kind == 13) != s.cooldown() {
                     return Err(bad("purpose record kind"));
                 }
                 Self::Inputs(Box::new(s))
             }
             2 => Self::Evaluation(EvalPayload::decode(&mut r)?),
             3 => Self::Decision(EvalDecision::decode(&mut r)?),
-            4 => Self::Segment(SegmentReceipt::decode(&mut r)?),
+            4 | 14 => Self::Segment(SegmentReceipt::decode(&mut r, kind == 14)?),
             5 => Self::Comparison(ComparisonReceipt::decode(&mut r)?),
             7 => Self::Command(CommandOutcome::decode(&mut r)?),
-            9 => Self::Preflight(PreflightReceipt::decode(&mut r)?),
-            10 => Self::VerificationStart(VerificationStart::decode(&mut r)?),
+            9 | 16 => Self::Preflight(PreflightReceipt::decode(&mut r, kind == 16)?),
+            10 | 15 => {
+                let scope = if kind == 15 { r.byte()? } else { 0 };
+                Self::VerificationStart(VerificationStart::decode(&mut r, scope)?)
+            }
             11 => Self::VerificationRow(VerificationRow::decode(&mut r)?),
             12 => Self::VerificationFinal(VerificationFinal::decode(&mut r)?),
             _ => return Err(bad("record kind")),
@@ -2475,6 +2582,22 @@ fn resolve_native(root: &Path, s: &RunSnapshot, n: &CheckpointRef, resume: bool)
 
 #[derive(Subcommand)]
 pub enum Action {
+    /// Register the one authorized A75-R512 LR continuation pair, without learning.
+    CooldownPrepare {
+        #[arg(long)]
+        parent_arm: PathBuf,
+        #[arg(long)]
+        expected_parent: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// One durable parent parity attempt, or the gated single fresh confirmation.
+    CooldownVerify {
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long)]
+        confirmation: bool,
+    },
     /// Register the explicitly authorized F512 anchor-ratio pair; no optimizer calls.
     AnchorPrepare {
         #[arg(long)]
@@ -2571,6 +2694,13 @@ pub enum Action {
         output: PathBuf,
     },
     #[cfg(feature = "test-support")]
+    FixtureCooldown {
+        #[arg(long)]
+        from: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    #[cfg(feature = "test-support")]
     FixturePair {
         #[arg(long)]
         from: PathBuf,
@@ -2587,6 +2717,14 @@ pub(super) fn command(action: Action) -> Result<()> {
     let mut control = RunControl::command(matches!(action, Action::Run { .. }))?;
     control.deadline = control.start + Duration::from_secs(1800);
     match action {
+        Action::CooldownPrepare {
+            parent_arm,
+            expected_parent,
+            output,
+        } => cooldown_prepare(&parent_arm, unhex(&expected_parent)?, &output, &mut control),
+        Action::CooldownVerify { root, confirmation } => {
+            cooldown_verify(&root, confirmation, &mut control)
+        }
         Action::AnchorPrepare {
             baseline,
             policy,
@@ -2691,6 +2829,27 @@ pub(super) fn command(action: Action) -> Result<()> {
             restart_spec,
         ),
         #[cfg(feature = "test-support")]
+        Action::FixtureCooldown { from, output } => {
+            std::fs::create_dir(&output)?;
+            for (name, purpose) in [
+                ("continuous", RunPurpose::LrContinuous),
+                ("split", RunPurpose::LrSplit),
+            ] {
+                let dir = output.join(name);
+                fixture_fork_inner(&from, &dir, false, false, RunPurpose::SaveContinuous, true)?;
+                let mut s = read_inputs(&dir)?;
+                s.contract = COOLDOWN_CONTRACT.into();
+                s.purpose = purpose;
+                s.lr_policy = 3;
+                s.lr_offset = 0;
+                std::fs::write(
+                    dir.join("inputs.r3er"),
+                    Record::Inputs(Box::new(s)).encode()?,
+                )?;
+            }
+            Ok(())
+        }
+        #[cfg(feature = "test-support")]
         Action::FixturePreflight { from, output } => {
             std::fs::create_dir(&output)?;
             for (arm, purpose) in [
@@ -2756,6 +2915,28 @@ fn segment(root: &Path, r: &FileRef, s: &RunSnapshot) -> Result<SegmentReceipt> 
     }
     t.elapsed.finite()?;
     t.cleanup.finite()?;
+    if s.cooldown() {
+        let rates = t
+            .lr_bits
+            .as_ref()
+            .ok_or_else(|| bad("missing actual LR trace"))?;
+        let first = t
+            .updates
+            .checked_sub(t.draws.len() as u64)
+            .ok_or_else(|| bad("LR cursor"))?;
+        if rates.len() != t.draws.len()
+            || rates.iter().enumerate().any(|(i, bits)| {
+                cooldown_lr(s.lr_policy, first + i as u64 + 1)
+                    .map(f64::to_bits)
+                    .ok()
+                    != Some(*bits)
+            })
+        {
+            return Err(bad("actual LR bits/horizon/cursor mismatch"));
+        }
+    } else if t.lr_bits.is_some() {
+        return Err(bad("LR trace outside registered policy"));
+    }
     Ok(t)
 }
 fn lineage(root: &Path, s: &RunSnapshot, last: &FileRef) -> Result<Vec<(FileRef, SegmentReceipt)>> {
@@ -3788,6 +3969,15 @@ fn anchor_tape(
     seed: u64,
     framed: &[Sample],
 ) -> Result<(Vec<Draw>, [u64; 2])> {
+    anchor_tape_through(pools, anchors, seed, framed, 512)
+}
+fn anchor_tape_through(
+    pools: &[Vec<u32>; 2],
+    anchors: u8,
+    seed: u64,
+    framed: &[Sample],
+    count: u64,
+) -> Result<(Vec<Draw>, [u64; 2])> {
     let mut streams = pools.clone();
     let mut rngs = [
         Rng {
@@ -3800,7 +3990,7 @@ fn anchor_tape(
     let mut cursors = [streams[0].len(), streams[1].len()];
     let mut tape = Vec::new();
     let mut pool_targets = [0; 2];
-    for step in 0..512 {
+    for step in 0..count {
         let mut indices = Vec::new();
         for (pool, count) in [usize::from(anchors), 8 - usize::from(anchors)]
             .into_iter()
@@ -3843,6 +4033,605 @@ fn anchor_tape(
     Ok((tape, pool_targets))
 }
 
+fn cooldown_lr(policy: u8, n: u64) -> Result<f64> {
+    if !(1..=256).contains(&n) {
+        return Err(bad("cooldown schedule cursor outside fixed horizon256"));
+    }
+    match policy {
+        2 => Ok(1e-4),
+        3 => Ok(1e-5
+            + 0.5 * (1e-4 - 1e-5) * (1. + (std::f64::consts::PI * (n - 1) as f64 / 255.).cos())),
+        _ => Err(bad("unknown cooldown LR policy")),
+    }
+}
+
+fn cooldown_prepare(
+    parent: &Path,
+    expected: Hash,
+    output: &Path,
+    control: &mut RunControl,
+) -> Result<()> {
+    let old = read_inputs(parent)?;
+    let auth = old
+        .authorization
+        .as_ref()
+        .ok_or_else(|| bad("cooldown requires verified A75-R pools"))?;
+    if old.contract != RESTART_CONTRACT || old.arm_name() != "A75-R" || auth.anchors != 6 {
+        return Err(bad("cooldown parent policy"));
+    }
+    let closed = arm_commands(parent, &old)?;
+    let (_, command) = closed.last().ok_or_else(|| bad("parent not executed"))?;
+    let observed = close_native_inner(parent, &command.terminal.locator, control, false)?;
+    let chain = lineage(parent, &old, &command.terminal)?;
+    let history = verified_history(parent, &old, &chain)?;
+    let terminal = &chain.last().unwrap().1;
+    let native = terminal
+        .native
+        .as_ref()
+        .ok_or_else(|| bad("parent missing native"))?;
+    if native.step != 24310 || native.file.digest != expected || terminal.updates != 512 {
+        return Err(bad("cooldown actual parent file/step"));
+    }
+    // Explicit legacy observation: do not rewrite or promote the original proof.
+    preflight_body(
+        parent.parent().ok_or_else(|| bad("legacy pair root"))?,
+        control,
+        false,
+        true,
+        &mut Vec::new(),
+    )?;
+    let l = resolve_native(parent, &old, native, true)?;
+    let state = l
+        .manifest
+        .training
+        .as_ref()
+        .ok_or_else(|| bad("parent full Adam state"))?;
+    let framed = samples(
+        &old.train
+            .iter()
+            .map(|i| old.cases[*i as usize].clone())
+            .collect::<Vec<_>>(),
+        &l.tokenizer,
+        state.config.seq_len,
+    )?;
+    let (continued, _) = anchor_tape_through(&auth.pools, 6, old.parent.counters[2], &framed, 768)?;
+    if continued[..512].iter().zip(&old.tape).any(|(a, b)| {
+        a.indices != b.indices
+            || a.sampler != b.sampler
+            || a.input != b.input
+            || a.target != b.target
+    }) || native.counters[2] != continued[511].sampler
+    {
+        return Err(bad("A75 stream cursor cannot be reconstructed"));
+    }
+    let tape = continued[512..].to_vec();
+    let score = |kind| {
+        observed
+            .panels
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .map(|(_, s)| s)
+            .ok_or_else(|| bad("parent score absent"))
+    };
+    let dev = score(PanelKind::Dev)?;
+    let watch = score(PanelKind::Watch)?;
+    let mut material = Vec::new();
+    string(&mut material, COOLDOWN_CONTRACT);
+    material.extend(expected);
+    material.extend(old.binding());
+    material.extend(evaluator_source());
+    let binary = unhex(&file_hash(&std::env::current_exe()?)?)?;
+    material.extend(binary);
+    // One registered path prevents copying a study to restart a closed authorization.
+    let registered = output
+        .parent()
+        .ok_or_else(|| bad("study parent"))?
+        .canonicalize()?
+        .join(output.file_name().ok_or_else(|| bad("study name"))?);
+    string(&mut material, &registered.to_string_lossy());
+    for d in &tape {
+        integers(&mut material, &d.indices);
+        for n in [d.sampler, d.input, d.target] {
+            put_varint(&mut material, n);
+        }
+    }
+    let pair = hash(&material);
+    let mut origins = old.origins.clone();
+    origins.retain(|o| o.role != "execution-binary");
+    for (role, path) in [
+        ("execution-binary", std::env::current_exe()?),
+        ("cooldown-parent-inputs", parent.join("inputs.r3er")),
+        (
+            "cooldown-parent-terminal",
+            parent.join(&command.terminal.locator),
+        ),
+        (
+            "cooldown-parent-command",
+            parent.join(command_locator(&command.terminal)?),
+        ),
+        (
+            "cooldown-legacy-proof",
+            parent.parent().unwrap().join("preflight-proof.r3er"),
+        ),
+    ] {
+        origins.push(Origin {
+            role: role.into(),
+            original: FileRef {
+                digest: unhex(&file_hash(&path)?)?,
+                locator: path.canonicalize()?.display().to_string(),
+            },
+        });
+    }
+    origins.push(Origin {
+        role: "cooldown-registered-root".into(),
+        original: FileRef {
+            locator: registered.display().to_string(),
+            digest: pair,
+        },
+    });
+    let mut registrations = Vec::new();
+    for lr in [2, 3] {
+        let mut s = old.clone();
+        s.contract = COOLDOWN_CONTRACT.into();
+        s.source = evaluator_source();
+        s.origins = origins.clone();
+        let mut id = material.clone();
+        id.push(lr);
+        s.run = hash(&id);
+        s.policy = s.run;
+        s.parent = native.clone();
+        s.parent.run = s.run;
+        s.parent.segment = 0;
+        s.parent.file.locator = "parent.r3m".into();
+        s.tape = tape.clone();
+        s.lr_policy = lr;
+        s.lr_offset = 0;
+        s.eval_steps = vec![128, 256];
+        s.purpose = RunPurpose::LrSplit;
+        s.baseline = [dev.exact, watch.exact, dev.errors + watch.errors];
+        s.authorization = Some(AnchorAuthorization {
+            pair,
+            baseline: command.terminal.digest,
+            expected_parent: expected,
+            anchors: 6,
+            pools: auth.pools.clone(),
+        });
+        s.validate()?;
+        for n in [1, 128, 256] {
+            let mut future = state.clone();
+            fork_budget(
+                &mut future,
+                s.parent.step,
+                s.parent.counters[0],
+                256,
+                1_000_000,
+            )?;
+            future.step += n;
+            future.consumed_tokens += tape[..n].iter().map(|d| d.input).sum::<u64>();
+            future.target_tokens += tape[..n].iter().map(|d| d.target).sum::<u64>();
+            future.sampler_state = tape[n - 1].sampler;
+            let mut manifest = l.manifest.clone();
+            manifest.training = Some(future);
+            checkpoint::validate_metadata(&manifest, &l.tokenizer)?;
+            println!(
+                "SAVE_METADATA_PRECHECK arm={} local_step={n} absolute_step={} LR_BITS={} ACTUAL_UPDATES=0",
+                s.arm_name(),
+                s.parent.step + n as u64,
+                cooldown_lr(lr, n as u64)?.to_bits()
+            );
+        }
+        registrations.push(s);
+    }
+    control.check("cooldown_register")?;
+    std::fs::create_dir(output)?;
+    std::fs::copy(
+        parent.join(command_locator(&command.terminal)?),
+        output.join("parent-command.r3er"),
+    )?;
+    for s in registrations {
+        let dir = output.join(s.arm_name());
+        std::fs::create_dir(&dir)?;
+        std::fs::copy(parent.join(&native.file.locator), dir.join("parent.r3m"))?;
+        publish(&dir, "inputs.r3er", &Record::Inputs(Box::new(s.clone())))?;
+        resolve_native(&dir, &s, &s.parent, true)?;
+        println!(
+            "REGISTERED ARM={} source={} binary={} binding={} parent={} model={} Adam={} cursor={} tape=EXACT_A75_CONTINUATION HORIZON=256 predicted_input={} predicted_target={} SMALL_UPDATES=0",
+            s.arm_name(),
+            hex(&s.source),
+            hex(&binary),
+            hex(&s.binding()),
+            hex(&expected),
+            hex(&s.parent.model),
+            hex(&s.parent.adam.unwrap()),
+            s.parent.counters[2],
+            s.tape.iter().map(|d| d.input).sum::<u64>(),
+            s.tape.iter().map(|d| d.target).sum::<u64>()
+        );
+    }
+    for kind in [PanelKind::Dev, PanelKind::Cross, PanelKind::Ordinary] {
+        let (e, l) = payload(parent, &old, &history.evaluations[&(native.step, kind)])?;
+        print_anchor_panel(&old, &e, &l)?;
+    }
+    Ok(())
+}
+
+fn metadata_sample(s: &RunSnapshot, kind: PanelKind, count: usize) -> Result<Vec<u32>> {
+    let mut cases = panel(s, kind)?.cases.clone();
+    cases.sort_by_key(|i| {
+        let e = &s.cases[*i as usize];
+        (
+            e.category,
+            e.family.clone(),
+            scene(e).to_owned(),
+            e.id.clone(),
+        )
+    });
+    let n = count.min(cases.len());
+    Ok((0..n).map(|i| cases[i * cases.len() / n]).collect())
+}
+fn origin_path(s: &RunSnapshot, role: &str) -> Result<PathBuf> {
+    let refs = s
+        .origins
+        .iter()
+        .filter(|o| o.role == role)
+        .collect::<Vec<_>>();
+    if refs.len() != 1 {
+        return Err(bad("unique provenance role"));
+    }
+    let r = &refs[0].original;
+    let p = PathBuf::from(&r.locator);
+    if unhex(&file_hash(&p)?)? != r.digest {
+        return Err(bad("provenance bytes changed"));
+    }
+    Ok(p)
+}
+fn cooldown_verify(root: &Path, confirmation: bool, control: &mut RunControl) -> Result<()> {
+    let study = read_inputs(&root.join("K-KEEP"))?;
+    if !study.cooldown() {
+        return Err(bad("verification requires cooldown study"));
+    }
+    let target = if confirmation {
+        root.join("confirmation")
+    } else {
+        root.to_path_buf()
+    };
+    if target.exists()
+        && let Some(outcome) = read_preflight_outcome(&target)?
+    {
+        outcome.require_current_success()?;
+        println!("COOLDOWN_VERIFICATION=READ_ONLY NEW_GENERATIONS=0");
+        return Ok(());
+    }
+    let (dir, snapshot, native, command, baseline, scope) = if confirmation {
+        let mut candidates = Vec::new();
+        for arm in ["K-KEEP", "D-DECAY"] {
+            let dir = root.join(arm);
+            let s = read_inputs(&dir)?;
+            let closed = arm_commands(&dir, &s)?;
+            let (t, c) = closed
+                .last()
+                .ok_or_else(|| bad("confirmation before pair complete"))?;
+            if c.status != CommandStatus::Complete || !t.complete {
+                return Err(bad("confirmation incomplete arm"));
+            }
+            let Record::Comparison(score) = read_record(
+                &dir,
+                c.comparison
+                    .as_ref()
+                    .ok_or_else(|| bad("comparison missing"))?,
+            )?
+            else {
+                return Err(bad("comparison kind"));
+            };
+            if score.candidate {
+                let get = |k| {
+                    score
+                        .panels
+                        .iter()
+                        .find(|(kind, _)| *kind == k)
+                        .map(|(_, s)| s)
+                        .ok_or_else(|| bad("candidate panel missing"))
+                };
+                candidates.push((
+                    (
+                        get(PanelKind::Cross)?.exact,
+                        get(PanelKind::Dev)?.exact,
+                        get(PanelKind::Ordinary)?.qa[0],
+                        u8::from(arm == "K-KEEP"),
+                    ),
+                    dir,
+                    s,
+                    t.native.clone().ok_or_else(|| bad("candidate native"))?,
+                    c.clone(),
+                ));
+            }
+        }
+        candidates.sort_by_key(|v| v.0);
+        let Some((_, dir, s, n, c)) = candidates.pop() else {
+            println!("FRESH_CONFIRMATION=NOT_RUN_NO_JOINT_CANDIDATE H3_SEAL=NOT_OPENED");
+            return Ok(());
+        };
+        // Selection uses stored metadata only; the complete independent close follows durable intent.
+        (dir, s, n, c, None, 2)
+    } else {
+        let path = origin_path(&study, "cooldown-parent-inputs")?;
+        let dir = path
+            .parent()
+            .ok_or_else(|| bad("parent provenance root"))?
+            .to_path_buf();
+        let old = read_inputs(&dir)?;
+        let cp = origin_path(&study, "cooldown-parent-command")?;
+        let Record::Command(c) = read_record(
+            &dir,
+            &reference(
+                &dir,
+                &cp.strip_prefix(&dir)
+                    .map_err(|_| bad("parent command path"))?
+                    .to_string_lossy(),
+            )?,
+        )?
+        else {
+            return Err(bad("parent command kind"));
+        };
+        let t = segment(&dir, &c.terminal, &old)?;
+        (
+            dir,
+            old,
+            t.native.ok_or_else(|| bad("parent native"))?,
+            c,
+            Some(study.clone()),
+            1,
+        )
+    };
+    if confirmation {
+        std::fs::create_dir(&target)?;
+        std::fs::copy(dir.join("inputs.r3er"), target.join("inputs.r3er"))?;
+        std::fs::copy(dir.join(&native.file.locator), target.join("native.r3m"))?;
+        std::fs::copy(
+            dir.join(command_locator(&command.terminal)?),
+            target.join("command.r3er"),
+        )?;
+    }
+    let inputs = if confirmation {
+        [
+            reference(&target, "inputs.r3er")?,
+            reference(&target, "inputs.r3er")?,
+        ]
+    } else {
+        [
+            reference(root, "K-KEEP/inputs.r3er")?,
+            reference(root, "D-DECAY/inputs.r3er")?,
+        ]
+    };
+    let commands = if confirmation {
+        [
+            reference(&target, "command.r3er")?,
+            reference(&target, "command.r3er")?,
+        ]
+    } else {
+        [
+            reference(root, "parent-command.r3er")?,
+            reference(root, "parent-command.r3er")?,
+        ]
+    };
+    let natives = if confirmation {
+        [
+            reference(&target, "native.r3m")?,
+            reference(&target, "native.r3m")?,
+        ]
+    } else {
+        [
+            reference(root, "K-KEEP/parent.r3m")?,
+            reference(root, "D-DECAY/parent.r3m")?,
+        ]
+    };
+    let specs = if confirmation {
+        [PanelKind::Dev, PanelKind::Cross, PanelKind::Ordinary]
+            .iter()
+            .map(|k| Ok((*k, panel(&snapshot, *k)?.cases.clone())))
+            .collect::<Result<Vec<_>>>()?
+    } else {
+        [PanelKind::Dev, PanelKind::Ordinary]
+            .iter()
+            .map(|k| Ok((*k, metadata_sample(&snapshot, *k, 8)?)))
+            .collect::<Result<Vec<_>>>()?
+    };
+    let order = specs
+        .iter()
+        .enumerate()
+        .flat_map(|(i, (_, cases))| {
+            cases
+                .iter()
+                .map(move |n| (if confirmation { 0 } else { i as u8 }, *n))
+        })
+        .collect::<Vec<_>>();
+    let start = VerificationStart {
+        scope,
+        root: target.canonicalize()?.display().to_string(),
+        pair: study
+            .authorization
+            .as_ref()
+            .ok_or_else(|| bad("study authorization"))?
+            .pair,
+        source: evaluator_source(),
+        binary: unhex(&file_hash(&std::env::current_exe()?)?)?,
+        inputs,
+        commands,
+        natives,
+        generation_limit: order.len() as u64,
+        seconds_limit: 1800,
+        order,
+    };
+    if start.source != study.source
+        || origin_path(&study, "execution-binary")? != std::env::current_exe()?.canonicalize()?
+    {
+        return Err(bad("verification registered source/binary"));
+    }
+    finish_verification_attempt(
+        &target,
+        start.clone(),
+        snapshot.tiny_spec,
+        control,
+        |control, returned| {
+            if confirmation {
+                let (_, g, seconds) =
+                    anchor_budget(&root.join("D-DECAY"), &read_inputs(&root.join("D-DECAY"))?)?;
+                if g + start.order.len() > 4096 {
+                    return Err(bad("confirmation generation budget"));
+                }
+                control.deadline =
+                    control.start + Duration::from_secs_f64((7200. - seconds).min(1800.));
+            }
+            close_native_inner(&dir, &command.terminal.locator, control, false)?;
+            let chain = lineage(&dir, &snapshot, &command.terminal)?;
+            let h = verified_history(&dir, &snapshot, &chain)?;
+            let l = resolve_native(&dir, &snapshot, &native, true)?;
+            let sr = reference(&target, "preflight-start.r3er")?;
+            let mut proof_panels = Vec::new();
+            let mut scores = Vec::new();
+            for (panel_index, (kind, cases)) in specs.iter().enumerate() {
+                let (old, _) = payload(&dir, &snapshot, &h.evaluations[&(native.step, *kind)])?;
+                let mut rows = Vec::new();
+                for ordinal in cases {
+                    let i = returned.len();
+                    let elapsed = control.start.elapsed().as_secs_f64();
+                    let row = evaluate_row_with_entry(
+                        &l,
+                        &snapshot.cases[*ordinal as usize],
+                        *ordinal,
+                        control,
+                        false,
+                        true,
+                        || {
+                            publish(
+                                &target,
+                                &format!("preflight-row-{i:02}-start.r3er"),
+                                &Record::VerificationRow(VerificationRow {
+                                    start: sr.clone(),
+                                    index: i as u32,
+                                    row: None,
+                                    elapsed: Scalar::F64(elapsed),
+                                }),
+                            )
+                            .map(|_| ())
+                        },
+                    )?;
+                    returned.push(row.clone());
+                    verification_fault(snapshot.tiny_spec, "raw", control)?;
+                    publish(
+                        &target,
+                        &format!("preflight-row-{i:02}.r3er"),
+                        &Record::VerificationRow(VerificationRow {
+                            start: sr.clone(),
+                            index: i as u32,
+                            row: Some(row.clone()),
+                            elapsed: Scalar::F64(control.start.elapsed().as_secs_f64()),
+                        }),
+                    )?;
+                    verification_fault(snapshot.tiny_spec, "returned", control)?;
+                    control.check("cooldown_verification_returned")?;
+                    let original = old
+                        .rows
+                        .iter()
+                        .find(|r| r.ordinal == *ordinal)
+                        .ok_or_else(|| bad("parent raw ordinal"))?;
+                    row_output(&row, &l)?;
+                    if row.tokens != original.tokens
+                        || row.eos != original.eos
+                        || row.finish != original.finish
+                        || row.error != original.error
+                        || !row.completed
+                        || row.interruption.is_some()
+                    {
+                        return Err(bad("fresh normal token/EOS/error parity mismatch"));
+                    }
+                    rows.push(row);
+                }
+                let s = if let Some(b) = &baseline {
+                    if panel_index == 0 {
+                        b.clone()
+                    } else {
+                        read_inputs(&root.join("D-DECAY"))?
+                    }
+                } else {
+                    snapshot.clone()
+                };
+                let e = EvalPayload {
+                    run: s.run,
+                    binding: s.binding(),
+                    source: evaluator_source(),
+                    model: native.model,
+                    tokenizer: native.tokenizer,
+                    architecture: native.architecture,
+                    step: native.step,
+                    new_updates: if confirmation { 256 } else { 0 },
+                    kind: *kind,
+                    expected: cases.len() as u32,
+                    rows,
+                };
+                if confirmation {
+                    let score = rescore(&s, &e, &l, true)?;
+                    print_anchor_panel(&s, &e, &l)?;
+                    scores.push((*kind, score));
+                }
+                proof_panels.push(publish(
+                    &target,
+                    &format!("verification-{}.r3er", kind.name()),
+                    &Record::Evaluation(e),
+                )?);
+                println!(
+                    "VERIFICATION_PANEL={} completed={} total_generations={}",
+                    kind.name(),
+                    cases.len(),
+                    control.generation_calls
+                );
+            }
+            if confirmation {
+                // Watch is the same ordinary subset. It must not consume another model call.
+                let Record::Evaluation(mut watch) =
+                    read_record(&target, proof_panels.last().unwrap())?
+                else {
+                    return Err(bad("confirmation ordinary kind"));
+                };
+                let spec = panel(&snapshot, PanelKind::Watch)?;
+                watch.rows = spec
+                    .cases
+                    .iter()
+                    .map(|n| {
+                        watch
+                            .rows
+                            .iter()
+                            .find(|r| r.ordinal == *n)
+                            .cloned()
+                            .ok_or_else(|| bad("confirmation watch member"))
+                    })
+                    .collect::<Result<_>>()?;
+                watch.kind = PanelKind::Watch;
+                watch.expected = spec.cases.len() as u32;
+                scores.push((PanelKind::Watch, rescore(&snapshot, &watch, &l, true)?));
+                if !eligible(&snapshot, &scores, false, &[]) {
+                    return Err(bad("fresh confirmation joint gate failed"));
+                }
+            }
+            control.check("cooldown_verification_proof")?;
+            publish(
+                &target,
+                "preflight-proof.r3er",
+                &Record::Preflight(PreflightReceipt {
+                    pair: start.pair,
+                    source: start.source,
+                    binary: start.binary,
+                    commands: start.commands.clone(),
+                    panels: proof_panels,
+                    elapsed: Scalar::F64(control.start.elapsed().as_secs_f64()),
+                    generations: control.generation_calls as u64,
+                }),
+            )?;
+            Ok(())
+        },
+    )
+}
+
 fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
     let a = s
         .authorization
@@ -3855,7 +4644,9 @@ fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
     let mut updates = 0;
     let mut generations = 0;
     let mut seconds = 0.;
-    let arms: &[&str] = if s.contract == RESTART_CONTRACT {
+    let arms: &[&str] = if s.cooldown() {
+        &["K-KEEP", "D-DECAY"]
+    } else if s.contract == RESTART_CONTRACT {
         &["preflight-A", "preflight-B", "C50-R", "A75-R"]
     } else {
         &["C50", "A75"]
@@ -3878,6 +4669,25 @@ fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
         {
             return Err(bad("pair parent/policy mismatch"));
         }
+        if s.cooldown()
+            && (!other.cooldown()
+                || other.source != s.source
+                || other.parent.file.digest != s.parent.file.digest
+                || other.parent.counters != s.parent.counters
+                || other.train != s.train
+                || other.cases.iter().map(case_hash).collect::<Vec<_>>()
+                    != s.cases.iter().map(case_hash).collect::<Vec<_>>()
+                || other_a.pools != a.pools
+                || other.tape.len() != s.tape.len()
+                || other.tape.iter().zip(&s.tape).any(|(a, b)| {
+                    a.indices != b.indices
+                        || a.sampler != b.sampler
+                        || a.input != b.input
+                        || a.target != b.target
+                }))
+        {
+            return Err(bad("cooldown identical parent/data/tape/source"));
+        }
         let closed = arm_commands(&arm_root, &other)?;
         if arm != s.arm_name()
             && closed
@@ -3898,7 +4708,7 @@ fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
             seconds += c.elapsed.finite()?;
         }
     }
-    if !s.preflight() && s.contract == RESTART_CONTRACT {
+    if !s.preflight() && matches!(s.contract.as_str(), RESTART_CONTRACT | COOLDOWN_CONTRACT) {
         let p = read_preflight_outcome(parent)?.ok_or_else(|| bad("missing preflight outcome"))?;
         generations += p.entries as usize;
         seconds += p.elapsed + p.publication_reserve;
@@ -3907,14 +4717,34 @@ fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
             p.elapsed, p.publication_reserve
         );
         p.require_current_success()?;
+        if s.cooldown() {
+            let Record::VerificationStart(start) =
+                read_record(parent, &reference(parent, "preflight-start.r3er")?)?
+            else {
+                return Err(bad("parent parity intent"));
+            };
+            if start.scope != 1
+                || start.pair != a.pair
+                || start.source != s.source
+                || start.inputs
+                    != [
+                        reference(parent, "K-KEEP/inputs.r3er")?,
+                        reference(parent, "D-DECAY/inputs.r3er")?,
+                    ]
+            {
+                return Err(bad("parent parity study binding"));
+            }
+        }
     }
     if updates
-        > if s.contract == RESTART_CONTRACT {
+        > if s.cooldown() {
+            512
+        } else if s.contract == RESTART_CONTRACT {
             1028
         } else {
             1024
         }
-        || generations > 7500
+        || generations > if s.cooldown() { 4096 } else { 7500 }
         || seconds >= 7200.
     {
         return Err(bad("anchor pair budget exhausted"));
@@ -4016,6 +4846,7 @@ fn verification_intent(root: &Path) -> Result<VerificationStart> {
         );
     }
     Ok(VerificationStart {
+        scope: 0,
         root: root.canonicalize()?.to_string_lossy().into_owned(),
         pair: pair.ok_or_else(|| bad("empty verification"))?,
         source: evaluator_source(),
@@ -4038,6 +4869,14 @@ fn verification_rows(
     start: &VerificationStart,
 ) -> Result<Vec<(FileRef, EvalRow, f64)>> {
     let mut rows = Vec::new();
+    let inputs = start
+        .inputs
+        .iter()
+        .map(|r| match read_record(root, r)? {
+            Record::Inputs(s) => Ok(s),
+            _ => Err(bad("verification inputs kind")),
+        })
+        .collect::<Result<Vec<_>>>()?;
     let mut missing = false;
     for (i, (arm, ordinal)) in start.order.iter().enumerate() {
         let reservation = format!("preflight-row-{i:02}-start.r3er");
@@ -4068,11 +4907,11 @@ fn verification_rows(
         let row = v
             .row
             .ok_or_else(|| bad("missing returned verification row"))?;
-        let Record::Inputs(s) = read_record(root, &start.inputs[*arm as usize])? else {
-            return Err(bad("verification inputs kind"));
-        };
+        let s = &inputs[*arm as usize];
         if row.ordinal != *ordinal
-            || row.case != case_hash(&s.cases[*ordinal as usize])
+            || s.cases
+                .get(*ordinal as usize)
+                .is_none_or(|c| row.case != case_hash(c))
             || !row.started
         {
             return Err(bad("verification case/entry binding"));
@@ -4196,6 +5035,24 @@ fn read_preflight_outcome(root: &Path) -> Result<Option<PreflightOutcome>> {
         {
             return Err(bad("verification positive final/proof mismatch"));
         }
+        let mut accounted = BTreeSet::new();
+        if p.panels.len() != if start.scope == 2 { 3 } else { 2 } {
+            return Err(bad("verification panel count"));
+        }
+        let loaded = if start.scope > 0 {
+            if start.natives[0].digest != start.natives[1].digest {
+                return Err(bad(
+                    "scoped verification must use one exact native endpoint",
+                ));
+            }
+            Some(checkpoint::load(
+                &owned_path(root, &start.natives[0].locator, true)?,
+                Device::Cpu,
+                true,
+            )?)
+        } else {
+            None
+        };
         for (arm, r) in p.panels.iter().enumerate() {
             let Record::Evaluation(e) = read_record(root, r)? else {
                 return Err(bad("verification proof raw kind"));
@@ -4203,7 +5060,13 @@ fn read_preflight_outcome(root: &Path) -> Result<Option<PreflightOutcome>> {
             let expected = rows
                 .iter()
                 .enumerate()
-                .filter(|(i, _)| start.order[*i].0 as usize == arm)
+                .filter(|(i, (_, row, _))| {
+                    if start.scope == 2 {
+                        e.rows.iter().any(|r| r.ordinal == row.ordinal)
+                    } else {
+                        start.order[*i].0 as usize == arm
+                    }
+                })
                 .map(|(_, (_, row, _))| row)
                 .collect::<Vec<_>>();
             let encode = |row: &EvalRow| {
@@ -4211,6 +5074,39 @@ fn read_preflight_outcome(root: &Path) -> Result<Option<PreflightOutcome>> {
                 row.encode(&mut b);
                 b
             };
+            if let Some(l) = &loaded {
+                let Record::Inputs(s) =
+                    read_record(root, &start.inputs[if start.scope == 2 { 0 } else { arm }])?
+                else {
+                    return Err(bad("verification snapshot kind"));
+                };
+                if e.run != s.run
+                    || e.binding != s.binding()
+                    || e.source != start.source
+                    || e.model != unhex(&l.model.weight_hash()?)?
+                    || e.tokenizer != unhex(&l.tokenizer.semantic_id())?
+                    || e.architecture != unhex(&l.model.config.semantic_id()?)?
+                    || e.step
+                        != l.manifest
+                            .training
+                            .as_ref()
+                            .ok_or_else(|| bad("verification endpoint step"))?
+                            .step as u64
+                    || e.expected as usize != expected.len()
+                {
+                    return Err(bad("verification proof actual endpoint/policy"));
+                }
+                if start.scope == 2 {
+                    rescore(&s, &e, l, true)?;
+                } else if e.rows.iter().map(|r| r.ordinal).collect::<Vec<_>>()
+                    != metadata_sample(&s, e.kind, 8)?
+                {
+                    return Err(bad("parent metadata-only sample changed"));
+                }
+                for row in &e.rows {
+                    row_output(row, l)?;
+                }
+            }
             if e.rows.len() != expected.len()
                 || e.rows
                     .iter()
@@ -4219,6 +5115,15 @@ fn read_preflight_outcome(root: &Path) -> Result<Option<PreflightOutcome>> {
             {
                 return Err(bad("proof dropped/changed returned rows"));
             }
+            for row in &e.rows {
+                let key = (if start.scope == 2 { 0 } else { arm }, row.ordinal);
+                if !accounted.insert(key) {
+                    return Err(bad("duplicate proof row"));
+                }
+            }
+        }
+        if accounted.len() != rows.len() {
+            return Err(bad("proof panel coverage"));
         }
     }
     println!(
@@ -4286,6 +5191,18 @@ fn verify_save_preflight(root: &Path, control: &mut RunControl, generate: bool) 
     }
     let start = verification_intent(root)?;
     let tiny = read_inputs(&root.join("preflight-A"))?.tiny_spec;
+    finish_verification_attempt(root, start, tiny, control, |control, returned| {
+        preflight_body(root, control, true, false, returned)
+    })
+}
+fn finish_verification_attempt(
+    root: &Path,
+    start: VerificationStart,
+    tiny: bool,
+    control: &mut RunControl,
+    work: impl FnOnce(&mut RunControl, &mut Vec<EvalRow>) -> Result<()>,
+) -> Result<()> {
+    control.generation_limit = start.generation_limit as usize;
     verification_fault(tiny, "start", control)?;
     // hard_link(create-new) in the existing publisher elects a single observer. No work before success.
     let sr = publish(
@@ -4301,7 +5218,7 @@ fn verify_save_preflight(root: &Path, control: &mut RunControl, generate: bool) 
     let mut returned = Vec::new();
     let result = (|| {
         verification_fault(tiny, "started", control)?;
-        preflight_body(root, control, true, false, &mut returned)
+        work(control, &mut returned)
     })();
     if let Err(e) = &result {
         control.classify_error(e);
@@ -4356,7 +5273,12 @@ fn preflight_body(
     returned: &mut Vec<EvalRow>,
 ) -> Result<()> {
     if generate {
-        control.generation_limit = 8;
+        let Record::VerificationStart(start) =
+            read_record(root, &reference(root, "preflight-start.r3er")?)?
+        else {
+            return Err(bad("preflight durable intent missing"));
+        };
+        control.generation_limit = start.generation_limit as usize;
     }
     let mut endpoints = Vec::new();
     let mut commands = Vec::new();
@@ -4552,7 +5474,7 @@ fn preflight_body(
     let commands: [FileRef; 2] = commands
         .try_into()
         .map_err(|_| bad("preflight command count"))?;
-    let panels = [
+    let panels = vec![
         reference(root, "preflight-A/parity.r3er")?,
         reference(root, "preflight-B/parity.r3er")?,
     ];
@@ -4617,6 +5539,21 @@ fn print_anchor_panel(s: &RunSnapshot, e: &EvalPayload, l: &Loaded) -> Result<()
     for row in &e.rows {
         let case = &s.cases[row.ordinal as usize];
         let (actual, _) = row_output(row, l)?;
+        if row.error.is_some() || actual.as_deref() == Some("") {
+            println!(
+                "RAW_ERROR_CLASS panel={} step={} ordinal={} tokens={} zero_tokens={} actual_absent={} decoded_empty={} EOS={:?} finish={:?} class={:?}",
+                e.kind.name(),
+                e.step,
+                row.ordinal,
+                row.tokens.len(),
+                row.tokens.is_empty(),
+                actual.is_none(),
+                actual.as_deref() == Some(""),
+                row.eos,
+                row.finish,
+                row.error_class
+            );
+        }
         let a = actual.as_deref().unwrap_or("");
         let exact = strict_answer_match(
             actual.as_deref(),
@@ -4680,7 +5617,57 @@ fn print_anchor_panel(s: &RunSnapshot, e: &EvalPayload, l: &Loaded) -> Result<()
     }
     Ok(())
 }
+fn paired_panel(
+    a: (&RunSnapshot, &EvalPayload, &Loaded),
+    b: (&RunSnapshot, &EvalPayload, &Loaded),
+) -> Result<[u64; 4]> {
+    let marks = |(s, e, l): (&RunSnapshot, &EvalPayload, &Loaded)| -> Result<Vec<(Hash, bool)>> {
+        rescore(s, e, l, true)?;
+        e.rows
+            .iter()
+            .map(|r| {
+                let case = &s.cases[r.ordinal as usize];
+                let (actual, _) = row_output(r, l)?;
+                Ok((
+                    case_hash(case),
+                    r.completed
+                        && r.interruption.is_none()
+                        && strict_answer_match(
+                            actual.as_deref(),
+                            &case.answer,
+                            r.finish == Finish::Eos,
+                            r.error.is_some(),
+                        ),
+                ))
+            })
+            .collect()
+    };
+    let a = marks(a)?;
+    let b = marks(b)?;
+    if a.len() != b.len() {
+        return Err(bad("paired denominator"));
+    }
+    let mut counts = [0; 4];
+    for (a, b) in a.iter().zip(&b) {
+        if a.0 != b.0 {
+            return Err(bad("paired source contents"));
+        }
+        counts[usize::from(a.1) * 2 + usize::from(b.1)] += 1;
+    }
+    Ok(counts)
+}
 fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
+    let cooldown = root.join("K-KEEP").exists();
+    if cooldown {
+        read_preflight_outcome(root)?
+            .ok_or_else(|| bad("missing parent verification"))?
+            .require_current_success()?;
+        if root.join("confirmation").exists() {
+            read_preflight_outcome(&root.join("confirmation"))?
+                .ok_or_else(|| bad("confirmation missing intent"))?
+                .require_current_success()?;
+        }
+    }
     if root.join("preflight-A").is_dir() {
         let p = read_preflight_outcome(root)?.ok_or_else(|| bad("missing preflight attempt"))?;
         if p.legacy {
@@ -4690,7 +5677,9 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
             p.require_current_success()?;
         }
     }
-    let arms = if root.join("C50-R").exists() {
+    let arms = if cooldown {
+        ["K-KEEP", "D-DECAY"]
+    } else if root.join("C50-R").exists() {
         ["C50-R", "A75-R"]
     } else {
         ["C50", "A75"]
@@ -4826,7 +5815,7 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
             chain.iter().map(|(_, t)| t.teachers).sum::<u64>(),
             t.stop
         );
-        for n in [256, 512] {
+        for n in if cooldown { [128, 256] } else { [256, 512] } {
             for kind in [PanelKind::Dev, PanelKind::Cross, PanelKind::Ordinary] {
                 if let Some(r) = h.evaluations.get(&(s.parent.step + n, kind)) {
                     let (e, l) = payload(&dir, &s, r)?;
@@ -4839,6 +5828,26 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
         } else {
             false
         };
+        if cooldown {
+            let original = origin_path(&s, "cooldown-parent-inputs")?;
+            let parent = original.parent().ok_or_else(|| bad("paired parent root"))?;
+            let old = read_inputs(parent)?;
+            let closed = arm_commands(parent, &old)?;
+            let command = &closed
+                .last()
+                .ok_or_else(|| bad("paired parent terminal"))?
+                .1;
+            let old_h = verified_history(parent, &old, &lineage(parent, &old, &command.terminal)?)?;
+            for kind in [PanelKind::Dev, PanelKind::Cross, PanelKind::Ordinary] {
+                let (a, al) = payload(parent, &old, &old_h.evaluations[&(s.parent.step, kind)])?;
+                let (b, bl) = payload(&dir, &s, &h.evaluations[&(s.parent.step + 256, kind)])?;
+                let counts = paired_panel((&old, &a, &al), (&s, &b, &bl))?;
+                println!(
+                    "PAIRED parent_A75_R512_to={arm} updates=256 panel={} both_wrong/gain/loss/both_correct={counts:?}",
+                    kind.name()
+                );
+            }
+        }
         endpoints.push((s, h, candidate));
     }
     if endpoints[0].0.authorization.as_ref().unwrap().pair
@@ -4846,7 +5855,7 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
     {
         return Err(bad("report mismatched pair"));
     }
-    for n in [256, 512] {
+    for n in if cooldown { [128, 256] } else { [256, 512] } {
         for kind in [PanelKind::Dev, PanelKind::Cross, PanelKind::Ordinary] {
             let mut rows = Vec::new();
             for (i, (s, h, _)) in endpoints.iter().enumerate() {
@@ -4890,7 +5899,7 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
         }
     }
     println!(
-        "MODEL_PAIR={} C50_candidate={} A75_candidate={} GOAL1_ACCEPTED=false H3_SEAL=NOT_OPENED",
+        "MODEL_PAIR={} first_arm_candidate={} second_arm_candidate={} GOAL1_ACCEPTED=false H3_SEAL=NOT_OPENED",
         if endpoints.iter().any(|e| e.2) {
             "JOINT_GATE_PASS_PENDING_FRESH_PROCESS"
         } else {
@@ -4937,7 +5946,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
         ));
     }
     if s.authorization.is_some() {
-        if s.contract != RESTART_CONTRACT {
+        if !matches!(s.contract.as_str(), RESTART_CONTRACT | COOLDOWN_CONTRACT) {
             return Err(bad("closed historical study is not restart authorization"));
         }
         if s.source != evaluator_source()
@@ -4954,8 +5963,32 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
             return Err(bad("registered source/binary changed before training"));
         }
         let (_, generations, seconds) = anchor_budget(root, &s)?;
+        if s.cooldown() {
+            let registration = s
+                .origins
+                .iter()
+                .find(|o| o.role == "cooldown-registered-root")
+                .ok_or_else(|| bad("study root binding"))?;
+            if root
+                .parent()
+                .ok_or_else(|| bad("study root"))?
+                .canonicalize()?
+                .to_string_lossy()
+                != registration.original.locator
+            {
+                return Err(bad("study moved outside registered authorization"));
+            }
+            for role in [
+                "cooldown-parent-inputs",
+                "cooldown-parent-terminal",
+                "cooldown-parent-command",
+                "cooldown-legacy-proof",
+            ] {
+                origin_path(&s, role)?;
+            }
+        }
         control.deadline = control.start + Duration::from_secs_f64((7200. - seconds).min(1800.));
-        control.generation_limit = 7500 - generations;
+        control.generation_limit = if s.cooldown() { 4096 } else { 7500 } - generations;
         println!(
             "NODE=G2 ARM={} STATE=START prior_generations={generations} prior_command_s={seconds:.3} source={} binary={} input_binding={}",
             s.arm_name(),
@@ -4972,7 +6005,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                 return Err(bad("replacement source changed"));
             }
         }
-        if !s.preflight() {
+        if !s.preflight() && !s.cooldown() {
             verify_save_preflight(
                 root.parent().ok_or_else(|| bad("preflight root"))?,
                 control,
@@ -5020,7 +6053,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
             s.parent.step,
             s.parent.counters[0],
             s.tape.len(),
-            2_000_000,
+            if s.cooldown() { 1_000_000 } else { 2_000_000 },
         )?;
         let mut manifest = l.manifest.clone();
         manifest.training = Some(state.clone());
@@ -5035,6 +6068,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
     let mut evaluations = Vec::new();
     let mut decisions = Vec::new();
     let mut draws = Vec::new();
+    let mut lr_bits = s.cooldown().then(Vec::new);
     let mut complete = false;
     let mut heartbeat = Instant::now();
     let mut last_saved = if resume.is_some() {
@@ -5051,8 +6085,14 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
         let framed = samples(&episodes, &l.tokenizer, state.config.seq_len)?;
         loop {
             let n = state.step as u64 - s.parent.step;
-            if s.purpose == RunPurpose::SaveSplit && index == 0 && n == 1 {
-                println!("PURPOSE=SAVE_RESUME_PREFLIGHT explicit_one_update_segment_deadline=true");
+            if matches!(s.purpose, RunPurpose::SaveSplit | RunPurpose::LrSplit)
+                && index == 0
+                && n == 1
+            {
+                println!(
+                    "PURPOSE={:?} explicit_one_update_segment_deadline=true budgeted_update=true",
+                    s.purpose
+                );
                 control.deadline = Instant::now();
                 control.check("preflight_split_save_boundary")?;
             }
@@ -5083,7 +6123,9 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                     );
                     last_saved = Some(native);
                 }
-                let kinds: &[PanelKind] = if s.authorization.is_some() {
+                let kinds: &[PanelKind] = if s.cooldown() && n == 128 {
+                    &[PanelKind::Dev, PanelKind::Watch]
+                } else if s.authorization.is_some() {
                     &[
                         PanelKind::Dev,
                         PanelKind::Cross,
@@ -5123,7 +6165,10 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                         {
                             control.deadline = Instant::now();
                         }
-                        let e = if kind == PanelKind::Watch && s.authorization.is_some() {
+                        let e = if kind == PanelKind::Watch
+                            && s.authorization.is_some()
+                            && !(s.cooldown() && n == 128)
+                        {
                             let r =
                                 &h.evaluations[&(state.step as u64, PanelKind::Ordinary)].payload;
                             let Record::Evaluation(mut e) = read_record(root, r)? else {
@@ -5312,7 +6357,9 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                     ))
                 })
                 .collect::<Result<BTreeMap<_, _>>>()?;
-            let rate = if s.tiny_spec {
+            let rate = if s.cooldown() {
+                cooldown_lr(s.lr_policy, n + 1)?
+            } else if s.tiny_spec {
                 state.config.lr
             } else {
                 progress_lr(
@@ -5329,8 +6376,11 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
             state.train_loss = Some(f64::from(ce));
             state.validation_loss = None;
             draws.push(d.clone());
+            if let Some(rates) = &mut lr_bits {
+                rates.push(rate.to_bits());
+            }
             println!(
-                "ACTUAL_{}_UPDATE={} MODEL_STEP={} INPUT_TOKENS={} TARGET_TOKENS={} LR_BITS={}",
+                "ACTUAL_{}_UPDATE={} MODEL_STEP={} INPUT_TOKENS={} TARGET_TOKENS={} LOSS={ce} LR_BITS={}",
                 if s.tiny_spec { "TINY" } else { "SMALL" },
                 draws.len(),
                 state.step,
@@ -5415,7 +6465,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
             r.native = native.clone();
         }
     }
-    if !(s.contract == RESTART_CONTRACT && control.observed == [StopReason::TimeBudget]) && evaluations.iter().any(|r| read_record(root,&r.payload).is_ok_and(|v| matches!(v,
+    if !(matches!(s.contract.as_str(), RESTART_CONTRACT | COOLDOWN_CONTRACT) && control.observed == [StopReason::TimeBudget]) && evaluations.iter().any(|r| read_record(root,&r.payload).is_ok_and(|v| matches!(v,
         Record::Evaluation(e) if e.rows.len()!=e.expected as usize || e.rows.iter().any(|r|!r.completed || r.interruption.is_some())))) {
         control.observe(StopReason::AuditIncomplete);
     }
@@ -5443,6 +6493,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
         elapsed: Scalar::F64(control.start.elapsed().as_secs_f64()),
         cleanup: Scalar::F64(cleanup.elapsed().as_secs_f64()),
         draws,
+        lr_bits,
     };
     if t.complete
         && t.stop.is_empty()
@@ -5933,6 +6984,7 @@ fn import_legacy(
         elapsed: Scalar::F64(control.start.elapsed().as_secs_f64()),
         cleanup: Scalar::F64(0.),
         draws: vec![],
+        lr_bits: None,
     };
     publish(output, "terminal.r3er", &Record::Segment(t))?;
     close_native(output, "terminal.r3er", control)?;
@@ -6088,6 +7140,7 @@ fn parity(root: &Path, output: &Path, control: &mut RunControl) -> Result<()> {
         elapsed: Scalar::F64(control.start.elapsed().as_secs_f64()),
         cleanup: Scalar::F64(0.),
         draws: vec![],
+        lr_bits: None,
     };
     let terminal = publish(output, "terminal.r3er", &Record::Segment(t))?;
     if let Some(e) = failure {
@@ -6485,6 +7538,7 @@ fn fixture_fork_inner(
 #[cfg(feature = "test-support")]
 #[allow(clippy::type_complexity)] // Test-only comparison of existing typed state, not a new runtime abstraction.
 fn fixture_check(roots: &[PathBuf]) -> Result<()> {
+    let mut expected_lr_state = None;
     let mut expected: Option<(Hash, Hash, [u64; 3], Vec<(PanelKind, Vec<u32>)>, [u64; 3])> = None;
     for root in roots {
         let s = read_inputs(root)?;
@@ -6493,17 +7547,39 @@ fn fixture_check(roots: &[PathBuf]) -> Result<()> {
         };
         let chain = lineage(root, &s, &c.terminal)?;
         let h = verified_history(root, &s, &chain)?;
-        if h.decisions.len() != 2 || c.candidate || c.historical {
+        if h.decisions.len() != if s.preflight() { 0 } else { 2 } || c.candidate || c.historical {
             return Err(bad("fixture decisions/eligibility"));
         }
         let n = chain.last().unwrap().1.native.as_ref().unwrap();
+        if s.cooldown() {
+            let l = resolve_native(root, &s, n, true)?;
+            let rates = chain
+                .iter()
+                .flat_map(|(_, t)| t.lr_bits.clone().unwrap_or_default())
+                .collect::<Vec<_>>();
+            if rates.len() != 2 {
+                return Err(bad("TINY numeric actual LR count"));
+            }
+            let current = (l.manifest.training.clone(), rates);
+            if expected_lr_state
+                .as_ref()
+                .is_some_and(|old| *old != current)
+            {
+                return Err(bad("continuous/split full state/LR mismatch"));
+            }
+            expected_lr_state = Some(current);
+        }
         let mut raw = Vec::new();
-        for kind in [
-            PanelKind::Dev,
-            PanelKind::Watch,
-            PanelKind::Cross,
-            PanelKind::Ordinary,
-        ] {
+        for kind in if s.preflight() {
+            vec![]
+        } else {
+            vec![
+                PanelKind::Dev,
+                PanelKind::Watch,
+                PanelKind::Cross,
+                PanelKind::Ordinary,
+            ]
+        } {
             let (e, l) = payload(root, &s, &h.evaluations[&(n.step, kind)])?;
             for r in &e.rows {
                 if let Some(Scalar::F64(f)) = r.diagnostic {
@@ -6681,6 +7757,19 @@ mod binary_tests {
         assert_eq!(restored.pools, auth.pools);
         assert_eq!(restored.anchors, 6);
         println!("ANCHOR_RATIO_REGRESSION SMALL_UPDATES=0 TINY_UPDATES=0 GENERATIONS=0");
+    }
+    #[test]
+    fn cooldown_scalar_fixed_horizon_and_bits() {
+        let midpoint = 0.000055 + 0.000045 * (std::f64::consts::PI / 510.).sin();
+        for (n, expected) in [(1, 0.0001), (128, midpoint), (256, 0.00001)] {
+            assert!((cooldown_lr(3, n).unwrap() - expected).abs() < 2e-20);
+            assert_eq!(cooldown_lr(2, n).unwrap().to_bits(), 1e-4f64.to_bits());
+        }
+        assert!(cooldown_lr(3, 0).is_err());
+        assert!(cooldown_lr(3, 257).is_err());
+        assert!(cooldown_lr(1, 1).is_err());
+        assert!(cooldown_lr(3, 2).unwrap() > cooldown_lr(3, 128).unwrap());
+        println!("LR_FORMULA_OBSERVATIONS=6 SCALAR_OPTIMIZER_CALLS=0 TINY_UPDATES=0");
     }
     use std::fs;
     #[test]
@@ -7055,6 +8144,7 @@ mod binary_tests_close {
                 elapsed: Scalar::F64(-0.),
                 cleanup: Scalar::F64(0.1),
                 draws: vec![],
+                lr_bits: None,
             };
             publish(&root, "terminal.r3er", &Record::Segment(t)).unwrap();
             if mode == 6 {

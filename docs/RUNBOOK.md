@@ -13,6 +13,19 @@ legacy limitation while recounting old endpoints. The previous4:4/6:2 run is clo
 Current stage, conditional LR-only budget and evidence are in QUALITY_RECOVERY_PLAN and
 EXPERIMENT_STATUS. No new SMALL save-preflight4 or old ratio rerun is authorized.
 
+`recovery native cooldown-prepare --parent-arm PRESERVED_A75_R --expected-parent FULL_NATIVE_SHA --output NEW_STUDY`
+validates the legacy parent and reconstructs the next256 draws from the same original
+streams after verifying all previous512. Both arms use the same6:2 tape. Run
+`cooldown-verify --root NEW_STUDY` exactly once for metadata-selected parent dev8/ordinary8.
+Its durable failure or unknown tail blocks learning. K-KEEP then D-DECAY each use `run`
+once for the budgeted first update and again with `--resume segment-00/terminal.r3er`.
+The new process verifies native weights/Adam/counters and actual LR bits before forward.
+No new four-update SMALL preflight exists. A failed arm blocks the other arm/report.
+After two complete endpoints, `anchor-report --root NEW_STUDY` recounts the pair and
+parent paired changes. Only a joint candidate permits `cooldown-verify --root NEW_STUDY
+--confirmation`; one full normal confirmation uses the same durable attempt finalizer.
+The sealed panel is never opened here. Keep the registered source/binary/path unchanged.
+
 ## Durable retries and native command outcomes
 
 The explicit replacement study is registered with

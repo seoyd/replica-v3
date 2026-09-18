@@ -21,6 +21,13 @@ conditional one candidate fresh1168. Joint gates/guard remain fixed, H3 seal NOT
 No joint candidate means study complete/quality fail and no further learning. Verified
 stages explicitly commit/push with remote SHA checks; independent acceptance stays pending.
 
+The registered D policy is `1e-5 + 0.5*(1e-4-1e-5)*(1+cos(PI*(n-1)/255))`.
+Local n never replaces the inherited Adam step24310+n. LR-policy changes also change
+the cumulative effect of the unchanged decoupled decay coefficient; this is not a
+claim about gradient step-size alone. The previous512 A75 draws were exactly reproduced,
+then the next256 frozen (input627563,target65772 each). Parent QA181 is observed; the
+unchanged acceptance floor178 retains its original provenance. Mid128 is not a winner.
+
 ## Closed: R3-DURABILITY-PAIR-RESTART-1.0
 
 D0–D4 execution is closed on source50a0fb72f552cc130fbd5598019222c7a7bd95fe.

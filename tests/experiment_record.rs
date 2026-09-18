@@ -53,6 +53,81 @@ fn p(p: &Path) -> &str {
     p.to_str().unwrap()
 }
 #[test]
+fn cooldown_actual_lr_continuous_and_fresh_process_resume() {
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap =
+        PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").expect("reuse TINY bootstrap"));
+    let root = d.path().join("cooldown");
+    call(
+        &[
+            "fixture-cooldown",
+            "--from",
+            p(&bootstrap),
+            "--output",
+            p(&root),
+        ],
+        None,
+        true,
+        &d.path().join("prepare.log"),
+    );
+    let continuous = root.join("continuous");
+    let split = root.join("split");
+    let a = call(
+        &["run", "--root", p(&continuous)],
+        None,
+        true,
+        &d.path().join("continuous.log"),
+    );
+    let b = call(
+        &["run", "--root", p(&split)],
+        None,
+        true,
+        &d.path().join("first.log"),
+    );
+    assert!(split.join("segment-00/final.r3m").is_file());
+    let c = call(
+        &[
+            "run",
+            "--root",
+            p(&split),
+            "--resume",
+            "segment-00/terminal.r3er",
+        ],
+        None,
+        true,
+        &d.path().join("resume.log"),
+    );
+    let rates = |out: &Output| {
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| l.starts_with("ACTUAL_TINY_UPDATE="))
+            .map(|l| l.split("LR_BITS=").nth(1).unwrap().parse::<u64>().unwrap())
+            .collect::<Vec<_>>()
+    };
+    let mut split_rates = rates(&b);
+    split_rates.extend(rates(&c));
+    assert_eq!(rates(&a), split_rates);
+    assert_eq!(split_rates.len(), 2);
+    assert_eq!(split_rates[0], 1e-4f64.to_bits());
+    assert!(f64::from_bits(split_rates[1]) < 1e-4);
+    call(
+        &[
+            "fixture-check",
+            "--roots",
+            p(&continuous),
+            "--roots",
+            p(&split),
+        ],
+        None,
+        true,
+        &d.path().join("check.log"),
+    );
+    println!(
+        "COOLDOWN_NUMERIC TINY_UPDATES={} GENERATIONS=0 SCALAR_OPTIMIZER=0",
+        rates(&a).len() + split_rates.len()
+    );
+}
+#[test]
 fn binary_preflight_attempt_failures_usage_and_single_writer() {
     fn copy_dir(from: &Path, to: &Path) {
         fs::create_dir(to).unwrap();

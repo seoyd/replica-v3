@@ -26,6 +26,15 @@ Old proofs without intent are LEGACY_SUCCESS_WITHOUT_ATTEMPT_INTENT in explicit 
 audits. They are not upgraded or granted new verification permission. Current work permits
 new save-verification fixtures only for TINY; the completed SMALL4 test is reused as history.
 
+The bounded cooldown study uses kind13 for the same owned input snapshot with explicit
+K/D policy and run purpose. Source, binary, parent and registered root join its binding.
+Kind14 adds actual f64 LR bits to the existing segment, checked against each cumulative
+update before resume. Native .r3m and old kind4 are unchanged. Kind15 is a scoped use
+of the same verification intent (parent16 or conditional fresh1168); kind16 extends the
+existing proof to up to three panels. All scopes use the same row/finalization/consumer.
+Entry/final readers bound counts by their intent; old kind9/10 retain their old decoding.
+No JSON state, tensor change, new publisher, or automatic retry is introduced.
+
 ## Experimental R3JRN v1 (fixed before implementation)
 
 Separate explicit snapshot+journal paths; product ask remains SQLite. R3ARCH and
