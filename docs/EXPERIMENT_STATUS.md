@@ -1,6 +1,141 @@
 # 진단 및 구현 상태
 
-## R3 / R4 준비 — C512 독립 검증 완료, 제한 T-SCREEN 실행 전
+## R6 최종 — 경계 수리 PASS, T-SCREEN32 품질 회귀로 종료
+
+R3-QUALITY-RECOVERY-BOUNDED-BRIDGE-1.0 / 2026-09-19.
+**RESULT=PARTIAL: 구현·진단·정해진 중단 프로토콜 완료, 모델 품질 회복 실패.**
+T_SCREEN_COMPLETED=true는 승인된 조기 종료 절차를 마쳤다는 뜻이다.
+SMALL512 완료나 정상 command/후보 승인이라는 뜻이 아니다.
+
+REVIEW_BASE=`e08687eff768dd8b6426accebdfe148d3ce8b556`.
+R2 source=`7cefe81b32a8fa98e1755f3348254e3271c7cd8f`.
+최종 구현/실제 T 실행 SOURCE_COMMIT=
+`eb66357fbee97de67b637ec0b1986e636ebd372e`.
+각 source commit을 정상 push하고 실제 remote 전체 SHA 일치를 확인한 뒤 실행했다.
+이 최종 결과 절은 별도 docs-only 보고이며 실행 소스를 바꾸지 않는다.
+[실제 candidate diff](https://github.com/seoyd/replica-v3/compare/e08687eff768dd8b6426accebdfe148d3ce8b556...eb66357fbee97de67b637ec0b1986e636ebd372e).
+T execution binary SHA256=
+`a9dead446823e7ac606c988333bdabec3012dc2635aeaea981bf73927d74e068`;
+evaluator source digest=
+`ae9a015ee2f168355a22f162365d6078d14cede1937a2ef0bf776e707637eac5`.
+학습 전후 source/test/binary hash가 같았다.
+
+### 실제 동일 endpoint 결과
+
+EXISTING_RAW: 부모의 complete olddev/CROSS/ordinary 및 replacement-01 newdev를
+각 원래 모델/내용 binding으로 검증했다. metadata와 고정 hash 순서로 OLD/CROSS/
+NEW의16 base×4 view, ordinary의 QA category 균형32를 고정했다. 부모224는
+원래 row의 명시적인 projection이며 이번 generation0이다. aux는 QA에 넣지 않았다.
+
+EXECUTED_THIS_RUN: 같은 A75-R24310/native/Adam/tokenizer/T corpus/6:2 tape,
+default loss/first-target weight8, constantLR1e-4(bits4547007122018943789), F32
+CPU Accelerate threads1. 첫1회 저장/정상 TimePause 뒤 새 process31회를 수행했다.
+학습 중 소스·LR·정책·자료·평가 기준을 바꾸지 않았다.
+
+| 고정 screen | 부모24310 | T-SCREEN24342 | 변화 |
+|---|---:|---:|---:|
+| OLD strict |64/64|16/64|−48|
+| CROSS strict |60/64|11/64|−49|
+| ordinary QA |20/32|12/32|−8|
+| NEW strict |0/64|0/64|0|
+| NEW base4 |0/16|0/16|0|
+| 생성 오류/비정상 종료 |0/224|28/224|+28|
+
+32회 native를 **평가 전에** 저장했고224행을 모두 반환했다. EOS 종료198/224,
+strict UTF-8 오류가 명시된 로그2건이다. 이224표본의39/224를 전체 QA400이나
+H3 전체 점수로 바꾸지 않는다. OLD/CROSS 손실이 각각12 이상이고 오류 급증
+조건도 충족했다. 저장된 판정은 QUALITY_REGRESSION_STOP/QualityGuard이며
+`resume=false, complete=false, candidate=false`다. command status는 Failed,
+error=None(품질 정책 중단)으로 남았다. storage 실패로 뭉뚱그리지 않는다.
+
+새 process의 `screen-report`가 native/step/tape/LR/guard/terminal/command를
+재검산하고 동일한32회 중단 및 점수를 반환했다(exit0). 원 학습 명령 exit1과
+보고 명령 exit0은 목적이 다르다. 정상 완료 certificate나 후보 승격을 만들지
+않았다. 64/128/256/512 및 최종1568 panel은 **NOT_RUN_QUALITY_STOP**이다.
+가장 좋은 중간 checkpoint를 선택하거나 남은480회를 재사용하지 않았다.
+
+### 사용량·저장·증거
+
+신규 SMALL32/512, input85,211/target8,322 tokens, anchor192/focus64 **노출**,
+TINY63/128, scalar0. 신규 normal generations288/4096=R3 64+T224, 모두 반환.
+기록된 generation tokens13,006=R3 1,962+T11,044(EOS 포함). 신규 own diagnostic
+forwards60/192, 모두 반환; T teacher0, 외부 모델 호출0. 과거 부모320/teacher64는
+순수 검증/재사용이며 새 호출로 합산하지 않았다. 기존 C512 소비량도 별도다.
+
+최종 사용량 정정: 앞선 진행 보고의 TINY60은 native runner의 update entry와
+그 직접 회귀만 센 값이었다. `quick-r2-fixed/command-08.stdout`의 별도 standalone
+resume 회귀3회(`AMBIENT_RESUME_TINY_UPDATES=3`)를 포함하면 **63회**다.
+실제 재실행3회가 추가된 것이 아니라 누락된 관측을 합산한 정정이다.
+
+R3 command elapsed13.9488005초. T prepare/start의 보수적 budget ledger는
+각 완료 명령에 publication/cleanup120초를 별도로 예약했고, 마지막 재개 시작에
+430.552초가 charge돼 있었다. 이 예약을 실제 계산 시간으로 부르지 않는다.
+정확한 신규 command elapsed는 각 binary command에 남아 있으며 build/test와
+분리된다. 마지막 평가 중 관측 wall73.781초는 최종 command 시간의 대체값이 아니다.
+과거 C의 누락 command 총사용량과 강제종료 TINY의 미확정 tail은 UNKNOWN 유지.
+
+마지막 durable native:
+`artifacts/quality-recovery-bounded-bridge-20260919/T-SCREEN/segment-01/step-0032.r3m`.
+physical SHA256=`4d2eb3e7d248421adf85101c9680b96c0ae3125d0c4afb0296397c6827e9c5f4`,
+weight hash=`70e9f858ff13b4f2bd56e759a71696c200fe09760d01c56c53adf36a24f6b934`,
+step24342. 운영 모델 pointer는 바꾸지 않았다.
+
+인가된 로컬 증거 root는 `artifacts/quality-recovery-bounded-bridge-20260919/`다.
+
+| 파일/경로 | 내용 |
+|---|---|
+| `c512-diagnostic.log`, `c512-diagnostic/audit-final.r3er` | C full-state/raw/fresh64/numeric60 진단 |
+| `c512-diagnostic/t-screen-registration.r3er` | 새 T-SCREEN 단일 등록 |
+| `T-SCREEN/inputs.r3er`, `parent-screen.r3er` | 고정 native 자료·정책 및 기존 parent raw projection |
+| `T-SCREEN/segment-00/{terminal,command}.r3er` | 첫1회 durable TimePause |
+| `T-SCREEN/segment-01/{screen-0032,decision-0032,terminal,command}.r3er` | 224 raw와 guard/품질 중단 |
+| `t-screen-{prepare,first,resume,report}.log` | 실제 명령 출력과 새 process 재검산 |
+| `T-SCREEN/executed-replica-train` | 실제 학습 실행 파일 보존 사본 |
+| `quick-r2-fixed/`, `screen-policy.log`, `screen-final-process.log`, `final-parent-stop-regressions.log` | 직접 회귀 증거 |
+| `r0-originals.sha256`, `originals-after.sha256-check` | 기존927파일 보존 검산 |
+
+부모는 `artifacts/native-corpus-objective-20260918/A75-R24310-v2.r3m`, 원 T corpus는
+`artifacts/quality-first-bridge-20260919/data-ready/T-TEMPORAL.r3c`이며 시작 시
+physical hash와 종료 후 hash가 같다. 기존 C/T study와 replacement 관측의927개
+파일 hash가 모두 유지됐다. C의 누락 terminal/command는 계속 없다. 원 실패를
+수리하거나 기존 T0을 실행 완료로 바꾸지 않았다. 모델/raw/코퍼스는 Git에 게시하지 않는다.
+
+### 최종 대조와 판정
+
+FB01_REAL_CAPACITY=PASS: kind14/metrics의 공통512, count/LR/정책/남은 bytes 검증,
+실제 Record→publisher→reader 경계 및257/511 RED→GREEN. 합성 count는 optimizer0.
+FB02_REGISTERED_ROOT=PASS: actual canonical observation root를 observe/prepare/
+report에 공통 적용, 실제 replacement 등록 TINY positive/copy/source/binary/registry
+negative 및 기존 native parent identity 변경 거부. 코드 변경은 기존
+`src/experiment_record.rs`, `src/codec.rs`, `src/check_main.rs`, 기존 test와 문서에 한정.
+
+관련 quick15명령/18고유 테스트 PASS, 후속 screen policy1/process1 및 기존 native
+parent/종료 receipt 직접 unit2 PASS: 이번 **고유 테스트22개**. 기존 bridge parity의
+중복 실행을 고유 수에 더하지 않는다. fmt/check/clippy/release PASS, zero-test0.
+의도적인 기존 decoder RED2건과 초기 취소 핸들러 중복 fixture FAIL은 로그에 보존했다.
+전체 무관 테스트·대규모 재학습은 실행하지 않았다.
+
+CODE_FIX_ACCEPTED=PASS_IMPLEMENTER_DIRECT_SCOPE;
+SAVED_C_ARTIFACT_VALID=VERIFIED; C512_RAW_RECOUNT=AGREED;
+HISTORICAL_C_FINALIZATION=FAILED_UNCHANGED;
+REGRESSION_DIAGNOSIS=OBSERVED_NOT_CAUSAL_PROOF;
+T_SCREEN_COMPLETED=true/STOPPED_32; MODEL_QUALITY_RECOVERED=false;
+H3_JOINT=false; NEW_BINDING_SKILL=false; H3_SEAL=NOT_OPENED;
+S4/S5/S6=NOT_PASSED_NOT_RUN_THIS_CONTRACT; GOAL1_READY=false;
+GOAL1_ACCEPTED=false; INDEPENDENT_REVIEW=NOT_RUN.
+
+R3CORP/R3TOK/R3MODEL/R3ER를 유지했다. 신규 canonical JSON writer0, SQLite/IPC/
+legacy JSON 원본·모델 구조·tokenizer·optimizer 수식 변경0. 신규 영구 Rust module0,
+신규 영구 파일0. 로컬 실험 증거와 신규 checkpoint만 생성했다.
+
+다음 **미실행 가설 하나**: 동일6:2 배합에서 기존 copy 동작을 보존할 anchor 내용의
+커버리지가 부족할 수 있다. C와 T 모두 큰 보존 손실을 보였고, 이번 정확한 입력/캐시
+검사에서는 계산 결함을 재현하지 못했다는 제한된 근거다. 기존 anchor가 실제 old
+dev/CROSS 형식을 얼마나 포함하는지부터 확인하는 별도 사전등록 검토를 제안한다.
+인과관계는 UNRESOLVED이며 자료 교체·비율/LR 변경·추가 학습은 실행하지 않았다.
+T32와 과거 C512의 동일 예산 승패 비교는 하지 않는다.
+
+## R3 / R4 진입 당시 기록 — C512 독립 검증 및 T-SCREEN 준비
 
 R3-QUALITY-RECOVERY-BOUNDED-BRIDGE-1.0. R2 source
 `7cefe81b32a8fa98e1755f3348254e3271c7cd8f`를 정상 push하고 remote 전체 SHA를
@@ -41,7 +176,7 @@ command Failed/비재개로 남고, 순수 report만 정상 연구의 조기 종
 신규 정책 unit1 PASS. 실제 replacement/scope3 proof를 거친 explicit TINY
 1+1+1+1 panel의 첫1/fresh1/close/moved-root 거부 PASS. 기존 bridge 연속2와
 첫1/fresh1 weight/Adam/tape 정합성도 재확인했다. 이 단계 실제 TINY8회(2회 시험과
-최종2+4 회귀)를 더해 누적60/128. 이 절 작성 시 T-SCREEN SMALL은 NOT_RUN이다.
+최종2+4 회귀)를 더해 누적63/128(standalone3회 포함 정정). 이 절 작성 시 T-SCREEN SMALL은 NOT_RUN이다.
 
 ## R0–R2 — bounded bridge 경계 수정, 모델 실행 전
 
@@ -62,8 +197,8 @@ FB02: 등록 observation root의 canonical 경로를 observe/prepare/report에�
 proof를 사용한다. 복사본 B의 세 진입점 거부, 원 위치 A 별칭의 정상 실행,
 읽기 전용 보고, teacher 실패 보존, 첫1+fresh1/연속2의 기존 모델·Adam·close
 회귀가 실제 통과했다. 직접 process 시험4개 뒤 실행한 관련 quick은
-15명령/18개 고유 테스트 PASS(0-test 없음). 해당 quick의 TINY44회와 선행
-직접 process의8회를 합쳐 이번 실제 TINY52/128, scalar0이다. 반복 invocation을
+15명령/18개 고유 테스트 PASS(0-test 없음). 해당 quick의 TINY47회(native44+
+standalone3)와 선행 직접 process8회를 합쳐 이 단계 TINY55/128, scalar0이다. 반복 invocation을
 새 고유 테스트로 더하지 않는다. 강제 종료 시험의 미확정 생성/teacher tail은
 UNKNOWN이며 SMALL 사용량과 합치지 않는다.
 

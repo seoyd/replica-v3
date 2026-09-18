@@ -1,6 +1,17 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: R3-QUALITY-RECOVERY-BOUNDED-BRIDGE-1.0
+## Closed at32: R3-QUALITY-RECOVERY-BOUNDED-BRIDGE-1.0
+
+Source eb66357fbee97de67b637ec0b1986e636ebd372e. FB01/FB02 direct regressions,
+C512 full-state/raw audit, fresh64 and numeric60 passed. The single T-SCREEN then
+executed first1+fresh31 and saved step24342 before evaluating224 frozen cases.
+OLD64→16, CROSS60→11, QA20→12, NEW0→0; errors0→28. The registered immediate
+quality stop fired. Terminal and command preserve QualityGuard/non-resume/Failed,
+and a fresh read-only report verified that research outcome. No64/128/256/512 run,
+no old C/T repair, no further registration and no use of the unspent480 updates.
+New SMALL32, generation288, own forwards60, TINY63 (including standalone resume3).
+H3/S4/S5/S6/Goal1 are unpassed.
+The protocol below records this closed study and does not authorize another attempt.
 
 Base source e08687eff768dd8b6426accebdfe148d3ce8b556, report HEAD
 92c6ca1e0f12135c83a4f3bc334039332672bb83. Preserve the failed C512 publication,
