@@ -25,6 +25,24 @@ Unsupported ordinary grammar retains baseline with coverage disclosed; all focus
 grammar must validate. Concrete label contradictions stop DATA_CONTRACT_FAIL.
 Train64 teacher probes are fixed by metadata before outcomes, never dev-failure selection.
 
+The current implementation sorts train ordinals by SHA256(seed17, category, family,
+scene, ID), takes64 and stores that exact order in the objective policy. BASE and
+SPAN use one binary, the same pool/tape/parent and constant actualLR bits. First
+target weight is8 in the observed parent. Per-update phase times, gradient/update
+norm and clip flag are typed segment metrics; native save/reload and panel time
+are separate observed log measurements. The train-only module uses the existing
+limited renderer grammar, checks copied fields/cited source, and falls back only
+for unsupported ordinary forms. No annotation is passed to greedy generation.
+
+Commands reuse `replica-train recovery native`: `objective-prepare --parent-arm
+PATH --expected-parent SHA --output NEW_ROOT`, `cooldown-verify --root NEW_ROOT`
+for the shared parent16 finalizer, `run --root NEW_ROOT/B-BASE` then `S-SPAN`,
+and `anchor-report --root NEW_ROOT` for raw/paired recount. Only a clean authorized
+time pause may use `run --resume segment-NN/terminal.r3er`. Failed/unknown command
+or probe state blocks retries and the other arm. `cooldown-verify --confirmation`
+uses the same consumer and only runs for a joint candidate. These command names
+reuse the existing bounded implementation, not the closed K/D authorization.
+
 Budget: SMALL1024 (BASE512+SPAN512), generation4096, own-model teacher256 (planned192),
 TINY optimizer128 including failed/quick runs. Each command1800s/study7200s/cleanup120s.
 Parent parity16; each mid256 dev/watch288; each final512 dev/CROSS/ordinary1168;

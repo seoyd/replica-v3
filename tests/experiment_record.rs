@@ -240,6 +240,74 @@ fn cooldown_actual_lr_continuous_and_fresh_process_resume() {
     );
 }
 #[test]
+fn objective_policy_native_fresh_resume_and_zero_span_parity() {
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
+    let mut roots = Vec::new();
+    let mut updates = 0;
+    for span in [false, true] {
+        let root = d.path().join(if span { "span" } else { "base" });
+        call(
+            &[
+                "fixture-fork",
+                "--from",
+                p(&bootstrap),
+                "--output",
+                p(&root),
+                "--objective-span",
+                if span { "true" } else { "false" },
+            ],
+            None,
+            true,
+            &d.path().join("prepare.log"),
+        );
+        let out = call(
+            &["run", "--root", p(&root)],
+            span.then_some("raw:1"),
+            true,
+            &d.path().join("run.log"),
+        );
+        updates += String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| l.starts_with("ACTUAL_TINY_UPDATE="))
+            .count();
+        if span {
+            let out = call(
+                &[
+                    "run",
+                    "--root",
+                    p(&root),
+                    "--resume",
+                    "segment-00/terminal.r3er",
+                ],
+                None,
+                true,
+                &d.path().join("resume.log"),
+            );
+            updates += String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter(|l| l.starts_with("ACTUAL_TINY_UPDATE="))
+                .count();
+        }
+        assert!(root.join("train-final-final.r3er").is_file());
+        roots.push(root);
+    }
+    call(
+        &[
+            "fixture-check",
+            "--roots",
+            p(&roots[0]),
+            "--roots",
+            p(&roots[1]),
+        ],
+        None,
+        true,
+        &d.path().join("parity.log"),
+    );
+    assert_eq!(updates, 4);
+    println!("OBJECTIVE_PROCESS_TINY_UPDATES={updates} SMALL_UPDATES=0");
+}
+#[test]
 fn restart_and_cooldown_partial_panels_resume_to_close() {
     let d = tempfile::tempdir().unwrap();
     let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
@@ -954,13 +1022,21 @@ fn binary_real_process_resume_and_close() {
     call(&args, None, true, &root.join("parity-check.log"));
     for (name, untrained) in [("cancel", false), ("quality-and-cancel", true)] {
         let path = root.join(name);
-        let mut args = vec![
-            "fixture-fork",
-            "--from",
-            p(&bootstrap),
-            "--output",
-            p(&path),
-        ];
+        // A reused bootstrap can itself be a trained fork. Its parent is then not
+        // random-init; construct only the untrained fixture (zero optimizer calls).
+        let random_init = root.join("random-init");
+        let input = if untrained {
+            call(
+                &["fixture", "--output", p(&random_init)],
+                None,
+                true,
+                &root.join("random-init.log"),
+            );
+            &random_init
+        } else {
+            &bootstrap
+        };
+        let mut args = vec!["fixture-fork", "--from", p(input), "--output", p(&path)];
         if untrained {
             args.push("--untrained");
         }

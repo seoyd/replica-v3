@@ -1,5 +1,49 @@
 # 진단 및 구현 상태
 
+## E3 — train-only objective 구현과 실행 준비
+
+R3-DATA-BINARY-AND-TARGET-LOSS-1.0 / EXECUTED_THIS_RUN / 2026-09-18.
+E1/E2 source13c7d86e224606673918a11f9aa88a2dccde2c2c를 정상 push했고 실제 remote
+full SHA 일치를 확인했다. 근거 root는 `artifacts/data-binary-target-loss-20260918/`.
+
+기존 response_loss를 BASE로 보존하고 SPAN은 per-episode 정규화된 coefficient의
+차이만 기존 objective에 더한다. 따라서 unsupported/zero-span 행은 혼합 batch에서도
+기본 loss를 유지한다. answer 전체 token의 byte overlap union, EOS/padding/shift,
+질량 보존, 독립 scalar/analytic gradient/central difference, microbatch objective와
+gradient, 반복 ID/leading zero/Korean byte/인용/fallback 회귀4 PASS. fixed tolerance는
+loss2e-6, gradient1e-6, mass1e-12이며 실패 뒤 완화하지 않았다.
+실제 TINY weighted full-response optimizer2회와 binary objective 연속2 대 fresh
+process1+1(4회), bound Adam/native/clock/policy/probe/close 회귀가 통과했다.
+
+필수 quick는1회 수행했다. 20 commands 중19 PASS, 마지막 process suite에서
+4 PASS/1 FAIL이었다. 재사용 bootstrap의 부모step24를 untrained로 가정한 기존
+fixture 문제였다. 무작위 초기화 fixture만 optimizer0으로 별도 만들도록 고친 뒤
+실패한 단일 process 회귀 PASS(10updates), QualityGuard+Cancelled+TimeBudget
+동시 보존/재개 차단 확인. quick에서 미실행된 journal6/archive1도 각각 PASS.
+원 quick FAIL을 새 전체 quick PASS로 바꾸지 않았다. 후속 관련 loss4/clippy도 PASS.
+compile의 잘못된 bin명 `replica` 실패는0calls이며 올바른 replica-v3/train release
+build는 PASS. 새 학습용 binary는 test-support 없이 빌드했다.
+
+현재 TINY 총109/128: 이전38 + loss 최초2 + objective process4 + quick53(실패포함)
++ 수정 process10 + 최종 loss2. SMALL optimizer/generation/teacher=0/0/0.
+원본을 읽는 draft release 준비에서 부모 dev240/entity247/event250/오류1,
+CROSS462/entity499/event500/오류0, ordinary QA181/336,aux53/64를 재집계했다.
+focus512/512 지원, anchor1778/2048 지원·270 fallback, first-target weight8이었다.
+draft registration은 실행 source 변경 전 것이므로 학습에 쓰지 않는다.
+debug 준비는 모델 API/optimizer 진입 전 긴 read/hash 감사 중 구현자가 SIGINT 후
+SIGTERM으로 종료했다(관측 경과5분37초; 최종 정확한 elapsed UNKNOWN). 기록은
+e3-data-audit-draft.log에 보존하며 모델 속도/학습 실패/완료로 세지 않는다.
+
+최종 실행 binary=`e4-train`, SHA256
+194fb3b2b0c93f01f1a9510ef9b9383e4b75a494eb5e5e372ad1c912f344422b.
+최종 등록은 e3-final-registration.log에서 exit0: actual parent/native/Adam/cursor와
+512draw의 동일성을 검증했다. 각 군 예정 input1255342/target131787, endpoint24822.
+기존 의미 검사 Validated2432/AmbiguousEvidence128/Contradicted0이며 모호128을
+검증 완료로 바꾸지 않았다. 역할 coverage는 위 draft와 같았다. 새 root=`study/`.
+등록 source digest=b9e7ed5ea8016e46460ace4c22505064c2972190d1cb90c0adcf9941ffeee356.
+OBJECTIVE_IMPLEMENTED=IMPLEMENTER_VERIFIED; 학습/부모 parity/train64 probe는
+아직 NOT_RUN, H3/S4/Goal1 미통과, 독립 검토 대기.
+
 ## E0–E2 — publication 승인 및 부분 평가 재개 수리
 
 R3-DATA-BINARY-AND-TARGET-LOSS-1.0 / 2026-09-18 / EXECUTED_THIS_RUN.

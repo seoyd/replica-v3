@@ -7,6 +7,9 @@ use serde_json::{Value, json};
 use std::{collections::BTreeSet, io::Write, path::PathBuf, sync::Arc, time::Duration};
 #[path = "experiment_record.rs"]
 mod experiment_record;
+pub(super) fn reject_unbound_objective_resume(path: &Path) -> Result<()> {
+    experiment_record::reject_unbound_objective_resume(path)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -51,6 +54,7 @@ pub(super) struct RunControl {
     attempted_case_count: usize,
     interrupted_case_id: Option<String>,
     pub(super) teacher_calls: usize,
+    pub(super) teacher_limit: usize,
     #[cfg(test)]
     elapsed_override: Option<Duration>,
     #[cfg(test)]
@@ -85,6 +89,7 @@ impl RunControl {
             attempted_case_count: 0,
             interrupted_case_id: None,
             teacher_calls: 0,
+            teacher_limit: usize::MAX,
             #[cfg(test)]
             elapsed_override: None,
             #[cfg(test)]

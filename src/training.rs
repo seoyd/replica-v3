@@ -3,6 +3,8 @@
 pub mod contrast;
 #[path = "quality_recovery.rs"]
 pub mod recovery;
+#[path = "target_loss.rs"]
+pub mod target_loss;
 use crate::data::{self, Episode};
 use candle_core::{DType, Device, Tensor, Var};
 use replica_v3::{
@@ -722,6 +724,9 @@ pub fn train(run: Run<'_>, cancel: std::sync::Arc<AtomicBool>) -> Result<()> {
 fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<()> {
     control.measure_rss = run.measure_rss;
     control.check("training_started")?;
+    if run.resume {
+        recovery::reject_unbound_objective_resume(run.checkpoint)?;
+    }
     if run.extend_steps.is_none()
         && (run.extend_microbatch.is_some()
             || run.extend_sample_group_size.is_some()

@@ -1,5 +1,25 @@
 # B0 storage format v1
 
+## Train-only objective records
+
+R3ER kind19 explicitly extends the owned input snapshot with objective revision1,
+BASE/SPAN mode, exact annotation digest and ordered train probe ordinals. The
+annotation uses answer-byte intervals and the unchanged full answer tokenization;
+it is neither a product inference input nor a tokenizer mapping. Kinds1/13 remain
+unchanged. A nondefault optimizer continuation requires its bound native run policy;
+the unchanged `.r3m` itself does not identify the loss used to train it. Generic
+resume from a registered objective directory is rejected in favor of native run.
+
+Kind20 contains bounded typed own-model train-probe rows: native/source/policy
+binding, ordinal, actual target/correct counts, first-error role, CE/objective and
+role mass/NLL. Started and cumulative partial rows are immutable; an unfinished
+probe is not silently retried. Kind21 extends the segment with up to512 actual LR
+bit patterns and per-update preparation/forward/backward/optimizer seconds,
+gradient norm, update norm, objective and clip flag. Old kind14 retains its256
+bound and original meaning. These records use fixed typed fields, not JSON payloads.
+The model tensor format, inference equation ID, tokenizer mapping and user DB are
+unchanged. Train cache measurements belong to a later source than this experiment.
+
 ## Verification publication authorization v2
 
 R3ER kind17 is the new intent (explicit scope plus the existing typed fields);
