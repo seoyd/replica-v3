@@ -2,6 +2,20 @@
 
 ## Preserved C512 diagnostic
 
+After the audit and direct regression gates pass, register once with
+`recovery native screen-prepare --prior-arm OLD_STUDY/T-TEMPORAL --observation
+OLD_REPLACEMENT_01 --audit C512_DIAGNOSTIC --output NEW_PARENT/T-SCREEN`.
+This reuses proven parent raw and performs no new generation or optimizer call.
+The immutable registration is stored under the diagnostic root before the child;
+do not remove it to retry a failed preparation.
+Use `recovery native run --root NEW_PARENT/T-SCREEN` for the budgeted first update,
+then a fresh process with `--resume segment-00/terminal.r3er`. Pure time pauses alone
+permit another segment with the unchanged policy/cursor/source/binary. A quality stop
+retains command Failed and resume=false. `recovery native screen-report --root ROOT
+--terminal segment-NN/terminal.r3er` verifies and reports that research outcome without
+turning it into successful command/candidate eligibility. Stop at the registered gate;
+do not train to512 after a failed32/64/128/256 screen.
+
 Use `replica-train recovery native bridge-artifact-audit --root OLD_C_ROOT
 --checkpoint segment-01/step-0512.r3m --expected PHYSICAL_SHA --output NEW_ROOT`
 only on the preserved failed C512 arm. This reads native weights/Adam/objective,

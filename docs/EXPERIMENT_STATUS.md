@@ -1,5 +1,48 @@
 # 진단 및 구현 상태
 
+## R3 / R4 준비 — C512 독립 검증 완료, 제한 T-SCREEN 실행 전
+
+R3-QUALITY-RECOVERY-BOUNDED-BRIDGE-1.0. R2 source
+`7cefe81b32a8fa98e1755f3348254e3271c7cd8f`를 정상 push하고 remote 전체 SHA를
+확인했다. 진단 실행 binary SHA256:
+`bb0d8d7c4c8a9d8f382f58bff8969967e26f81396acf43877afa3e4c6700a827`.
+`c512-diagnostic.log` / `c512-diagnostic/audit-final.r3er`에 실제 결과를 보존한다.
+
+EXECUTED_THIS_RUN: C512 physical hash ce01daec…ef624, model ef7962e0…be440e,
+Adam59ecfba1…c62939, step24822 및 부모24310, 실제 tape/counters/내장 objective
+binding 전체를 검사했다. 기존 terminal/command는 여전히 없고 과거 실패·UNKNOWN
+사용량·resume 부적격을 바꾸지 않았다. C/T 각각2560개 학습 사례의 train/product
+prompt token이 같고 exact-input/differing-target 충돌0이다.
+
+DERIVED_FROM_EXISTING_RAW: olddev6/256, CROSS4/512, ordinary QA188/336와
+aux24/64, newdev4/256, conditional0/144를 원래 tokens/EOS/UTF-8/분모로
+재채점했다. 기존 보고와 같다. olddev entity78/context39/value193/event83,
+CROSS123/57/350/171이다. olddev 분류는 인용/기록 오류148, 대상44, context23,
+해석불가 형식31, UTF-8오류4, strict정답6. CROSS는 각각277/119/31/70/11/4.
+확정 문법의 짧은 QA 형식 전환은0건이었다. 이 분류는 우선순위 첫 분류이며
+전체 필드 오류의 독립 합계가 아니다. 원출력·primary metric은 보정하지 않았다.
+
+EXECUTED_THIS_RUN: metadata 고정32문항씩 부모/C의 normal generation64회
+진입/반환, 그중 각10개 동일 pre-error prefix의 own forward60회 진입/반환.
+C32의 tokens/EOS/error는 기존 raw와 모두 같았다. full/cached argmax20쌍 일치,
+최대 logit 차이0.00002193450927734375; 선언 abs1e-4+rel1e-3 이내다. 확인한
+범위에서 cache 결함은 재현되지 않았다. C의 첫 오류에서 틀린 token이 gold보다
+높은 logit을 가졌다는 관측이며, 특정 망각 기제를 원인으로 확정하지 않는다.
+진단 command elapsed13.9488005초; 컴파일/회귀 시간과 별개다. SMALL updates0.
+
+R4는 기존 native runner/판정/재개를 확장한 단일 T-SCREEN 등록 경로다.
+같은 부모/Adam/T corpus/6:2 tape/default loss/LR1e-4를 검사하고, original parent
+raw에서 metadata224 패널을 도출한다. 등록 파일은 child보다 먼저 발행하며,
+불완전한 등록·중단·실패를 새 실행으로 바꾸지 않는다. 32/64/128 및 조건부256
+screen의 판정을 같은 immutable decision과 terminal에 연결한다. 품질 중단은
+command Failed/비재개로 남고, 순수 report만 정상 연구의 조기 종료와 실행 오류를
+구분한다. SMALL512 또는 최종 후보 성공으로 승격하지 않는다.
+
+신규 정책 unit1 PASS. 실제 replacement/scope3 proof를 거친 explicit TINY
+1+1+1+1 panel의 첫1/fresh1/close/moved-root 거부 PASS. 기존 bridge 연속2와
+첫1/fresh1 weight/Adam/tape 정합성도 재확인했다. 이 단계 실제 TINY8회(2회 시험과
+최종2+4 회귀)를 더해 누적60/128. 이 절 작성 시 T-SCREEN SMALL은 NOT_RUN이다.
+
 ## R0–R2 — bounded bridge 경계 수정, 모델 실행 전
 
 R3-QUALITY-RECOVERY-BOUNDED-BRIDGE-1.0 / 2026-09-19.

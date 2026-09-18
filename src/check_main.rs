@@ -417,6 +417,17 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
             r.cargo("check", &["--all-targets"], false)?;
             r.cargo("clippy", &["--all-targets", "--", "-D", "warnings"], false)?;
             if *bridge_receipts {
+                r.cargo(
+                    "test",
+                    &[
+                        "--bin",
+                        "replica-train",
+                        "bounded_screen_policy_",
+                        "--",
+                        "--test-threads=1",
+                    ],
+                    true,
+                )?;
                 // Each CLI fixture installs its process cancellation handler once.
                 r.cargo(
                     "test",
@@ -453,6 +464,7 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                     true,
                 )?;
                 for filter in [
+                    "bounded_screen_",
                     "bridge_",
                     "conditional_",
                     "native_resume_ignores_ambient_policy_json",

@@ -228,6 +228,7 @@ enum PanelKind {
     LegacyDev,
     Conditional,
     Sanity,
+    Screen,
 }
 impl PanelKind {
     fn tag(self) -> u8 {
@@ -241,6 +242,7 @@ impl PanelKind {
             Self::LegacyDev => 6,
             Self::Conditional => 7,
             Self::Sanity => 8,
+            Self::Screen => 9,
         }
     }
     fn read(r: &mut Reader<'_>) -> Result<Self> {
@@ -254,6 +256,7 @@ impl PanelKind {
             6 => Ok(Self::LegacyDev),
             7 => Ok(Self::Conditional),
             8 => Ok(Self::Sanity),
+            9 => Ok(Self::Screen),
             _ => Err(bad("panel kind")),
         }
     }
@@ -268,6 +271,7 @@ impl PanelKind {
             Self::LegacyDev => "legacy-dev",
             Self::Conditional => "conditional",
             Self::Sanity => "sanity",
+            Self::Screen => "screen",
         }
     }
 }
@@ -468,6 +472,7 @@ impl RunSnapshot {
                 | OBJECTIVE_CONTRACT
                 | NATIVE_CORPUS_CONTRACT
                 | BRIDGE_CONTRACT
+                | BOUNDED_BRIDGE_CONTRACT
         ) {
             b.push(self.purpose.tag());
         }
@@ -507,6 +512,7 @@ impl RunSnapshot {
                 | OBJECTIVE_CONTRACT
                 | NATIVE_CORPUS_CONTRACT
                 | BRIDGE_CONTRACT
+                | BOUNDED_BRIDGE_CONTRACT
         ) {
             b.extend(self.source);
             for o in &self.origins {
@@ -539,7 +545,7 @@ impl RunSnapshot {
             .map(|_| episode_decode(r))
             .collect::<Result<Vec<_>>>()?;
         let train = integers_read(r, MAX_CASES)?;
-        let n = count(r, 7)?;
+        let n = count(r, 8)?;
         let panels = (0..n)
             .map(|_| PanelSpec::decode(r))
             .collect::<Result<Vec<_>>>()?;
@@ -570,6 +576,7 @@ impl RunSnapshot {
                 | OBJECTIVE_CONTRACT
                 | NATIVE_CORPUS_CONTRACT
                 | BRIDGE_CONTRACT
+                | BOUNDED_BRIDGE_CONTRACT
         ) {
             RunPurpose::read(r)?
         } else {
@@ -630,7 +637,9 @@ impl RunSnapshot {
             }
         }
         if self.contract
-            != if self.bridge() {
+            != if self.screen() {
+                BOUNDED_BRIDGE_CONTRACT
+            } else if self.bridge() {
                 BRIDGE_CONTRACT
             } else if self.path_parity() {
                 NATIVE_CORPUS_CONTRACT
@@ -655,14 +664,27 @@ impl RunSnapshot {
                 } else {
                     1
                 }
-            || self.panels.len() != if self.bridge() { 7 } else { 4 }
+            || self.panels.len()
+                != if self.screen() {
+                    8
+                } else if self.bridge() {
+                    7
+                } else {
+                    4
+                }
             || self
                 .panels
                 .iter()
                 .map(|p| p.kind)
                 .collect::<BTreeSet<_>>()
                 .len()
-                != if self.bridge() { 7 } else { 4 }
+                != if self.screen() {
+                    8
+                } else if self.bridge() {
+                    7
+                } else {
+                    4
+                }
             || self
                 .cases
                 .iter()
@@ -685,6 +707,8 @@ impl RunSnapshot {
                         || self.eval_steps
                             != if self.tiny_spec {
                                 vec![1, 2]
+                            } else if self.screen() {
+                                vec![32, 64, 128, 256, 512]
                             } else {
                                 vec![256, 512]
                             }))
@@ -733,6 +757,7 @@ impl RunSnapshot {
                 PanelKind::LegacyDev => 256,
                 PanelKind::Conditional => 144,
                 PanelKind::Sanity => 64,
+                PanelKind::Screen => 224,
             };
             if p.cases.is_empty()
                 || (!self.tiny_spec && p.cases.len() != expected)
@@ -778,6 +803,8 @@ impl RunSnapshot {
                         vec![]
                     } else if self.cooldown() {
                         vec![128, 256]
+                    } else if self.screen() {
+                        vec![32, 64, 128, 256, 512]
                     } else {
                         vec![256, 512]
                     }
@@ -832,15 +859,20 @@ impl RunSnapshot {
         self.cooldown() || self.objective.is_some() || self.bridge()
     }
     fn bridge(&self) -> bool {
-        self.contract == BRIDGE_CONTRACT
+        self.contract == BRIDGE_CONTRACT || self.screen()
     }
-    fn study_arms(&self) -> [&'static str; 2] {
-        if self.bridge() {
-            ["C-COPYMATCH", "T-TEMPORAL"]
+    fn screen(&self) -> bool {
+        self.contract == BOUNDED_BRIDGE_CONTRACT
+    }
+    fn study_arms(&self) -> &'static [&'static str] {
+        if self.screen() {
+            &["T-SCREEN"]
+        } else if self.bridge() {
+            &["C-COPYMATCH", "T-TEMPORAL"]
         } else if self.objective.is_some() {
-            ["B-BASE", "S-SPAN"]
+            &["B-BASE", "S-SPAN"]
         } else {
-            ["K-KEEP", "D-DECAY"]
+            &["K-KEEP", "D-DECAY"]
         }
     }
     fn supports_partial_resume(&self) -> bool {
@@ -851,10 +883,14 @@ impl RunSnapshot {
                 | OBJECTIVE_CONTRACT
                 | NATIVE_CORPUS_CONTRACT
                 | BRIDGE_CONTRACT
+                | BOUNDED_BRIDGE_CONTRACT
         ) && !self.historical
             && (self.tiny_spec || self.authorization.is_some())
     }
     fn arm_name(&self) -> &'static str {
+        if self.screen() {
+            return "T-SCREEN";
+        }
         if self.bridge() {
             return if self.purpose == RunPurpose::LrContinuous {
                 "C-COPYMATCH"
@@ -1707,6 +1743,14 @@ impl ComparisonReceipt {
 #[derive(Clone, Debug, Serialize)]
 #[allow(clippy::large_enum_variant)] // Bodies own their vectors; avoid an extra allocation per terminal read.
 enum Record {
+    ScreenRegistration {
+        root: String,
+        input: Hash,
+        audit: FileRef,
+        observation: FileRef,
+        parent: FileRef,
+        preparation: Scalar,
+    },
     ArtifactAudit(Box<ArtifactAudit>),
     PreparationMeasure {
         bindings: [Hash; 5],
@@ -2372,6 +2416,23 @@ impl Record {
     fn encode(&self) -> Result<Vec<u8>> {
         let mut body = Vec::new();
         let kind = match self {
+            Self::ScreenRegistration {
+                root,
+                input,
+                audit,
+                observation,
+                parent,
+                preparation,
+            } => {
+                string(&mut body, BOUNDED_BRIDGE_CONTRACT);
+                string(&mut body, root);
+                body.extend(input);
+                for r in [audit, observation, parent] {
+                    r.encode(&mut body);
+                }
+                preparation.encode(&mut body);
+                31
+            }
             Self::ArtifactAudit(v) => {
                 v.encode(&mut body);
                 30
@@ -2460,6 +2521,7 @@ impl Record {
                         | OBJECTIVE_CONTRACT
                         | NATIVE_CORPUS_CONTRACT
                         | BRIDGE_CONTRACT
+                        | BOUNDED_BRIDGE_CONTRACT
                 ) {
                     body.push(u8::from(v.authorization.is_some()));
                 }
@@ -2595,6 +2657,19 @@ impl Record {
         }
         let mut r = Reader::new(&bytes[HEADER..]);
         let record = match kind {
+            31 => {
+                if text(&mut r)? != BOUNDED_BRIDGE_CONTRACT {
+                    return Err(bad("screen registration contract"));
+                }
+                Self::ScreenRegistration {
+                    root: text(&mut r)?,
+                    input: digest_read(&mut r)?,
+                    audit: FileRef::decode(&mut r)?,
+                    observation: FileRef::decode(&mut r)?,
+                    parent: FileRef::decode(&mut r)?,
+                    preparation: Scalar::decode(&mut r)?,
+                }
+            }
             30 => Self::ArtifactAudit(Box::new(ArtifactAudit::decode(&mut r)?)),
             24 => {
                 let bindings = [
@@ -5007,6 +5082,647 @@ fn bridge_probe_indices(s: &RunSnapshot) -> Result<Vec<u32>> {
     Ok(out)
 }
 
+fn read_absolute(r: &FileRef) -> Result<Record> {
+    let bytes = neural::read_bounded(Path::new(&r.locator), MAX_FILE)?;
+    if hash(&bytes) != r.digest {
+        return Err(bad("screen immutable reference changed"));
+    }
+    Record::decode(&bytes)
+}
+fn verified_artifact_audit(file: &FileRef) -> Result<ArtifactAudit> {
+    let Record::ArtifactAudit(a) = read_absolute(file)? else {
+        return Err(bad("screen requires artifact audit"));
+    };
+    let s = match read_absolute(&a.input)? {
+        Record::Inputs(s) => s,
+        _ => return Err(bad("audit input")),
+    };
+    if !s.bridge()
+        || s.arm_name() != "C-COPYMATCH"
+        || s.tiny_spec
+        || !a.complete
+        || !a.stop.is_empty()
+        || a.error.is_some()
+        || a.calls != [64, 64, 60, 60]
+        || a.fresh.len() != 64
+        || a.numeric.len() != 20
+        || a.panels.len() != 5
+        || a.selection != bridge_diagnostic_selection(&s)?
+    {
+        return Err(bad("screen diagnostic incomplete or failed"));
+    }
+    for r in &a.originals {
+        if absolute_reference(Path::new(&r.locator))? != *r {
+            return Err(bad("audit original changed"));
+        }
+    }
+    for model in 0..2u8 {
+        if a.fresh
+            .iter()
+            .filter(|(m, _)| *m == model)
+            .map(|(_, r)| r.ordinal)
+            .collect::<Vec<_>>()
+            != a.selection
+            || a.numeric
+                .iter()
+                .filter(|r| r.model == model)
+                .map(|r| r.ordinal)
+                .collect::<Vec<_>>()
+                != a.selection[..10]
+        {
+            return Err(bad("audit ordered numeric/generation cases"));
+        }
+    }
+    let original_root = Path::new(&a.input.locator)
+        .parent()
+        .ok_or_else(|| bad("audit root"))?;
+    if original_root.join("segment-01/terminal.r3er").exists()
+        || original_root.join("segment-01/command.r3er").exists()
+    {
+        return Err(bad("historical failure changed"));
+    }
+    let l = resolve_native(original_root, &s, &a.native, true)?;
+    for (kind, reported) in &a.panels {
+        let name = format!("segment-01/{}-0512.r3er", kind.name());
+        let Record::Evaluation(raw) =
+            read_record(original_root, &reference(original_root, &name)?)?
+        else {
+            return Err(bad("audit original raw"));
+        };
+        let score = rescore(&s, &raw, &l, true)?;
+        let mut expected = Vec::new();
+        let mut actual = Vec::new();
+        score.encode(&mut expected);
+        reported.encode(&mut actual);
+        if expected != actual || raw.source != s.source || raw.step != a.native.step {
+            return Err(bad("audit raw score/source/step changed"));
+        }
+    }
+    Ok(*a)
+}
+fn screen_selection(s: &RunSnapshot) -> Result<Vec<u32>> {
+    let mut all = Vec::new();
+    for kind in [
+        PanelKind::LegacyDev,
+        PanelKind::Cross,
+        PanelKind::Ordinary,
+        PanelKind::Dev,
+    ] {
+        let mut groups: BTreeMap<String, Vec<u32>> = BTreeMap::new();
+        for &i in &panel(s, kind)?.cases {
+            let e = &s.cases[i as usize];
+            if kind == PanelKind::Ordinary {
+                if !e.family.starts_with("copy/") {
+                    groups.entry(e.category.to_string()).or_default().push(i);
+                }
+            } else {
+                groups.entry(scene(e).into()).or_default().push(i);
+            }
+        }
+        if kind == PanelKind::Ordinary {
+            for v in groups.values_mut() {
+                v.sort_by_key(|i| hash(s.cases[*i as usize].id.as_bytes()));
+            }
+            let mut selected = Vec::new();
+            for index in 0..32 {
+                for v in groups.values() {
+                    if let Some(i) = v.get(index) {
+                        selected.push(*i);
+                        if selected.len() == 32 {
+                            break;
+                        }
+                    }
+                }
+                if selected.len() == 32 {
+                    break;
+                }
+            }
+            if selected.len() != 32 {
+                return Err(bad("screen QA32 membership"));
+            }
+            all.extend(selected);
+        } else {
+            if groups.values().any(|v| v.len() != 4) {
+                return Err(bad("screen base must retain four views"));
+            }
+            let mut groups = groups.into_iter().collect::<Vec<_>>();
+            groups.sort_by_key(|(k, _)| {
+                hash(format!("bounded-screen-v1/{}/{k}", kind.name()).as_bytes())
+            });
+            if groups.len() < 16 {
+                return Err(bad("screen 16 bases unavailable"));
+            }
+            all.extend(groups.into_iter().take(16).flat_map(|(_, v)| v));
+        }
+    }
+    if all.len() != 224 || all.iter().collect::<BTreeSet<_>>().len() != 224 {
+        return Err(bad("screen unique224"));
+    }
+    Ok(all)
+}
+fn screen_scores(s: &RunSnapshot, e: &EvalPayload, l: &Loaded) -> Result<[Score; 4]> {
+    rescore(s, e, l, true)?;
+    let mut result: [Score; 4] = Default::default();
+    let mut start = 0;
+    for (i, count) in (if s.tiny_spec {
+        [1, 1, 1, 1]
+    } else {
+        [64, 64, 32, 64]
+    })
+    .into_iter()
+    .enumerate()
+    {
+        let mut subset = s.clone();
+        let spec = subset
+            .panels
+            .iter_mut()
+            .find(|p| p.kind == PanelKind::Screen)
+            .ok_or_else(|| bad("screen panel"))?;
+        spec.cases = spec.cases[start..start + count].to_vec();
+        let mut raw = e.clone();
+        raw.rows = raw.rows[start..start + count].to_vec();
+        raw.expected = count as u32;
+        raw.binding = subset.binding();
+        result[i] = rescore(&subset, &raw, l, true)?;
+        start += count;
+    }
+    Ok(result)
+}
+fn screen_policy(
+    parent: &[Score; 4],
+    now: &[Score; 4],
+    mut streak: [u64; 3],
+    updates: u64,
+) -> ([u64; 3], Option<&'static str>) {
+    let loss: [u64; 3] = std::array::from_fn(|i| parent[i].exact.saturating_sub(now[i].exact));
+    for i in 0..3 {
+        streak[i] = if loss[i] >= if i == 2 { 4 } else { 8 } {
+            streak[i] + 1
+        } else {
+            0
+        };
+    }
+    if loss[0] >= 12 || loss[1] >= 12 || streak.iter().any(|n| *n >= 2) {
+        return (streak, Some("QUALITY_REGRESSION_STOP"));
+    }
+    let errors = now.iter().map(|s| s.errors).sum::<u64>();
+    if errors >= 5 && errors >= parent.iter().map(|s| s.errors).sum::<u64>() + 4 {
+        return (streak, Some("GENERATION_ERROR_REGRESSION_STOP"));
+    }
+    if matches!(updates, 128 | 256)
+        && !(now[3].exact >= parent[3].exact + 8
+            && now[3].base[0] >= 2
+            && loss[0] <= 4
+            && loss[1] <= 4
+            && loss[2] <= 2)
+    {
+        return (streak, Some("NO_SUFFICIENT_TRANSFER_SIGNAL_WITHIN_BUDGET"));
+    }
+    (streak, None)
+}
+fn screen_parent(s: &RunSnapshot) -> Result<(PathBuf, EvalPayload, f64)> {
+    let a = s
+        .origins
+        .iter()
+        .find(|o| o.role == "bounded-audit")
+        .ok_or_else(|| bad("screen audit binding"))?;
+    let audit_root = Path::new(&a.original.locator)
+        .parent()
+        .ok_or_else(|| bad("screen audit root"))?;
+    let Record::ScreenRegistration {
+        root,
+        input,
+        audit,
+        observation,
+        parent,
+        preparation,
+    } = read_record(
+        audit_root,
+        &reference(audit_root, "t-screen-registration.r3er")?,
+    )?
+    else {
+        return Err(bad("screen registration"));
+    };
+    let root = PathBuf::from(root);
+    if root.canonicalize()? != root
+        || reference(&root, "inputs.r3er")?.digest != input
+        || audit != a.original
+        || read_inputs(&root)?.binding() != s.binding()
+    {
+        return Err(bad("screen registered root/input"));
+    }
+    let proof = s
+        .origins
+        .iter()
+        .find(|o| o.role == "bridge-observation-final")
+        .ok_or_else(|| bad("screen parent proof"))?;
+    if proof.original != observation {
+        return Err(bad("screen observation identity"));
+    }
+    let Record::Evaluation(raw) = read_absolute(&parent)? else {
+        return Err(bad("screen parent raw"));
+    };
+    let preparation = preparation.finite()?;
+    if preparation < 0. {
+        return Err(bad("screen preparation clock"));
+    }
+    Ok((root, raw, preparation))
+}
+fn screen_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
+    let (registered, baseline, preparation) = screen_parent(s)?;
+    if root.canonicalize()? != registered {
+        return Err(bad("screen moved outside registration"));
+    }
+    let a = verified_artifact_audit(
+        &s.origins
+            .iter()
+            .find(|o| o.role == "bounded-audit")
+            .unwrap()
+            .original,
+    )?;
+    for o in s
+        .origins
+        .iter()
+        .filter(|o| o.role.starts_with("bounded-parent-raw-"))
+    {
+        if absolute_reference(Path::new(&o.original.locator))? != o.original {
+            return Err(bad("original parent raw changed"));
+        }
+    }
+    bridge_origins(s, None)?;
+    let observation = origin_path(s, "bridge-observation-final")?;
+    let observation = observation.parent().unwrap();
+    let prior = read_inputs(observation)?;
+    bridge_origins(&prior, Some(observation))?;
+    read_preflight_outcome(observation)?
+        .ok_or_else(|| bad("screen parent proof absent"))?
+        .require_current_success()?;
+    let l = resolve_native(root, s, &s.parent, true)?;
+    if prior.parent.model != s.parent.model
+        || prior.parent.adam != s.parent.adam
+        || baseline.step != s.parent.step
+        || baseline.new_updates != 0
+    {
+        return Err(bad("screen unchanged parent"));
+    }
+    screen_scores(s, &baseline, &l)?;
+    if panel(s, PanelKind::Screen)?.cases != screen_selection(s)? {
+        return Err(bad("screen metadata selection changed"));
+    }
+    let original = origin_path(s, "bounded-prior-inputs")?;
+    let old = read_inputs(original.parent().unwrap())?;
+    if old.parent.model != s.parent.model
+        || old.parent.adam != s.parent.adam
+        || old.parent.counters != s.parent.counters
+        || old.cases.iter().map(case_hash).collect::<Vec<_>>()
+            != s.cases.iter().map(case_hash).collect::<Vec<_>>()
+        || old.tape.iter().zip(&s.tape).any(|(a, b)| {
+            a.indices != b.indices
+                || a.input != b.input
+                || a.target != b.target
+                || a.sampler != b.sampler
+        })
+        || old.tape.len() != s.tape.len()
+    {
+        return Err(bad("screen original T data/tape changed"));
+    }
+    let mut updates = 0;
+    let mut generations = a.calls[0] as usize;
+    let mut seconds = a.elapsed.finite()? + preparation + 240.;
+    let mut teachers = a.calls[2];
+    for (t, c) in arm_commands(root, s)? {
+        updates += t.draws.len() as u64;
+        generations += t.generations as usize;
+        teachers += t.teachers;
+        seconds += c.elapsed.finite()? + 120.;
+    }
+    if updates > 512 || generations > 4096 || teachers > 192 || seconds >= 7200. {
+        return Err(bad("bounded screen global budget"));
+    }
+    println!(
+        "SCREEN_BUDGET prior_updates={updates} generations={generations}/4096 forwards={teachers}/192 charged_seconds={seconds}/7200 cleanup_reservation=120"
+    );
+    Ok((updates, generations, seconds))
+}
+fn screen_report(root: &Path, terminal: &str, control: &mut RunControl) -> Result<()> {
+    let s = read_inputs(root)?;
+    if !s.screen() {
+        return Err(bad("report requires bounded screen"));
+    }
+    let (registered, _, _) = screen_parent(&s)?;
+    if root.canonicalize()? != registered {
+        return Err(bad("screen report registered root"));
+    }
+    let reference = reference(root, terminal)?;
+    let chain = lineage(root, &s, &reference)?;
+    let history = verified_history(root, &s, &chain)?;
+    let t = &chain.last().unwrap().1;
+    let Record::Command(c) =
+        read_record(root, &self::reference(root, &command_locator(&reference)?)?)?
+    else {
+        return Err(bad("screen command absent"));
+    };
+    if c.run != s.run
+        || c.binding != s.binding()
+        || c.terminal != reference
+        || c.error.is_some()
+        || t.save_error.is_some()
+        || c.stop != t.stop
+        || root.join("close-stop.r3er").exists()
+    {
+        return Err(bad("screen execution/storage/cancel error"));
+    }
+    if history.quality {
+        if !t.stop.contains(&StopReason::QualityGuard)
+            || t.stop
+                .iter()
+                .any(|v| !matches!(v, StopReason::QualityGuard | StopReason::TimeBudget))
+            || t.resume
+            || t.complete
+            || t.candidate
+            || c.status != CommandStatus::Failed
+            || c.comparison.is_some()
+        {
+            return Err(bad("screen stopped research is not a positive command"));
+        }
+        println!(
+            "T_SCREEN_COMPLETED=true STOPPED_AT={} COMMAND_STATUS=Failed QUALITY_STOP_PRESERVED=true RESUME=false candidate=false H3_JOINT=false",
+            t.updates
+        );
+    } else {
+        if t.updates != 512 || !t.complete {
+            return Err(bad("screen research incomplete"));
+        }
+        effective_outcome(root, &s, &reference)?;
+        let close = close_native_inner(root, terminal, control, false)?;
+        let native = t.native.as_ref().unwrap();
+        print_bridge_teacher(
+            &read_verified_bridge_teacher(root, "final-probe", &s, native)?,
+            native.step,
+        )?;
+        println!(
+            "T_SCREEN_COMPLETED=true COMPLETE_512=true H3_JOINT={} FULL_PANELS={:?}",
+            close.candidate, close.panels
+        );
+    }
+    let native = t.native.as_ref().unwrap();
+    println!(
+        "BOUNDED_RESEARCH NEW_SMALL_UPDATES={} INPUT_TOKENS={} TARGET_TOKENS={} NEW_GENERATIONS={} NEW_FORWARDS={} LAST_DURABLE_NATIVE={} file={} model={} step={} COMPARISON=POSTHOC_DIFFERENT_SOURCE_AND_STOPPING HISTORICAL_C_FINALIZATION=FAILED_UNCHANGED GOAL1_ACCEPTED=false",
+        t.updates,
+        native.counters[0] - s.parent.counters[0],
+        native.counters[1] - s.parent.counters[1],
+        chain.iter().map(|(_, t)| t.generations).sum::<u64>(),
+        chain.iter().map(|(_, t)| t.teachers).sum::<u64>(),
+        native.file.locator,
+        hex(&native.file.digest),
+        hex(&native.model),
+        native.step
+    );
+    Ok(())
+}
+fn screen_prepare(
+    prior_arm: &Path,
+    observation: &Path,
+    audit_path: &Path,
+    output: &Path,
+    control: &mut RunControl,
+) -> Result<()> {
+    let audit_ref = absolute_reference(&audit_path.join("audit-final.r3er"))?;
+    let audit = verified_artifact_audit(&audit_ref)?;
+    println!(
+        "AUDIT_REUSED source={} binary={} calls={:?} generated_tokens={} elapsed={} NEW_CALLS=0 HISTORICAL_COMMAND_STILL_FAILED=true",
+        hex(&audit.source),
+        hex(&audit.binary),
+        audit.calls,
+        audit
+            .fresh
+            .iter()
+            .map(|(_, r)| r.tokens.len())
+            .sum::<usize>(),
+        audit.elapsed.finite()?
+    );
+    let old = read_inputs(prior_arm)?;
+    if old.tiny_spec
+        || !old.bridge()
+        || old.arm_name() != "T-TEMPORAL"
+        || !arm_commands(prior_arm, &old)?.is_empty()
+    {
+        return Err(bad("screen requires unchanged unstarted T"));
+    }
+    bridge_origins(&old, None)?;
+    let Record::Inputs(audited_input) = read_absolute(&audit.input)? else {
+        return Err(bad("audited parent input"));
+    };
+    if audited_input.parent.file.digest != old.parent.file.digest
+        || audited_input.parent.model != old.parent.model
+        || audited_input.parent.adam != old.parent.adam
+        || audited_input.parent.tokenizer != old.parent.tokenizer
+        || audited_input.parent.architecture != old.parent.architecture
+        || audited_input.parent.step != old.parent.step
+        || audited_input.parent.counters != old.parent.counters
+    {
+        return Err(bad(
+            "screen and C diagnostic must share the same original parent",
+        ));
+    }
+    let obs = read_inputs(observation)?;
+    bridge_origins(&obs, Some(observation))?;
+    read_preflight_outcome(observation)?
+        .ok_or_else(|| bad("screen parent observation"))?
+        .require_current_success()?;
+    let l = resolve_native(prior_arm, &old, &old.parent, true)?;
+    if obs.parent.model != old.parent.model || obs.parent.adam != old.parent.adam {
+        return Err(bad("screen observation parent"));
+    }
+    let train = old
+        .train
+        .iter()
+        .map(|i| old.cases[*i as usize].clone())
+        .collect::<Vec<_>>();
+    exact_training_inputs(&train, &l)?;
+    let temporal = data::native::read(&origin_path(&old, "bridge-temporal-corpus")?)?;
+    if data::native::ordered_bytes(&train) != data::native::ordered_bytes(&temporal.train) {
+        return Err(bad("screen original T native bytes"));
+    }
+    // Read original parent panels at the same native endpoint; never regenerate320.
+    let prior_input = origin_path(&old, "bridge-parent-inputs")?;
+    let parent_root = prior_input.parent().unwrap();
+    let parent_s = read_inputs(parent_root)?;
+    let closed = arm_commands(parent_root, &parent_s)?;
+    let terminal = &closed
+        .last()
+        .ok_or_else(|| bad("parent terminal missing"))?
+        .1
+        .terminal;
+    close_native_inner(parent_root, &terminal.locator, control, false)?;
+    let chain = lineage(parent_root, &parent_s, terminal)?;
+    let h = verified_history(parent_root, &parent_s, &chain)?;
+    let mut rows = BTreeMap::new();
+    let mut inherited_raw = Vec::new();
+    for kind in [PanelKind::Dev, PanelKind::Cross, PanelKind::Ordinary] {
+        let er = h
+            .evaluations
+            .get(&(old.parent.step, kind))
+            .ok_or_else(|| bad("same parent raw missing"))?;
+        let (raw, loaded) = payload(parent_root, &parent_s, er)?;
+        rescore(&parent_s, &raw, &loaded, true)?;
+        if raw.model != old.parent.model {
+            return Err(bad("parent screen model mismatch"));
+        }
+        for r in raw.rows {
+            rows.insert(r.case, r);
+        }
+        inherited_raw.push(absolute_reference(&parent_root.join(&er.payload.locator))?);
+    }
+    let Record::Evaluation(dev) = read_record(observation, &reference(observation, "dev.r3er")?)?
+    else {
+        return Err(bad("parent newdev raw"));
+    };
+    rescore(&obs, &dev, &l, true)?;
+    for r in dev.rows {
+        rows.insert(r.case, r);
+    }
+    inherited_raw.push(absolute_reference(&observation.join("dev.r3er"))?);
+    let registered = output
+        .parent()
+        .ok_or_else(|| bad("screen root"))?
+        .canonicalize()?
+        .join("T-SCREEN");
+    if output.file_name().and_then(|n| n.to_str()) != Some("T-SCREEN") || output.exists() {
+        return Err(bad("screen exactly one new T-SCREEN root"));
+    }
+    let mut s = old.clone();
+    s.contract = BOUNDED_BRIDGE_CONTRACT.into();
+    s.source = evaluator_source();
+    s.eval_steps = vec![32, 64, 128, 256, 512];
+    let selected = screen_selection(&s)?;
+    let bytes = data::native::ordered_bytes(
+        &selected
+            .iter()
+            .map(|i| s.cases[*i as usize].clone())
+            .collect::<Vec<_>>(),
+    );
+    s.panels.push(PanelSpec {
+        kind: PanelKind::Screen,
+        dataset: hash(&bytes),
+        cases: selected,
+    });
+    s.origins.retain(|o| {
+        !matches!(
+            o.role.as_str(),
+            "bridge-replacement-registration" | "execution-binary" | "cooldown-registered-root"
+        )
+    });
+    for (role, file) in [
+        ("bounded-audit", audit_ref.clone()),
+        (
+            "bounded-prior-inputs",
+            absolute_reference(&prior_arm.join("inputs.r3er"))?,
+        ),
+        (
+            "execution-binary",
+            absolute_reference(&std::env::current_exe()?)?,
+        ),
+    ] {
+        s.origins.push(Origin {
+            role: role.into(),
+            original: file,
+        });
+    }
+    for (i, r) in inherited_raw.into_iter().enumerate() {
+        s.origins.push(Origin {
+            role: format!("bounded-parent-raw-{i}"),
+            original: r,
+        });
+    }
+    let mut key = BOUNDED_BRIDGE_CONTRACT.as_bytes().to_vec();
+    key.extend(audit_ref.digest);
+    key.extend(old.binding());
+    key.extend(s.source);
+    string(&mut key, &registered.display().to_string());
+    s.run = hash(&key);
+    s.policy = s.run;
+    s.parent.run = s.run;
+    s.authorization.as_mut().unwrap().pair = s.run;
+    s.origins.push(Origin {
+        role: "cooldown-registered-root".into(),
+        original: FileRef {
+            locator: registered.parent().unwrap().display().to_string(),
+            digest: s.run,
+        },
+    });
+    s.validate()?;
+    let mut future = l.manifest.training.clone().unwrap();
+    fork_budget(
+        &mut future,
+        s.parent.step,
+        s.parent.counters[0],
+        512,
+        2_000_000,
+    )?;
+    future.step += 512;
+    future.consumed_tokens += s.tape.iter().map(|d| d.input).sum::<u64>();
+    future.target_tokens += s.tape.iter().map(|d| d.target).sum::<u64>();
+    future.sampler_state = s.tape.last().unwrap().sampler;
+    future.resume_binding = Some(objective_binding(&s, &future, &l.tokenizer)?);
+    let mut m = l.manifest.clone();
+    m.training = Some(future);
+    checkpoint::validate_metadata(&m, &l.tokenizer)?;
+    Record::Segment(SegmentReceipt::capacity_value(s.tape.clone(), true, false)).encode()?;
+    let raw = panel(&s, PanelKind::Screen)?
+        .cases
+        .iter()
+        .map(|i| {
+            let mut r = rows
+                .get(&case_hash(&s.cases[*i as usize]))
+                .cloned()
+                .ok_or_else(|| bad("parent screen exact case absent"))?;
+            r.ordinal = *i;
+            Ok(r)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut parent = bridge_payload(&s, &s.parent, PanelKind::Screen, raw);
+    parent.expected = 224;
+    let scores = screen_scores(&s, &parent, &l)?;
+    let parent_bytes = Record::Evaluation(parent.clone()).encode()?;
+    let input = Record::Inputs(Box::new(s.clone()));
+    let proof = absolute_reference(&observation.join("preflight-final.r3er"))?;
+    // Register before creating the child. Missing child/final files block another attempt.
+    publish(
+        audit_path,
+        "t-screen-registration.r3er",
+        &Record::ScreenRegistration {
+            root: registered.display().to_string(),
+            input: hash(&input.encode()?),
+            audit: audit_ref,
+            observation: proof,
+            parent: FileRef {
+                locator: registered.join("parent-screen.r3er").display().to_string(),
+                digest: hash(&parent_bytes),
+            },
+            preparation: Scalar::F64(control.start.elapsed().as_secs_f64()),
+        },
+    )?;
+    std::fs::create_dir(&registered)?;
+    std::fs::copy(prior_arm.join("parent.r3m"), registered.join("parent.r3m"))?;
+    publish(&registered, "inputs.r3er", &input)?;
+    publish(
+        &registered,
+        "parent-screen.r3er",
+        &Record::Evaluation(parent),
+    )?;
+    screen_budget(&registered, &s)?;
+    println!(
+        "T_SCREEN_REGISTERED parent_step={} parent_model={} Adam={} baseline={scores:?} HORIZON=512 INITIAL_LIMIT=128 EVAL=32,64,128,256,512 LR_BITS={} NEW_GENERATIONS=0 NEW_UPDATES=0 audit_calls={:?} PARENT_ROWS=DERIVED_FROM_EXISTING_RAW",
+        s.parent.step,
+        hex(&s.parent.model),
+        hex(&s.parent.adam.unwrap()),
+        1e-4f64.to_bits(),
+        audit.calls
+    );
+    Ok(())
+}
+
 fn absolute_reference(path: &Path) -> Result<FileRef> {
     Ok(FileRef {
         locator: path.canonicalize()?.display().to_string(),
@@ -6600,6 +7316,31 @@ fn resolve_native(root: &Path, s: &RunSnapshot, n: &CheckpointRef, resume: bool)
 
 #[derive(Subcommand)]
 pub enum Action {
+    #[cfg(feature = "test-support")]
+    FixtureScreen {
+        #[arg(long)]
+        observation: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Register the single bounded temporal screen, from verified read-only evidence.
+    ScreenPrepare {
+        #[arg(long)]
+        prior_arm: PathBuf,
+        #[arg(long)]
+        observation: PathBuf,
+        #[arg(long)]
+        audit: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Read the stopped research without granting command success or resume.
+    ScreenReport {
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long)]
+        terminal: String,
+    },
     /// One bounded audit of the preserved failed C endpoint. Never repairs its command.
     BridgeArtifactAudit {
         #[arg(long)]
@@ -6938,6 +7679,140 @@ pub(super) fn command(action: Action) -> Result<()> {
     let mut control = RunControl::command(matches!(action, Action::Run { .. }))?;
     control.deadline = control.start + Duration::from_secs(1800);
     match action {
+        #[cfg(feature = "test-support")]
+        Action::FixtureScreen {
+            observation,
+            output,
+        } => {
+            let mut s = read_inputs(&observation)?;
+            if !s.tiny_spec || !s.historical {
+                return Err(bad("screen fixture requires actual TINY observation"));
+            }
+            bridge_origins(&s, Some(&observation))?;
+            read_preflight_outcome(&observation)?
+                .ok_or_else(|| bad("fixture real parent proof"))?
+                .require_current_success()?;
+            let l = resolve_native(&observation, &s, &s.parent, true)?;
+            let framed = samples(
+                &s.train
+                    .iter()
+                    .map(|i| s.cases[*i as usize].clone())
+                    .collect::<Vec<_>>(),
+                &l.tokenizer,
+                l.manifest.training.as_ref().unwrap().config.seq_len,
+            )?;
+            s.tape =
+                anchor_tape_through(&[vec![0], vec![1]], 6, s.parent.counters[2], &framed, 2)?.0;
+            s.contract = BOUNDED_BRIDGE_CONTRACT.into();
+            s.historical = false;
+            s.eval_steps = vec![1, 2];
+            s.source = evaluator_source();
+            s.run = hash(output.to_string_lossy().as_bytes());
+            s.policy = s.run;
+            s.parent.run = s.run;
+            s.origins
+                .retain(|o| o.role != "bridge-replacement-registration");
+            let proof = absolute_reference(&observation.join("preflight-final.r3er"))?;
+            let fixture_root = output.parent().unwrap().join("screen-fixture-registration");
+            std::fs::create_dir(&fixture_root)?;
+            // Explicit test scope: the audit reference is a real scope3 TINY parent proof.
+            let audit = FileRef {
+                locator: fixture_root
+                    .canonicalize()?
+                    .join("parent-proof.r3er")
+                    .display()
+                    .to_string(),
+                digest: proof.digest,
+            };
+            std::fs::copy(&proof.locator, &audit.locator)?;
+            s.origins.extend([
+                Origin {
+                    role: "bounded-audit".into(),
+                    original: audit.clone(),
+                },
+                Origin {
+                    role: "bounded-prior-inputs".into(),
+                    original: absolute_reference(&observation.join("inputs.r3er"))?,
+                },
+                Origin {
+                    role: "bridge-observation-final".into(),
+                    original: proof.clone(),
+                },
+            ]);
+            let template = s.cases[panel(&s, PanelKind::Dev)?.cases[0] as usize].clone();
+            let mut indices = Vec::new();
+            for kind in [
+                PanelKind::LegacyDev,
+                PanelKind::Cross,
+                PanelKind::Ordinary,
+                PanelKind::Dev,
+            ] {
+                let mut e = template.clone();
+                e.id = format!("screen-test/{}/0", kind.name());
+                let index = s.cases.len() as u32;
+                s.cases.push(e);
+                indices.push(index);
+                s.panels.iter_mut().find(|p| p.kind == kind).unwrap().cases = vec![index];
+            }
+            s.panels
+                .iter_mut()
+                .find(|p| p.kind == PanelKind::Watch)
+                .unwrap()
+                .cases = vec![indices[2]];
+            s.panels.push(PanelSpec {
+                kind: PanelKind::Screen,
+                dataset: hash(b"EXPLICIT_TINY_FOUR_CASE_TEST"),
+                cases: indices,
+            });
+            s.validate()?;
+            let raw = evaluate(
+                &s,
+                &l,
+                PanelKind::Screen,
+                s.parent.step,
+                &mut control,
+                false,
+                vec![],
+            )?;
+            screen_scores(&s, &raw, &l)?;
+            let registered = output
+                .parent()
+                .unwrap()
+                .canonicalize()?
+                .join(output.file_name().unwrap());
+            let input = Record::Inputs(Box::new(s));
+            let parent = Record::Evaluation(raw);
+            publish(
+                &fixture_root,
+                "t-screen-registration.r3er",
+                &Record::ScreenRegistration {
+                    root: registered.display().to_string(),
+                    input: hash(&input.encode()?),
+                    audit,
+                    observation: proof,
+                    parent: FileRef {
+                        locator: registered.join("parent-screen.r3er").display().to_string(),
+                        digest: hash(&parent.encode()?),
+                    },
+                    preparation: Scalar::F64(control.start.elapsed().as_secs_f64()),
+                },
+            )?;
+            std::fs::create_dir(&output)?;
+            std::fs::copy(observation.join("parent.r3m"), output.join("parent.r3m"))?;
+            publish(&output, "inputs.r3er", &input)?;
+            publish(&output, "parent-screen.r3er", &parent)?;
+            println!(
+                "EXPLICIT_SCREEN_TEST_PARENT GENERATIONS=4 UPDATES=0 PRODUCTION_REPLACEMENT_PROOF=true"
+            );
+            Ok(())
+        }
+        Action::ScreenPrepare {
+            prior_arm,
+            observation,
+            audit,
+            output,
+        } => screen_prepare(&prior_arm, &observation, &audit, &output, &mut control),
+        Action::ScreenReport { root, terminal } => screen_report(&root, &terminal, &mut control),
         Action::BridgeArtifactAudit {
             root,
             checkpoint,
@@ -7736,6 +8611,51 @@ fn decision_for(
     w: Hash,
     l: &Loaded,
 ) -> Result<EvalDecision> {
+    if s.screen() && dev.kind == PanelKind::Screen {
+        if dev.step != watch.step || d != w {
+            return Err(bad("screen decision identity"));
+        }
+        let (_, parent, _) = screen_parent(s)?;
+        let parent_root = PathBuf::from(
+            &s.origins
+                .iter()
+                .find(|o| o.role == "bounded-prior-inputs")
+                .ok_or_else(|| bad("screen original parent"))?
+                .original
+                .locator,
+        );
+        let parent_model = resolve_native(parent_root.parent().unwrap(), s, &s.parent, true)?;
+        let base = screen_scores(s, &parent, &parent_model)?;
+        let scores = screen_scores(s, dev, l)?;
+        let (after, stop) = screen_policy(&base, &scores, before, dev.new_updates);
+        println!(
+            "T_SCREEN_RESULT updates={} OLD={}/{} CROSS={}/{} QA={}/{} NEW={}/{} NEW_BASE4={}/{} ERRORS={} parent={:?} STOP={stop:?}",
+            dev.new_updates,
+            scores[0].exact,
+            scores[0].planned,
+            scores[1].exact,
+            scores[1].planned,
+            scores[2].exact,
+            scores[2].planned,
+            scores[3].exact,
+            scores[3].planned,
+            scores[3].base[0],
+            scores[3].base[1],
+            scores.iter().map(|s| s.errors).sum::<u64>(),
+            base.iter().map(|s| s.exact).collect::<Vec<_>>()
+        );
+        return Ok(EvalDecision {
+            run: s.run,
+            binding: s.binding(),
+            dev: d,
+            watch: w,
+            step: dev.step,
+            before,
+            after,
+            applied: true,
+            quality_stop: stop.is_some(),
+        });
+    }
     let ds = rescore(s, dev, l, true)?;
     let ws = rescore(s, watch, l, true)?;
     if dev.kind != PanelKind::Dev
@@ -7848,13 +8768,28 @@ fn verified_history(
                 }
                 continue;
             }
+            let screening = s.screen() && d.step < s.parent.step + s.tape.len() as u64;
             let dr = h
                 .evaluations
-                .get(&(d.step, PanelKind::Dev))
+                .get(&(
+                    d.step,
+                    if screening {
+                        PanelKind::Screen
+                    } else {
+                        PanelKind::Dev
+                    },
+                ))
                 .ok_or_else(|| bad("guard dev missing"))?;
             let wr = h
                 .evaluations
-                .get(&(d.step, PanelKind::Watch))
+                .get(&(
+                    d.step,
+                    if screening {
+                        PanelKind::Screen
+                    } else {
+                        PanelKind::Watch
+                    },
+                ))
                 .ok_or_else(|| bad("guard watch missing"))?;
             let (dev, l) = payload(root, s, dr)?;
             let (watch, _) = payload(root, s, wr)?;
@@ -7891,7 +8826,7 @@ fn verified_history(
         }
         if !s.historical
             && h.evaluations.keys().any(|(step, kind)| {
-                *kind == PanelKind::Dev
+                matches!(kind, PanelKind::Dev | PanelKind::Screen)
                     && (*step < t.native.as_ref().unwrap().step || t.complete)
                     && !h.decisions.contains_key(step)
             })
@@ -9206,7 +10141,7 @@ fn cooldown_verify(root: &Path, confirmation: bool, control: &mut RunControl) ->
                         .ok_or_else(|| bad("bridge required score"))
                 };
                 let dev = get(&score.panels, PanelKind::Dev)?;
-                arm == arms[1]
+                *arm == arms[1]
                     && dev.exact >= 192
                     && dev.exact as i64 - get(&c.panels, PanelKind::Dev)?.exact as i64 >= 26
                     && dev.base[0] >= 40
@@ -9237,7 +10172,7 @@ fn cooldown_verify(root: &Path, confirmation: bool, control: &mut RunControl) ->
                         } else {
                             get(PanelKind::Ordinary)?.qa[0]
                         },
-                        u8::from(arm == arms[0]),
+                        u8::from(*arm == arms[0]),
                     ),
                     dir,
                     s,
@@ -9548,6 +10483,9 @@ fn cooldown_verify(root: &Path, confirmation: bool, control: &mut RunControl) ->
 }
 
 fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
+    if s.screen() {
+        return screen_budget(root, s);
+    }
     let a = s
         .authorization
         .as_ref()
@@ -9561,7 +10499,7 @@ fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
     let mut seconds = 0.;
     let study_arms = s.study_arms();
     let arms: &[&str] = if s.continuation() {
-        &study_arms
+        study_arms
     } else if s.contract == RESTART_CONTRACT {
         &["preflight-A", "preflight-B", "C50-R", "A75-R"]
     } else {
@@ -9660,6 +10598,7 @@ fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
                 | OBJECTIVE_CONTRACT
                 | NATIVE_CORPUS_CONTRACT
                 | BRIDGE_CONTRACT
+                | BOUNDED_BRIDGE_CONTRACT
         )
     {
         let p = read_preflight_outcome(parent)?.ok_or_else(|| bad("missing preflight outcome"))?;
@@ -11460,6 +12399,19 @@ fn train_probe(
 }
 fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Result<()> {
     let s = read_inputs(root)?;
+    if s.screen() && s.tiny_spec {
+        let (registered, _, _) = screen_parent(&s)?;
+        if root.canonicalize()? != registered {
+            return Err(bad("TINY screen registered root"));
+        }
+        let proof = origin_path(&s, "bridge-observation-final")?;
+        let observation = proof.parent().unwrap();
+        let prior = read_inputs(observation)?;
+        bridge_origins(&prior, Some(observation))?;
+        read_preflight_outcome(observation)?
+            .ok_or_else(|| bad("TINY screen original proof"))?
+            .require_current_success()?;
+    }
     // Pure, discarded capacity check using the actual terminal encoder; no future receipt.
     Record::Segment(SegmentReceipt::capacity_value(
         s.tape.clone(),
@@ -11527,6 +12479,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                 | OBJECTIVE_CONTRACT
                 | NATIVE_CORPUS_CONTRACT
                 | BRIDGE_CONTRACT
+                | BOUNDED_BRIDGE_CONTRACT
         ) {
             return Err(bad("closed historical study is not restart authorization"));
         }
@@ -11546,7 +12499,9 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
         let (_, generations, seconds) = anchor_budget(root, &s)?;
         if s.objective.is_some() || s.bridge() {
             let parent = root.parent().ok_or_else(|| bad("objective pair root"))?;
-            let mut teachers = if s.bridge() {
+            let mut teachers = if s.screen() {
+                60
+            } else if s.bridge() {
                 bridge_probe_indices(&s)?.len()
             } else {
                 0
@@ -11592,7 +12547,9 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
             }
         }
         control.deadline = control.start + Duration::from_secs_f64((7200. - seconds).min(1800.));
-        control.generation_limit = if s.bridge() {
+        control.generation_limit = if s.screen() {
+            4096
+        } else if s.bridge() {
             4608
         } else if s.continuation() {
             4096
@@ -11825,7 +12782,10 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                 let mid = s.cooldown() && n == 128
                     || (s.objective.is_some() || s.bridge())
                         && n == if s.tiny_spec { 1 } else { 256 };
-                let kinds: &[PanelKind] = if mid {
+                let screening = s.screen() && n < s.tape.len() as u64;
+                let kinds: &[PanelKind] = if screening {
+                    &[PanelKind::Screen]
+                } else if mid {
                     &[PanelKind::Dev, PanelKind::Watch]
                 } else if s.bridge() {
                     &[
@@ -11903,7 +12863,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                                 kind,
                                 state.step as u64,
                                 control,
-                                s.tiny_spec,
+                                s.tiny_spec && !s.screen(),
                                 prefix,
                             )?
                         };
@@ -11956,8 +12916,16 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                         };
                         Ok((r.clone(), e, Record::identity(&bytes)?))
                     };
-                    let (_, dev, dh) = get(PanelKind::Dev)?;
-                    let (_, watch, wh) = get(PanelKind::Watch)?;
+                    let (_, dev, dh) = get(if screening {
+                        PanelKind::Screen
+                    } else {
+                        PanelKind::Dev
+                    })?;
+                    let (_, watch, wh) = get(if screening {
+                        PanelKind::Screen
+                    } else {
+                        PanelKind::Watch
+                    })?;
                     let d = decision_for(&s, &dev, &watch, h.guard, dh, wh, &l)?;
                     let r = publish(
                         root,
@@ -12007,6 +12975,11 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                 }
                 last_saved = Some(native);
                 fault(&s, "checkpoint", n, control);
+                if s.screen() && h.quality {
+                    // The policy ended this research. Preserve a non-resumable quality
+                    // terminal; do not turn it into a normal completion/candidate.
+                    break;
+                }
                 control.check("binary_checkpoint_recorded")?;
             }
             if n == s.tape.len() as u64 && s.preflight() {
@@ -13423,6 +14396,68 @@ fn fixture_check(roots: &[PathBuf]) -> Result<()> {
 #[cfg(test)]
 mod binary_tests {
     use super::*;
+    #[test]
+    fn bounded_screen_policy_stops_and_extensions_are_fixed() {
+        let base: [Score; 4] = std::array::from_fn(|i| Score {
+            exact: if i == 3 { 0 } else { 32 },
+            planned: if i == 2 { 32 } else { 64 },
+            ..Default::default()
+        });
+        let mut now = base.clone();
+        now[0].exact -= 12;
+        assert_eq!(
+            screen_policy(&base, &now, [0; 3], 32).1,
+            Some("QUALITY_REGRESSION_STOP")
+        );
+        now = base.clone();
+        now[1].exact -= 8;
+        let (streak, stop) = screen_policy(&base, &now, [0; 3], 32);
+        assert!(stop.is_none());
+        assert_eq!(
+            screen_policy(&base, &now, streak, 64).1,
+            Some("QUALITY_REGRESSION_STOP")
+        );
+        now = base.clone();
+        now[2].exact -= 4;
+        let (streak, stop) = screen_policy(&base, &now, [0; 3], 32);
+        assert!(stop.is_none());
+        assert!(screen_policy(&base, &now, streak, 64).1.is_some());
+        now = base.clone();
+        now[3].exact = 8;
+        now[3].base = [2, 16];
+        now[0].exact -= 4;
+        now[1].exact -= 4;
+        now[2].exact -= 2;
+        for step in [128, 256] {
+            assert!(screen_policy(&base, &now, [0; 3], step).1.is_none());
+        }
+        for field in 0..4 {
+            let mut failed = now.clone();
+            if field == 3 {
+                failed[3].exact -= 1;
+            } else {
+                failed[field].exact -= 1;
+            }
+            assert_eq!(
+                screen_policy(&base, &failed, [0; 3], 128).1,
+                Some("NO_SUFFICIENT_TRANSFER_SIGNAL_WITHIN_BUDGET")
+            );
+        }
+        now[3].base[0] = 1;
+        assert!(screen_policy(&base, &now, [0; 3], 128).1.is_some());
+        now = base.clone();
+        now[3].errors = 4;
+        assert!(screen_policy(&base, &now, [0; 3], 32).1.is_none());
+        now[3].errors = 5;
+        assert_eq!(
+            screen_policy(&base, &now, [0; 3], 32).1,
+            Some("GENERATION_ERROR_REGRESSION_STOP")
+        );
+        assert_eq!(
+            screen_policy(&base, &base, [0; 3], 128).1,
+            Some("NO_SUFFICIENT_TRANSFER_SIGNAL_WITHIN_BUDGET")
+        );
+    }
     #[test]
     fn segment_capacity_record_publisher_roundtrip() {
         let dir = tempfile::tempdir().unwrap();

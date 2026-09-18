@@ -14,6 +14,16 @@ references, metadata selection, raw recount, fresh rows, same-prefix numeric che
 and entered/returned call counts. It is never a terminal, command or resume proof.
 Existing R3MODEL/R3CORP/R3TOK and product SQLite/IPC formats remain unchanged.
 
+The bounded screen uses existing kind25 inputs with an explicit new contract and
+an additional typed `Screen` panel(tag9). Kind31 binds the sole new root, physical
+inputs digest, verified diagnostic and original observation references, derived
+parent-screen raw, and preparation elapsed bits. This registers one child before
+publication; missing child/state blocks execution. Parent-screen rows are projections
+of referenced original raw, not new generation. Their source identifies the projection
+writer; actual generation provenance remains in the original referenced records.
+No tensor, tokenizer, corpus or user DB layout changes. Historical readers reject
+the new contract/kind rather than silently treating this as the failed old pair.
+
 ## R3CORP v1 source corpus and native default
 
 `data::native` is train-only. Its Episode codec is shared with existing R3ER;

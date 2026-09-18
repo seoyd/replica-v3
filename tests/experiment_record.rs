@@ -225,6 +225,100 @@ fn bridge_registered_observation_rejects_prestart_copy_in_fresh_processes() {
     );
 }
 #[test]
+fn bounded_screen_registered_tiny_first_save_fresh_resume_and_close() {
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
+    let obs = d.path().join("observation");
+    let root = d.path().join("T-SCREEN");
+    call(
+        &[
+            "fixture-bridge",
+            "--from",
+            p(&bootstrap),
+            "--output",
+            p(&obs),
+            "--observation",
+        ],
+        None,
+        true,
+        &d.path().join("prepare.log"),
+    );
+    call(
+        &["bridge-observe", "--root", p(&obs)],
+        None,
+        true,
+        &d.path().join("observe.log"),
+    );
+    call(
+        &[
+            "fixture-screen",
+            "--observation",
+            p(&obs),
+            "--output",
+            p(&root),
+        ],
+        None,
+        true,
+        &d.path().join("screen.log"),
+    );
+    let original = evidence_manifest(&obs);
+    let first = call(
+        &["run", "--root", p(&root)],
+        None,
+        true,
+        &d.path().join("first.log"),
+    );
+    assert!(String::from_utf8_lossy(&first.stdout).contains("COMMAND_FINALIZATION=TimePause"));
+    let second = call(
+        &[
+            "run",
+            "--root",
+            p(&root),
+            "--resume",
+            "segment-00/terminal.r3er",
+        ],
+        None,
+        true,
+        &d.path().join("resume.log"),
+    );
+    let text = String::from_utf8_lossy(&second.stdout);
+    assert!(text.contains("T_SCREEN_RESULT updates=1"));
+    assert!(text.contains("COMMAND_FINALIZATION=Complete"));
+    let before = evidence_manifest(&root);
+    call(
+        &[
+            "close",
+            "--root",
+            p(&root),
+            "--terminal",
+            "segment-01/terminal.r3er",
+        ],
+        None,
+        true,
+        &d.path().join("close.log"),
+    );
+    assert_eq!(original, evidence_manifest(&obs));
+    assert_eq!(before, evidence_manifest(&root));
+    let copied = d.path().join("copied");
+    copy_fixture(&root, &copied);
+    let out = call(
+        &[
+            "run",
+            "--root",
+            p(&copied),
+            "--resume",
+            "segment-00/terminal.r3er",
+        ],
+        None,
+        false,
+        &d.path().join("moved.log"),
+    );
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("ACTUAL_TINY_UPDATE="));
+    println!(
+        "BOUNDED_SCREEN_PROCESS TINY_UPDATES=2 SMALL_UPDATES=0 PRODUCTION_REPLACEMENT=true EXPLICIT_PANEL_SPEC=1+1+1+1"
+    );
+}
+#[test]
 fn bridge_observation_teacher_receipt_survives_fresh_read_and_cannot_retry() {
     let d = tempfile::tempdir().unwrap();
     let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
