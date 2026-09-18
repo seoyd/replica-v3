@@ -1,5 +1,22 @@
 # 진단 및 구현 상태
 
+## 최종 게시와 검토 전달
+
+최종 candidate source=`af63823346ebb6e11cc23451a8ba0c704eb34039`.
+기준 source=`1e25be2cef801dd67a6515e5c33823a0d1b06a92`.
+main/origin seoyd/replica-v3 정상 push 뒤 실제 remote full SHA가 candidate와 일치했다.
+이 절은 이후 report-only 변경이다. 학습 source는 별도의
+`414e1d3434224be1007e9717cb339109792dd333`이며 cache source로 소급 변경하지 않는다.
+
+검토용 diff=`artifacts/data-binary-target-loss-20260918/candidate.diff`
+(위 base→candidate, 관련 source/tests/docs만). 허용된 읽기 전용 원자료와 증거 root는
+`artifacts/data-binary-target-loss-20260918/`다. study/B-BASE 및 S-SPAN의 inputs,
+segment-00 native/raw/command/decision/comparison, train probe 원본, cache와
+e1/e2/e3/e4/e5/e6 로그를 보존했다. 원 corpus 경로와 부모 SHA는 아래 절에 명시했다.
+원문·checkpoint·corpus·로그·임시 지시문·target은 git stage/push하지 않았다.
+candidate 이후 tracked source dirty0이며, 기존 untracked 자료는 보존했다.
+추가 SMALL0/새 품질 gate0. 독립 검토 승인이나 Goal1 완료는 부여하지 않았다.
+
 ## E5/E6 — 저장 원형 검증과 최종 대조
 
 R3-DATA-BINARY-AND-TARGET-LOSS-1.0 / 2026-09-18 / RESULT=PARTIAL.
