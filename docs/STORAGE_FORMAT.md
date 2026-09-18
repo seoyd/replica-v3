@@ -429,6 +429,23 @@ command blocks automatic retry. Pair caps are1024 updates,7500 generations and72
 segment1800s with bounded120s cleanup. A terminal's clean time resume cannot reset them.
 # Command finalization and journal retry acknowledgement
 
+R3ER kind8 is a replacement-study input snapshot. It explicitly encodes an
+authorization-present byte, the existing typed snapshot, then purpose0 Anchor,
+1 SaveContinuous, or2 SaveSplit. The new contract binds source and read-only origin
+FileRefs into input identity. Preflight has exactly two frozen draws, no quality
+evaluation schedule and candidate=false. Kind9 is its save/resume proof: pair,
+source and binary digests; two command FileRefs; two parity-panel FileRefs; exact
+elapsed Scalar and actual generation count. It is emitted only after both complete
+native endpoints, state and output equality are verified. Old readers reject these
+kinds; no historical input/command is silently upgraded.
+
+Replacement evaluation checkpoints are saved and reloaded before expensive panels.
+A clean time-only partial panel may continue in a new immutable record at the same
+model/step, retaining the exact completed row prefix and preserving the old raw.
+An interrupted last row can be attempted again and is counted again. Changed complete
+observations, mismatched prefixes, cancelled/integrity-failed ancestry remain errors.
+This continuation never permits optimizer progress past a pending guard decision.
+
 R3ER v1 record kind7 is a typed CommandOutcome: run digest32, binding digest32,
 terminal FileRef, optional comparison FileRef, status byte (0 Complete,1 TimePause,
 2 Failed), bounded unique stop tags, optional UTF-8 error, exact Scalar elapsed.

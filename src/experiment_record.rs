@@ -17,6 +17,7 @@ const MAX_TOKENS: usize = 2048;
 const MAX_TEXT: usize = 262144;
 const CONTRACT: &str = "R3-BINARY-EVAL-RESUME-1.0";
 const ANCHOR_CONTRACT: &str = "R3-NATIVE-STORAGE-QUALITY-1.0";
+const RESTART_CONTRACT: &str = "R3-DURABILITY-PAIR-RESTART-1.0";
 
 fn bad(s: &str) -> Error {
     Error::Corrupt(format!("R3ER: {s}"))
@@ -335,6 +336,30 @@ struct RunSnapshot {
     baseline: [u64; 3],
     anchor_floor: u64,
     authorization: Option<AnchorAuthorization>,
+    purpose: RunPurpose,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+enum RunPurpose {
+    Anchor,
+    SaveContinuous,
+    SaveSplit,
+}
+impl RunPurpose {
+    fn tag(self) -> u8 {
+        match self {
+            Self::Anchor => 0,
+            Self::SaveContinuous => 1,
+            Self::SaveSplit => 2,
+        }
+    }
+    fn read(r: &mut Reader<'_>) -> Result<Self> {
+        match r.byte()? {
+            0 => Ok(Self::Anchor),
+            1 => Ok(Self::SaveContinuous),
+            2 => Ok(Self::SaveSplit),
+            _ => Err(bad("unknown run purpose")),
+        }
+    }
 }
 
 fn episode_encode(e: &Episode, b: &mut Vec<u8>) {
@@ -512,6 +537,9 @@ impl RunSnapshot {
         if let Some(a) = &self.authorization {
             a.encode(b);
         }
+        if self.contract == RESTART_CONTRACT {
+            b.push(self.purpose.tag());
+        }
     }
     fn binding(&self) -> Hash {
         let mut b = if self.authorization.is_some() {
@@ -538,6 +566,13 @@ impl RunSnapshot {
         }
         b.push(u8::from(self.historical));
         b.push(u8::from(self.tiny_spec));
+        if self.contract == RESTART_CONTRACT {
+            b.extend(self.source);
+            for o in &self.origins {
+                string(&mut b, &o.role);
+                o.original.encode(&mut b);
+            }
+        }
         self.content(&mut b);
         hash(&b)
     }
@@ -587,6 +622,11 @@ impl RunSnapshot {
         } else {
             None
         };
+        let purpose = if contract == RESTART_CONTRACT {
+            RunPurpose::read(r)?
+        } else {
+            RunPurpose::Anchor
+        };
         let s = Self {
             contract,
             run,
@@ -607,13 +647,37 @@ impl RunSnapshot {
             baseline,
             anchor_floor,
             authorization,
+            purpose,
         };
         s.validate()?;
         Ok(s)
     }
     fn validate(&self) -> Result<()> {
+        if self.preflight()
+            && (self.contract != RESTART_CONTRACT
+                || self.tape.len() != 2
+                || !self.eval_steps.is_empty())
+        {
+            return Err(bad("preflight purpose/update/evaluation bounds"));
+        }
+        if self.contract == RESTART_CONTRACT && !self.tiny_spec {
+            for role in [
+                "replacement-inputs",
+                "replacement-terminal",
+                "replacement-command",
+                "execution-binary",
+            ] {
+                if self.origins.iter().filter(|o| o.role == role).count() != 1 {
+                    return Err(bad("restart authorization provenance"));
+                }
+            }
+        }
         if self.contract
-            != if self.authorization.is_some() {
+            != if self.contract == RESTART_CONTRACT
+                && (self.authorization.is_some() || self.tiny_spec)
+            {
+                RESTART_CONTRACT
+            } else if self.authorization.is_some() {
                 ANCHOR_CONTRACT
             } else {
                 CONTRACT
@@ -678,8 +742,14 @@ impl RunSnapshot {
                 || a.pools[0].len() != 2048
                 || a.pools[1].len() != 512
                 || all != (0..2560).collect()
-                || self.tape.len() != 512
-                || self.eval_steps != [256, 512]
+                || self.tape.len() != if self.preflight() { 2 } else { 512 }
+                || self.eval_steps
+                    != if self.preflight() {
+                        vec![]
+                    } else {
+                        vec![256, 512]
+                    }
+                || self.preflight() && (self.contract != RESTART_CONTRACT || a.anchors != 4)
                 || self.tape.iter().map(|d| d.input).sum::<u64>() > 2_000_000
                 || self.tape.iter().map(|d| d.target).sum::<u64>() > 500_000
             {
@@ -707,6 +777,26 @@ impl RunSnapshot {
             }
         }
         Ok(())
+    }
+    fn preflight(&self) -> bool {
+        self.purpose != RunPurpose::Anchor
+    }
+    fn arm_name(&self) -> &'static str {
+        match self.purpose {
+            RunPurpose::SaveContinuous => "preflight-A",
+            RunPurpose::SaveSplit => "preflight-B",
+            RunPurpose::Anchor => match &self.authorization {
+                Some(a) if self.contract == RESTART_CONTRACT => {
+                    if a.anchors == 4 {
+                        "C50-R"
+                    } else {
+                        "A75-R"
+                    }
+                }
+                Some(a) => a.name(),
+                None => "TINY",
+            },
+        }
     }
 }
 
@@ -1434,14 +1524,61 @@ enum Record {
     Segment(SegmentReceipt),
     Comparison(ComparisonReceipt),
     Command(CommandOutcome),
+    Preflight(PreflightReceipt),
+}
+#[derive(Clone, Debug, Serialize)]
+struct PreflightReceipt {
+    pair: Hash,
+    source: Hash,
+    binary: Hash,
+    commands: [FileRef; 2],
+    panels: [FileRef; 2],
+    elapsed: Scalar,
+    generations: u64,
+}
+impl PreflightReceipt {
+    fn encode(&self, b: &mut Vec<u8>) {
+        b.extend(self.pair);
+        b.extend(self.source);
+        b.extend(self.binary);
+        for r in self.commands.iter().chain(&self.panels) {
+            r.encode(b);
+        }
+        self.elapsed.encode(b);
+        put_varint(b, self.generations);
+    }
+    fn decode(r: &mut Reader<'_>) -> Result<Self> {
+        let p = Self {
+            pair: digest_read(r)?,
+            source: digest_read(r)?,
+            binary: digest_read(r)?,
+            commands: [FileRef::decode(r)?, FileRef::decode(r)?],
+            panels: [FileRef::decode(r)?, FileRef::decode(r)?],
+            elapsed: Scalar::decode(r)?,
+            generations: r.var()?,
+        };
+        if p.elapsed.finite()? < 0. || p.generations > 8 {
+            return Err(bad("preflight observation bounds"));
+        }
+        Ok(p)
+    }
 }
 impl Record {
     fn encode(&self) -> Result<Vec<u8>> {
         let mut body = Vec::new();
         let kind = match self {
             Self::Inputs(v) => {
+                if v.contract == RESTART_CONTRACT {
+                    body.push(u8::from(v.authorization.is_some()));
+                }
                 v.encode(&mut body);
-                if v.authorization.is_some() { 6 } else { 1 }
+                if v.contract == RESTART_CONTRACT {
+                    8
+                } else if v.authorization.is_some() {
+                    6
+                } else {
+                    1
+                }
             }
             Self::Evaluation(v) => {
                 v.encode(&mut body);
@@ -1462,6 +1599,10 @@ impl Record {
             Self::Command(v) => {
                 v.encode(&mut body);
                 7
+            }
+            Self::Preflight(v) => {
+                v.encode(&mut body);
+                9
             }
         };
         if body.len() > MAX_FILE - HEADER {
@@ -1503,12 +1644,20 @@ impl Record {
         }
         let mut r = Reader::new(&bytes[HEADER..]);
         let record = match kind {
-            1 | 6 => Self::Inputs(Box::new(RunSnapshot::decode(&mut r, kind == 6)?)),
+            1 | 6 | 8 => {
+                let authorized = if kind == 8 { r.bool()? } else { kind == 6 };
+                let s = RunSnapshot::decode(&mut r, authorized)?;
+                if (kind == 8) != (s.contract == RESTART_CONTRACT) {
+                    return Err(bad("purpose record kind"));
+                }
+                Self::Inputs(Box::new(s))
+            }
             2 => Self::Evaluation(EvalPayload::decode(&mut r)?),
             3 => Self::Decision(EvalDecision::decode(&mut r)?),
             4 => Self::Segment(SegmentReceipt::decode(&mut r)?),
             5 => Self::Comparison(ComparisonReceipt::decode(&mut r)?),
             7 => Self::Command(CommandOutcome::decode(&mut r)?),
+            9 => Self::Preflight(PreflightReceipt::decode(&mut r)?),
             _ => return Err(bad("record kind")),
         };
         if !r.finished() {
@@ -1778,6 +1927,7 @@ fn panel(s: &RunSnapshot, kind: PanelKind) -> Result<&PanelSpec> {
         .find(|p| p.kind == kind)
         .ok_or_else(|| bad("missing panel spec"))
 }
+#[allow(clippy::too_many_arguments)] // Optional verified prefix for same-model time-pause continuation.
 fn evaluate(
     s: &RunSnapshot,
     l: &Loaded,
@@ -1785,11 +1935,11 @@ fn evaluate(
     step: u64,
     control: &mut RunControl,
     with_teacher: bool,
+    mut rows: Vec<EvalRow>,
 ) -> Result<EvalPayload> {
     let spec = panel(s, kind)?;
-    let mut rows = Vec::new();
     let mut heartbeat = Instant::now();
-    for ordinal in &spec.cases {
+    for ordinal in spec.cases.iter().skip(rows.len()) {
         if control.generation_calls >= control.generation_limit {
             control.observe(StopReason::ResourceLimit);
             break;
@@ -2079,6 +2229,14 @@ pub enum Action {
         expected_parent: String,
         #[arg(long)]
         output: PathBuf,
+        /// Explicit one-time replacement of the preserved C50 native-save failure.
+        #[arg(long)]
+        replacement_of: Option<PathBuf>,
+    },
+    /// Verify continuous/split preflight endpoints; never use them as quality parents.
+    SavePreflightVerify {
+        #[arg(long)]
+        root: PathBuf,
     },
     /// Independently recount the registered pair endpoints; never extend its budget.
     AnchorReport {
@@ -2143,6 +2301,15 @@ pub enum Action {
         output: PathBuf,
         #[arg(long)]
         untrained: bool,
+        #[arg(long)]
+        restart_spec: bool,
+    },
+    #[cfg(feature = "test-support")]
+    FixturePreflight {
+        #[arg(long)]
+        from: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
     },
     #[cfg(feature = "test-support")]
     FixturePair {
@@ -2166,7 +2333,18 @@ pub(super) fn command(action: Action) -> Result<()> {
             policy,
             expected_parent,
             output,
-        } => anchor_prepare(&baseline, &policy, &expected_parent, &output, &mut control),
+            replacement_of,
+        } => anchor_prepare(
+            &baseline,
+            &policy,
+            &expected_parent,
+            &output,
+            replacement_of.as_deref(),
+            &mut control,
+        ),
+        Action::SavePreflightVerify { root } => {
+            verify_save_preflight(&root, &mut control, true).map(|_| ())
+        }
         Action::AnchorReport { root } => anchor_report(&root, &mut control),
         Action::Run { root, resume } => {
             let outcome = run_native(&root, resume.as_deref(), &mut control);
@@ -2232,12 +2410,38 @@ pub(super) fn command(action: Action) -> Result<()> {
             from,
             output,
             untrained,
-        } => fixture_fork(&from, &output, untrained),
+            restart_spec,
+        } => fixture_fork_inner(
+            &from,
+            &output,
+            untrained,
+            false,
+            RunPurpose::Anchor,
+            restart_spec,
+        ),
+        #[cfg(feature = "test-support")]
+        Action::FixturePreflight { from, output } => {
+            std::fs::create_dir(&output)?;
+            for (arm, purpose) in [
+                ("preflight-A", RunPurpose::SaveContinuous),
+                ("preflight-B", RunPurpose::SaveSplit),
+            ] {
+                fixture_fork_inner(&from, &output.join(arm), false, false, purpose, true)?;
+            }
+            Ok(())
+        }
         #[cfg(feature = "test-support")]
         Action::FixturePair { from, output } => {
             std::fs::create_dir(&output)?;
             for arm in ["C50", "A75"] {
-                fixture_fork_inner(&from, &output.join(arm), false, true)?;
+                fixture_fork_inner(
+                    &from,
+                    &output.join(arm),
+                    false,
+                    true,
+                    RunPurpose::Anchor,
+                    false,
+                )?;
             }
             Ok(())
         }
@@ -2429,7 +2633,26 @@ fn verified_history(
             if let Some(old) = h.evaluations.get(&key)
                 && old.payload.digest != r.payload.digest
             {
-                return Err(bad("ambiguous same-step raw observation"));
+                let (previous, _) = payload(root, s, old)?;
+                let prefix = previous
+                    .rows
+                    .iter()
+                    .take_while(|r| r.completed && r.interruption.is_none())
+                    .collect::<Vec<_>>();
+                if s.contract != RESTART_CONTRACT
+                    || prefix.len() == previous.expected as usize
+                    || previous.model != e.model
+                    || e.rows.len() < prefix.len()
+                    || prefix.iter().zip(&e.rows).any(|(a, b)| {
+                        let mut x = Vec::new();
+                        let mut y = Vec::new();
+                        a.encode(&mut x);
+                        b.encode(&mut y);
+                        x != y
+                    })
+                {
+                    return Err(bad("ambiguous same-step raw observation"));
+                }
             }
             h.evaluations.insert(key, r.clone());
         }
@@ -2502,6 +2725,9 @@ fn eligible(
     quality: bool,
     stops: &[StopReason],
 ) -> bool {
+    if s.preflight() {
+        return false;
+    }
     if s.historical
         || s.tiny_spec
         || quality
@@ -2764,16 +2990,26 @@ fn close_native_inner(
     }
     let final_native = t.native.as_ref().unwrap();
     let step = final_native.step;
-    if !s.historical && !h.decisions.contains_key(&step) {
+    if !s.historical && !s.preflight() && !h.decisions.contains_key(&step) {
         return Err(bad("final guard decision pending"));
     }
     let mut scores = Vec::new();
-    for kind in [
-        PanelKind::Dev,
-        PanelKind::Watch,
-        PanelKind::Cross,
-        PanelKind::Ordinary,
-    ] {
+    let kinds: &[PanelKind] = if s.preflight() {
+        &[]
+    } else {
+        &[
+            PanelKind::Dev,
+            PanelKind::Watch,
+            PanelKind::Cross,
+            PanelKind::Ordinary,
+        ]
+    };
+    if s.preflight()
+        && (t.updates != 2 || !h.evaluations.is_empty() || !h.decisions.is_empty() || t.candidate)
+    {
+        return Err(bad("preflight is not an exact two-update save observation"));
+    }
+    for &kind in kinds {
         control.check("binary_close_panel")?;
         let r = h
             .evaluations
@@ -2929,6 +3165,7 @@ fn anchor_prepare(
     policy: &Path,
     expected_parent: &str,
     output: &Path,
+    replacement_of: Option<&Path>,
     control: &mut RunControl,
 ) -> Result<()> {
     control.check("anchor_registration")?;
@@ -3020,6 +3257,51 @@ fn anchor_prepare(
     material.extend(base.binding());
     material.extend(expected_parent);
     material.extend(baseline_ref.digest);
+    let mut replacements = Vec::new();
+    if let Some(previous) = replacement_of {
+        let old_root = previous.join("C50");
+        let old = read_inputs(&old_root)?;
+        let t = segment(
+            &old_root,
+            &reference(&old_root, "segment-00/terminal.r3er")?,
+            &old,
+        )?;
+        if old.contract != ANCHOR_CONTRACT
+            || old.parent.file.digest != expected_parent
+            || old.parent.model != base.parent.model
+            || old.parent.adam != base.parent.adam
+            || t.updates != 256
+            || t.native.is_some()
+            || t.stop != [StopReason::IntegrityFail]
+            || t.save_error.as_deref() != Some("corruption: checkpoint training state")
+            || t.resume
+            || previous.join("A75/segment-00").exists()
+        {
+            return Err(bad(
+                "replacement requires the specific preserved C50 save failure",
+            ));
+        }
+        for (role, name) in [
+            ("replacement-inputs", "inputs.r3er"),
+            ("replacement-terminal", "segment-00/terminal.r3er"),
+            ("replacement-command", "segment-00/command.r3er"),
+        ] {
+            let r = reference(&old_root, name)?;
+            replacements.push(Origin {
+                role: role.into(),
+                original: FileRef {
+                    locator: old_root.join(name).canonicalize()?.display().to_string(),
+                    digest: r.digest,
+                },
+            });
+        }
+        string(&mut material, RESTART_CONTRACT);
+        material.extend(evaluator_source());
+        material.extend(unhex(&file_hash(&std::env::current_exe()?)?)?);
+        for o in &replacements {
+            material.extend(o.original.digest);
+        }
+    }
     for pool in &pools {
         integers(&mut material, pool);
     }
@@ -3056,7 +3338,13 @@ fn anchor_prepare(
             anchors,
             pools: pools.clone(),
         };
-        s.contract = ANCHOR_CONTRACT.into();
+        s.contract = if replacement_of.is_some() {
+            RESTART_CONTRACT
+        } else {
+            ANCHOR_CONTRACT
+        }
+        .into();
+        s.origins.extend(replacements.clone());
         s.historical = false;
         s.source = evaluator_source();
         let mut identity = material.clone();
@@ -3104,6 +3392,27 @@ fn anchor_prepare(
         let (tape, _) = anchor_tape(&pools, anchors, state.sampler_state, &framed)?;
         s.tape = tape;
         s.authorization = Some(authorization);
+        if let Some(previous) = replacement_of {
+            let old = read_inputs(&previous.join(if anchors == 4 { "C50" } else { "A75" }))?;
+            if old.train != s.train
+                || old.cases.iter().map(case_hash).collect::<Vec<_>>()
+                    != s.cases.iter().map(case_hash).collect::<Vec<_>>()
+                || old.tape.len() != s.tape.len()
+                || old.tape.iter().zip(&s.tape).any(|(x, y)| {
+                    x.indices != y.indices
+                        || x.sampler != y.sampler
+                        || x.input != y.input
+                        || x.target != y.target
+                })
+                || old
+                    .panels
+                    .iter()
+                    .zip(&s.panels)
+                    .any(|(x, y)| x.kind != y.kind || x.dataset != y.dataset || x.cases != y.cases)
+            {
+                return Err(bad("replacement changed original frozen cases/panels/tape"));
+            }
+        }
         s.validate()?;
         // Validate the furthest registered save before publishing authorization or doing work.
         let mut end = state.clone();
@@ -3122,11 +3431,26 @@ fn anchor_prepare(
         checkpoint::validate_metadata(&manifest, &l.tokenizer)?;
         registrations.push(s);
     }
+    if replacement_of.is_some() {
+        for purpose in [RunPurpose::SaveContinuous, RunPurpose::SaveSplit] {
+            let mut s = registrations[0].clone();
+            s.purpose = purpose;
+            s.tape.truncate(2);
+            s.eval_steps.clear();
+            let mut identity = material.clone();
+            identity.extend(b"SAVE_RESUME_PREFLIGHT");
+            identity.push(purpose.tag());
+            s.run = hash(&identity);
+            s.policy = s.run;
+            s.parent.run = s.run;
+            s.validate()?;
+            registrations.push(s);
+        }
+    }
     control.check("anchor_before_publication")?;
     std::fs::create_dir(output)?;
     for s in registrations {
-        let a = s.authorization.as_ref().unwrap();
-        let root = output.join(a.name());
+        let root = output.join(s.arm_name());
         std::fs::create_dir(&root)?;
         publish_new(&root.join("parent.r3m"), |file, _| {
             std::io::copy(
@@ -3138,16 +3462,25 @@ fn anchor_prepare(
         resolve_native(&root, &s, &s.parent, true)?;
         publish(&root, "inputs.r3er", &Record::Inputs(Box::new(s.clone())))?;
         println!(
-            "NODE=G2 ARM={} STATE=REGISTERED parent={} model={} Adam={} step={} LR=0.0001 updates=512 input={} target={} anchor_draws={} focus_draws={} baseline={}/{}/{} source={} binary={} optimizer_calls=0",
-            a.name(),
+            "ATTEMPT={} CONTRACT={} PURPOSE={:?} PLANNED_UPDATES={} PLANNED_END_STEP={} guard_parent={:?} guard=consecutive(dev_drop26/watch_drop4/error_increase6)_or_single_error20pct",
+            hex(&pair),
+            s.contract,
+            s.purpose,
+            s.tape.len(),
+            s.parent.step + s.tape.len() as u64,
+            s.baseline
+        );
+        println!(
+            "NODE=D2 ARM={} STATE=REGISTERED parent={} model={} Adam={} step={} LR=0.0001 input={} target={} anchor_draws={} focus_draws={} baseline={}/{}/{} source={} binary={} optimizer_calls=0",
+            s.arm_name(),
             hex(&expected_parent),
             hex(&s.parent.model),
             hex(&s.parent.adam.unwrap()),
             s.parent.step,
             s.tape.iter().map(|d| d.input).sum::<u64>(),
             s.tape.iter().map(|d| d.target).sum::<u64>(),
-            usize::from(anchors_for(&s)) * 512,
-            (8 - usize::from(anchors_for(&s))) * 512,
+            usize::from(anchors_for(&s)) * s.tape.len(),
+            (8 - usize::from(anchors_for(&s))) * s.tape.len(),
             dev.exact,
             stats(PanelKind::Cross)?.exact,
             stats(PanelKind::Ordinary)?.qa[0],
@@ -3226,14 +3559,23 @@ fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
         .authorization
         .as_ref()
         .ok_or_else(|| bad("missing anchor authorization"))?;
-    if root.file_name().and_then(|v| v.to_str()) != Some(a.name()) {
+    if root.file_name().and_then(|v| v.to_str()) != Some(s.arm_name()) {
         return Err(bad("pair arm locator"));
     }
     let parent = root.parent().ok_or_else(|| bad("pair root"))?;
     let mut updates = 0;
     let mut generations = 0;
     let mut seconds = 0.;
-    for arm in ["C50", "A75"] {
+    let arms: &[&str] = if s.contract == RESTART_CONTRACT {
+        &["preflight-A", "preflight-B", "C50-R", "A75-R"]
+    } else {
+        &["C50", "A75"]
+    };
+    let current = arms
+        .iter()
+        .position(|arm| *arm == s.arm_name())
+        .ok_or_else(|| bad("unknown arm"))?;
+    for (position, &arm) in arms.iter().enumerate() {
         let arm_root = parent.join(arm);
         let other = read_inputs(&arm_root)?;
         let other_a = other
@@ -3241,22 +3583,25 @@ fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
             .as_ref()
             .ok_or_else(|| bad("pair authorization missing"))?;
         if other_a.pair != a.pair
-            || other_a.name() != arm
+            || other.arm_name() != arm
             || other.parent.model != s.parent.model
             || other.parent.adam != s.parent.adam
         {
             return Err(bad("pair parent/policy mismatch"));
         }
         let closed = arm_commands(&arm_root, &other)?;
-        if arm != a.name()
+        if arm != s.arm_name()
             && closed
                 .last()
                 .is_some_and(|(_, c)| c.status != CommandStatus::Complete)
         {
             return Err(bad("other arm is not complete"));
         }
-        if a.name() == "A75" && arm == "C50" && closed.is_empty() {
-            return Err(bad("control arm must complete first"));
+        if position < current && closed.is_empty() {
+            return Err(bad("previous preflight/control arm must complete first"));
+        }
+        if position > current && !closed.is_empty() {
+            return Err(bad("later arm already started; earlier arm is closed"));
         }
         for (t, c) in closed {
             updates += t.draws.len() as u64;
@@ -3264,7 +3609,27 @@ fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
             seconds += c.elapsed.finite()?;
         }
     }
-    if updates > 1024 || generations > 7500 || seconds >= 7200. {
+    if !s.preflight() && s.contract == RESTART_CONTRACT {
+        let Record::Preflight(p) =
+            read_record(parent, &reference(parent, "preflight-proof.r3er")?)?
+        else {
+            return Err(bad("missing preflight certificate"));
+        };
+        if p.pair != a.pair || p.source != s.source {
+            return Err(bad("preflight pair/source changed"));
+        }
+        generations += p.generations as usize;
+        seconds += p.elapsed.finite()?;
+    }
+    if updates
+        > if s.contract == RESTART_CONTRACT {
+            1028
+        } else {
+            1024
+        }
+        || generations > 7500
+        || seconds >= 7200.
+    {
         return Err(bad("anchor pair budget exhausted"));
     }
     Ok((updates, generations, seconds))
@@ -3292,6 +3657,209 @@ fn arm_commands(root: &Path, s: &RunSnapshot) -> Result<Vec<(SegmentReceipt, Com
     }
     Ok(out)
 }
+fn verify_save_preflight(root: &Path, control: &mut RunControl, generate: bool) -> Result<()> {
+    if generate {
+        control.generation_limit = 8;
+    }
+    let mut endpoints = Vec::new();
+    let mut commands = Vec::new();
+    for (arm, purpose, segments) in [
+        ("preflight-A", RunPurpose::SaveContinuous, 1),
+        ("preflight-B", RunPurpose::SaveSplit, 2),
+    ] {
+        control.check("preflight_verify")?;
+        let dir = root.join(arm);
+        let s = read_inputs(&dir)?;
+        if s.purpose != purpose || s.tape.len() != 2 || s.source != evaluator_source() {
+            return Err(bad("preflight purpose/source/budget"));
+        }
+        let closed = arm_commands(&dir, &s)?;
+        if closed.len() != segments
+            || closed
+                .last()
+                .is_none_or(|(_, c)| c.status != CommandStatus::Complete)
+        {
+            return Err(bad("preflight continuous/split finalization"));
+        }
+        let c = &closed.last().unwrap().1;
+        commands.push(reference(
+            root,
+            &format!("{arm}/{}", command_locator(&c.terminal)?),
+        )?);
+        close_native_inner(&dir, &c.terminal.locator, control, false)?;
+        let chain = lineage(&dir, &s, &c.terminal)?;
+        let n = chain
+            .last()
+            .unwrap()
+            .1
+            .native
+            .as_ref()
+            .ok_or_else(|| bad("preflight endpoint"))?;
+        let l = resolve_native(&dir, &s, n, true)?;
+        if n.step != s.parent.step + 2
+            || chain.iter().map(|(_, t)| t.draws.len()).sum::<usize>() != 2
+        {
+            return Err(bad("preflight actual optimizer count"));
+        }
+        println!(
+            "SAVE_CAPABLE=WRITER_READER_VERIFIED PURPOSE=SAVE_RESUME_PREFLIGHT arm={arm} native={} file={} step={} model={} Adam={} counters={:?} quality_eligible=false",
+            dir.join(&n.file.locator).display(),
+            hex(&n.file.digest),
+            n.step,
+            hex(&n.model),
+            hex(&n.adam.unwrap()),
+            n.counters
+        );
+        endpoints.push((s, l));
+    }
+    let (a, al) = &endpoints[0];
+    let (b, bl) = &endpoints[1];
+    let at = al
+        .manifest
+        .training
+        .as_ref()
+        .ok_or_else(|| bad("preflight training state"))?;
+    let bt = bl
+        .manifest
+        .training
+        .as_ref()
+        .ok_or_else(|| bad("preflight training state"))?;
+    if a.parent.file.digest != b.parent.file.digest
+        || a.parent.adam != b.parent.adam
+        || al.model.weight_hash()? != bl.model.weight_hash()?
+        || optimizer_hash(&al.optimizer)? != optimizer_hash(&bl.optimizer)?
+        || al.tokenizer.semantic_id() != bl.tokenizer.semantic_id()
+        || at != bt
+        || at.train_loss.map(f64::to_bits) != bt.train_loss.map(f64::to_bits)
+        || a.lr_policy != b.lr_policy
+        || a.lr_offset != b.lr_offset
+        || a.tape.iter().zip(&b.tape).any(|(x, y)| {
+            x.indices != y.indices
+                || x.sampler != y.sampler
+                || x.input != y.input
+                || x.target != y.target
+        })
+    {
+        return Err(bad("SMALL save/resume preflight numeric/tape/state parity"));
+    }
+    if generate && root.join("preflight-proof.r3er").exists() {
+        return Err(bad("preflight already certified"));
+    }
+    if generate
+        && endpoints.iter().enumerate().any(|(i, _)| {
+            root.join(if i == 0 { "preflight-A" } else { "preflight-B" })
+                .join("parity.r3er")
+                .exists()
+        })
+    {
+        return Err(bad("preflight generation already attempted"));
+    }
+    let mut observations = Vec::new();
+    for (i, (s, l)) in endpoints.iter().enumerate() {
+        let dir = root.join(if i == 0 { "preflight-A" } else { "preflight-B" });
+        let spec = panel(s, PanelKind::Ordinary)?;
+        if generate {
+            let mut rows = Vec::new();
+            for &ordinal in spec.cases.iter().take(2) {
+                rows.push(evaluate_row(
+                    l,
+                    &s.cases[ordinal as usize],
+                    ordinal,
+                    control,
+                    false,
+                )?);
+            }
+            let e = EvalPayload {
+                run: s.run,
+                binding: s.binding(),
+                source: s.source,
+                model: unhex(&l.model.weight_hash()?)?,
+                tokenizer: unhex(&l.tokenizer.semantic_id())?,
+                architecture: unhex(&l.model.config.semantic_id()?)?,
+                step: s.parent.step + 2,
+                new_updates: 2,
+                kind: PanelKind::Ordinary,
+                expected: spec.cases.len() as u32,
+                rows,
+            };
+            publish(&dir, "parity.r3er", &Record::Evaluation(e))?;
+        }
+        let Record::Evaluation(e) = read_record(&dir, &reference(&dir, "parity.r3er")?)? else {
+            return Err(bad("preflight parity record"));
+        };
+        rescore(s, &e, l, false)?;
+        if e.rows.len() != spec.cases.len().min(2)
+            || e.rows
+                .iter()
+                .any(|r| !r.completed || r.interruption.is_some())
+        {
+            return Err(bad("preflight parity incomplete"));
+        }
+        observations.push(
+            e.rows
+                .iter()
+                .map(|r| (r.tokens.clone(), r.eos, r.finish, r.error.clone()))
+                .collect::<Vec<_>>(),
+        );
+    }
+    if observations[0] != observations[1] {
+        return Err(bad("preflight native generation parity"));
+    }
+    let pair = a.authorization.as_ref().map_or(a.parent.model, |v| v.pair);
+    let source = evaluator_source();
+    let binary = unhex(&file_hash(&std::env::current_exe()?)?)?;
+    let commands: [FileRef; 2] = commands
+        .try_into()
+        .map_err(|_| bad("preflight command count"))?;
+    let panels = [
+        reference(root, "preflight-A/parity.r3er")?,
+        reference(root, "preflight-B/parity.r3er")?,
+    ];
+    if generate {
+        control.check("preflight_proof_publish")?;
+        publish(
+            root,
+            "preflight-proof.r3er",
+            &Record::Preflight(PreflightReceipt {
+                pair,
+                source,
+                binary,
+                commands,
+                panels,
+                elapsed: Scalar::F64(control.start.elapsed().as_secs_f64()),
+                generations: control.generation_calls as u64,
+            }),
+        )?;
+    } else {
+        let Record::Preflight(p) = read_record(root, &reference(root, "preflight-proof.r3er")?)?
+        else {
+            return Err(bad("preflight certificate kind"));
+        };
+        if p.pair != pair
+            || p.source != source
+            || p.binary != binary
+            || p.commands != commands
+            || p.panels != panels
+        {
+            return Err(bad("preflight certificate binding"));
+        }
+    }
+    println!(
+        "SAVE_RESUME_PREFLIGHT=PASS PROFILE={} continuous_updates=2 split_updates=2 ACTUAL_NEW_GENERATIONS={} TEACHERS={} actual_LR_bits={} stored_config_LR={} quality_eligible=false",
+        al.model.config.profile,
+        control.generation_calls,
+        control.teacher_calls,
+        if a.tiny_spec {
+            at.config.lr
+        } else {
+            progress_lr("L", 1025)?
+        }
+        .to_bits(),
+        at.config.lr
+    );
+    Ok(())
+}
+
 fn print_anchor_panel(s: &RunSnapshot, e: &EvalPayload, l: &Loaded) -> Result<()> {
     let score = rescore(s, e, l, true)?;
     let mut context = 0;
@@ -3339,7 +3907,7 @@ fn print_anchor_panel(s: &RunSnapshot, e: &EvalPayload, l: &Loaded) -> Result<()
     }
     println!(
         "NODE=G2 ARM={} PANEL={} step={} updates={} model={} full={}/{} entity={} context={context} value={value} event={} errors={} empty={empty} EOS={eos} wrong_citation={wrong_citation} base4={}/{} QA={}/{} AUX={}/{}",
-        s.authorization.as_ref().map_or("BASELINE", |a| a.name()),
+        s.arm_name(),
         e.kind.name(),
         e.step,
         e.new_updates,
@@ -3367,7 +3935,12 @@ fn print_anchor_panel(s: &RunSnapshot, e: &EvalPayload, l: &Loaded) -> Result<()
     Ok(())
 }
 fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
-    for arm in ["C50", "A75"] {
+    let arms = if root.join("C50-R").exists() {
+        ["C50-R", "A75-R"]
+    } else {
+        ["C50", "A75"]
+    };
+    for arm in arms {
         let dir = root.join(arm);
         let s = read_inputs(&dir)?;
         if let Err(e) = arm_commands(&dir, &s) {
@@ -3378,7 +3951,7 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
         }
     }
     let mut incomplete = false;
-    for arm in ["C50", "A75"] {
+    for arm in arms {
         let dir = root.join(arm);
         let s = read_inputs(&dir)?;
         let mut paths = std::fs::read_dir(&dir)?
@@ -3435,7 +4008,7 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
         return Ok(());
     }
     let mut endpoints = Vec::new();
-    for arm in ["C50", "A75"] {
+    for arm in arms {
         let dir = root.join(arm);
         let s = read_inputs(&dir)?;
         let a = s
@@ -3523,7 +4096,7 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
             let mut rows = Vec::new();
             for (i, (s, h, _)) in endpoints.iter().enumerate() {
                 if let Some(r) = h.evaluations.get(&(s.parent.step + n, kind)) {
-                    let (e, l) = payload(&root.join(if i == 0 { "C50" } else { "A75" }), s, r)?;
+                    let (e, l) = payload(&root.join(arms[i]), s, r)?;
                     rescore(s, &e, &l, true)?;
                     rows.push(
                         e.rows
@@ -3599,7 +4172,10 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
             "this repair authorizes no SMALL optimizer updates; historical import cannot resume",
         ));
     }
-    if let Some(authorization) = &s.authorization {
+    if s.authorization.is_some() {
+        if s.contract != RESTART_CONTRACT {
+            return Err(bad("closed historical study is not restart authorization"));
+        }
         if s.source != evaluator_source()
             || s.origins
                 .iter()
@@ -3618,11 +4194,27 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
         control.generation_limit = 7500 - generations;
         println!(
             "NODE=G2 ARM={} STATE=START prior_generations={generations} prior_command_s={seconds:.3} source={} binary={} input_binding={}",
-            authorization.name(),
+            s.arm_name(),
             hex(&evaluator_source()),
             file_hash(&std::env::current_exe()?)?,
             hex(&s.binding())
         );
+        for origin in s
+            .origins
+            .iter()
+            .filter(|o| o.role.starts_with("replacement-"))
+        {
+            if unhex(&file_hash(Path::new(&origin.original.locator))?)? != origin.original.digest {
+                return Err(bad("replacement source changed"));
+            }
+        }
+        if !s.preflight() {
+            verify_save_preflight(
+                root.parent().ok_or_else(|| bad("preflight root"))?,
+                control,
+                false,
+            )?;
+        }
     }
     let mut h = History {
         evaluations: BTreeMap::new(),
@@ -3658,7 +4250,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
         .training
         .clone()
         .ok_or_else(|| bad("training state"))?;
-    if s.authorization.is_some() {
+    if !s.historical {
         fork_budget(
             &mut state,
             s.parent.step,
@@ -3681,6 +4273,11 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
     let mut draws = Vec::new();
     let mut complete = false;
     let mut heartbeat = Instant::now();
+    let mut last_saved = if resume.is_some() {
+        Some(initial.clone())
+    } else {
+        None
+    };
     let outcome = (|| -> Result<()> {
         let episodes: Vec<_> = s
             .train
@@ -3690,8 +4287,38 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
         let framed = samples(&episodes, &l.tokenizer, state.config.seq_len)?;
         loop {
             let n = state.step as u64 - s.parent.step;
+            if s.purpose == RunPurpose::SaveSplit && index == 0 && n == 1 {
+                println!("PURPOSE=SAVE_RESUME_PREFLIGHT explicit_one_update_segment_deadline=true");
+                control.deadline = Instant::now();
+                control.check("preflight_split_save_boundary")?;
+            }
             l.model.refresh_identity()?;
             if s.eval_steps.contains(&(n as u32)) {
+                if s.authorization.is_some() {
+                    let native = if let Some(saved) =
+                        last_saved.as_ref().filter(|r| r.step == state.step as u64)
+                    {
+                        reuse_native(root, &s, saved, &l, &state, &adam, index)?
+                    } else {
+                        save_native(
+                            root,
+                            &format!("{name}/step-{n:04}.r3m"),
+                            &s,
+                            &mut l,
+                            &state,
+                            &adam,
+                            index,
+                            "RECOVERY_SCREENING",
+                        )?
+                    };
+                    println!(
+                        "LAST_DURABLE_NATIVE={} step={} file_hash={} STATE=SAVED_BEFORE_EVALUATION",
+                        native.file.locator,
+                        native.step,
+                        hex(&native.file.digest)
+                    );
+                    last_saved = Some(native);
+                }
                 let kinds: &[PanelKind] = if s.authorization.is_some() {
                     &[
                         PanelKind::Dev,
@@ -3703,8 +4330,35 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                     &[PanelKind::Dev, PanelKind::Watch]
                 };
                 for &kind in kinds {
-                    if !h.evaluations.contains_key(&(state.step as u64, kind)) {
+                    let previous = h
+                        .evaluations
+                        .get(&(state.step as u64, kind))
+                        .map(|r| payload(root, &s, r).map(|v| v.0))
+                        .transpose()?;
+                    let done = previous.as_ref().is_some_and(|e| {
+                        e.rows.len() == e.expected as usize
+                            && e.rows
+                                .iter()
+                                .all(|r| r.completed && r.interruption.is_none())
+                    });
+                    if !done {
                         control.check("binary_before_evaluation")?;
+                        let prefix = previous
+                            .map(|e| {
+                                e.rows
+                                    .into_iter()
+                                    .take_while(|r| r.completed && r.interruption.is_none())
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        #[cfg(feature = "test-support")]
+                        if s.tiny_spec
+                            && kind == PanelKind::Dev
+                            && n == 1
+                            && std::env::var("R3ER_TEST_STOP").as_deref() == Ok("partial-dev")
+                        {
+                            control.deadline = Instant::now();
+                        }
                         let e = if kind == PanelKind::Watch && s.authorization.is_some() {
                             let r =
                                 &h.evaluations[&(state.step as u64, PanelKind::Ordinary)].payload;
@@ -3725,7 +4379,15 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                             e.expected = spec.cases.len() as u32;
                             e
                         } else {
-                            evaluate(&s, &l, kind, state.step as u64, control, s.tiny_spec)?
+                            evaluate(
+                                &s,
+                                &l,
+                                kind,
+                                state.step as u64,
+                                control,
+                                s.tiny_spec,
+                                prefix,
+                            )?
                         };
                         if s.authorization.is_some()
                             && e.rows.len() == e.expected as usize
@@ -3742,7 +4404,11 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                         )?;
                         let er = EvaluationRef {
                             payload: r,
-                            native: None,
+                            native: if s.authorization.is_some() {
+                                last_saved.clone()
+                            } else {
+                                None
+                            },
                         };
                         h.evaluations.insert((state.step as u64, kind), er.clone());
                         evaluations.push(er);
@@ -3785,6 +4451,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                     .evaluations
                     .get(&(state.step as u64, PanelKind::Dev))
                     .and_then(|e| e.native.as_ref())
+                    .or_else(|| last_saved.as_ref().filter(|r| r.step == state.step as u64))
                 {
                     reuse_native(root, &s, native, &l, &state, &adam, index)?
                 } else {
@@ -3812,8 +4479,13 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                     }
                     h.evaluations.insert((state.step as u64, kind), r);
                 }
+                last_saved = Some(native);
                 fault(&s, "checkpoint", n, control);
                 control.check("binary_checkpoint_recorded")?;
+            }
+            if n == s.tape.len() as u64 && s.preflight() {
+                complete = true;
+                break;
             }
             if n == s.tape.len() as u64 {
                 for kind in [PanelKind::Cross, PanelKind::Ordinary] {
@@ -3821,7 +4493,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                         continue;
                     }
                     control.check("binary_final_panel")?;
-                    let e = evaluate(&s, &l, kind, state.step as u64, control, true)?;
+                    let e = evaluate(&s, &l, kind, state.step as u64, control, true, Vec::new())?;
                     let r = publish(
                         root,
                         &format!("{name}/{}.r3er", kind.name()),
@@ -3905,8 +4577,8 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
             if heartbeat.elapsed() >= Duration::from_secs(15) {
                 let n = state.step as u64 - s.parent.step;
                 println!(
-                    "NODE=G2 ARM={} STATE=TRAINING completed_updates={n}/{} optimizer_absolute_step={} input_tokens={} target_tokens={} anchor_draws={} focus_draws={} last_complete_eval={:?} quality_gate=NOT_EVALUATED elapsed_s={:.3} rss_kib={:?} last_stop={:?}",
-                    s.authorization.as_ref().map_or("TINY", |a| a.name()),
+                    "NODE=D3 ARM={} STATE=TRAINING completed_updates={n}/{} optimizer_absolute_step={} input_tokens={} target_tokens={} anchor_draws={} focus_draws={} last_complete_eval={:?} quality_gate=NOT_EVALUATED elapsed_s={:.3} rss_kib={:?} last_stop={:?} last_saved_step={:?}",
+                    s.arm_name(),
                     s.tape.len(),
                     state.step,
                     state.consumed_tokens - s.parent.counters[0],
@@ -3916,7 +4588,8 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                     h.decisions.keys().next_back(),
                     control.start.elapsed().as_secs_f64(),
                     control.last_rss_kib,
-                    control.stop
+                    control.stop,
+                    last_saved.as_ref().map(|r| r.step)
                 );
                 heartbeat = Instant::now();
             }
@@ -3940,10 +4613,14 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
         .stop
         .map_or("SCREENING_BUDGET_REACHED", StopReason::name);
     let saved = (|| {
-        if let Some(native) = h
-            .evaluations
-            .get(&(state.step as u64, PanelKind::Dev))
-            .and_then(|e| e.native.as_ref())
+        if let Some(native) = last_saved
+            .as_ref()
+            .filter(|r| r.step == state.step as u64)
+            .or_else(|| {
+                h.evaluations
+                    .get(&(state.step as u64, PanelKind::Dev))
+                    .and_then(|e| e.native.as_ref())
+            })
         {
             let reference = reuse_native(root, &s, native, &l, &state, &adam, index)?;
             println!(
@@ -3974,7 +4651,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
             r.native = native.clone();
         }
     }
-    if evaluations.iter().any(|r| read_record(root,&r.payload).is_ok_and(|v| matches!(v,
+    if !(s.contract == RESTART_CONTRACT && control.observed == [StopReason::TimeBudget]) && evaluations.iter().any(|r| read_record(root,&r.payload).is_ok_and(|v| matches!(v,
         Record::Evaluation(e) if e.rows.len()!=e.expected as usize || e.rows.iter().any(|r|!r.completed || r.interruption.is_some())))) {
         control.observe(StopReason::AuditIncomplete);
     }
@@ -4003,7 +4680,12 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
         cleanup: Scalar::F64(cleanup.elapsed().as_secs_f64()),
         draws,
     };
-    if t.complete && t.stop.is_empty() && t.save_error.is_none() && s.authorization.is_some() {
+    if t.complete
+        && t.stop.is_empty()
+        && t.save_error.is_none()
+        && s.authorization.is_some()
+        && !s.preflight()
+    {
         let scores = t
             .evaluations
             .iter()
@@ -4427,6 +5109,7 @@ fn import_legacy(
         ],
         anchor_floor: progress_u64(&p, "anchor_floor")?,
         authorization: None,
+        purpose: RunPurpose::Anchor,
     };
     publish(output, "inputs.r3er", &Record::Inputs(Box::new(s.clone())))?;
     let mut refs = Vec::new();
@@ -4940,6 +5623,7 @@ fn fixture(output: &Path) -> Result<()> {
         baseline: [0, 0, 0],
         anchor_floor: 178,
         authorization: None,
+        purpose: RunPurpose::Anchor,
     };
     for (i, kind) in [
         PanelKind::Dev,
@@ -4983,11 +5667,14 @@ fn publish_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     })
 }
 #[cfg(feature = "test-support")]
-fn fixture_fork(from: &Path, output: &Path, untrained: bool) -> Result<()> {
-    fixture_fork_inner(from, output, untrained, false)
-}
-#[cfg(feature = "test-support")]
-fn fixture_fork_inner(from: &Path, output: &Path, untrained: bool, pair: bool) -> Result<()> {
+fn fixture_fork_inner(
+    from: &Path,
+    output: &Path,
+    untrained: bool,
+    pair: bool,
+    purpose: RunPurpose,
+    restart: bool,
+) -> Result<()> {
     let mut s = read_inputs(from)?;
     if !s.tiny_spec {
         return Err(bad("fixture fork requires explicit TINY test spec"));
@@ -5014,6 +5701,14 @@ fn fixture_fork_inner(from: &Path, output: &Path, untrained: bool, pair: bool) -
         d.sampler = s.parent.counters[2] + i as u64 + 1;
     }
     s.baseline = [0; 3];
+    s.purpose = purpose;
+    if restart {
+        s.contract = RESTART_CONTRACT.into();
+        s.source = evaluator_source();
+    }
+    if s.preflight() {
+        s.eval_steps.clear();
+    }
     if pair {
         s.origins.push(Origin {
             role: "test-pair".into(),

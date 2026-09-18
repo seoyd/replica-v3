@@ -31,6 +31,124 @@ fn p(p: &Path) -> &str {
     p.to_str().unwrap()
 }
 #[test]
+fn binary_save_preflight_and_partial_panel_process_resume() {
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = if let Some(path) = std::env::var_os("R3ER_TEST_BOOTSTRAP") {
+        PathBuf::from(path)
+    } else {
+        let path = d.path().join("bootstrap");
+        call(
+            &["fixture", "--output", p(&path)],
+            None,
+            true,
+            &d.path().join("bootstrap-prepare.log"),
+        );
+        call(
+            &["run", "--root", p(&path)],
+            None,
+            true,
+            &d.path().join("bootstrap-run.log"),
+        );
+        path
+    };
+    let root = d.path().join("preflight");
+    call(
+        &[
+            "fixture-preflight",
+            "--from",
+            p(&bootstrap),
+            "--output",
+            p(&root),
+        ],
+        None,
+        true,
+        &d.path().join("prepare.log"),
+    );
+    for arm in ["preflight-A", "preflight-B"] {
+        call(
+            &["run", "--root", p(&root.join(arm))],
+            None,
+            true,
+            &d.path().join(format!("{arm}.log")),
+        );
+    }
+    call(
+        &[
+            "run",
+            "--root",
+            p(&root.join("preflight-B")),
+            "--resume",
+            "segment-00/terminal.r3er",
+        ],
+        None,
+        true,
+        &d.path().join("resume.log"),
+    );
+    let out = call(
+        &["save-preflight-verify", "--root", p(&root)],
+        None,
+        true,
+        &d.path().join("verify.log"),
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("quality_eligible=false"));
+    let partial = d.path().join("partial");
+    call(
+        &[
+            "fixture-fork",
+            "--from",
+            p(&bootstrap),
+            "--output",
+            p(&partial),
+            "--restart-spec",
+        ],
+        None,
+        true,
+        &d.path().join("partial-prepare.log"),
+    );
+    call(
+        &["run", "--root", p(&partial)],
+        Some("partial-dev"),
+        true,
+        &d.path().join("partial.log"),
+    );
+    let raw = fs::read(partial.join("segment-00/dev-0001.r3er")).unwrap();
+    let terminal = fs::read(partial.join("segment-00/terminal.r3er")).unwrap();
+    call(
+        &[
+            "run",
+            "--root",
+            p(&partial),
+            "--resume",
+            "segment-00/terminal.r3er",
+        ],
+        None,
+        true,
+        &d.path().join("partial-resume.log"),
+    );
+    assert_eq!(
+        raw,
+        fs::read(partial.join("segment-00/dev-0001.r3er")).unwrap()
+    );
+    assert_eq!(
+        terminal,
+        fs::read(partial.join("segment-00/terminal.r3er")).unwrap()
+    );
+    assert!(partial.join("comparison.r3er").is_file());
+    call(
+        &[
+            "close",
+            "--root",
+            p(&partial),
+            "--terminal",
+            "segment-01/terminal.r3er",
+        ],
+        None,
+        true,
+        &d.path().join("partial-close.log"),
+    );
+    println!("PREFLIGHT_REGRESSION_TINY_UPDATES=6 SMALL_UPDATES=0 GENERATIONS=8 TEACHERS=6");
+}
+#[test]
 fn binary_post_terminal_failure_blocks_pair_and_report() {
     let d = tempfile::tempdir().unwrap();
     let bootstrap = if let Some(p) = std::env::var_os("R3ER_TEST_BOOTSTRAP") {

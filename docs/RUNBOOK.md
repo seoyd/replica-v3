@@ -2,6 +2,22 @@
 
 ## Durable retries and native command outcomes
 
+The explicit replacement study is registered with
+`replica-train recovery native anchor-prepare --baseline VERIFIED_F_IMPORT --policy ORIGINAL_F_POLICY --expected-parent FULL_NATIVE_SHA --replacement-of PRESERVED_FAILED_PAIR --output NEW_ATTEMPT`.
+It accepts the specific old C50+256 native-save failure, freezes unchanged pool/tape
+contents and registers C50-R/A75-R plus preflight-A/preflight-B. It does not resume
+or rewrite the failed pair. Use one frozen release executable throughout.
+
+Run preflight-A once, preflight-B once, then preflight-B with
+`--resume segment-00/terminal.r3er`. The latter uses an explicitly registered
+one-update segment deadline; it is a save/resume experiment, not a model quality
+stop. `recovery native save-preflight-verify --root NEW_ATTEMPT` compares exact
+weights/Adam/state and at most two ordinary requests per endpoint, then writes the
+typed proof. Total SMALL optimizer4. Do not retry a failed preflight or use it as a
+quality parent. Only then run C50-R, complete its command, and run A75-R, each≤512.
+`recovery native anchor-report --root NEW_ATTEMPT` independently recounts both
+endpoints. The pair budget includes preflight command time and parity generation.
+
 Journal append retries now perform sync_all before returning the existing ACK.
 After any sync failure the writer remains poisoned: explicitly reopen/replay and
 retry; do not truncate a tail or treat successful read-only replay as an ACK.

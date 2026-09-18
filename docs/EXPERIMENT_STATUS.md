@@ -1,5 +1,30 @@
 # 진단 및 구현 상태
 
+## D2 준비 — native 사전검증 경로·학습 전 코드 gate 통과
+
+2026-09-18 / EXECUTED_THIS_RUN. D1 source
+c5f8d03fc08b61f451999930356b71f077f85d10을 정상 push하고 실제 remote SHA 일치를
+확인했다. 이 절은 실제 SMALL preflight 이전의 코드 검증 상태다: SMALL0, D3 NOT_RUN.
+
+기존 runner/optimizer/native writer/loader를 그대로 호출하는 한정 preflight 목적을
+등록했다. 연속2와 별도 process1+1, 소수 greedy parity의 성공 proof가 있어야 정식
+C50-R/A75-R를 시작한다. 새 계약/실패 receipt hash/실행 source·binary로 attempt를
+구분하며 원래 parent·case·panel·pool·tape를 재검증한다. 정식 평가 전에 endpoint를
+저장·로드한다. clean time-only partial panel은 원본 raw와 완료 prefix를 보존해 재개한다.
+
+직접 TINY preflight/partial-panel process1 PASS, TINY6/gen8/teacher6. 마지막 source의
+필수 quick는19 test invocations/74 test executions PASS, 중복된 필터1개를 제외한
+고유73 tests다. fmt/check/clippy와 source_unchanged=true; release build PASS.
+quick source digest=ab3e87fd8436acb015dd8ac857b15d87a42fb649528a50da91752d134c7bb0d9.
+근거: 같은 evidence root의 `d2-tiny-preflight.log`, `d2-quick/summary.json`,
+`d2-release-build.log`. 0-test 호출이나 실패를 PASS로 합산하지 않았다.
+
+이번 누적 TINY79/scalar0(직접30 + quick49), SMALL0. quick의49는 native process30,
+기존 LR/renewal/time-split19다. 기존 bootstrap은 재사용했다. 직접/native process의
+generation156/teacher152와 기타 기존 quick의 미계측 호출을 구분한다; 후자는 UNKNOWN,
+0으로 보고하지 않는다. 모두128회 TINY/scalar 실행 상한 안이다. 다음 단계는 동결된
+동일 source/binary에서 실제 SMALL4 preflight이며, 실패 시 정식 pair를 실행하지 않는다.
+
 ## D1 — retry ACK와 command 종료 경계 수리
 
 2026-09-18 / R3-DURABILITY-PAIR-RESTART-1.0 / EXECUTED_THIS_RUN.
