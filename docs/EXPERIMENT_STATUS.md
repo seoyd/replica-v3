@@ -1,5 +1,27 @@
 # 진단 및 구현 상태
 
+## Q6 — candidate 전달, 전체 품질 실험은 미완료
+
+SOURCE_COMMIT=`2a1010105e0914e4c84cc94b7da707171baaecbe`.
+main 정상 push 후 `git ls-remote origin refs/heads/main`의 전체 SHA가 동일했다.
+이 절은 source 이후 report-only 변경이다.
+[candidate source](https://github.com/seoyd/replica-v3/tree/2a1010105e0914e4c84cc94b7da707171baaecbe),
+[기준 대비 diff](https://github.com/seoyd/replica-v3/compare/a89fbc977ed9421489a43fc4b4eb6f42a5ebbd25...2a1010105e0914e4c84cc94b7da707171baaecbe).
+로컬 diff는 `artifacts/quality-first-bridge-20260919/candidate.diff`다.
+
+최종 release build PASS(15.38초), 바이너리 SHA256
+`fd554bdfb6e80ccbab150fd066d32ce5caeaa4b86d703d11ca775a2942dc925c`.
+동일 source의 최종 fresh-process admission도 실패 attempt를 거부했다
+(`final-sticky-admission.log`, 의도한 exit1, 신규 generation/teacher/optimizer0).
+원 부모 관측의 성공 final을 만들지 않았고 신규 study/SMALL checkpoint 없음.
+현재 소유 학습 process0, 마지막 durable SMALL step24310,
+TINY optimizer122/128, SMALL optimizer0/1024, scalar0.
+
+RESULT=PARTIAL. CK01~03/직접 수리 PASS와 무학습 원자료 검증은 완료했다.
+다만 Q3 SMALL 등록 및 C/T 실제 비교는 publication 실패에 의해 차단됐으므로
+전체 구현 계약 완료·모델 품질 회복·H3/S4/S5/S6/Goal1 완료가 아니다.
+새 파일은 ignored 실험 자료뿐이며 새 영구 소스/문서 파일은 없다.
+
 ## Q2/Q3 — 실제 부모 관측 완료, publication 실패로 학습 진입 차단
 
 R3-QUALITY-FIRST-BRIDGE-1.0 / 2026-09-19. **계약 전체 PARTIAL**.
