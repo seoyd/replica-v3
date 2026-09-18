@@ -65,6 +65,115 @@ fn copy_fixture(from: &Path, to: &Path) {
     }
 }
 #[test]
+fn bridge_observation_teacher_receipt_survives_fresh_read_and_cannot_retry() {
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
+    let root = d.path().join("observation");
+    call(
+        &[
+            "fixture-bridge",
+            "--from",
+            p(&bootstrap),
+            "--output",
+            p(&root),
+            "--observation",
+        ],
+        None,
+        true,
+        &d.path().join("prepare.log"),
+    );
+    let observed = call(
+        &["bridge-observe", "--root", p(&root)],
+        None,
+        true,
+        &d.path().join("observe.log"),
+    );
+    let log = String::from_utf8_lossy(&observed.stdout);
+    assert!(log.contains("TEACHERS=2"));
+    let final_bytes = fs::read(root.join("preflight-final.r3er")).unwrap();
+    let report = call(
+        &["bridge-observe-report", "--root", p(&root)],
+        None,
+        true,
+        &d.path().join("report.log"),
+    );
+    assert!(
+        String::from_utf8_lossy(&report.stdout)
+            .contains("NEW_GENERATIONS=0 NEW_TEACHERS=0 NEW_SMALL_UPDATES=0")
+    );
+    call(
+        &["bridge-observe", "--root", p(&root)],
+        None,
+        false,
+        &d.path().join("retry.log"),
+    );
+    assert_eq!(
+        final_bytes,
+        fs::read(root.join("preflight-final.r3er")).unwrap()
+    );
+    println!("BRIDGE_RECEIPT TINY_GENERATIONS=2 TINY_TEACHERS=2 TINY_UPDATES=0 SMALL_UPDATES=0");
+}
+#[test]
+fn bridge_policy_two_updates_equal_one_plus_one_in_fresh_processes() {
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
+    let a = d.path().join("continuous");
+    let b = d.path().join("split");
+    let mut updates = 0;
+    for (root, continuous) in [(&a, true), (&b, false)] {
+        let mut args = vec![
+            "fixture-bridge",
+            "--from",
+            p(&bootstrap),
+            "--output",
+            p(root),
+        ];
+        if continuous {
+            args.push("--continuous");
+        }
+        call(&args, None, true, &d.path().join("prepare.log"));
+        let out = call(
+            &["run", "--root", p(root)],
+            None,
+            true,
+            &d.path().join("run.log"),
+        );
+        updates += String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| l.starts_with("ACTUAL_TINY_UPDATE="))
+            .count();
+        if !continuous {
+            assert!(String::from_utf8_lossy(&out.stdout).contains("resume=true complete=false"));
+            let out = call(
+                &[
+                    "run",
+                    "--root",
+                    p(root),
+                    "--resume",
+                    "segment-00/terminal.r3er",
+                ],
+                None,
+                true,
+                &d.path().join("resume.log"),
+            );
+            updates += String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter(|l| l.starts_with("ACTUAL_TINY_UPDATE="))
+                .count();
+        }
+    }
+    assert_eq!(updates, 4);
+    call(
+        &["fixture-check", "--roots", p(&a), "--roots", p(&b)],
+        None,
+        true,
+        &d.path().join("check.log"),
+    );
+    println!(
+        "BRIDGE_FRESH_PROCESS NUMERIC_WEIGHT_ADAM_LR_PARITY=true TINY_UPDATES={updates} SMALL_UPDATES=0"
+    );
+}
+#[test]
 fn verification_published_final_sync_error_cannot_authorize_fresh_process() {
     let d = tempfile::tempdir().unwrap();
     let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());

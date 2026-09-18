@@ -19,6 +19,60 @@ pub const GENERATOR_REVISION: &str = "educational-korean-v1";
 mod harness_tests {
     use super::*;
     #[test]
+    fn bridge_pairs_serialized_temporal_oracle_and_negative_facts() {
+        let tok = ByteBpe::train(&[b"bridge".to_vec()], &hash(b"bridge-fixture"), 264).unwrap();
+        let [c, t, dev, sanity] = bridge_panel(&[], &tok, 19419).unwrap();
+        assert_eq!(
+            [c.len(), t.len(), dev.len(), sanity.len()],
+            [512, 512, 256, 64]
+        );
+        for (a, b) in c.iter().zip(&t) {
+            bridge_pair(a, b, &tok).unwrap();
+        }
+        for q in t.chunks(4).chain(dev.chunks(4)) {
+            assert_eq!(q[0].request.evidence, q[1].request.evidence);
+            assert_eq!(q[2].request.evidence, q[3].request.evidence);
+            assert_eq!(q[0].request.input, q[2].request.input);
+            assert_ne!(q[0].answer, q[1].answer);
+            assert_ne!(q[0].answer, q[2].answer);
+            for e in q {
+                bridge_support(e).unwrap();
+            }
+        }
+        for mode in 0..6 {
+            let mut e = t[0].clone();
+            match mode {
+                0 => e.answer = t[1].answer.clone(),
+                1 => e.request.evidence.items[1].event_id = e.request.evidence.items[0].event_id,
+                2 => {
+                    e.request.evidence.items[1].original_excerpt =
+                        e.request.evidence.items[0].original_excerpt.clone()
+                }
+                3 => {
+                    e.request.evidence.items[1].recorded_at =
+                        e.request.evidence.items[0].recorded_at
+                }
+                4 => {
+                    e.request.evidence.items[1].version_status =
+                        e.request.evidence.items[0].version_status.clone()
+                }
+                5 => e.request.input = e.request.input.replacen("의 ", "의 잘못된", 1),
+                _ => unreachable!(),
+            }
+            assert!(bridge_support(&e).is_err(), "mode={mode}");
+        }
+        let mut alias_collision = c[0].clone();
+        alias_collision.request.evidence = t[0].request.evidence.clone();
+        assert!(bridge_pair(&alias_collision, &t[0], &tok).is_err());
+        for group in sanity.chunks(4) {
+            assert_eq!(group[0].request.evidence.items.len(), 1);
+            assert_eq!(group[1].answer, group[2].answer);
+            assert_eq!(group[1].request.input, group[2].request.input);
+            assert_eq!(group[2].request.evidence, group[3].request.evidence);
+            assert_ne!(group[2].answer, group[3].answer);
+        }
+    }
+    #[test]
     fn conditional_panel_facts_swap_order_and_independent_oracle() {
         let (cases, foils) = conditional_panel(&[], 19317).unwrap();
         assert_eq!(cases.len(), 144);
@@ -2257,6 +2311,324 @@ pub fn crossed_copy_development(
     crossed_copy_panel(prior, seed, 128, false)
 }
 /// Frozen development contrasts only. Labels stay outside ModelRequest.
+pub fn bridge_panel(
+    prior: &[Episode],
+    tokenizer: &ByteBpe,
+    seed: u64,
+) -> Result<[Vec<Episode>; 4]> {
+    use replica_v3::neural::transformer::Rng;
+    let mut rng = Rng::new(seed);
+    let mut used: BTreeSet<String> = prior
+        .iter()
+        .flat_map(|e| &e.request.evidence.items)
+        .filter_map(|r| {
+            r.original_excerpt
+                .split_once("의 ")
+                .map(|(e, _)| e.to_owned())
+        })
+        .collect();
+    let mut output: [Vec<Episode>; 4] = Default::default();
+    for (split, count) in [("train", 128usize), ("dev", 64), ("sanity", 16)] {
+        for base in 0..count {
+            let digits = [2, 4, 6, 8][base % 4];
+            let repeated = base / if split == "sanity" { 4 } else { 16 } % 2 == 1;
+            let kind = base / if split == "sanity" { 8 } else { 32 } % 2;
+            let order = ((base ^ (base >> 2) ^ (base >> 4)) & 1) != 0;
+            let newer_id_larger = (((base >> 1) ^ (base >> 3) ^ (base >> 5)) & 1) != 0;
+            let mut entity = None;
+            for _ in 0..10000 {
+                let prefixes = [
+                    "장치",
+                    "설비",
+                    "센서",
+                    "장비",
+                    "기기",
+                    "기계",
+                    "단말",
+                    "부품",
+                    "측정기",
+                    "계측기",
+                    "제어기",
+                    "구동기",
+                ];
+                let prefix = prefixes[(rng.next_u64() % prefixes.len() as u64) as usize];
+                let first = (rng.next_u64() % 10) as u8;
+                let mut number = String::new();
+                for i in 0..digits {
+                    number.push(char::from(
+                        b'0' + if repeated {
+                            first
+                        } else {
+                            (first + i as u8) % 10
+                        },
+                    ));
+                }
+                let candidate = format!("{prefix}{number}");
+                if !used.contains(&candidate)
+                    && usize::from_str_radix(&hash(candidate.as_bytes())[..8], 16).unwrap() % 3 != 2
+                {
+                    entity = Some(candidate);
+                    break;
+                }
+            }
+            let entity = entity.ok_or_else(|| {
+                Error::Invalid(format!("BRIDGE_NAMESPACE_CAPACITY {split}/{base}"))
+            })?;
+            used.insert(entity.clone());
+            let prefix: String = entity.chars().take_while(|c| !c.is_ascii_digit()).collect();
+            let mut alias = None;
+            for _ in 0..10000 {
+                let number = rng.next_u64() % 10u64.pow(digits as u32);
+                let candidate = format!("{prefix}{number:0digits$}");
+                if candidate != entity
+                    && !used.contains(&candidate)
+                    && usize::from_str_radix(&hash(candidate.as_bytes())[..8], 16).unwrap() % 3 != 2
+                    && tokenizer.encode(candidate.as_bytes())?.len()
+                        == tokenizer.encode(entity.as_bytes())?.len()
+                {
+                    alias = Some(candidate);
+                    break;
+                }
+            }
+            let alias =
+                alias.ok_or_else(|| Error::Invalid("BRIDGE_MATCHED_ALIAS_CAPACITY".into()))?;
+            // Alias is never a queried entity in any other split.
+            used.insert(alias.clone());
+            let context = format!("구역{:05}", rng.next_u64() % 100000);
+            let values = if kind == 0 {
+                let dirs = [
+                    "오른쪽",
+                    "왼쪽",
+                    "직진",
+                    "대기",
+                    "북쪽",
+                    "남쪽",
+                    "동쪽",
+                    "서쪽",
+                ];
+                let i = (rng.next_u64() % 8) as usize;
+                [
+                    dirs[i].to_owned(),
+                    dirs[(i + 1 + (rng.next_u64() % 7) as usize) % 8].to_owned(),
+                ]
+            } else {
+                let n = rng.next_u64() % 100000;
+                [
+                    format!("경로{n:05}"),
+                    format!("경로{:05}", (n + 1 + rng.next_u64() % 99999) % 100000),
+                ]
+            };
+            let event_digits = [2u32, 4, 6, 8][base / 4 % 4];
+            let low = 10u64.pow(event_digits - 1);
+            let span = 9 * low;
+            let a = low + rng.next_u64() % span;
+            let b = low + ((a - low + 1 + rng.next_u64() % (span - 1)) % span);
+            let ids = if newer_id_larger {
+                [a.max(b), a.min(b)]
+            } else {
+                [a.min(b), a.max(b)]
+            };
+            let past_time = (100 + rng.next_u64() % 10000) as i64;
+            for view in 0..4 {
+                let past = view % 2 == 1;
+                let swap = view / 2;
+                let selected = usize::from(past);
+                let mut records = Vec::new();
+                for i in 0..2 {
+                    let mut record = evidence(
+                        ids[i] as i64,
+                        format!("{entity}의 {context} 이동 지시는 {}이다.", values[i ^ swap]),
+                        if i == 0 { "current" } else { "superseded" },
+                    );
+                    record.recorded_at = past_time + if i == 0 { 100 } else { 0 };
+                    record.observed_at = Some(record.recorded_at - 1);
+                    records.push(record);
+                }
+                let answer = format!(
+                    "{} [event:{}]",
+                    records[selected].original_excerpt, records[selected].event_id
+                );
+                let id = format!("bridge/{split}/{seed}/{base}/{view}");
+                let input = format!(
+                    "{entity}의 {context}에서 {} 사건의 원문을 빠짐없이 쓰고 그 사건을 인용해줘.",
+                    if past {
+                        "과거에 유효했던"
+                    } else {
+                        "현재 유효한"
+                    }
+                );
+                let mut e = Episode {
+                    id: id.clone(),
+                    category: 0,
+                    family: format!(
+                        "bridge/{split}/digits-{digits}/repeated-{repeated}/kind-{kind}/order-{order}/newer-id-larger-{newer_id_larger}/view-{view}"
+                    ),
+                    binding: format!("{entity}/{context}/{}", values[selected ^ swap]),
+                    sequence: format!("bridge/{split}/{seed}/{base}"),
+                    answer,
+                    request: ModelRequest {
+                        request_id: id,
+                        system: SYSTEM.into(),
+                        input,
+                        evidence: EvidenceBundle {
+                            items: records,
+                            ..Default::default()
+                        },
+                        limits: GenerationLimits {
+                            context_tokens: 2048,
+                            max_tokens: 128,
+                            timeout_ms: 30000,
+                        },
+                    },
+                };
+                if order {
+                    e.request.evidence.items.reverse();
+                }
+                bridge_support(&e)?;
+                let mut c = e.clone();
+                let nonselected = c
+                    .request
+                    .evidence
+                    .items
+                    .iter_mut()
+                    .find(|r| r.event_id != ids[selected] as i64)
+                    .unwrap();
+                nonselected.original_excerpt =
+                    nonselected.original_excerpt.replacen(&entity, &alias, 1);
+                bridge_support(&c)?;
+                if split == "train" {
+                    output[0].push(c);
+                    output[1].push(e);
+                } else if split == "dev" {
+                    output[2].push(e);
+                } else if view == 0 {
+                    // A single/current, B two distinct entities, C competing same slot, D past query.
+                    let mut a = e.clone();
+                    a.request
+                        .evidence
+                        .items
+                        .retain(|r| r.version_status == "current");
+                    for (v, mut item) in [a, c, e].into_iter().enumerate() {
+                        item.id = format!("bridge/sanity/{seed}/{base}/{v}");
+                        item.request.request_id = item.id.clone();
+                        output[3].push(item);
+                    }
+                } else if view == 1 {
+                    e.id = format!("bridge/sanity/{seed}/{base}/3");
+                    e.request.request_id = e.id.clone();
+                    output[3].push(e);
+                }
+            }
+        }
+    }
+    for i in [0, 1] {
+        check_split(&output[i], &output[2])?;
+        check_split(&output[i], &output[3])?;
+    }
+    for (c, t) in output[0].iter().zip(&output[1]) {
+        bridge_pair(c, t, tokenizer)?;
+    }
+    Ok(output)
+}
+/// Independent of label/binding/position: derive the unique support from serialized grammar and times.
+pub fn bridge_support(e: &Episode) -> Result<usize> {
+    let invalid = || Error::Invalid(format!("BRIDGE_DATA_CONTRACT {}", e.id));
+    let (entity, tail) = e.request.input.split_once("의 ").ok_or_else(invalid)?;
+    let (context, question) = tail.split_once("에서 ").ok_or_else(invalid)?;
+    let status = if question.starts_with("현재 유효한 사건의 ") {
+        "current"
+    } else if question.starts_with("과거에 유효했던 사건의 ") {
+        "superseded"
+    } else {
+        return Err(invalid());
+    };
+    let records = &e.request.evidence.items;
+    if records.len() != 2 || records[0].event_id == records[1].event_id {
+        return Err(invalid());
+    }
+    let mut values = BTreeSet::new();
+    let mut selected = Vec::new();
+    for (i, record) in records.iter().enumerate() {
+        let (subject, rest) = record
+            .original_excerpt
+            .split_once("의 ")
+            .ok_or_else(invalid)?;
+        let (slot, value) = rest.split_once(" 이동 지시는 ").ok_or_else(invalid)?;
+        let value = value
+            .strip_suffix("이다.")
+            .filter(|v| !v.is_empty())
+            .ok_or_else(invalid)?;
+        if !values.insert(value)
+            || record.observed_at.is_none_or(|t| t > record.recorded_at)
+            || !["current", "superseded"].contains(&record.version_status.as_str())
+        {
+            return Err(invalid());
+        }
+        if subject == entity && slot == context && record.version_status == status {
+            selected.push(i);
+        }
+    }
+    let current = records
+        .iter()
+        .find(|r| r.version_status == "current")
+        .ok_or_else(invalid)?;
+    let past = records
+        .iter()
+        .find(|r| r.version_status == "superseded")
+        .ok_or_else(invalid)?;
+    if current.recorded_at <= past.recorded_at || selected.len() != 1 {
+        return Err(invalid());
+    }
+    let support = &records[selected[0]];
+    if e.answer != format!("{} [event:{}]", support.original_excerpt, support.event_id) {
+        return Err(invalid());
+    }
+    Ok(selected[0])
+}
+pub fn bridge_pair(c: &Episode, t: &Episode, tokenizer: &ByteBpe) -> Result<()> {
+    let selected = bridge_support(t)?;
+    if bridge_support(c)? != selected
+        || c.request.input != t.request.input
+        || c.answer != t.answer
+        || c.request.evidence.items.len() != 2
+    {
+        return Err(Error::Invalid("BRIDGE_PAIRED_TARGET".into()));
+    }
+    let mut expected = t.clone();
+    let nonselected = 1 - selected;
+    let (original, suffix) = t.request.evidence.items[nonselected]
+        .original_excerpt
+        .split_once("의 ")
+        .unwrap();
+    let (alias, other_suffix) = c.request.evidence.items[nonselected]
+        .original_excerpt
+        .split_once("의 ")
+        .unwrap();
+    if original == alias
+        || suffix != other_suffix
+        || original
+            .chars()
+            .take_while(|c| !c.is_ascii_digit())
+            .collect::<String>()
+            != alias
+                .chars()
+                .take_while(|c| !c.is_ascii_digit())
+                .collect::<String>()
+        || original.len() != alias.len()
+    {
+        return Err(Error::Invalid("BRIDGE_ALIAS_DELTA".into()));
+    }
+    expected.request.evidence.items[nonselected].original_excerpt = c.request.evidence.items
+        [nonselected]
+        .original_excerpt
+        .clone();
+    if native::ordered_bytes(&[expected]) != native::ordered_bytes(std::slice::from_ref(c))
+        || tokenizer.encode(c.answer.as_bytes())? != tokenizer.encode(t.answer.as_bytes())?
+    {
+        return Err(Error::Invalid("BRIDGE_ONLY_ENTITY_DELTA".into()));
+    }
+    Ok(())
+}
 pub fn conditional_panel(prior: &[Episode], seed: u64) -> Result<(Vec<Episode>, Vec<String>)> {
     use replica_v3::neural::transformer::Rng;
     let mut rng = Rng::new(seed);

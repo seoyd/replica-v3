@@ -21,6 +21,7 @@ const RESTART_CONTRACT: &str = "R3-DURABILITY-PAIR-RESTART-1.0";
 const COOLDOWN_CONTRACT: &str = "R3-PREFLIGHT-ONCE-AND-COOLDOWN-1.0";
 const OBJECTIVE_CONTRACT: &str = "R3-DATA-BINARY-AND-TARGET-LOSS-1.0";
 const NATIVE_CORPUS_CONTRACT: &str = "R3-NATIVE-CORPUS-OBJECTIVE-BINDING-1.0";
+const BRIDGE_CONTRACT: &str = "R3-QUALITY-FIRST-BRIDGE-1.0";
 
 fn bad(s: &str) -> Error {
     Error::Corrupt(format!("R3ER: {s}"))
@@ -221,6 +222,9 @@ enum PanelKind {
     Ordinary,
     DevParity,
     OrdinaryParity,
+    LegacyDev,
+    Conditional,
+    Sanity,
 }
 impl PanelKind {
     fn tag(self) -> u8 {
@@ -231,6 +235,9 @@ impl PanelKind {
             Self::Ordinary => 3,
             Self::DevParity => 4,
             Self::OrdinaryParity => 5,
+            Self::LegacyDev => 6,
+            Self::Conditional => 7,
+            Self::Sanity => 8,
         }
     }
     fn read(r: &mut Reader<'_>) -> Result<Self> {
@@ -241,6 +248,9 @@ impl PanelKind {
             3 => Ok(Self::Ordinary),
             4 => Ok(Self::DevParity),
             5 => Ok(Self::OrdinaryParity),
+            6 => Ok(Self::LegacyDev),
+            7 => Ok(Self::Conditional),
+            8 => Ok(Self::Sanity),
             _ => Err(bad("panel kind")),
         }
     }
@@ -252,6 +262,9 @@ impl PanelKind {
             Self::Ordinary => "ordinary",
             Self::DevParity => "dev-parity",
             Self::OrdinaryParity => "ordinary-parity",
+            Self::LegacyDev => "legacy-dev",
+            Self::Conditional => "conditional",
+            Self::Sanity => "sanity",
         }
     }
 }
@@ -447,7 +460,11 @@ impl RunSnapshot {
         }
         if matches!(
             self.contract.as_str(),
-            RESTART_CONTRACT | COOLDOWN_CONTRACT | OBJECTIVE_CONTRACT | NATIVE_CORPUS_CONTRACT
+            RESTART_CONTRACT
+                | COOLDOWN_CONTRACT
+                | OBJECTIVE_CONTRACT
+                | NATIVE_CORPUS_CONTRACT
+                | BRIDGE_CONTRACT
         ) {
             b.push(self.purpose.tag());
         }
@@ -482,7 +499,11 @@ impl RunSnapshot {
         b.push(u8::from(self.tiny_spec));
         if matches!(
             self.contract.as_str(),
-            RESTART_CONTRACT | COOLDOWN_CONTRACT | OBJECTIVE_CONTRACT | NATIVE_CORPUS_CONTRACT
+            RESTART_CONTRACT
+                | COOLDOWN_CONTRACT
+                | OBJECTIVE_CONTRACT
+                | NATIVE_CORPUS_CONTRACT
+                | BRIDGE_CONTRACT
         ) {
             b.extend(self.source);
             for o in &self.origins {
@@ -515,7 +536,7 @@ impl RunSnapshot {
             .map(|_| episode_decode(r))
             .collect::<Result<Vec<_>>>()?;
         let train = integers_read(r, MAX_CASES)?;
-        let n = count(r, 4)?;
+        let n = count(r, 7)?;
         let panels = (0..n)
             .map(|_| PanelSpec::decode(r))
             .collect::<Result<Vec<_>>>()?;
@@ -541,7 +562,11 @@ impl RunSnapshot {
         };
         let purpose = if matches!(
             contract.as_str(),
-            RESTART_CONTRACT | COOLDOWN_CONTRACT | OBJECTIVE_CONTRACT | NATIVE_CORPUS_CONTRACT
+            RESTART_CONTRACT
+                | COOLDOWN_CONTRACT
+                | OBJECTIVE_CONTRACT
+                | NATIVE_CORPUS_CONTRACT
+                | BRIDGE_CONTRACT
         ) {
             RunPurpose::read(r)?
         } else {
@@ -602,7 +627,9 @@ impl RunSnapshot {
             }
         }
         if self.contract
-            != if self.path_parity() {
+            != if self.bridge() {
+                BRIDGE_CONTRACT
+            } else if self.path_parity() {
                 NATIVE_CORPUS_CONTRACT
             } else if self.objective.is_some() {
                 OBJECTIVE_CONTRACT
@@ -625,14 +652,14 @@ impl RunSnapshot {
                 } else {
                     1
                 }
-            || self.panels.len() != 4
+            || self.panels.len() != if self.bridge() { 7 } else { 4 }
             || self
                 .panels
                 .iter()
                 .map(|p| p.kind)
                 .collect::<BTreeSet<_>>()
                 .len()
-                != 4
+                != if self.bridge() { 7 } else { 4 }
             || self
                 .cases
                 .iter()
@@ -645,6 +672,21 @@ impl RunSnapshot {
             || (self.historical && !self.tape.is_empty())
         {
             return Err(bad("run snapshot identity/membership/budget"));
+        }
+        if self.bridge()
+            && (self.lr_policy != 2
+                || self.lr_offset != 0
+                || self.objective.is_some()
+                || !self.historical
+                    && (self.tape.len() != if self.tiny_spec { 2 } else { 512 }
+                        || self.eval_steps
+                            != if self.tiny_spec {
+                                vec![1, 2]
+                            } else {
+                                vec![256, 512]
+                            }))
+        {
+            return Err(bad("bridge fixed default objective/LR/horizon"));
         }
         if self.cooldown()
             && (self.historical
@@ -685,6 +727,9 @@ impl RunSnapshot {
                 PanelKind::Cross => 512,
                 PanelKind::Ordinary => 400,
                 PanelKind::DevParity | PanelKind::OrdinaryParity => 16,
+                PanelKind::LegacyDev => 256,
+                PanelKind::Conditional => 144,
+                PanelKind::Sanity => 64,
             };
             if p.cases.is_empty()
                 || (!self.tiny_spec && p.cases.len() != expected)
@@ -778,10 +823,15 @@ impl RunSnapshot {
         self.contract == COOLDOWN_CONTRACT
     }
     fn continuation(&self) -> bool {
-        self.cooldown() || self.objective.is_some()
+        self.cooldown() || self.objective.is_some() || self.bridge()
+    }
+    fn bridge(&self) -> bool {
+        self.contract == BRIDGE_CONTRACT
     }
     fn study_arms(&self) -> [&'static str; 2] {
-        if self.objective.is_some() {
+        if self.bridge() {
+            ["C-COPYMATCH", "T-TEMPORAL"]
+        } else if self.objective.is_some() {
             ["B-BASE", "S-SPAN"]
         } else {
             ["K-KEEP", "D-DECAY"]
@@ -790,11 +840,22 @@ impl RunSnapshot {
     fn supports_partial_resume(&self) -> bool {
         matches!(
             self.contract.as_str(),
-            RESTART_CONTRACT | COOLDOWN_CONTRACT | OBJECTIVE_CONTRACT | NATIVE_CORPUS_CONTRACT
+            RESTART_CONTRACT
+                | COOLDOWN_CONTRACT
+                | OBJECTIVE_CONTRACT
+                | NATIVE_CORPUS_CONTRACT
+                | BRIDGE_CONTRACT
         ) && !self.historical
             && (self.tiny_spec || self.authorization.is_some())
     }
     fn arm_name(&self) -> &'static str {
+        if self.bridge() {
+            return if self.purpose == RunPurpose::LrContinuous {
+                "C-COPYMATCH"
+            } else {
+                "T-TEMPORAL"
+            };
+        }
         if let Some(o) = &self.objective {
             return if o.span { "S-SPAN" } else { "B-BASE" };
         }
@@ -1568,7 +1629,7 @@ impl ComparisonReceipt {
         let run = digest_read(r)?;
         let binding = digest_read(r)?;
         let terminal = FileRef::decode(r)?;
-        let n = count(r, 4)?;
+        let n = count(r, 6)?;
         let panels = (0..n)
             .map(|_| Ok((PanelKind::read(r)?, Score::decode(r)?)))
             .collect::<Result<Vec<_>>>()?;
@@ -1865,6 +1926,8 @@ impl VerificationStart {
                 0 => 4,
                 1 => 16,
                 2 => 1168,
+                3 => 320,
+                4 => 48,
                 _ => return Err(bad("verification scope")),
             },
         )?;
@@ -1989,7 +2052,7 @@ impl VerificationFinal {
         let save_error = r.opt(text)?;
         if entries > 1168
             || completed + interrupted > entries
-            || teachers != 0
+            || teachers > 64
             || elapsed.finite()? < 0.
             || tokens > 1168 * MAX_TOKENS as u64
             || succeeded
@@ -2099,11 +2162,14 @@ impl Record {
                         | COOLDOWN_CONTRACT
                         | OBJECTIVE_CONTRACT
                         | NATIVE_CORPUS_CONTRACT
+                        | BRIDGE_CONTRACT
                 ) {
                     body.push(u8::from(v.authorization.is_some()));
                 }
                 v.encode(&mut body);
-                if v.objective.is_some() {
+                if v.bridge() {
+                    25
+                } else if v.objective.is_some() {
                     19
                 } else if v.cooldown() {
                     13
@@ -2254,8 +2320,8 @@ impl Record {
                 Self::PreparationMeasure { bindings, rows }
             }
             23 => Self::Conditional(Box::new(ConditionalRecord::decode(&mut r)?)),
-            1 | 6 | 8 | 13 | 19 | 22 => {
-                let authorized = if matches!(kind, 8 | 13 | 19 | 22) {
+            1 | 6 | 8 | 13 | 19 | 22 | 25 => {
+                let authorized = if matches!(kind, 8 | 13 | 19 | 22 | 25) {
                     r.bool()?
                 } else {
                     kind == 6
@@ -2265,6 +2331,7 @@ impl Record {
                     || (kind == 13) != s.cooldown()
                     || (kind == 19) != s.objective.is_some()
                     || (kind == 22) != s.path_parity()
+                    || (kind == 25) != s.bridge()
                 {
                     return Err(bad("purpose record kind"));
                 }
@@ -3615,6 +3682,1014 @@ fn exposure_report(root: &Path, control: &mut RunControl) -> Result<()> {
     );
     Ok(())
 }
+fn bridge_origins(s: &RunSnapshot) -> Result<()> {
+    for o in s.origins.iter().filter(|o| o.role.starts_with("bridge-")) {
+        if unhex(&file_hash(Path::new(&o.original.locator))?)? != o.original.digest {
+            return Err(bad("bridge frozen origin changed"));
+        }
+    }
+    Ok(())
+}
+
+fn bridge_observe_prepare(
+    parent: &Path,
+    checkpoint_path: &Path,
+    data: &Path,
+    conditional: &Path,
+    output: &Path,
+    control: &mut RunControl,
+) -> Result<()> {
+    let old = read_inputs(parent)?;
+    let commands = arm_commands(parent, &old)?;
+    let command = &commands
+        .last()
+        .ok_or_else(|| bad("bridge parent incomplete"))?
+        .1;
+    let prior = close_native_inner(parent, &command.terminal.locator, control, false)?;
+    let chain = lineage(parent, &old, &command.terminal)?;
+    let n = chain.last().unwrap().1.native.as_ref().unwrap();
+    let original = resolve_native(parent, &old, n, true)?;
+    let l = checkpoint::load(checkpoint_path, Device::Cpu, true)?;
+    let state = l
+        .manifest
+        .training
+        .as_ref()
+        .ok_or_else(|| bad("bridge parent training"))?;
+    let mut a = original.manifest.training.clone().unwrap();
+    let mut b = state.clone();
+    a.resume_binding = None;
+    b.resume_binding = None;
+    if old.arm_name() != "A75-R"
+        || n.step != 24310
+        || n.model != unhex("dfc3efb664351578340e39d3cfc95b90f270541041d4641d72d6f41a53871b11")?
+        || a != b
+        || original.model.weight_hash()? != l.model.weight_hash()?
+        || optimizer_hash(&original.optimizer)? != optimizer_hash(&l.optimizer)?
+        || state.resume_binding.as_ref() != Some(&objective_binding(&old, state, &l.tokenizer)?)
+    {
+        return Err(bad("bridge exact migrated parent/objective/Adam"));
+    }
+    let c = data::native::read(&data.join("C-COPYMATCH.r3c"))?;
+    let t = data::native::read(&data.join("T-TEMPORAL.r3c"))?;
+    let sanity = data::native::read(&data.join("sanity.r3c"))?;
+    let auth = old
+        .authorization
+        .as_ref()
+        .ok_or_else(|| bad("bridge parent pools"))?;
+    let anchors = auth.pools[0]
+        .iter()
+        .map(|i| old.cases[old.train[*i as usize] as usize].clone())
+        .collect::<Vec<_>>();
+    if c.train.len() != 2560
+        || t.train.len() != 2560
+        || t.validation.len() != 256
+        || sanity.validation.len() != 64
+        || data::native::ordered_bytes(&c.train[..2048]) != data::native::ordered_bytes(&anchors)
+        || data::native::ordered_bytes(&t.train[..2048]) != data::native::ordered_bytes(&anchors)
+        || data::native::ordered_bytes(&c.validation) != data::native::ordered_bytes(&t.validation)
+    {
+        return Err(bad("bridge frozen native pools"));
+    }
+    for (a, b) in c.train[2048..].iter().zip(&t.train[2048..]) {
+        data::bridge_pair(a, b, &l.tokenizer)?;
+    }
+    for e in &t.validation {
+        data::bridge_support(e)?;
+    }
+    let conditional_plan = conditional_plan(conditional, false)?;
+    let mut s = old.clone();
+    s.contract = BRIDGE_CONTRACT.into();
+    s.source = evaluator_source();
+    s.historical = true;
+    s.authorization = None;
+    s.objective = None;
+    s.tape.clear();
+    s.eval_steps.clear();
+    s.lr_policy = 2;
+    s.lr_offset = 0;
+    s.purpose = RunPurpose::LrSplit;
+    s.cases = t.train;
+    s.train = (0..2560).collect();
+    s.panels.clear();
+    for kind in [
+        PanelKind::LegacyDev,
+        PanelKind::Cross,
+        PanelKind::Ordinary,
+        PanelKind::Watch,
+    ] {
+        let old_kind = if kind == PanelKind::LegacyDev {
+            PanelKind::Dev
+        } else {
+            kind
+        };
+        let mut indices = Vec::new();
+        for i in &panel(&old, old_kind)?.cases {
+            let e = &old.cases[*i as usize];
+            let index = if let Some(i) = s
+                .cases
+                .iter()
+                .position(|other| case_hash(other) == case_hash(e))
+            {
+                i
+            } else {
+                s.cases.push(e.clone());
+                s.cases.len() - 1
+            };
+            indices.push(index as u32);
+        }
+        s.panels.push(PanelSpec {
+            kind,
+            dataset: panel(&old, old_kind)?.dataset,
+            cases: indices,
+        });
+    }
+    for (kind, episodes) in [
+        (PanelKind::Dev, t.validation),
+        (PanelKind::Sanity, sanity.validation),
+        (PanelKind::Conditional, conditional_plan.cases),
+    ] {
+        let indices = (s.cases.len() as u32..(s.cases.len() + episodes.len()) as u32).collect();
+        let dataset = hash(&data::native::ordered_bytes(&episodes));
+        s.cases.extend(episodes);
+        s.panels.push(PanelSpec {
+            kind,
+            dataset,
+            cases: indices,
+        });
+    }
+    s.origins.clear();
+    for (role, path) in [
+        ("execution-binary", std::env::current_exe()?),
+        ("bridge-parent-inputs", parent.join("inputs.r3er")),
+        (
+            "bridge-parent-terminal",
+            parent.join(&command.terminal.locator),
+        ),
+        (
+            "bridge-parent-command",
+            parent.join(command_locator(&command.terminal)?),
+        ),
+        ("bridge-parent-native", checkpoint_path.to_path_buf()),
+        ("bridge-control-corpus", data.join("C-COPYMATCH.r3c")),
+        ("bridge-temporal-corpus", data.join("T-TEMPORAL.r3c")),
+        ("bridge-sanity-corpus", data.join("sanity.r3c")),
+        ("bridge-conditional-plan", conditional.join("plan.r3er")),
+    ] {
+        s.origins.push(Origin {
+            role: role.into(),
+            original: FileRef {
+                locator: path.canonicalize()?.display().to_string(),
+                digest: unhex(&file_hash(&path)?)?,
+            },
+        });
+    }
+    let mut identity = BRIDGE_CONTRACT.as_bytes().to_vec();
+    identity.extend(s.source);
+    for o in &s.origins {
+        o.original.encode(&mut identity);
+    }
+    s.run = hash(&identity);
+    s.policy = s.run;
+    s.frozen = hash(&data::native::ordered_bytes(&s.cases));
+    s.parent = n.clone();
+    s.parent.run = s.run;
+    s.parent.segment = 0;
+    s.parent.file = FileRef {
+        locator: "parent.r3m".into(),
+        digest: unhex(&file_hash(checkpoint_path)?)?,
+    };
+    s.validate()?;
+    std::fs::create_dir(output)?;
+    std::fs::copy(checkpoint_path, output.join("parent.r3m"))?;
+    std::fs::copy(
+        parent.join(command_locator(&command.terminal)?),
+        output.join("parent-command.r3er"),
+    )?;
+    publish(output, "inputs.r3er", &Record::Inputs(Box::new(s.clone())))?;
+    resolve_native(output, &s, &s.parent, true)?;
+    println!(
+        "BRIDGE_REGISTERED_OBSERVATION binding={} model={} parent_step={} prior_recount={:?} NEW_SMALL_UPDATES=0",
+        hex(&s.binding()),
+        hex(&s.parent.model),
+        s.parent.step,
+        prior.panels
+    );
+    Ok(())
+}
+
+fn bridge_observe(root: &Path, control: &mut RunControl) -> Result<()> {
+    let s = read_inputs(root)?;
+    if !s.bridge() || !s.historical || s.source != evaluator_source() {
+        return Err(bad("bridge observation source/mode"));
+    }
+    bridge_origins(&s)?;
+    if read_preflight_outcome(root)?.is_some() {
+        return Err(bad("bridge observation already attempted"));
+    }
+    let binary = unhex(&file_hash(&std::env::current_exe()?)?)?;
+    if s.origins
+        .iter()
+        .find(|o| o.role == "execution-binary")
+        .is_none_or(|o| o.original.digest != binary)
+    {
+        return Err(bad("bridge binary changed"));
+    }
+    let kinds = [PanelKind::Sanity, PanelKind::Dev];
+    control.teacher_limit = 64;
+    let order = kinds
+        .iter()
+        .enumerate()
+        .flat_map(|(arm, k)| {
+            panel(&s, *k)
+                .unwrap()
+                .cases
+                .iter()
+                .map(move |i| (arm as u8, *i))
+        })
+        .collect::<Vec<_>>();
+    let start = VerificationStart {
+        publication_v2: true,
+        scope: 3,
+        root: root.canonicalize()?.display().to_string(),
+        pair: s.run,
+        source: s.source,
+        binary,
+        inputs: [
+            reference(root, "inputs.r3er")?,
+            reference(root, "inputs.r3er")?,
+        ],
+        commands: [
+            reference(root, "parent-command.r3er")?,
+            reference(root, "parent-command.r3er")?,
+        ],
+        natives: [
+            reference(root, "parent.r3m")?,
+            reference(root, "parent.r3m")?,
+        ],
+        generation_limit: order.len() as u64,
+        order,
+        seconds_limit: 1800,
+    };
+    finish_verification_attempt(
+        root,
+        start.clone(),
+        s.tiny_spec,
+        control,
+        |control, returned| {
+            let l = resolve_native(root, &s, &s.parent, true)?;
+            let sr = reference(root, "preflight-start.r3er")?;
+            let mut panels = Vec::new();
+            for kind in kinds {
+                let mut rows = Vec::new();
+                for &ordinal in &panel(&s, kind)?.cases {
+                    let index = returned.len();
+                    let elapsed = control.start.elapsed().as_secs_f64();
+                    let row = evaluate_row_with_entry(
+                        &l,
+                        &s.cases[ordinal as usize],
+                        ordinal,
+                        control,
+                        s.tiny_spec,
+                        true,
+                        || {
+                            publish(
+                                root,
+                                &format!("preflight-row-{index:02}-start.r3er"),
+                                &Record::VerificationRow(VerificationRow {
+                                    start: sr.clone(),
+                                    index: index as u32,
+                                    row: None,
+                                    elapsed: Scalar::F64(elapsed),
+                                }),
+                            )
+                            .map(|_| ())
+                        },
+                    )?;
+                    returned.push(row.clone());
+                    publish(
+                        root,
+                        &format!("preflight-row-{index:02}.r3er"),
+                        &Record::VerificationRow(VerificationRow {
+                            start: sr.clone(),
+                            index: index as u32,
+                            row: Some(row.clone()),
+                            elapsed: Scalar::F64(control.start.elapsed().as_secs_f64()),
+                        }),
+                    )?;
+                    rows.push(row);
+                    control.check("bridge_observation_returned")?;
+                }
+                let e = bridge_payload(&s, &s.parent, kind, rows);
+                print_anchor_panel(&s, &e, &l)?;
+                panels.push(publish(
+                    root,
+                    &format!("{}.r3er", kind.name()),
+                    &Record::Evaluation(e),
+                )?);
+            }
+            if !s.tiny_spec {
+                bridge_teacher(root, "parent-probe", &s, &s.parent, &l, control)?;
+            }
+            publish(
+                root,
+                "preflight-proof.r3er",
+                &Record::Preflight(PreflightReceipt {
+                    pair: start.pair,
+                    source: start.source,
+                    binary: start.binary,
+                    commands: start.commands.clone(),
+                    panels,
+                    elapsed: Scalar::F64(control.start.elapsed().as_secs_f64()),
+                    generations: control.generation_calls as u64,
+                }),
+            )?;
+            Ok(())
+        },
+    )
+}
+fn bridge_payload(
+    s: &RunSnapshot,
+    n: &CheckpointRef,
+    kind: PanelKind,
+    rows: Vec<EvalRow>,
+) -> EvalPayload {
+    EvalPayload {
+        run: s.run,
+        binding: s.binding(),
+        source: s.source,
+        model: n.model,
+        tokenizer: n.tokenizer,
+        architecture: n.architecture,
+        step: n.step,
+        new_updates: n.step - s.parent.step,
+        kind,
+        expected: panel(s, kind).unwrap().cases.len() as u32,
+        rows,
+    }
+}
+
+fn bridge_prepare(observation: &Path, output: &Path, control: &mut RunControl) -> Result<()> {
+    read_preflight_outcome(observation)?
+        .ok_or_else(|| bad("bridge parent observation absent"))?
+        .require_current_success()?;
+    let old = read_inputs(observation)?;
+    bridge_origins(&old)?;
+    if !old.bridge() || !old.historical || old.source != evaluator_source() {
+        return Err(bad("bridge parent observation identity"));
+    }
+    let l = resolve_native(observation, &old, &old.parent, true)?;
+    let state = l.manifest.training.as_ref().unwrap();
+    let Record::Evaluation(dev) = read_record(observation, &reference(observation, "dev.r3er")?)?
+    else {
+        return Err(bad("bridge baseline raw"));
+    };
+    let baseline = rescore(&old, &dev, &l, true)?;
+    let parent = PathBuf::from(
+        &old.origins
+            .iter()
+            .find(|o| o.role == "bridge-parent-inputs")
+            .unwrap()
+            .original
+            .locator,
+    );
+    let parent = parent.parent().unwrap();
+    let prior = read_inputs(parent)?;
+    let closed = arm_commands(parent, &prior)?;
+    let previous = close_native_inner(
+        parent,
+        &closed.last().unwrap().1.terminal.locator,
+        control,
+        false,
+    )?;
+    let watch = &previous
+        .panels
+        .iter()
+        .find(|(k, _)| *k == PanelKind::Watch)
+        .unwrap()
+        .1;
+    let registered = output
+        .parent()
+        .ok_or_else(|| bad("bridge root"))?
+        .canonicalize()?
+        .join(output.file_name().ok_or_else(|| bad("bridge name"))?);
+    let proof = reference(observation, "preflight-final.r3er")?;
+    let mut key = BRIDGE_CONTRACT.as_bytes().to_vec();
+    key.extend(old.binding());
+    key.extend(proof.digest);
+    string(&mut key, &registered.display().to_string());
+    let pair = hash(&key);
+    let mut registrations = Vec::new();
+    for purpose in [RunPurpose::LrContinuous, RunPurpose::LrSplit] {
+        let mut s = old.clone();
+        s.historical = false;
+        s.purpose = purpose;
+        let name = s.arm_name();
+        let source = origin_path(
+            &old,
+            if purpose == RunPurpose::LrContinuous {
+                "bridge-control-corpus"
+            } else {
+                "bridge-temporal-corpus"
+            },
+        )?;
+        let data = data::native::read(&source)?;
+        s.cases[..2560].clone_from_slice(&data.train);
+        s.origins.push(Origin {
+            role: "bridge-observation-final".into(),
+            original: FileRef {
+                locator: observation
+                    .join("preflight-final.r3er")
+                    .canonicalize()?
+                    .display()
+                    .to_string(),
+                digest: proof.digest,
+            },
+        });
+        s.origins.push(Origin {
+            role: "cooldown-registered-root".into(),
+            original: FileRef {
+                locator: registered.display().to_string(),
+                digest: pair,
+            },
+        });
+        let mut id = key.clone();
+        id.push(purpose.tag());
+        s.run = hash(&id);
+        s.policy = s.run;
+        s.parent.run = s.run;
+        s.baseline = [baseline.exact, watch.exact, baseline.errors + watch.errors];
+        s.anchor_floor = 178;
+        let pools = [
+            (0..2048).collect::<Vec<_>>(),
+            (2048..2560).collect::<Vec<_>>(),
+        ];
+        let framed = samples(&data.train, &l.tokenizer, state.config.seq_len)?;
+        s.tape = anchor_tape_through(&pools, 6, s.parent.counters[2], &framed, 512)?.0;
+        s.eval_steps = vec![256, 512];
+        s.authorization = Some(AnchorAuthorization {
+            pair,
+            baseline: proof.digest,
+            expected_parent: s.parent.file.digest,
+            anchors: 6,
+            pools,
+        });
+        let mut exposures = vec![0; 2560];
+        for d in &s.tape {
+            for i in &d.indices {
+                exposures[*i as usize] += 1;
+            }
+        }
+        if exposures[2048..].iter().any(|n| *n != 2) {
+            return Err(bad("bridge focus twice exact exposure"));
+        }
+        s.validate()?;
+        for n in [1, 256, 512] {
+            let mut future = state.clone();
+            fork_budget(
+                &mut future,
+                s.parent.step,
+                s.parent.counters[0],
+                512,
+                2_000_000,
+            )?;
+            future.step += n;
+            future.consumed_tokens += s.tape[..n].iter().map(|d| d.input).sum::<u64>();
+            future.target_tokens += s.tape[..n].iter().map(|d| d.target).sum::<u64>();
+            future.sampler_state = s.tape[n - 1].sampler;
+            future.resume_binding = Some(objective_binding(&s, &future, &l.tokenizer)?);
+            let mut m = l.manifest.clone();
+            m.training = Some(future);
+            checkpoint::validate_metadata(&m, &l.tokenizer)?;
+        }
+        println!(
+            "BRIDGE_AUTHORIZATION arm={name} updates=512 focus_exposure=1024 each_view=2 actual_lr_bits={} inherited_config_lr={} first_target_weight={} input={} target={} parent_step={} model={} Adam={} source={} binding={} ACTUAL_UPDATES=0",
+            1e-4f64.to_bits(),
+            state.config.lr,
+            state.config.first_target_weight,
+            s.tape.iter().map(|d| d.input).sum::<u64>(),
+            s.tape.iter().map(|d| d.target).sum::<u64>(),
+            s.parent.step,
+            hex(&s.parent.model),
+            hex(&s.parent.adam.unwrap()),
+            hex(&s.source),
+            hex(&s.binding())
+        );
+        registrations.push(s);
+    }
+    control.check("bridge_register")?;
+    std::fs::create_dir(output)?;
+    for s in registrations {
+        let root = output.join(s.arm_name());
+        std::fs::create_dir(&root)?;
+        std::fs::copy(observation.join("parent.r3m"), root.join("parent.r3m"))?;
+        publish(&root, "inputs.r3er", &Record::Inputs(Box::new(s.clone())))?;
+        resolve_native(&root, &s, &s.parent, true)?;
+    }
+    Ok(())
+}
+
+fn bridge_observe_report(root: &Path, control: &mut RunControl) -> Result<()> {
+    let outcome =
+        read_preflight_outcome(root)?.ok_or_else(|| bad("bridge observation intent missing"))?;
+    let s = read_inputs(root)?;
+    if !s.bridge() || !s.historical {
+        return Err(bad("bridge observation report mode"));
+    }
+    bridge_origins(&s)?;
+    let l = resolve_native(root, &s, &s.parent, true)?;
+    for kind in [PanelKind::Sanity, PanelKind::Dev] {
+        let Record::Evaluation(e) =
+            read_record(root, &reference(root, &format!("{}.r3er", kind.name()))?)?
+        else {
+            return Err(bad("bridge observation panel"));
+        };
+        print_anchor_panel(&s, &e, &l)?;
+        if kind == PanelKind::Sanity {
+            for view in 0..4 {
+                let mut count = [0u64; 2];
+                for row in e.rows.iter().skip(view).step_by(4) {
+                    let (actual, abnormal) = row_output(row, &l)?;
+                    count[0] += u64::from(
+                        !abnormal
+                            && actual.as_deref()
+                                == Some(s.cases[row.ordinal as usize].answer.as_str()),
+                    );
+                    count[1] += 1;
+                }
+                println!(
+                    "BRIDGE_SANITY condition={} full={count:?}",
+                    [
+                        "A-single",
+                        "B-distinct-entity",
+                        "C-same-entity",
+                        "D-past-question"
+                    ][view]
+                );
+            }
+        }
+    }
+    if !s.tiny_spec {
+        reference(root, "parent-probe-final.r3er")?;
+        control.teacher_limit = 0;
+        bridge_teacher(root, "parent-probe", &s, &s.parent, &l, control)?;
+    }
+    println!(
+        "BRIDGE_OBSERVATION_READ_ONLY generation_entries_known={} elapsed_lower_bound={} historical_attempt_succeeded={} UNKNOWN_TAIL={} NEW_GENERATIONS={} NEW_TEACHERS={} NEW_SMALL_UPDATES=0 NOT_AUTHORIZED_TO_RESUME=true",
+        outcome.entries,
+        outcome.elapsed,
+        outcome.succeeded,
+        !outcome.succeeded,
+        control.generation_calls,
+        control.teacher_calls
+    );
+    Ok(())
+}
+
+fn bridge_probe_indices(s: &RunSnapshot) -> Result<Vec<u32>> {
+    let mut out = Vec::new();
+    for mut indices in [
+        s.train
+            .iter()
+            .skip(if s.tiny_spec { 0 } else { 2048 })
+            .copied()
+            .collect::<Vec<_>>(),
+        panel(s, PanelKind::Dev)?.cases.clone(),
+    ] {
+        indices.sort_by_key(|i| hash(s.cases[*i as usize].id.as_bytes()));
+        indices.truncate(if s.tiny_spec { 1 } else { 32 });
+        out.extend(indices);
+    }
+    Ok(out)
+}
+// Teacher-only observations use existing typed rows; started=false/tokens=[] means
+// no free generation was performed. retained=[foil index,gold ID,foil ID].
+fn bridge_teacher(
+    root: &Path,
+    prefix: &str,
+    s: &RunSnapshot,
+    n: &CheckpointRef,
+    l: &Loaded,
+    control: &mut RunControl,
+) -> Result<()> {
+    let indices = bridge_probe_indices(s)?;
+    let mut raw = bridge_payload(s, n, PanelKind::Dev, Vec::new());
+    raw.expected = indices.len() as u32;
+    let start = format!("{prefix}-start.r3er");
+    if root.join(&start).exists() {
+        let Record::Evaluation(existing) = read_record(root, &reference(root, &start)?)? else {
+            return Err(bad("bridge probe start"));
+        };
+        if existing.binding != raw.binding
+            || existing.model != raw.model
+            || existing.step != raw.step
+        {
+            return Err(bad("bridge probe start identity"));
+        }
+    } else {
+        publish(root, &start, &Record::Evaluation(raw.clone()))?;
+    }
+    for (index, &ordinal) in indices.iter().enumerate() {
+        let result = format!("{prefix}-row-{index:02}.r3er");
+        let entry = format!("{prefix}-entry-{index:02}.r3er");
+        let e = &s.cases[ordinal as usize];
+        let prompt = l.tokenizer.prepare(
+            &e.request,
+            l.model.config.context as u32,
+            &l.model.config.id()?,
+        )?;
+        if root.join(&result).exists() {
+            let Record::Evaluation(saved) = read_record(root, &reference(root, &result)?)? else {
+                return Err(bad("bridge probe raw"));
+            };
+            reference(root, &entry)?;
+            if saved.model != n.model
+                || saved.binding != s.binding()
+                || saved.step != n.step
+                || saved.rows.len() != 1
+                || saved.rows[0].ordinal != ordinal
+                || saved.rows[0].case != case_hash(e)
+                || saved.rows[0].prompt != token_hash(&prompt.token_ids)
+                || !matches!(saved.rows[0].teacher, TeacherRecord::Measured(_))
+                || saved.rows[0].started
+                || !saved.rows[0].tokens.is_empty()
+            {
+                return Err(bad("bridge probe recovered identity"));
+            }
+            raw.rows.push(saved.rows[0].clone());
+            continue;
+        }
+        if root.join(&entry).exists() {
+            return Err(bad("bridge teacher interrupted UNKNOWN; no retry"));
+        }
+        if control.teacher_calls >= control.teacher_limit
+            || root.join(format!("{prefix}-final.r3er")).exists()
+        {
+            return Err(bad(
+                "bridge teacher budget or incomplete previously final raw",
+            ));
+        }
+        control.check("bridge_before_teacher")?;
+        let selected = data::bridge_support(e)?;
+        let other = &e.request.evidence.items[1 - selected];
+        let foil = format!("{} [event:{}]", other.original_excerpt, other.event_id);
+        let mut row = EvalRow {
+            ordinal,
+            case: case_hash(e),
+            prompt: token_hash(&prompt.token_ids),
+            prompt_len: prompt.token_ids.len() as u32,
+            native_prompt: unhex(&prompt.token_digest)?,
+            provided: prompt.provided.clone(),
+            excluded: prompt.excluded.clone(),
+            tokens: Vec::new(),
+            eos: None,
+            started: false,
+            completed: false,
+            finish: Finish::NotStarted,
+            error: None,
+            error_class: None,
+            interruption: None,
+            effective_timeout: None,
+            timing: None,
+            retained: Vec::new(),
+            teacher: TeacherRecord::NotRequested,
+            diagnostic: None,
+        };
+        let mut one = raw.clone();
+        one.rows = vec![row.clone()];
+        publish(root, &entry, &Record::Evaluation(one.clone()))?;
+        let v = teacher_with_foil(l, e, &prompt.token_ids, &[], control, Some(&foil))?;
+        row.teacher = teacher_record(&v)?;
+        row.diagnostic = Some(scalar_value(&v["conditional_foil"], "margin")?);
+        row.retained = ["index", "gold", "foil"]
+            .iter()
+            .map(|key| {
+                u32::try_from(progress_u64(&v["conditional_foil"], key)?)
+                    .map_err(|_| bad("foil token"))
+            })
+            .collect::<Result<_>>()?;
+        row.completed = true;
+        one.rows = vec![row.clone()];
+        publish(root, &result, &Record::Evaluation(one))?;
+        raw.rows.push(row);
+    }
+    let final_path = format!("{prefix}-final.r3er");
+    let encoded = Record::Evaluation(raw.clone());
+    if root.join(&final_path).exists() {
+        if read_record(root, &reference(root, &final_path)?)?.encode()? != encoded.encode()? {
+            return Err(bad("bridge probe final binding"));
+        }
+    } else {
+        publish(root, &final_path, &encoded)?;
+    }
+    for (group, rows) in raw.rows.chunks(indices.len() / 2).enumerate() {
+        let mut nll = 0.;
+        let mut margin = 0.;
+        let mut correct = 0;
+        let mut tokens = 0;
+        for r in rows {
+            let TeacherRecord::Measured(t) = &r.teacher else {
+                return Err(bad("bridge teacher missing"));
+            };
+            nll += t.mean.finite()?;
+            margin += r.diagnostic.as_ref().unwrap().finite()?;
+            correct += t.correct;
+            tokens += t.target;
+        }
+        println!(
+            "BRIDGE_TEACHER group={} step={} cases={} mean_case_nll={} mean_foil_margin={} teacher_correct_tokens={correct} target_tokens={tokens} FREE_GENERATIONS=0",
+            if group == 0 { "train" } else { "dev" },
+            n.step,
+            rows.len(),
+            nll / rows.len() as f64,
+            margin / rows.len() as f64
+        );
+    }
+    Ok(())
+}
+
+fn bridge_audit(label: &str, episodes: &[Episode], l: &Loaded, require_all: bool) -> Result<()> {
+    let seq = l.manifest.training.as_ref().unwrap().config.seq_len;
+    let framed = samples(episodes, &l.tokenizer, seq)?;
+    if framed.len() != episodes.len() {
+        return Err(bad("bridge audit sample alignment"));
+    }
+    let mut inputs = BTreeMap::new();
+    let mut counts = BTreeMap::<String, u64>::new();
+    let mut lengths = Vec::new();
+    let mut distances = Vec::new();
+    for (e, s) in episodes.iter().zip(&framed) {
+        let mut request = e.request.clone();
+        request.limits.context_tokens = seq as u32;
+        request.limits.max_tokens = (s.tokens.len() - s.response_start) as u32;
+        let prepared = l.tokenizer.prepare(&request, seq as u32, "training")?;
+        if prepared.token_ids != s.tokens[..s.response_start]
+            || citations(&e.answer)?
+                .iter()
+                .any(|id| !prepared.provided.contains(id))
+            || require_all && !prepared.excluded.is_empty()
+        {
+            return Err(bad("BRIDGE_FRAMING_OR_EXCLUDED_SUPPORT"));
+        }
+        let digest = token_hash(&prepared.token_ids);
+        let target = s.tokens[s.response_start..].to_vec();
+        if inputs
+            .insert(digest, target.clone())
+            .is_some_and(|old| old != target)
+        {
+            return Err(bad("BRIDGE_SAME_INPUT_CONFLICTING_TARGET"));
+        }
+        for key in [
+            format!("evidence{}", e.request.evidence.items.len().min(3)),
+            format!("category{}", e.category),
+            format!(
+                "task/{}",
+                if e.family.starts_with("copy/") {
+                    "aux"
+                } else if e
+                    .request
+                    .evidence
+                    .items
+                    .iter()
+                    .any(|r| e.answer == format!("{} [event:{}]", r.original_excerpt, r.event_id))
+                {
+                    "full-copy"
+                } else {
+                    "other-QA"
+                }
+            ),
+            format!(
+                "question/{}",
+                if e.request.input.contains("과거") {
+                    "past"
+                } else if e.request.input.contains("현재") {
+                    "current"
+                } else {
+                    "other"
+                }
+            ),
+        ] {
+            *counts.entry(key).or_default() += 1;
+        }
+        *counts.entry("excluded_records".into()).or_default() += prepared.excluded.len() as u64;
+        let mut statements = BTreeMap::<(&str, &str), Vec<&replica_v3::retrieval::Evidence>>::new();
+        for r in &e.request.evidence.items {
+            if let Some((entity, rest)) = r.original_excerpt.split_once("의 ")
+                && let Some((slot, _)) = rest.split_once(" 이동 지시는 ")
+            {
+                statements.entry((entity, slot)).or_default().push(r);
+            }
+        }
+        for records in statements.values().filter(|rs| rs.len() > 1) {
+            *counts.entry("same_slot_competition".into()).or_default() += 1;
+            if let (Some(current), Some(past)) = (
+                records.iter().find(|r| r.version_status == "current"),
+                records.iter().find(|r| r.version_status == "superseded"),
+            ) {
+                *counts
+                    .entry(format!(
+                        "current_id_larger/{}",
+                        current.event_id > past.event_id
+                    ))
+                    .or_default() += 1;
+                *counts
+                    .entry(format!(
+                        "current_time_larger/{}",
+                        current.recorded_at > past.recorded_at
+                    ))
+                    .or_default() += 1;
+            }
+        }
+        lengths.push((s.response_start, target.len()));
+        for (i, _) in prepared
+            .token_ids
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| **t == neural::EVIDENCE_ROLE)
+        {
+            distances.push(s.response_start - i);
+        }
+    }
+    lengths.sort();
+    distances.sort();
+    println!(
+        "BRIDGE_COVERAGE={label} cases={} counts={counts:?} prompt_target_min_median_max={:?}/{:?}/{:?} source_distance_min_median_max={:?}/{:?}/{:?} first_target_weight_bits={} input_conflicts=0 JSON_READS=0 SQLITE_OPENS_SOURCE_PATH=0",
+        episodes.len(),
+        lengths.first(),
+        lengths.get(lengths.len() / 2),
+        lengths.last(),
+        distances.first(),
+        distances.get(distances.len() / 2),
+        distances.last(),
+        l.manifest
+            .training
+            .as_ref()
+            .unwrap()
+            .config
+            .first_target_weight
+            .to_bits()
+    );
+    Ok(())
+}
+#[allow(clippy::too_many_arguments)] // Explicit source identities for one bounded study registration.
+fn bridge_data(
+    parent: &Path,
+    checkpoint_path: &Path,
+    corpus: &Path,
+    base: &Path,
+    conditional: &Path,
+    output: &Path,
+    seed: u64,
+    control: &mut RunControl,
+) -> Result<()> {
+    let s = read_inputs(parent)?;
+    let l = checkpoint::load(checkpoint_path, Device::Cpu, true)?;
+    let state = l
+        .manifest
+        .training
+        .as_ref()
+        .ok_or_else(|| bad("bridge parent state"))?;
+    if state.step != 24310
+        || state.resume_binding.as_ref() != Some(&objective_binding(&s, state, &l.tokenizer)?)
+        || state.resume_binding.as_ref().unwrap().family != 1
+    {
+        return Err(bad("bridge proven migrated A75 parent"));
+    }
+    let commands = arm_commands(parent, &s)?;
+    let (_, command) = commands
+        .last()
+        .ok_or_else(|| bad("bridge original parent terminal"))?;
+    let chain = lineage(parent, &s, &command.terminal)?;
+    let n = chain.last().unwrap().1.native.as_ref().unwrap();
+    let original = resolve_native(parent, &s, n, true)?;
+    let mut old = original.manifest.training.clone().unwrap();
+    old.resume_binding = None;
+    let mut new = state.clone();
+    new.resume_binding = None;
+    if n.model != unhex("dfc3efb664351578340e39d3cfc95b90f270541041d4641d72d6f41a53871b11")?
+        || original.model.weight_hash()? != l.model.weight_hash()?
+        || optimizer_hash(&original.optimizer)? != optimizer_hash(&l.optimizer)?
+        || old != new
+    {
+        return Err(bad("bridge migration weights/Adam/state lineage"));
+    }
+    let c = data::native::read(corpus)?;
+    let train = s
+        .train
+        .iter()
+        .map(|i| s.cases[*i as usize].clone())
+        .collect::<Vec<_>>();
+    if data::native::ordered_bytes(&c.train) != data::native::ordered_bytes(&train) {
+        return Err(bad("bridge native source parent content"));
+    }
+    let auth = s
+        .authorization
+        .as_ref()
+        .ok_or_else(|| bad("bridge original pools"))?;
+    let anchors = auth.pools[0]
+        .iter()
+        .map(|i| train[*i as usize].clone())
+        .collect::<Vec<_>>();
+    for (label, indices) in [
+        ("parent-anchor", &auth.pools[0]),
+        ("parent-focus", &auth.pools[1]),
+    ] {
+        bridge_audit(
+            label,
+            &indices
+                .iter()
+                .map(|i| train[*i as usize].clone())
+                .collect::<Vec<_>>(),
+            &l,
+            false,
+        )?;
+    }
+    let b = read_inputs(base)?;
+    for (label, indices) in [
+        ("base-anchor", &b.authorization.as_ref().unwrap().pools[0]),
+        ("base-focus", &b.authorization.as_ref().unwrap().pools[1]),
+    ] {
+        bridge_audit(
+            label,
+            &indices
+                .iter()
+                .map(|i| b.cases[b.train[*i as usize] as usize].clone())
+                .collect::<Vec<_>>(),
+            &l,
+            false,
+        )?;
+    }
+    bridge_audit("parent-validation", &c.validation, &l, false)?;
+    let previous = conditional_plan(conditional, false)?;
+    let mut prior = s.cases.clone();
+    prior.extend(b.cases);
+    prior.extend(previous.cases);
+    let [control_focus, temporal_focus, dev, sanity] =
+        data::bridge_panel(&prior, &l.tokenizer, seed)?;
+    bridge_audit("copy-match-focus", &control_focus, &l, true)?;
+    bridge_audit("temporal-focus", &temporal_focus, &l, true)?;
+    bridge_audit("new-development", &dev, &l, true)?;
+    bridge_audit("sanity", &sanity, &l, true)?;
+    let cf = samples(&control_focus, &l.tokenizer, state.config.seq_len)?;
+    let tf = samples(&temporal_focus, &l.tokenizer, state.config.seq_len)?;
+    let mismatched = cf
+        .iter()
+        .zip(&tf)
+        .filter(|(a, b)| a.response_start != b.response_start)
+        .count();
+    if cf
+        .iter()
+        .zip(&tf)
+        .any(|(a, b)| a.tokens[a.response_start..] != b.tokens[b.response_start..])
+    {
+        return Err(bad("bridge target token equality"));
+    }
+    println!(
+        "BRIDGE_MATCHED cases=512 target_token_equal=true prompt_length_mismatches={mismatched} PLANNED_SMALL_UPDATES=1024 ACTUAL_SMALL_UPDATES=0"
+    );
+    control.check("bridge_data_before_publish")?;
+    std::fs::create_dir(output)?;
+    for (name, focus, validation) in [
+        ("C-COPYMATCH.r3c", control_focus, dev.clone()),
+        ("T-TEMPORAL.r3c", temporal_focus, dev),
+        ("sanity.r3c", Vec::new(), sanity),
+    ] {
+        // R3CORP has two nonempty splits. The sanity file retains the same historical
+        // anchors as train; only its validation split is observed, never trained.
+        let mut episodes = anchors.clone();
+        episodes.extend(focus);
+        let mut meta = c.manifest.clone();
+        meta.generator = "temporal-record-bridge-v1".into();
+        meta.seed = seed;
+        meta.split_rule = format!(
+            "native-parent={}; unseen entity namespaces exclude prior and reserved seal bucket; train128x4/dev64x4/sanity16x4; {name}",
+            hex(&c.semantic)
+        );
+        let mut built = data::native::from_episodes(meta, episodes, validation)?;
+        built.origins.push(data::native::Origin {
+            role: "source-parent".into(),
+            path: corpus.display().to_string(),
+            physical: c.physical,
+            bytes: std::fs::metadata(corpus)?.len(),
+        });
+        data::native::write(&output.join(name), &built, true)?;
+        let read = data::native::read(&output.join(name))?;
+        for e in read.train.iter().skip(2048).chain(if name == "sanity.r3c" {
+            [].iter()
+        } else {
+            read.validation.iter()
+        }) {
+            data::bridge_support(e)?;
+        }
+        println!(
+            "BRIDGE_NATIVE={name} train={} dev={} physical={} semantic={}",
+            read.train.len(),
+            read.validation.len(),
+            hex(&read.physical),
+            hex(&read.semantic)
+        );
+    }
+    Ok(())
+}
 fn path_prepare(
     parent_arm: &Path,
     parent: &Path,
@@ -4049,6 +5124,59 @@ fn resolve_native(root: &Path, s: &RunSnapshot, n: &CheckpointRef, resume: bool)
 #[derive(Subcommand)]
 pub enum Action {
     #[cfg(feature = "test-support")]
+    FixtureBridge {
+        #[arg(long)]
+        from: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        continuous: bool,
+        #[arg(long)]
+        observation: bool,
+    },
+    BridgeObservePrepare {
+        #[arg(long)]
+        parent_arm: PathBuf,
+        #[arg(long)]
+        checkpoint: PathBuf,
+        #[arg(long)]
+        data: PathBuf,
+        #[arg(long)]
+        conditional: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    BridgeObserve {
+        #[arg(long)]
+        root: PathBuf,
+    },
+    BridgeObserveReport {
+        #[arg(long)]
+        root: PathBuf,
+    },
+    BridgePrepare {
+        #[arg(long)]
+        observation: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    BridgeData {
+        #[arg(long)]
+        parent_arm: PathBuf,
+        #[arg(long)]
+        checkpoint: PathBuf,
+        #[arg(long)]
+        corpus: PathBuf,
+        #[arg(long)]
+        base_arm: PathBuf,
+        #[arg(long)]
+        conditional: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value_t = 19419)]
+        seed: u64,
+    },
+    #[cfg(feature = "test-support")]
     FixtureConditional {
         #[arg(long)]
         from: PathBuf,
@@ -4318,6 +5446,114 @@ pub(super) fn command(action: Action) -> Result<()> {
     let mut control = RunControl::command(matches!(action, Action::Run { .. }))?;
     control.deadline = control.start + Duration::from_secs(1800);
     match action {
+        #[cfg(feature = "test-support")]
+        Action::FixtureBridge {
+            from,
+            output,
+            continuous,
+            observation,
+        } => {
+            let original = read_inputs(&from)?;
+            if !original.tiny_spec {
+                return Err(bad("bridge fixture requires existing TINY"));
+            }
+            let t = segment(
+                &from,
+                &reference(&from, "segment-00/terminal.r3er")?,
+                &original,
+            )?;
+            if !t.complete {
+                return Err(bad("TINY bootstrap incomplete"));
+            }
+            let n = t
+                .native
+                .as_ref()
+                .ok_or_else(|| bad("TINY bootstrap native"))?;
+            resolve_native(&from, &original, n, true)?;
+            let mut s = original.clone();
+            s.contract = BRIDGE_CONTRACT.into();
+            s.source = evaluator_source();
+            s.authorization = None;
+            s.historical = false;
+            s.objective = None;
+            s.purpose = RunPurpose::LrContinuous;
+            s.lr_policy = 2;
+            s.lr_offset = 0;
+            s.eval_steps = vec![1, 2];
+            s.tape.truncate(2);
+            for (i, d) in s.tape.iter_mut().enumerate() {
+                d.sampler = n.counters[2] + i as u64 + 1;
+            }
+            s.run = hash(output.to_string_lossy().as_bytes());
+            s.policy = s.run;
+            s.parent = n.clone();
+            s.parent.run = s.run;
+            s.parent.segment = 0;
+            s.parent.file.locator = "parent.r3m".into();
+            s.origins.clear();
+            if continuous {
+                s.origins.push(Origin {
+                    role: "bridge-continuous-test".into(),
+                    original: FileRef {
+                        locator: "parent.r3m".into(),
+                        digest: n.file.digest,
+                    },
+                });
+            }
+            for kind in [
+                PanelKind::LegacyDev,
+                PanelKind::Conditional,
+                PanelKind::Sanity,
+            ] {
+                let mut p = panel(&s, PanelKind::Dev)?.clone();
+                p.kind = kind;
+                s.panels.push(p);
+            }
+            if observation {
+                s.historical = true;
+                s.tape.clear();
+                s.eval_steps.clear();
+                let binary = std::env::current_exe()?;
+                s.origins.push(Origin {
+                    role: "execution-binary".into(),
+                    original: FileRef {
+                        locator: binary.canonicalize()?.display().to_string(),
+                        digest: unhex(&file_hash(&binary)?)?,
+                    },
+                });
+            }
+            s.validate()?;
+            std::fs::create_dir(&output)?;
+            std::fs::copy(from.join(&n.file.locator), output.join("parent.r3m"))?;
+            if observation {
+                std::fs::copy(
+                    from.join("segment-00/terminal.r3er"),
+                    output.join("parent-command.r3er"),
+                )?;
+            }
+            publish(&output, "inputs.r3er", &Record::Inputs(Box::new(s)))?;
+            Ok(())
+        }
+        Action::BridgeObservePrepare {
+            parent_arm,
+            checkpoint,
+            data,
+            conditional,
+            output,
+        } => bridge_observe_prepare(
+            &parent_arm,
+            &checkpoint,
+            &data,
+            &conditional,
+            &output,
+            &mut control,
+        ),
+        Action::BridgeObserve { root } => bridge_observe(&root, &mut control),
+        Action::BridgeObserveReport { root } => bridge_observe_report(&root, &mut control),
+        Action::BridgePrepare {
+            observation,
+            output,
+        } => bridge_prepare(&observation, &output, &mut control),
         Action::VersionParity {
             parent_arm,
             checkpoint,
@@ -4396,6 +5632,24 @@ pub(super) fn command(action: Action) -> Result<()> {
             publish(&output, "plan.r3er", &Record::Conditional(Box::new(p)))?;
             Ok(())
         }
+        Action::BridgeData {
+            parent_arm,
+            checkpoint,
+            corpus,
+            base_arm,
+            conditional,
+            output,
+            seed,
+        } => bridge_data(
+            &parent_arm,
+            &checkpoint,
+            &corpus,
+            &base_arm,
+            &conditional,
+            &output,
+            seed,
+            &mut control,
+        ),
         Action::ConditionalRun { root, model } => conditional_run(&root, model, &mut control),
         Action::ConditionalReport { root } => conditional_report(&root, &mut control),
         Action::ExposureReport { root } => exposure_report(&root, &mut control),
@@ -4824,7 +6078,7 @@ fn segment(root: &Path, r: &FileRef, s: &RunSnapshot) -> Result<SegmentReceipt> 
             .ok_or_else(|| bad("LR cursor"))?;
         if rates.len() != t.draws.len()
             || rates.iter().enumerate().any(|(i, bits)| {
-                (if s.objective.is_some() || s.path_parity() {
+                (if s.objective.is_some() || s.path_parity() || s.bridge() {
                     Ok(1e-4)
                 } else {
                     cooldown_lr(s.lr_policy, first + i as u64 + 1)
@@ -5124,13 +6378,17 @@ fn eligible(
         || s.tiny_spec
         || quality
         || stops.iter().any(|r| *r != StopReason::TimeBudget)
-        || scores.len() != 4
+        || scores.len() != if s.bridge() { 6 } else { 4 }
     {
         return false;
     }
     let find = |kind| scores.iter().find(|(k, _)| *k == kind).map(|(_, v)| v);
     let (Some(d), Some(c), Some(o), Some(w)) = (
-        find(PanelKind::Dev),
+        find(if s.bridge() {
+            PanelKind::LegacyDev
+        } else {
+            PanelKind::Dev
+        }),
         find(PanelKind::Cross),
         find(PanelKind::Ordinary),
         find(PanelKind::Watch),
@@ -5144,8 +6402,10 @@ fn eligible(
         && c.entity >= 507
         && c.event >= 507
         && o.qa[0] >= s.anchor_floor
-        && [d, c, o, w]
+        && [d, c, o, w].iter().all(|p| p.errors == 0)
+        && scores
             .iter()
+            .map(|(_, p)| p)
             .all(|p| p.errors == 0 && p.completed == p.planned)
 }
 fn close_native(
@@ -5388,6 +6648,15 @@ fn close_native_inner(
     let mut scores = Vec::new();
     let kinds: &[PanelKind] = if s.preflight() {
         &[]
+    } else if s.bridge() {
+        &[
+            PanelKind::Dev,
+            PanelKind::Watch,
+            PanelKind::Cross,
+            PanelKind::Ordinary,
+            PanelKind::LegacyDev,
+            PanelKind::Conditional,
+        ]
     } else {
         &[
             PanelKind::Dev,
@@ -6329,12 +7598,19 @@ fn origin_path(s: &RunSnapshot, role: &str) -> Result<PathBuf> {
     Ok(p)
 }
 fn cooldown_verify(root: &Path, confirmation: bool, control: &mut RunControl) -> Result<()> {
-    let study = read_inputs(&root.join(if root.join("B-BASE").exists() {
+    let study = read_inputs(&root.join(if root.join("C-COPYMATCH").exists() {
+        "C-COPYMATCH"
+    } else if root.join("B-BASE").exists() {
         "B-BASE"
     } else {
         "K-KEEP"
     }))?;
     let arms = study.study_arms();
+    if study.bridge() && !confirmation {
+        return Err(bad(
+            "bridge uses full parent observation, not additional parity",
+        ));
+    }
     if !study.continuation() {
         return Err(bad("verification requires cooldown study"));
     }
@@ -6371,7 +7647,39 @@ fn cooldown_verify(root: &Path, confirmation: bool, control: &mut RunControl) ->
             else {
                 return Err(bad("comparison kind"));
             };
-            if score.candidate {
+            let signal = if study.bridge() {
+                let other = read_inputs(&root.join(arms[0]))?;
+                let closed = arm_commands(&root.join(arms[0]), &other)?;
+                let Record::Comparison(c) = read_record(
+                    &root.join(arms[0]),
+                    closed
+                        .last()
+                        .unwrap()
+                        .1
+                        .comparison
+                        .as_ref()
+                        .ok_or_else(|| bad("bridge control comparison"))?,
+                )?
+                else {
+                    return Err(bad("bridge control comparison kind"));
+                };
+                let get = |rows: &[(PanelKind, Score)], k| {
+                    rows.iter()
+                        .find(|(kind, _)| *kind == k)
+                        .map(|(_, v)| v.clone())
+                        .ok_or_else(|| bad("bridge required score"))
+                };
+                let dev = get(&score.panels, PanelKind::Dev)?;
+                arm == arms[1]
+                    && dev.exact >= 192
+                    && dev.exact as i64 - get(&c.panels, PanelKind::Dev)?.exact as i64 >= 26
+                    && dev.base[0] >= 40
+                    && dev.errors == 0
+                    && get(&score.panels, PanelKind::Ordinary)?.qa[0] >= 178
+            } else {
+                true
+            };
+            if score.candidate && signal {
                 let get = |k| {
                     score
                         .panels
@@ -6408,7 +7716,7 @@ fn cooldown_verify(root: &Path, confirmation: bool, control: &mut RunControl) ->
             return Ok(());
         };
         // Selection uses stored metadata only; the complete independent close follows durable intent.
-        (dir, s, n, c, None, 2)
+        (dir, s, n, c, None, if study.bridge() { 4 } else { 2 })
     } else {
         let path = origin_path(&study, "cooldown-parent-inputs")?;
         let dir = path
@@ -6484,7 +7792,16 @@ fn cooldown_verify(root: &Path, confirmation: bool, control: &mut RunControl) ->
     let specs = if confirmation {
         [PanelKind::Dev, PanelKind::Cross, PanelKind::Ordinary]
             .iter()
-            .map(|k| Ok((*k, panel(&snapshot, *k)?.cases.clone())))
+            .map(|k| {
+                Ok((
+                    *k,
+                    if study.bridge() {
+                        metadata_sample(&snapshot, *k, 16)?
+                    } else {
+                        panel(&snapshot, *k)?.cases.clone()
+                    },
+                ))
+            })
             .collect::<Result<Vec<_>>>()?
     } else {
         [PanelKind::Dev, PanelKind::Ordinary]
@@ -6533,7 +7850,7 @@ fn cooldown_verify(root: &Path, confirmation: bool, control: &mut RunControl) ->
             if confirmation {
                 let (_, g, seconds) =
                     anchor_budget(&root.join(arms[1]), &read_inputs(&root.join(arms[1]))?)?;
-                if g + start.order.len() > 4096 {
+                if g + start.order.len() > if study.bridge() { 4608 } else { 4096 } {
                     return Err(bad("confirmation generation budget"));
                 }
                 control.deadline =
@@ -6621,12 +7938,16 @@ fn cooldown_verify(root: &Path, confirmation: bool, control: &mut RunControl) ->
                     tokenizer: native.tokenizer,
                     architecture: native.architecture,
                     step: native.step,
-                    new_updates: if confirmation { 256 } else { 0 },
+                    new_updates: if confirmation {
+                        snapshot.tape.len() as u64
+                    } else {
+                        0
+                    },
                     kind: *kind,
                     expected: cases.len() as u32,
                     rows,
                 };
-                if confirmation {
+                if confirmation && !study.bridge() {
                     let score = rescore(&s, &e, &l, true)?;
                     print_anchor_panel(&s, &e, &l)?;
                     scores.push((*kind, score));
@@ -6643,7 +7964,7 @@ fn cooldown_verify(root: &Path, confirmation: bool, control: &mut RunControl) ->
                     control.generation_calls
                 );
             }
-            if confirmation {
+            if confirmation && !study.bridge() {
                 // Watch is the same ordinary subset. It must not consume another model call.
                 let Record::Evaluation(mut watch) =
                     read_record(&target, proof_panels.last().unwrap())?
@@ -6733,8 +8054,9 @@ fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
                 || other.parent.file.digest != s.parent.file.digest
                 || other.parent.counters != s.parent.counters
                 || other.train != s.train
-                || other.cases.iter().map(case_hash).collect::<Vec<_>>()
-                    != s.cases.iter().map(case_hash).collect::<Vec<_>>()
+                || !s.bridge()
+                    && other.cases.iter().map(case_hash).collect::<Vec<_>>()
+                        != s.cases.iter().map(case_hash).collect::<Vec<_>>()
                 || other_a.pools != a.pools
                 || other.tape.len() != s.tape.len()
                 || other.tape.iter().zip(&s.tape).any(|(a, b)| {
@@ -6745,6 +8067,21 @@ fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
                 }))
         {
             return Err(bad("cooldown identical parent/data/tape/source"));
+        }
+        if s.bridge() {
+            bridge_origins(&other)?;
+            let l = resolve_native(root, s, &s.parent, true)?;
+            for (i, (x, y)) in other.cases.iter().zip(&s.cases).enumerate() {
+                if !(2048..2560).contains(&i) || other.arm_name() == s.arm_name() {
+                    if case_hash(x) != case_hash(y) {
+                        return Err(bad("bridge shared cases changed"));
+                    }
+                } else if other.arm_name() == "C-COPYMATCH" {
+                    data::bridge_pair(x, y, &l.tokenizer)?;
+                } else {
+                    data::bridge_pair(y, x, &l.tokenizer)?;
+                }
+            }
         }
         let closed = arm_commands(&arm_root, &other)?;
         if arm != s.arm_name()
@@ -6766,10 +8103,26 @@ fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
             seconds += c.elapsed.finite()?;
         }
     }
+    if s.bridge() {
+        let path = origin_path(s, "bridge-observation-final")?;
+        let observation = path
+            .parent()
+            .ok_or_else(|| bad("bridge observation root"))?;
+        let p = read_preflight_outcome(observation)?
+            .ok_or_else(|| bad("bridge observation missing"))?;
+        p.require_current_success()?;
+        generations += p.entries as usize;
+        seconds += p.elapsed + p.publication_reserve;
+    }
     if !s.preflight()
+        && !s.bridge()
         && matches!(
             s.contract.as_str(),
-            RESTART_CONTRACT | COOLDOWN_CONTRACT | OBJECTIVE_CONTRACT | NATIVE_CORPUS_CONTRACT
+            RESTART_CONTRACT
+                | COOLDOWN_CONTRACT
+                | OBJECTIVE_CONTRACT
+                | NATIVE_CORPUS_CONTRACT
+                | BRIDGE_CONTRACT
         )
     {
         let p = read_preflight_outcome(parent)?.ok_or_else(|| bad("missing preflight outcome"))?;
@@ -6809,7 +8162,14 @@ fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
         } else {
             1024
         }
-        || generations > if s.continuation() { 4096 } else { 7500 }
+        || generations
+            > if s.bridge() {
+                4608
+            } else if s.continuation() {
+                4096
+            } else {
+                7500
+            }
         || seconds >= 7200.
     {
         return Err(bad("anchor pair budget exhausted"));
@@ -7107,10 +8467,24 @@ fn read_preflight_outcome(root: &Path) -> Result<Option<PreflightOutcome>> {
         || f.entries > start.generation_limit
         || f.tokens < tokens
         || f.elapsed.finite()? < elapsed
+        || start.scope != 3 && f.teachers != 0
     {
         return Err(bad("verification final usage/raw binding"));
     }
     if f.succeeded {
+        if start.scope == 3 {
+            let Record::Inputs(s) = read_record(root, &start.inputs[0])? else {
+                return Err(bad("bridge teacher intent snapshot"));
+            };
+            let expected = if s.tiny_spec {
+                start.order.len() as u64
+            } else {
+                bridge_probe_indices(&s)?.len() as u64
+            };
+            if !s.bridge() || !s.historical || f.teachers != expected {
+                return Err(bad("bridge teacher completed usage"));
+            }
+        }
         let proof_ref = f
             .proof
             .as_ref()
@@ -7133,7 +8507,7 @@ fn read_preflight_outcome(root: &Path) -> Result<Option<PreflightOutcome>> {
             return Err(bad("verification positive final/proof mismatch"));
         }
         let mut accounted = BTreeSet::new();
-        if p.panels.len() != if start.scope == 2 { 3 } else { 2 } {
+        if p.panels.len() != if matches!(start.scope, 2 | 4) { 3 } else { 2 } {
             return Err(bad("verification panel count"));
         }
         let loaded = if start.scope > 0 {
@@ -7158,7 +8532,7 @@ fn read_preflight_outcome(root: &Path) -> Result<Option<PreflightOutcome>> {
                 .iter()
                 .enumerate()
                 .filter(|(i, (_, row, _))| {
-                    if start.scope == 2 {
+                    if matches!(start.scope, 2 | 4) {
                         e.rows.iter().any(|r| r.ordinal == row.ordinal)
                     } else {
                         start.order[*i].0 as usize == arm
@@ -7172,8 +8546,10 @@ fn read_preflight_outcome(root: &Path) -> Result<Option<PreflightOutcome>> {
                 b
             };
             if let Some(l) = &loaded {
-                let Record::Inputs(s) =
-                    read_record(root, &start.inputs[if start.scope == 2 { 0 } else { arm }])?
+                let Record::Inputs(s) = read_record(
+                    root,
+                    &start.inputs[if matches!(start.scope, 2 | 4) { 0 } else { arm }],
+                )?
                 else {
                     return Err(bad("verification snapshot kind"));
                 };
@@ -7193,10 +8569,10 @@ fn read_preflight_outcome(root: &Path) -> Result<Option<PreflightOutcome>> {
                 {
                     return Err(bad("verification proof actual endpoint/policy"));
                 }
-                if start.scope == 2 {
+                if start.scope == 2 || start.scope == 3 {
                     rescore(&s, &e, l, true)?;
                 } else if e.rows.iter().map(|r| r.ordinal).collect::<Vec<_>>()
-                    != metadata_sample(&s, e.kind, 8)?
+                    != metadata_sample(&s, e.kind, if start.scope == 4 { 16 } else { 8 })?
                 {
                     return Err(bad("parent metadata-only sample changed"));
                 }
@@ -7213,7 +8589,10 @@ fn read_preflight_outcome(root: &Path) -> Result<Option<PreflightOutcome>> {
                 return Err(bad("proof dropped/changed returned rows"));
             }
             for row in &e.rows {
-                let key = (if start.scope == 2 { 0 } else { arm }, row.ordinal);
+                let key = (
+                    if matches!(start.scope, 2 | 4) { 0 } else { arm },
+                    row.ordinal,
+                );
                 if !accounted.insert(key) {
                     return Err(bad("duplicate proof row"));
                 }
@@ -7315,7 +8694,12 @@ fn finish_verification_attempt(
         .try_lock()
         .map_err(|e| Error::Conflict(format!("verification writer: {e}")))?;
     println!(
-        "VERIFICATION_BEGIN_DURABLE=true CONTRACT={COOLDOWN_CONTRACT} ATTEMPT_ID={} RESERVED_UPPER_BOUND={} UNKNOWN_TAIL=true",
+        "VERIFICATION_BEGIN_DURABLE=true CONTRACT={} ATTEMPT_ID={} RESERVED_UPPER_BOUND={} UNKNOWN_TAIL=true",
+        if matches!(start.scope, 3 | 4) {
+            BRIDGE_CONTRACT
+        } else {
+            COOLDOWN_CONTRACT
+        },
         hex(&sr.digest),
         start.generation_limit
     );
@@ -7738,6 +9122,27 @@ fn print_anchor_panel(s: &RunSnapshot, e: &EvalPayload, l: &Loaded) -> Result<()
             v[0] += u64::from(exact);
             v[1] += 1;
         }
+        if case.family.starts_with("bridge/") {
+            for key in case.family.split('/').filter(|v| {
+                v.starts_with("digits-")
+                    || v.starts_with("repeated-")
+                    || v.starts_with("order-")
+                    || v.starts_with("newer-id-larger-")
+                    || v.starts_with("kind-")
+            }) {
+                let counts = strata.entry(key.to_string()).or_default();
+                counts[0] += u64::from(exact);
+                counts[1] += 1;
+            }
+            let key = if case.request.input.contains("현재 유효한") {
+                "question/current"
+            } else {
+                "question/past"
+            };
+            let counts = strata.entry(key.into()).or_default();
+            counts[0] += u64::from(exact);
+            counts[1] += 1;
+        }
     }
     println!(
         "NODE=G2 ARM={} PANEL={} step={} updates={} model={} full={}/{} entity={} context={context} value={value} event={} errors={} empty={empty} EOS={eos} wrong_citation={wrong_citation} base4={}/{} QA={}/{} AUX={}/{}",
@@ -7840,6 +9245,7 @@ fn paired_counts(a: &[(Hash, bool, bool)], b: &[(Hash, bool, bool)]) -> Result<[
     Ok(counts)
 }
 fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
+    let bridge = root.join("C-COPYMATCH").exists();
     let cooldown = root.join("K-KEEP").exists();
     let objective = root.join("B-BASE").exists();
     if cooldown || objective {
@@ -7861,7 +9267,9 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
             p.require_current_success()?;
         }
     }
-    let arms = if objective {
+    let arms = if bridge {
+        ["C-COPYMATCH", "T-TEMPORAL"]
+    } else if objective {
         ["B-BASE", "S-SPAN"]
     } else if cooldown {
         ["K-KEEP", "D-DECAY"]
@@ -7873,6 +9281,9 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
     for arm in arms {
         let dir = root.join(arm);
         let s = read_inputs(&dir)?;
+        if bridge {
+            bridge_origins(&s)?;
+        }
         if let Err(e) = arm_commands(&dir, &s) {
             println!(
                 "MODEL_PAIR=FAILED_OR_INCOMPLETE ARM={arm} REASON={e} candidate=false GOAL1_ACCEPTED=false"
@@ -8059,7 +9470,17 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
             t.stop
         );
         for n in if cooldown { [128, 256] } else { [256, 512] } {
-            for kind in [PanelKind::Dev, PanelKind::Cross, PanelKind::Ordinary] {
+            for kind in if bridge {
+                vec![
+                    PanelKind::Dev,
+                    PanelKind::LegacyDev,
+                    PanelKind::Cross,
+                    PanelKind::Ordinary,
+                    PanelKind::Conditional,
+                ]
+            } else {
+                vec![PanelKind::Dev, PanelKind::Cross, PanelKind::Ordinary]
+            } {
                 if let Some(r) = h.evaluations.get(&(s.parent.step + n, kind)) {
                     let (e, l) = payload(&dir, &s, r)?;
                     print_anchor_panel(&s, &e, &l)?;
@@ -8071,6 +9492,36 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
         } else {
             false
         };
+        if bridge {
+            reference(&dir, "final-probe-final.r3er")?;
+            bridge_teacher(&dir, "final-probe", &s, native, &l, control)?;
+            let observation = origin_path(&s, "bridge-observation-final")?;
+            let observation = observation.parent().unwrap();
+            read_preflight_outcome(observation)?
+                .ok_or_else(|| bad("bridge observation missing"))?
+                .require_current_success()?;
+            let parent = read_inputs(observation)?;
+            let pl = resolve_native(observation, &parent, &parent.parent, true)?;
+            reference(observation, "parent-probe-final.r3er")?;
+            bridge_teacher(
+                observation,
+                "parent-probe",
+                &parent,
+                &parent.parent,
+                &pl,
+                control,
+            )?;
+            for kind in [PanelKind::Sanity, PanelKind::Dev] {
+                let Record::Evaluation(e) = read_record(
+                    observation,
+                    &reference(observation, &format!("{}.r3er", kind.name()))?,
+                )?
+                else {
+                    return Err(bad("bridge parent raw"));
+                };
+                print_anchor_panel(&parent, &e, &pl)?;
+            }
+        }
         if cooldown || objective {
             let original = origin_path(&s, "cooldown-parent-inputs")?;
             let parent = original.parent().ok_or_else(|| bad("paired parent root"))?;
@@ -8108,7 +9559,17 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
         return Err(bad("report mismatched pair"));
     }
     for n in if cooldown { [128, 256] } else { [256, 512] } {
-        for kind in [PanelKind::Dev, PanelKind::Cross, PanelKind::Ordinary] {
+        for kind in if bridge {
+            vec![
+                PanelKind::Dev,
+                PanelKind::LegacyDev,
+                PanelKind::Cross,
+                PanelKind::Ordinary,
+                PanelKind::Conditional,
+            ]
+        } else {
+            vec![PanelKind::Dev, PanelKind::Cross, PanelKind::Ordinary]
+        } {
             let mut rows = Vec::new();
             for (i, (s, h, _)) in endpoints.iter().enumerate() {
                 if let Some(r) = h.evaluations.get(&(s.parent.step + n, kind)) {
@@ -8121,6 +9582,65 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
                     (rows[0].0, &rows[0].1, &rows[0].2),
                     (rows[1].0, &rows[1].1, &rows[1].2),
                 )?;
+                if bridge && n == 512 && kind == PanelKind::Dev {
+                    let t = rescore(rows[1].0, &rows[1].1, &rows[1].2, true)?;
+                    let ts = &endpoints[1].0;
+                    let th = &endpoints[1].1;
+                    let (oe, ol) = payload(
+                        &root.join(arms[1]),
+                        ts,
+                        &th.evaluations[&(ts.parent.step + 512, PanelKind::Ordinary)],
+                    )?;
+                    let ordinary = rescore(ts, &oe, &ol, true)?;
+                    let signal = t.exact >= 192
+                        && counts[0][1] as i64 - counts[0][2] as i64 >= 26
+                        && t.base[0] >= 40
+                        && t.errors == 0
+                        && ordinary.qa[0] >= 178;
+                    println!(
+                        "BINDING_LEARNING_SIGNAL={signal} primary_T_minus_C={} full={} base4={:?} QA={:?} H3_JOINT={:?} MODEL_QUALITY_RECOVERED={} GOAL1_READY=false H3_SEAL=NOT_OPENED",
+                        counts[0][1] as i64 - counts[0][2] as i64,
+                        t.exact,
+                        t.base,
+                        ordinary.qa,
+                        endpoints.iter().map(|x| x.2).collect::<Vec<_>>(),
+                        signal && endpoints[1].2
+                    );
+                    for (s, e, l) in &rows {
+                        let mut query = [0u64; 2];
+                        let mut swap = [0u64; 2];
+                        let mut changes = [0u64; 2];
+                        for quartet in e.rows.as_chunks::<4>().0 {
+                            let outputs = quartet
+                                .iter()
+                                .map(|r| row_output(r, l))
+                                .collect::<Result<Vec<_>>>()?;
+                            let marks = quartet
+                                .iter()
+                                .zip(&outputs)
+                                .map(|(r, (a, abnormal))| {
+                                    !abnormal
+                                        && a.as_deref()
+                                            == Some(s.cases[r.ordinal as usize].answer.as_str())
+                                })
+                                .collect::<Vec<_>>();
+                            for (a, b) in [(0, 1), (2, 3)] {
+                                query[0] += u64::from(marks[a] && marks[b]);
+                                query[1] += 1;
+                                changes[0] += u64::from(outputs[a].0 != outputs[b].0);
+                                changes[1] += 1;
+                            }
+                            for (a, b) in [(0, 2), (1, 3)] {
+                                swap[0] += u64::from(marks[a] && marks[b]);
+                                swap[1] += 1;
+                            }
+                        }
+                        println!(
+                            "BRIDGE_JOINT arm={} query_change_both_correct={query:?} value_swap_both_correct={swap:?} query_output_change={changes:?}",
+                            s.arm_name()
+                        );
+                    }
+                }
                 println!(
                     "PAIRED updates={n} panel={} both_wrong/gain/loss/both_correct={:?} base_all_views={:?}",
                     kind.name(),
@@ -8431,7 +9951,11 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
     if s.authorization.is_some() {
         if !matches!(
             s.contract.as_str(),
-            RESTART_CONTRACT | COOLDOWN_CONTRACT | OBJECTIVE_CONTRACT | NATIVE_CORPUS_CONTRACT
+            RESTART_CONTRACT
+                | COOLDOWN_CONTRACT
+                | OBJECTIVE_CONTRACT
+                | NATIVE_CORPUS_CONTRACT
+                | BRIDGE_CONTRACT
         ) {
             return Err(bad("closed historical study is not restart authorization"));
         }
@@ -8449,9 +9973,9 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
             return Err(bad("registered source/binary changed before training"));
         }
         let (_, generations, seconds) = anchor_budget(root, &s)?;
-        if s.objective.is_some() {
+        if s.objective.is_some() || s.bridge() {
             let parent = root.parent().ok_or_else(|| bad("objective pair root"))?;
-            let mut teachers = 0;
+            let mut teachers = if s.bridge() { 64 } else { 0 };
             for arm in s.study_arms() {
                 let dir = parent.join(arm);
                 let other = read_inputs(&dir)?;
@@ -8460,7 +9984,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                     .map(|(t, _)| t.teachers as usize)
                     .sum::<usize>();
             }
-            control.teacher_limit = 256usize
+            control.teacher_limit = (if s.bridge() { 192usize } else { 256usize })
                 .checked_sub(teachers)
                 .ok_or_else(|| bad("pair teacher budget"))?;
         }
@@ -8479,17 +10003,27 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
             {
                 return Err(bad("study moved outside registered authorization"));
             }
-            for role in [
-                "cooldown-parent-inputs",
-                "cooldown-parent-terminal",
-                "cooldown-parent-command",
-                "cooldown-legacy-proof",
-            ] {
+            for role in if s.bridge() {
+                &[][..]
+            } else {
+                &[
+                    "cooldown-parent-inputs",
+                    "cooldown-parent-terminal",
+                    "cooldown-parent-command",
+                    "cooldown-legacy-proof",
+                ][..]
+            } {
                 origin_path(&s, role)?;
             }
         }
         control.deadline = control.start + Duration::from_secs_f64((7200. - seconds).min(1800.));
-        control.generation_limit = if s.continuation() { 4096 } else { 7500 } - generations;
+        control.generation_limit = if s.bridge() {
+            4608
+        } else if s.continuation() {
+            4096
+        } else {
+            7500
+        } - generations;
         println!(
             "NODE=G2 ARM={} STATE=START prior_generations={generations} prior_command_s={seconds:.3} source={} binary={} input_binding={}",
             s.arm_name(),
@@ -8674,7 +10208,8 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
         }
         loop {
             let n = state.step as u64 - s.parent.step;
-            if matches!(s.purpose, RunPurpose::SaveSplit | RunPurpose::LrSplit)
+            if (s.bridge() || matches!(s.purpose, RunPurpose::SaveSplit | RunPurpose::LrSplit))
+                && !(s.tiny_spec && s.origins.iter().any(|o| o.role == "bridge-continuous-test"))
                 && index == 0
                 && n == 1
             {
@@ -8712,9 +10247,20 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                     );
                     last_saved = Some(native);
                 }
-                let mid = s.cooldown() && n == 128 || s.objective.is_some() && n == 256;
+                let mid = s.cooldown() && n == 128
+                    || (s.objective.is_some() || s.bridge())
+                        && n == if s.tiny_spec { 1 } else { 256 };
                 let kinds: &[PanelKind] = if mid {
                     &[PanelKind::Dev, PanelKind::Watch]
+                } else if s.bridge() {
+                    &[
+                        PanelKind::Dev,
+                        PanelKind::Cross,
+                        PanelKind::Ordinary,
+                        PanelKind::Watch,
+                        PanelKind::LegacyDev,
+                        PanelKind::Conditional,
+                    ]
                 } else if s.authorization.is_some() {
                     &[
                         PanelKind::Dev,
@@ -8927,6 +10473,18 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                         control,
                     )?;
                 }
+                if s.bridge() && !s.tiny_spec {
+                    bridge_teacher(
+                        root,
+                        "final-probe",
+                        &s,
+                        last_saved
+                            .as_ref()
+                            .ok_or_else(|| bad("bridge final saved endpoint"))?,
+                        &l,
+                        control,
+                    )?;
+                }
                 complete = true;
                 break;
             }
@@ -8981,7 +10539,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                     ))
                 })
                 .collect::<Result<BTreeMap<_, _>>>()?;
-            let rate = if s.objective.is_some() || s.path_parity() {
+            let rate = if s.objective.is_some() || s.path_parity() || s.bridge() {
                 1e-4
             } else if s.cooldown() {
                 cooldown_lr(s.lr_policy, n + 1)?
@@ -10208,7 +11766,7 @@ fn fixture_check(roots: &[PathBuf]) -> Result<()> {
             return Err(bad("fixture decisions/eligibility"));
         }
         let n = chain.last().unwrap().1.native.as_ref().unwrap();
-        if s.cooldown() {
+        if s.cooldown() || s.bridge() {
             let l = resolve_native(root, &s, n, true)?;
             let rates = chain
                 .iter()

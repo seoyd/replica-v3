@@ -38,6 +38,36 @@ H3 joint stays dev244/entity254/event254, CROSS487/entity507/event507, QA178,
 required-panel errors0 and durable same endpoint. Signal and H3 are separate.
 S4/S5/S6/seal/Goal1 are not automatically authorized by this study.
 
+### Current stop: parent observation publication failed
+
+Q1 repairs are published at10a968ec1eb0b253f21ebc318f6973d2da5ac6fa.
+Q2 native paired data and actual parent observations exist. Q3 native TINY
+continuous2 versus fresh1+1 is numerically equal. Q4 C/T training is NOT_RUN:
+the parent observation attempted320 generations and64 own teacher forwards,
+then its final record failed the inherited `teachers == 0` decoder invariant.
+This is an implementation/publication failure, not evidence of a failed optimizer
+or a completed quality experiment. The start, every returned row, panels, teacher
+rows and provisional proof remain immutable. No positive final certificate exists.
+
+The corrected decoder permits at most64 teacher observations; the bound reader
+requires zero for old verification scopes and the exact expected count for the
+bridge observation scope. Real TINY subprocess observation/teacher/fresh read
+and no-retry regressions exercise this path. Read-only recount cannot issue a
+new positive final or reopen the failed attempt. A fresh SMALL study remains
+blocked; no automatic replacement root, budget reuse or extra optimizer calls.
+
+Implementation stays in the existing data generator and R3ER runner: one native
+paired corpus per arm, verified origins, shared tape/LR/Adam, first-update save,
+partial evaluation continuation, six required final panels and typed probes.
+No new module/codec/DB/IPC was added. The SMALL registration and512-update paths
+are implemented but have not been executed in this attempt; do not call Q3/Q4
+accepted or STUDY_COMPLETE. The candidate48 branch is NOT_RUN_NO_CANDIDATE.
+
+One next hypothesis remains untested: competitive temporal-record exposure can
+improve same-slot selection while preserving ordinary QA. The current single-record
+sanity control also fails, so temporal selection alone is not an established cause.
+Any replacement study needs explicit new authorization and must retain this stop.
+
 ## Closed: R3-NATIVE-CORPUS-OBJECTIVE-BINDING-1.0
 
 N0–N5 implementation and bounded observations completed. Exact objective resume,

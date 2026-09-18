@@ -1,5 +1,144 @@
 # 진단 및 구현 상태
 
+## Q2/Q3 — 실제 부모 관측 완료, publication 실패로 학습 진입 차단
+
+R3-QUALITY-FIRST-BRIDGE-1.0 / 2026-09-19. **계약 전체 PARTIAL**.
+CK01/02/03 수리는 PASS, 자료 생성·native 재읽기·독립 문법 검사 PASS,
+TINY 저장/재개 수치 정합 PASS. SMALL C/T 비교는 **NOT_RUN**이다.
+코드/원자료 검사, 새 모델 품질 개선, H3/S4/S5/S6/Goal1은 별도 판정한다.
+
+이번 부모 관측에 자체 teacher64를 연결하면서 기존 VerificationFinal reader의
+`teachers != 0` 거부 조건을 함께 수정하지 못했다. 실제 generation320/teacher64
+이후 positive final 발행 전 `R3ER: verification outcome counters/status`로 exit1.
+이는 이번 구현의 저장 경계 오류다. 모델 학습 불능 원인으로 주장하지 않는다.
+수정 후 scope3에서만 최대64/완료 시 고정 표본 수를 검증하며, 기존 scope는
+teacher0 조건을 유지한다. 해당 TINY process 회귀가 PASS여도 실패한 원 관측의
+final을 새로 발행하거나 품질 학습을 자동 재개하지 않았다.
+
+`bridge-prepare`를 새 process에서 호출한 실제 결과는
+`verification failed/incomplete/legacy; retry and subsequent arm prohibited`/exit1.
+study 디렉터리가 생기지 않았고 C/T SMALL optimizer0, 마지막 실제 durable 모델은
+기존 A75-R24310이다. 실행 중인 학습은 없다. pending/final 없는 intent는
+INTERRUPTED_UNKNOWN으로 유지한다. generation raw가 완전하다는 사실을
+command 성공·총 시간 확정으로 바꾸지 않는다.
+
+### 실제 관측과 한계
+
+모든 새 출력은 동일 부모 model
+`dfc3efb664351578340e39d3cfc95b90f270541041d4641d72d6f41a53871b11`,
+normal greedy/strict UTF-8/EOS, generation320이다. 추가 SMALL optimizer0,
+optimizer input/target tokens0. 원 부모의 Adam/누적 counter는 보존했다.
+
+| 패널 | full | entity | context | value | event | 생성 오류 | EOS |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 기존 H3 dev 재집계 |240/256|247|별도 raw|별도 raw|250|1|별도 raw|
+| 기존 CROSS 재집계 |462/512|499|별도 raw|별도 raw|500|0|별도 raw|
+| 기존 ordinary 재집계 |234/400|253|별도 raw|별도 raw|325|0|별도 raw|
+| 새 sanity64 |0/64|2|9|18|7|1|64|
+| 새 개발256 |0/256|15|6|22|2|2|255|
+
+기존 ordinary는 QA181/336, aux53/64, watch19/32. 새 sanity A(single)/
+B(distinct)/C(same entity)/D(past)는 각각0/16. 따라서 선택 부담을 없앤 A도
+실패했다. 시간 선택만의 문제, 특정 kernel/수식/tokenizer 결함이라는 결론은
+UNRESOLVED다. 새 C/T training을 실행하지 않아 자료 개입 효과는 알 수 없다.
+개발256의 base4는0/64, current/past 각각0/128, 양순서 각각0/128이다.
+
+자체 teacher는 metadata train32/dev32, 총64 forward. 여기의 train32는 부모가
+아직 학습하지 않은 **새 focus** 표본이다. 부모의 원래 학습자료 암기 정확도와
+혼동하지 않는다. train 평균 사례 NLL
+3.4527065266943033, 동일 gold/foil prefix의 최초 차이 평균 margin
+1.2929080929607153, teacher token736/1229. dev는 NLL4.0264493192556605,
+margin−0.6523758731782436, token708/1268. 이는 자유생성 정답률이 아니다.
+sanity 생성 token1678 + dev6899 = 반환 token8577. 실패 attempt reader가 보존한
+elapsed lower bound36.3646395초, 전체 elapsed/token 사용량은 UNKNOWN으로 남긴다.
+64개의 완료된 teacher raw도 별도로 보존했다. 재검산 신규generation/teacher0.
+C/T midpoint/final/paired gain/loss, conditional144 새 평가, candidate48는 NOT_RUN.
+
+### 자료·실행 경로와 보존
+
+부모·B-BASE 각각의 ordinary anchor2048은 evidence0/1/2/3+=66/482/1098/402,
+같은 slot 경쟁410, current ID가 큰/작은 경우201/209였다. 기존 focus512는
+모두 단일 기록이었다. 따라서 이전 자료 전체에 선택 과제가 없었다고 하지 않는다.
+새 focus512는 두 기록/current256/past256, alias 외 C/T 정답 token·prompt 길이가
+모두 일치했다. train128base×4, dev64base×4, sanity16base×4; 기존 자료·예약된
+seal namespace를 피하며 seal 파일은 읽지 않았다. 작은 부정 사례 검사는
+뒤집힌 답·같은 값·동일 ID·time/status 모순·alias 충돌을 거부한다.
+
+실제 prompt token 범위: focus305–371, dev313–368, sanity243–364;
+source까지 거리 최대181/179/175. 자동 제외0, 같은 framed input의 상충 답0.
+first-target weight8(bits4620693217682128896), 실제 LR 정책1e-4.
+새 SMALL 가중치/Adam/tokenizer는 만들지 않았다. source-native 경로의 JSON 읽기와
+SQLite 열기 없음은 SOURCE_READ 근거이며 OS syscall 계측0이라는 주장이 아니다.
+기존 checker의 JSON 관측 요약, explicit legacy importer, 제품 IPC/운영 SQLite는
+그대로 있다. 새 corpus와 학습/평가 제어의 canonical 자료는 R3CORP/R3ER다.
+
+허용 원자료는 repository 아래 다음 경로다. 업로드하지 않는다.
+
+- `artifacts/quality-first-bridge-20260919/data-ready/`: C-COPYMATCH.r3c,
+  T-TEMPORAL.r3c, sanity.r3c. 앞선 `data/`와 `q2-data.log`의 sanity empty-train
+  packing 실패도 보존했다. model 호출 이전의 실패이며 R3CORP의 두 nonempty
+  split 규칙에 맞춰 sanity 파일 train에는 기존 anchor만 유지하고 validation64만
+  관측했다. 두 번째 C/T의 semantic hash는 첫 출력과 같다.
+- `artifacts/quality-first-bridge-20260919/parent-observation/`: inputs/parent,
+  durable start, returned320 rows, sanity/dev 패널, teacher64 rows,
+  parent-probe-final, provisional preflight-proof. **preflight-final은 없음**.
+- `artifacts/native-corpus-objective-20260918/A75-R24310-v2.r3m`:
+  physical81d18002580fd2b662f4fb4c7a7acfd45833b8f0ca1de49a62193b56bb3a6142.
+  기존 `durability-pair-restart-20260918/attempt-R/A75-R`와 실제 weights/Adam/step 대조.
+- 같은 evidence root의 `q2-parent-observe.log`, `q5-parent-reaudit.log`,
+  `q3-sticky-admission.log`, `observation-preservation-{before,after}.sha256`.
+  before/after 전체 파일 hash 목록 동일, 이전 원본8개도 재검증 OK.
+- 관측 실행 바이너리 `observed-replica-train`, SHA256
+  `5c22a933859a3708ab8ffd52b6e22fb57f841de397e0dce1a0b467b9333bdb87`.
+  관측 source file experiment_record SHA256
+  `1c9469d0142f407ac1295531e0578a69e709e832ba1ebe3a88234651f475824f`.
+  관측 후 teacher receipt 수리·읽기전용 보고가 추가됐으므로 최종 candidate와 구분한다.
+
+### 테스트와 최종 상태
+
+Q1의 quick29commands/33tests PASS 이후, 관측 전 q3-quick31commands/35tests
+PASS/exit0/source_unchanged=true. q3-quick source digest
+`000faf8af706c6f9f0339127f3c568ab95cbb7478ae2226c8463536f289aa956`.
+이후 finalization 수리에서 bridge process2tests PASS, fmt/clippy 및 최종 관련
+teacher receipt/기존 publication 회귀를 별도 기록한다. 전체 quick을 수리 후
+재실행했다고 하지 않는다. TINY 수치 회귀: continuous2와 fresh1+1의 weights,
+Adam, LR bits, counter, guard, 전체 raw가 같고6패널 close가 통과했다.
+새 teacher receipt 회귀는 TINY 실제generation2/teacher2, fresh read 신규호출0,
+동일 attempt 재시도 거부 및 final bytes 불변을 검증한다.
+
+최종 source에서 `quick --bridge-receipts`는 수정한 bridge process/기존 공개후sync/
+두 지정 corpus 회귀와 generator를 다시 실행한다. 기존 `quick --native-corpus`
+범위는 삭제하지 않았다. TINY128 상한 안에서 변경 경계만 재실행하기 위한 기존
+runner의 명시적 좁은 scope이며 전체 저장소 검사나 품질 gate가 아니다.
+실제 최종 결과는8commands/6tests PASS/exit0/source_unchanged=true,
+source digest `e8862534fc2960c9eb5227b602873a375682b03620263c17ce2850b473bb483c`.
+fmt/check/clippy를 포함한다. 수리 직후2tests, 마지막 observation1test 및 기존
+publication1test의 별도 호출도 모두 PASS이며 중복 실행을 독립 테스트 수로
+합산하지 않는다. 최종 release build는 학습 throughput과 분리한다.
+
+이 작업의 TINY optimizer 실제 합계122/128:
+CK01 red1+green3+Q1quick47+bridge smoke4+Q3quick51+
+finalization 수리4+publication 재검사4+최종 narrow quick8.
+신규 SMALL optimizer0, scalar optimizer0, SMALL generation320/4608,
+자체 SMALL teacher64/192, 외부 teacher0. TINY generation/teacher는
+각 subprocess의 실제 entry/returned/terminal에 별도 기록하며 강제종료/실패
+관측의 UNKNOWN tail을 성공 receipt 사용량0으로 바꾸지 않았다.
+
+최종 요구사항 대조: Q0/CK01~03 및 native 자료·독립 oracle·TINY numeric/receipt
+경계 검증 완료. Q2 원 관측의 종료는 실패 보존. Q3 SMALL 등록/endpoint metadata
+인가, Q4 C/T1+511·중간256·최종512 학습, Q5 C/T 전이/보존 비교는 미완료다.
+정상 완료됐으나 품질 미달인 STUDY_COMPLETE_QUALITY_FAIL로 표시하지 않는다.
+새 수리 이후 추가 SMALL 관측/재학습/새 root 생성은 실행하지 않았다.
+
+CODE_VERDICT=IMPLEMENTED_WITH_BOUNDED_VALIDATION,
+CK01/CK02/CK03=PASS, Q2_RAW_RECOUNT=VERIFIED,
+Q2_COMMAND_FINALIZATION=FAILED_PRESERVED, Q3_SMALL_REGISTRATION=BLOCKED,
+Q4/Q5_C_T_COMPARISON=NOT_RUN, MODEL_QUALITY_RECOVERED=false,
+H3_PASS=false, H3_SEAL=NOT_OPENED, S4/S5/S6=NOT_PASSED,
+GOAL1_READY=false, GOAL1_ACCEPTED=false, INDEPENDENT_REVIEW=NOT_RUN.
+NEW_PERMANENT_FILES=NONE. 기존 하네스/codec/RunControl/scorer에 연결했으며
+새 Graph/DB/IPC/검증 framework는 추가하지 않았다. 다음 승인 전 자동 연구 재시도 없음.
+
 ## Q1 — 세 직접 경계 회귀 완료
 
 EXECUTED_THIS_RUN. `q1-quick`의29 commands(fmt/check/clippy 포함),33 tests PASS/exit0,

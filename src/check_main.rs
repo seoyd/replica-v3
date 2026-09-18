@@ -32,6 +32,9 @@ enum Checks {
         /// Direct source-corpus/objective/resume regressions only; no unrelated storage suites.
         #[arg(long)]
         native_corpus: bool,
+        /// Only the changed bridge receipt/resume and direct corpus boundaries; leaves the full native suite intact.
+        #[arg(long, conflicts_with = "native_corpus")]
+        bridge_receipts: bool,
     },
     /// Explicit normal/transfer generation and fresh-process restart, never a quality waiver.
     Model {
@@ -401,7 +404,10 @@ fn release_evidence(checkpoint: &Path, stages: [(&str, &Path); 3]) -> Result<Val
 fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
     write_new(&r.output.join("boundaries.json"), &boundaries(files)?)?;
     match &cli.command {
-        Checks::Quick { native_corpus } => {
+        Checks::Quick {
+            native_corpus,
+            bridge_receipts,
+        } => {
             r.run(
                 "cargo",
                 &["fmt", "--all", "--", "--check"],
@@ -410,6 +416,51 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
             )?;
             r.cargo("check", &["--all-targets"], false)?;
             r.cargo("clippy", &["--all-targets", "--", "-D", "warnings"], false)?;
+            if *bridge_receipts {
+                r.cargo(
+                    "test",
+                    &[
+                        "--bin",
+                        "replica-train",
+                        "bridge_pairs_serialized_temporal_oracle_and_negative_facts",
+                        "--",
+                        "--test-threads=1",
+                    ],
+                    true,
+                )?;
+                for filter in ["bridge_", "verification_published_final_sync_error"] {
+                    r.cargo(
+                        "test",
+                        &[
+                            "--test",
+                            "experiment_record",
+                            filter,
+                            "--",
+                            "--test-threads=1",
+                            "--nocapture",
+                        ],
+                        true,
+                    )?;
+                }
+                for filter in [
+                    "full_population_binding_pairs_require_question_and_value_without_split_growth",
+                    "qa_memorization_subset_preserves_episodes_and_split_boundaries",
+                ] {
+                    r.cargo(
+                        "test",
+                        &[
+                            "--test",
+                            "training",
+                            filter,
+                            "--",
+                            "--exact",
+                            "--test-threads=1",
+                        ],
+                        true,
+                    )?;
+                }
+                return Ok(());
+            }
             if *native_corpus {
                 r.cargo(
                     "test",
@@ -419,6 +470,7 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                 for filter in [
                     "native_corpus_",
                     "conditional_panel_",
+                    "bridge_pairs_serialized_temporal_oracle_and_negative_facts",
                     "token_cache_",
                     "partial_prefix_rejects",
                 ] {
@@ -432,6 +484,7 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                     "native_corpus_standalone_default",
                     "native_resume_ignores_ambient_policy_json",
                     "conditional_plan_sticky_failure",
+                    "bridge_",
                     "objective_policy_",
                     "verification_published_final_sync_error",
                     "restart_and_cooldown_partial_panels",
