@@ -1,5 +1,147 @@
 # 진단 및 구현 상태
 
+## B4/B5 — C512 terminal 발행 실패, T와 pair 비교 차단
+
+R3-BRIDGE-EVIDENCE-RESTART-1.0 / 2026-09-19. **RESULT=PARTIAL**.
+ER01_PLAN_REGISTRATION=PASS, ER02_TEACHER_EVIDENCE_BOUND=PASS,
+ER03_REPORT_READ_ONLY=PASS, PRODUCTION_LAYOUT_E2E=PASS는 B1/B2 직접 회귀의
+판정이다. B3 replacement-01 부모 관측/승인도 정상 완료했다. 실제 SMALL은
+C512/T0이며 **STUDY_STATE=FAILED_PUBLICATION_AFTER_C512**다.
+정상적인 양군 완료 또는 STUDY_COMPLETE_QUALITY_FAIL로 부르지 않는다.
+
+SOURCE_COMMIT=EXECUTION_SOURCE_SHA=
+`e08687eff768dd8b6426accebdfe148d3ce8b556`. 실행과 최종 보고 사이 source/test/
+lockfile 변경0; 계산·저장 코드를 동결한 그대로 유지했다. B3 report commit은
+`5aff3ad72d7dcafa85c62b0d8371a5a4b116b7a7`이며 각각 정상 push와 원격 전체 SHA
+일치를 확인했다. 이 B4/B5 절은 이후 report-only 변경이다. 실행 바이너리 hash는
+`a0db28bed4d8b4ff93d6495a66c16088e11b117538c6ef827ab011a9a0a8d0c3`로
+보존 사본과 현재 release가 동일하다. 후보 diff의 기준 source는
+`2a1010105e0914e4c84cc94b7da707171baaecbe`다.
+
+### 실제 실행과 실패 경계
+
+`c-first-update.log`: 실제 첫1회, step24311 저장, input2698/target236,
+TimePause/정상 command receipt, exit0/wall9.65초. 새 process의
+`c-resume.log`는 이어서511회 실행했다. +256(step24566)과 +512(step24822)의
+native가 실제 저장됐고 최종 모든 generation 패널 및 자기 teacher64가 반환됐다.
+그 뒤 terminal 직렬화가 `corruption: R3ER: count bound`로 실패했다.
+명령 exit1/wall993.70초. segment-01에는 terminal/command/성공 close 증명이 없다.
+
+SOURCE_READ + 실제 실패 로그의 원인 연결: `SegmentReceipt::decode`는 LR trace가
+있고 objective_metrics가 없는 kind14에 최대256개를 허용한다. bridge는 이
+kind14를 쓰며 이번 새 process에서 실제 LR511개를 모았다. writer가 같은 decoder로
+검증하므로 terminal 발행 전에 거부된다. draws의 최대512와 LR bound256이 다르다.
+직접 TINY 첫1+fresh1은 이 크기 경계를 통과하지 않아 이를 잡지 못했다.
+이 원인 분리는 소스/로그 근거이며 별도511행 parser mutation을 실행했다고 하지
+않는다. 후속 수리에는 256/257/511/512의 실제 writer→reader 회귀가 필요하다.
+이번 동결 소스의 이 추가 결함은 **미수정**이며 남은 학습 예산을 재개 권한으로
+사용하지 않는다. 이 저장 결함을 낮은 모델 점수의 원인으로 단정하지 않는다.
+
+fresh `anchor-report`도 `MODEL_PAIR=FAILED_OR_INCOMPLETE ARM=C-COPYMATCH`,
+candidate=false/GOAL1_ACCEPTED=false로 exit1(wall1.17초)했다. 전체 증거 root의
+경로·유형·길이·SHA가 보고 전후 동일했다. 누락 terminal을 보충하지 않았고,
+segment-00으로 되돌려511회 재실행하거나 T/replacement-02를 시작하지 않았다.
+후속 arm의 같은 `arm_commands` 차단은 SOURCE_READ; T 실행 명령은 NOT_RUN이다.
+
+### 같은 저장 모델에서 나온 관측 — close 수용 아님
+
+부모 기존 패널은 같은 모델의 보존 raw 재집계, 부모 새dev는 이번 새 관측이다.
+C 값은 저장 step24822의 실제 생성 후 기존 scorer 출력 및 terminal 직전 raw
+재읽기 경로에서 나온 관측이다. **새 process의 완전한 endpoint/teacher close
+재검산은 terminal 부재로 BLOCKED**다. T와 paired 비교를0점으로 채우지 않는다.
+
+| 패널 | 부모 A75-R24310 | C512 관측 | T512 |
+|---|---:|---:|---|
+| 기존 dev 전체 |240/256|6/256|NOT_RUN|
+| 기존 dev entity/event/오류 |247/250/1|78/83/4|NOT_RUN|
+| CROSS 전체 |462/512|4/512|NOT_RUN|
+| CROSS entity/event/오류 |499/500/0|123/171/11|NOT_RUN|
+| ordinary QA |181/336|188/336|NOT_RUN|
+| auxiliary |53/64|24/64|NOT_RUN|
+| 새 dev 전체 |0/256|4/256|NOT_RUN|
+| 새 dev entity/context/value/event |15/6/22/2|95/221/64/23|NOT_RUN|
+| 새 dev 오류/EOS/base4 |2/255/0 of64|4/256/0 of64|NOT_RUN|
+| conditional144 |이번 부모 재생성 NOT_RUN|0/144, 오류5, EOS143|NOT_RUN|
+
+C 중간256은 새dev5/256, 오류29, base4=0/64, watch14/32였다. 최종512는
+watch20/32이며 ordinary의 subset 재사용이다. 중간점을 최종 후보로 고르지 않았다.
+최종 새dev의 current/past·양순서 각각의 점수와 첫 오류/전체 오류 세부는 원
+`c-resume.log`에 보존했다. C→T paired gain/loss, question-only/value-swap
+pair correctness 및 candidate48 parity는 NOT_RUN_BLOCKED다.
+
+자기 teacher는 train32/dev32의 동일 metadata 표본이다. 부모 train
+NLL3.4527065266943033→C0.20622504710091014, token736/1229→1126/1229,
+foil margin1.2929080929607153→7.28656492382288. dev는
+NLL4.0264493192556605→0.3387305017796899, token708/1268→1115/1268,
+margin−0.6523758731782436→−0.06975007429718971이다.
+teacher token 개선을 자유생성 정확도로 바꾸지 않는다. QA+7과 기존 dev−234,
+CROSS−458, aux−29가 동시에 관측됐다. 새 입력의 완전 답변 일반화는 미해결이다.
+T가 없으므로 동일 대상 경쟁 교육의 상대 효과는 **UNRESOLVED**이며 특정 모델
+수식/tokenizer/망각 기제를 원인으로 확정하지 않는다.
+
+### 실제 사용량·마지막 저장·보존
+
+DERIVED_FROM_EXISTING_LOGS: 각 실제 update 로그의 연속 step 및 단일 LR bits를
+검사해 C512, input1,349,176/target132,892, LR bits4547007122018943789
+(actual1e-4)를 재합산했다. 등록 tape는 anchor3072/focus1024, 각 focus view2회다.
+SMALL512/1024, TINY92/128, scalar0. 추가 SMALL parity0.
+새 SMALL generation의 완료 패널 행은2176=부모320+C중간288+C최종1568,
+반환 generation tokens75,647=부모8,577+C67,070. 최종 watch의32행/1,017tokens는
+ordinary에서 재사용했으므로 이중 계산하지 않았다. 완료 자기 teacher128=부모64+C64.
+이 수치는 로그의 완료 panel/teacher 반환 합계이며 누락 command receipt를 새로
+만든 값이 아니다. C finalization의 canonical 총 시간/전체 사용량 확정은 UNKNOWN;
+TINY 강제중단 시험의 미확정 tail과 과거 원 부모 관측 UNKNOWN도 그대로 남긴다.
+TINY generation/teacher의 전체 호출 합계는 확정하지 않으며 개별 process의 entry/
+returned/final 로그와 분리한다. 이를0으로 쓰거나 SMALL 집계에 합치지 않는다.
+
+아래7개 setup/순수읽기/모델 명령의 shell wall 합은1118.85초(B3 네 명령114.33,
+C9.65+993.70, 실패 pair report1.17)다. 모델 호출 시간만의 benchmark가 아니며
+빌드/회귀·후속 파일 검사 시간을 포함하지 않는다. C 프로세스 wall을 누락된
+정상 command의 canonical elapsed로 대신하지 않는다.
+
+LAST_DURABLE_NATIVE=
+`artifacts/bridge-evidence-restart-20260919/study/C-COPYMATCH/segment-01/step-0512.r3m`.
+물리 SHA256=`ce01daec7d7c0abeb99ad7e166cfca11668a3e0444817c75f8aa1c4fb28ef624`,
+실제 weight hash=`ef7962e07f3a8a7f968291c1ff3a51138555b722521155164ac17f65bbbe440e`,
+native model content ID=`6abb23fe0e6ea91646a34f8e61fa34a7c15ad2f5c1b29b4837cf51d1f0cfd6ca`.
+새 process의 기존 `model inspect`는 exit0으로 step24822/9,605,184 parameters와
+weight hash를 확인했다. generation/teacher/update0이며 metadata JSON은 기존
+stdout 보고 형식이다. native header/model content ID와 weight hash는 다른 정의다.
+새 process Adam 포함 전체 resume 검증은 NOT_RUN_BLOCKED, 채택 가능한 endpoint나
+정상 resume 후보가 아니다. ACTIVE_OWNED_TRAINING_PROCESSES=0.
+
+원 관측 파일 전체와 지정 corpus/부모 파일 hash 재검증 OK, 기존 UNKNOWN/실패/원문/
+로컬 untracked 작업 유지. 신규 canonical 파일은 기존 typed R3ER/R3MODEL이다.
+원 JSON corpus 자동 읽기/새 SQLite 호출 추가 없음은 SOURCE_READ; OS syscall은
+미계측이며0회 실측으로 주장하지 않는다. report JSON stdout과 checker summary는
+canonical 실행 상태와 구분한다.
+
+### 실행 증거와 최종 판정
+
+인가된 로컬 원자료 root는 `artifacts/bridge-evidence-restart-20260919/`다.
+`replacement-01/`은 이번 정상 부모 관측, `study/C-COPYMATCH/segment-01/`은
+saved256/512 및 dev/cross/ordinary/watch/legacy-dev/conditional raw,
+`study/C-COPYMATCH/final-probe-*`는 endpoint teacher 별도 파일이다.
+`study/T-TEMPORAL/`에는 등록만 있고 실행 segment가 없다.
+`executed-replica-train`, `c-first-update.log`, `c-resume.log`,
+`b5-failed-pair-report.log`, `b5-native-inspect.log`, `b5-known-usage.log`,
+`b5-{before,after}-report*`, `b5-*-verified.txt`를 보존했다.
+`recount_logged_usage.rs`는 이 로그의 합계만 읽는 Rust 산술 도구이며 ignored
+artifact다. binary raw 재채점기나 정상 certificate를 대신하지 않는다.
+
+최종 동결 source의 `quick --bridge-receipts`:13명령/14고유테스트 PASS,
+release build PASS. 구체 명령/exit는 `final-quick/summary.json` 및 각 stdout/
+stderr에 있다. 이번 저장 결함 때문에 회귀 통과를 end-to-end SMALL512 성공으로
+확장하지 않는다. 실패 이후 새 학습/생성/teacher/회귀 optimizer 호출0.
+
+REPAIR_VERIFIED=ER01/ER02/ER03 직접 범위, TRAINING_COMPARISON_COMPLETE=false,
+BINDING_LEARNING_SIGNAL=NOT_ESTABLISHED, MODEL_QUALITY_RECOVERED=false,
+H3=NOT_PASSED, H3_SEAL=NOT_OPENED, S4/S5/S6=NOT_PASSED,
+GOAL1_READY=false, INDEPENDENT_ACCEPTANCE=NOT_RUN.
+REMAINING=kind14 LR trace 크기 경계 수리·직접 회귀, 정상 C/T 비교/close 및 품질 조건.
+이 시도는 저장 실패로 닫혔고 어떤 미사용 budget도 자동 실행하지 않는다.
+NEW_PERMANENT_FILES=0; 원 모델/corpus/raw/임시 산출물은 게시하지 않는다.
+
 ## B3 — replacement-01 부모 관측·순수 검증·C/T 등록 완료
 
 EXECUTED_THIS_RUN. 실행 source는

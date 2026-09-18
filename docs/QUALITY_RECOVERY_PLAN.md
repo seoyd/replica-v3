@@ -1,6 +1,27 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: R3-BRIDGE-EVIDENCE-RESTART-1.0
+## Closed failed attempt: R3-BRIDGE-EVIDENCE-RESTART-1.0
+
+B1/B2 direct boundary repairs passed at frozen source
+e08687eff768dd8b6426accebdfe148d3ce8b556. The single replacement-01 parent
+observation, pure report and preparation passed. C executed512 updates, saved
+step24822 and returned every final generation panel and own teacher64, then
+terminal serialization failed (`R3ER: count bound`). The kind14 decoder bounds
+the actual LR vector at256 while the fresh resume segment accumulated511 rates.
+This additional storage defect remains unfixed in the frozen execution source.
+T did not start. No successful terminal/command/close certificate exists for C512;
+a fresh read-only pair report rejects the missing terminal without changing files.
+
+STUDY_STATE=FAILED_PUBLICATION_AFTER_C512, comparison incomplete, SMALL512/TINY92,
+new SMALL completed generations2176/own teacher128. Known returned generation
+tokens75,647; missing canonical command accounting remains UNKNOWN. Preserved C512
+raw shows newdev4/256, olddev6/256, CROSS4/512, QA188/336, aux24/64; these are
+observations, not endpoint acceptance. The final native and all failed evidence
+remain local. No source mutation to continue this study, rewind to segment00,
+second replacement, budget extension or T admission is authorized. A future
+repair must first exercise the actual terminal writer/reader at256/257/511/512
+rates; any subsequent learning requires a separate decision. The intended
+protocol below records this closed attempt, not an active execution authorization.
 
 Base source2a1010105e0914e4c84cc94b7da707171baaecbe, report
 5833ee9f6790b7c0c9489b648e9f4f2e0b229acd. The failed original parent observation
