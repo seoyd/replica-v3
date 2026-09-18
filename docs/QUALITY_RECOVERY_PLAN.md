@@ -1,5 +1,26 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: R3-PREFLIGHT-ONCE-AND-COOLDOWN-1.0
+
+Base source50a0fb72f552cc130fbd5598019222c7a7bd95fe, report198a1a032368f023d81ab744e59eccb1cd6b6e53.
+P0 preserves the previous preflight, completed C50-R/A75-R, failed pair and raw inputs.
+New evidence root: `artifacts/preflight-cooldown-20260918/`, originals.sha256.
+P1 records verification intent before observed work, each returned raw row, and a shared
+success/failure outcome with known/reserved/unknown usage. Missing finalization blocks
+retry and subsequent arms; legacy successes remain explicitly read-only observations.
+P2 reuses real TINY process fixtures for cancel/deadline/publication/kill/concurrency,
+positive parity, training resume and close regressions; final quick once before learning.
+Then P3 registers one A75-R24310 fork: K-KEEP constant1e-4 versus D-DECAY single cosine
+1e-4→1e-5 at local updates1..256. Same Adam,6:2 pools/tape, tokenizer/model/F32/CPU
+Accelerate/threads1. P4 saves first update and resumes in a fresh process, evaluates
+dev/watch at128 and full dev/CROSS/ordinary at256. P5 recounts fixed endpoints and
+paired outcomes. No old ratio rerun, SMALL4 preflight, journal/DB/format/core changes.
+Limits: SMALL512, TINY/scalar128, input1M/target250K per arm, generation4096, teacher0;
+model7200s, command1800s, cleanup120s. Parent parity16, two mid288, two final1168,
+conditional one candidate fresh1168. Joint gates/guard remain fixed, H3 seal NOT_OPENED.
+No joint candidate means study complete/quality fail and no further learning. Verified
+stages explicitly commit/push with remote SHA checks; independent acceptance stays pending.
+
 ## Closed: R3-DURABILITY-PAIR-RESTART-1.0
 
 D0–D4 execution is closed on source50a0fb72f552cc130fbd5598019222c7a7bd95fe.

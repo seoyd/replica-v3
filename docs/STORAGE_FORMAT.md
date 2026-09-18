@@ -1,5 +1,31 @@
 # B0 storage format v1
 
+## R3ER verification intent and outcome
+
+PV01 adds bounded typed record kinds10(verification start),11(entry reservation or
+returned EvalRow),12(final outcome) to the existing R3ER envelope/codec. Kind9 retains
+its old preflight-proof meaning. Model/native/journal/SQLite formats are unchanged.
+The start binds the canonical root, pair/source/binary, two input/command/native file
+references and ordered cases. The existing create-new hard-link publisher elects one
+writer after file sync and directory sync; observed work begins only after success.
+No per-token journal is added. Each entry reservation precedes the API, and its returned
+raw row is published before the next cancellation check. A reservation is not an actual call.
+
+Started → immutable returned rows → provisional proof → final(success with proof ref).
+Consumers share read_preflight_outcome; only the complete binding grants current success.
+Failed and incomplete attempts cannot retry or authorize another arm. Missing finalization
+reports durable lower bounds, reserved limits and UNKNOWN tail/time/tokens, never actual0.
+Known failures preserve actual entries/completions/interruption/tokens and original/save
+errors. Final elapsed measures through prior proof/publication work to the final decision;
+the last immutable file cannot include its own fsync duration. Budget conservatively adds
+the120s publication reservation once, separately from observed time. Stdout records elapsed
+after final publication. Cooperative cancel is sealed immediately before finite publication;
+fsync/tensor preemption and multi-file atomic transactions are not claimed.
+
+Old proofs without intent are LEGACY_SUCCESS_WITHOUT_ATTEMPT_INTENT in explicit read-only
+audits. They are not upgraded or granted new verification permission. Current work permits
+new save-verification fixtures only for TINY; the completed SMALL4 test is reused as history.
+
 ## Experimental R3JRN v1 (fixed before implementation)
 
 Separate explicit snapshot+journal paths; product ask remains SQLite. R3ARCH and

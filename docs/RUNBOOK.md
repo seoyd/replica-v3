@@ -1,5 +1,18 @@
 # Replica v3 B0 runbook
 
+## Current preflight repair and bounded cooldown study
+
+R3-PREFLIGHT-ONCE-AND-COOLDOWN-1.0 preserves the completed ratio pair and its old proof.
+New `save-preflight-verify` writes intent before native validation/generation and closes
+success/cancel/error through one finalizer. A successful repeated call is read-only; a
+failed/interrupted one is rejected with known/reserved/unknown usage. Do not remove intent,
+copy the attempt to a different root, or treat missing proof as permission to start again.
+`save-preflight-verify --root OLD_ATTEMPT --legacy-read-only` audits historical success
+without rewriting it or granting a new SMALL verification. `anchor-report` reports this
+legacy limitation while recounting old endpoints. The previous4:4/6:2 run is closed.
+Current stage, conditional LR-only budget and evidence are in QUALITY_RECOVERY_PLAN and
+EXPERIMENT_STATUS. No new SMALL save-preflight4 or old ratio rerun is authorized.
+
 ## Durable retries and native command outcomes
 
 The explicit replacement study is registered with

@@ -18,6 +18,7 @@ const MAX_TEXT: usize = 262144;
 const CONTRACT: &str = "R3-BINARY-EVAL-RESUME-1.0";
 const ANCHOR_CONTRACT: &str = "R3-NATIVE-STORAGE-QUALITY-1.0";
 const RESTART_CONTRACT: &str = "R3-DURABILITY-PAIR-RESTART-1.0";
+const COOLDOWN_CONTRACT: &str = "R3-PREFLIGHT-ONCE-AND-COOLDOWN-1.0";
 
 fn bad(s: &str) -> Error {
     Error::Corrupt(format!("R3ER: {s}"))
@@ -1525,6 +1526,203 @@ enum Record {
     Comparison(ComparisonReceipt),
     Command(CommandOutcome),
     Preflight(PreflightReceipt),
+    VerificationStart(VerificationStart),
+    VerificationRow(VerificationRow),
+    VerificationFinal(VerificationFinal),
+}
+#[derive(Clone, Debug, Serialize)]
+struct VerificationStart {
+    root: String,
+    pair: Hash,
+    source: Hash,
+    binary: Hash,
+    inputs: [FileRef; 2],
+    commands: [FileRef; 2],
+    natives: [FileRef; 2],
+    order: Vec<(u8, u32)>,
+    generation_limit: u64,
+    seconds_limit: u64,
+}
+impl VerificationStart {
+    fn encode(&self, b: &mut Vec<u8>) {
+        string(b, &self.root);
+        for h in [self.pair, self.source, self.binary] {
+            b.extend(h);
+        }
+        for r in self
+            .inputs
+            .iter()
+            .chain(&self.commands)
+            .chain(&self.natives)
+        {
+            r.encode(b);
+        }
+        put_varint(b, self.order.len() as u64);
+        for (arm, ordinal) in &self.order {
+            b.push(*arm);
+            put_varint(b, u64::from(*ordinal));
+        }
+        put_varint(b, self.generation_limit);
+        put_varint(b, self.seconds_limit);
+    }
+    fn decode(r: &mut Reader<'_>) -> Result<Self> {
+        let root = text(r)?;
+        let pair = digest_read(r)?;
+        let source = digest_read(r)?;
+        let binary = digest_read(r)?;
+        let inputs = [FileRef::decode(r)?, FileRef::decode(r)?];
+        let commands = [FileRef::decode(r)?, FileRef::decode(r)?];
+        let natives = [FileRef::decode(r)?, FileRef::decode(r)?];
+        let n = count(r, 4)?;
+        let order = (0..n)
+            .map(|_| Ok((r.byte()?, u32_read(r)?)))
+            .collect::<Result<Vec<_>>>()?;
+        let generation_limit = r.var()?;
+        let seconds_limit = r.var()?;
+        if n == 0
+            || generation_limit != n as u64
+            || seconds_limit != 1800
+            || order.iter().any(|(a, _)| *a > 1)
+        {
+            return Err(bad("verification intent bounds"));
+        }
+        Ok(Self {
+            root,
+            pair,
+            source,
+            binary,
+            inputs,
+            commands,
+            natives,
+            order,
+            generation_limit,
+            seconds_limit,
+        })
+    }
+}
+#[derive(Clone, Debug, Serialize)]
+struct VerificationRow {
+    start: FileRef,
+    index: u32,
+    // None reserves one API entry. It is not evidence that the call actually started.
+    row: Option<EvalRow>,
+    elapsed: Scalar,
+}
+impl VerificationRow {
+    fn encode(&self, b: &mut Vec<u8>) {
+        self.start.encode(b);
+        put_varint(b, u64::from(self.index));
+        optional(b, self.row.as_ref(), |b, row| row.encode(b));
+        self.elapsed.encode(b);
+    }
+    fn decode(r: &mut Reader<'_>) -> Result<Self> {
+        let v = Self {
+            start: FileRef::decode(r)?,
+            index: u32_read(r)?,
+            row: r.opt(EvalRow::decode)?,
+            elapsed: Scalar::decode(r)?,
+        };
+        if v.index >= 4 || v.elapsed.finite()? < 0. {
+            return Err(bad("verification row bounds"));
+        }
+        Ok(v)
+    }
+}
+#[derive(Clone, Debug, Serialize)]
+struct VerificationFinal {
+    start: FileRef,
+    rows: Vec<FileRef>,
+    proof: Option<FileRef>,
+    succeeded: bool,
+    entries: u64,
+    completed: u64,
+    interrupted: u64,
+    tokens: u64,
+    teachers: u64,
+    elapsed: Scalar,
+    unknown_tail: bool,
+    stop: Vec<StopReason>,
+    error: Option<String>,
+    save_error: Option<String>,
+}
+impl VerificationFinal {
+    fn encode(&self, b: &mut Vec<u8>) {
+        self.start.encode(b);
+        put_varint(b, self.rows.len() as u64);
+        for r in &self.rows {
+            r.encode(b);
+        }
+        optional(b, self.proof.as_ref(), |b, r| r.encode(b));
+        b.push(u8::from(self.succeeded));
+        for n in [
+            self.entries,
+            self.completed,
+            self.interrupted,
+            self.tokens,
+            self.teachers,
+        ] {
+            put_varint(b, n);
+        }
+        self.elapsed.encode(b);
+        b.push(u8::from(self.unknown_tail));
+        put_varint(b, self.stop.len() as u64);
+        for s in &self.stop {
+            b.push(stop_tag(*s));
+        }
+        optional(b, self.error.as_ref(), |b, e| string(b, e));
+        optional(b, self.save_error.as_ref(), |b, e| string(b, e));
+    }
+    fn decode(r: &mut Reader<'_>) -> Result<Self> {
+        let start = FileRef::decode(r)?;
+        let n = count(r, 4)?;
+        let rows = (0..n)
+            .map(|_| FileRef::decode(r))
+            .collect::<Result<Vec<_>>>()?;
+        let proof = r.opt(FileRef::decode)?;
+        let succeeded = r.bool()?;
+        let entries = r.var()?;
+        let completed = r.var()?;
+        let interrupted = r.var()?;
+        let tokens = r.var()?;
+        let teachers = r.var()?;
+        let elapsed = Scalar::decode(r)?;
+        let unknown_tail = r.bool()?;
+        let n = count(r, 8)?;
+        let stop = (0..n).map(|_| stop_read(r)).collect::<Result<Vec<_>>>()?;
+        let error = r.opt(text)?;
+        let save_error = r.opt(text)?;
+        if entries > 4
+            || completed + interrupted > entries
+            || teachers != 0
+            || elapsed.finite()? < 0.
+            || tokens > 4 * MAX_TOKENS as u64
+            || succeeded
+                && (proof.is_none()
+                    || unknown_tail
+                    || !stop.is_empty()
+                    || error.is_some()
+                    || save_error.is_some()
+                    || completed != entries)
+        {
+            return Err(bad("verification outcome counters/status"));
+        }
+        Ok(Self {
+            start,
+            rows,
+            proof,
+            succeeded,
+            entries,
+            completed,
+            interrupted,
+            tokens,
+            teachers,
+            elapsed,
+            unknown_tail,
+            stop,
+            error,
+            save_error,
+        })
+    }
 }
 #[derive(Clone, Debug, Serialize)]
 struct PreflightReceipt {
@@ -1604,6 +1802,18 @@ impl Record {
                 v.encode(&mut body);
                 9
             }
+            Self::VerificationStart(v) => {
+                v.encode(&mut body);
+                10
+            }
+            Self::VerificationRow(v) => {
+                v.encode(&mut body);
+                11
+            }
+            Self::VerificationFinal(v) => {
+                v.encode(&mut body);
+                12
+            }
         };
         if body.len() > MAX_FILE - HEADER {
             return Err(bad("file bound"));
@@ -1658,6 +1868,9 @@ impl Record {
             5 => Self::Comparison(ComparisonReceipt::decode(&mut r)?),
             7 => Self::Command(CommandOutcome::decode(&mut r)?),
             9 => Self::Preflight(PreflightReceipt::decode(&mut r)?),
+            10 => Self::VerificationStart(VerificationStart::decode(&mut r)?),
+            11 => Self::VerificationRow(VerificationRow::decode(&mut r)?),
+            12 => Self::VerificationFinal(VerificationFinal::decode(&mut r)?),
             _ => return Err(bad("record kind")),
         };
         if !r.finished() {
@@ -1828,6 +2041,18 @@ fn evaluate_row(
     control: &mut RunControl,
     with_teacher: bool,
 ) -> Result<EvalRow> {
+    evaluate_row_with_entry(l, e, ordinal, control, with_teacher, false, || Ok(()))
+}
+#[allow(clippy::too_many_arguments)] // One optional durable API entry at the existing generation boundary.
+fn evaluate_row_with_entry(
+    l: &Loaded,
+    e: &Episode,
+    ordinal: u32,
+    control: &mut RunControl,
+    with_teacher: bool,
+    durable_entry: bool,
+    before_entry: impl FnOnce() -> Result<()>,
+) -> Result<EvalRow> {
     control.check("case_started")?;
     control.attempted_case_count += 1;
     let prompt = l.tokenizer.prepare(
@@ -1837,16 +2062,47 @@ fn evaluate_row(
     )?;
     control.check("prompt_prepared")?;
     let timeout = control.effective_timeout(e.request.limits.timeout_ms)?;
+    before_entry()?;
+    control.check("durable_generation_entry")?;
     control.generation_calls += 1;
+    if durable_entry {
+        println!(
+            "VERIFICATION_GENERATION_API_ENTRY={} CASE_ORDINAL={ordinal}",
+            control.generation_calls
+        );
+    }
     let mut tokens = Vec::new();
+    let cancel = control.cancel.clone();
     let result = l.model.generate_observed(
         &prompt.token_ids,
         e.request.limits.max_tokens as usize,
         timeout,
-        &control.cancel,
+        &cancel,
         &e.id,
-        |id| tokens.push(id),
+        |id| {
+            tokens.push(id);
+            #[cfg(feature = "test-support")]
+            if l.model.config.profile == "TINY_NUMERIC_TEST_ONLY"
+                && matches!(
+                    std::env::var("R3ER_TEST_STOP").as_deref(),
+                    Ok("pv-first-token" | "pv-nonfinite")
+                )
+            {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        },
     );
+    #[cfg(feature = "test-support")]
+    let result = if l.model.config.profile == "TINY_NUMERIC_TEST_ONLY"
+        && std::env::var("R3ER_TEST_STOP").as_deref() == Ok("pv-nonfinite")
+    {
+        cancel.store(false, Ordering::Relaxed);
+        Err(Error::Model(
+            "nonfinite injected at generation return".into(),
+        ))
+    } else {
+        result
+    };
     if matches!(&result, Err(Error::Cancelled)) {
         control.observe(StopReason::Cancelled);
     }
@@ -2237,6 +2493,9 @@ pub enum Action {
     SavePreflightVerify {
         #[arg(long)]
         root: PathBuf,
+        /// Explicit audit of immutable old proofs; never authorizes a new verification.
+        #[arg(long)]
+        legacy_read_only: bool,
     },
     /// Independently recount the registered pair endpoints; never extend its budget.
     AnchorReport {
@@ -2342,8 +2601,20 @@ pub(super) fn command(action: Action) -> Result<()> {
             replacement_of.as_deref(),
             &mut control,
         ),
-        Action::SavePreflightVerify { root } => {
-            verify_save_preflight(&root, &mut control, true).map(|_| ())
+        Action::SavePreflightVerify {
+            root,
+            legacy_read_only,
+        } => {
+            if legacy_read_only {
+                let status = read_preflight_outcome(&root)?
+                    .ok_or_else(|| bad("missing legacy preflight"))?;
+                if !status.legacy {
+                    return Err(bad("explicit legacy mode requires legacy evidence"));
+                }
+                preflight_body(&root, &mut control, false, true, &mut Vec::new())
+            } else {
+                verify_save_preflight(&root, &mut control, true)
+            }
         }
         Action::AnchorReport { root } => anchor_report(&root, &mut control),
         Action::Run { root, resume } => {
@@ -2427,6 +2698,24 @@ pub(super) fn command(action: Action) -> Result<()> {
                 ("preflight-B", RunPurpose::SaveSplit),
             ] {
                 fixture_fork_inner(&from, &output.join(arm), false, false, purpose, true)?;
+            }
+            for arm in ["C50", "A75"] {
+                let dir = output.join(arm);
+                fixture_fork_inner(&from, &dir, false, true, RunPurpose::Anchor, false)?;
+                // The fixture consumers use their enclosing verification attempt, including after a copy.
+                let mut s = read_inputs(&dir)?;
+                s.origins.push(Origin {
+                    role: "test-verification".into(),
+                    original: FileRef {
+                        locator: "preflight-start.r3er".into(),
+                        digest: [0; 32],
+                    },
+                });
+                // This is a newly owned fixture; the production publisher never replaces records.
+                std::fs::write(
+                    dir.join("inputs.r3er"),
+                    Record::Inputs(Box::new(s)).encode()?,
+                )?;
             }
             Ok(())
         }
@@ -3610,16 +3899,14 @@ fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
         }
     }
     if !s.preflight() && s.contract == RESTART_CONTRACT {
-        let Record::Preflight(p) =
-            read_record(parent, &reference(parent, "preflight-proof.r3er")?)?
-        else {
-            return Err(bad("missing preflight certificate"));
-        };
-        if p.pair != a.pair || p.source != s.source {
-            return Err(bad("preflight pair/source changed"));
-        }
-        generations += p.generations as usize;
-        seconds += p.elapsed.finite()?;
+        let p = read_preflight_outcome(parent)?.ok_or_else(|| bad("missing preflight outcome"))?;
+        generations += p.entries as usize;
+        seconds += p.elapsed + p.publication_reserve;
+        println!(
+            "PAIR_USAGE_KNOWN updates={updates} generations={generations} charged_seconds={seconds} verification_elapsed_lower_bound={} publication_reserve_seconds={}",
+            p.elapsed, p.publication_reserve
+        );
+        p.require_current_success()?;
     }
     if updates
         > if s.contract == RESTART_CONTRACT {
@@ -3657,7 +3944,417 @@ fn arm_commands(root: &Path, s: &RunSnapshot) -> Result<Vec<(SegmentReceipt, Com
     }
     Ok(out)
 }
+struct PreflightOutcome {
+    succeeded: bool,
+    legacy: bool,
+    entries: u64,
+    elapsed: f64,
+    publication_reserve: f64,
+}
+impl PreflightOutcome {
+    fn require_current_success(&self) -> Result<()> {
+        if !self.succeeded || self.legacy {
+            return Err(bad(
+                "verification failed/incomplete/legacy; retry and subsequent arm prohibited",
+            ));
+        }
+        Ok(())
+    }
+}
+fn verification_intent(root: &Path) -> Result<VerificationStart> {
+    // Metadata and exact file references only. No native load, close, forward or generation here.
+    let mut inputs = Vec::new();
+    let mut commands = Vec::new();
+    let mut natives = Vec::new();
+    let mut order = Vec::new();
+    let mut pair = None;
+    for (i, (arm, purpose, end)) in [
+        ("preflight-A", RunPurpose::SaveContinuous, 0),
+        ("preflight-B", RunPurpose::SaveSplit, 1),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let dir = root.join(arm);
+        let s = read_inputs(&dir)?;
+        if !s.tiny_spec {
+            return Err(bad(
+                "PRE_START_REJECTED closed SMALL preflight authorization; explicit legacy read-only only",
+            ));
+        }
+        if s.purpose != *purpose || s.tape.len() != 2 || s.source != evaluator_source() {
+            return Err(bad("PRE_START_REJECTED preflight purpose/source"));
+        }
+        let current = s.authorization.as_ref().map_or(s.parent.model, |a| a.pair);
+        if pair.is_some_and(|p| p != current) {
+            return Err(bad("PRE_START_REJECTED mismatched pair"));
+        }
+        pair = Some(current);
+        inputs.push(reference(root, &format!("{arm}/inputs.r3er"))?);
+        let c = reference(root, &format!("{arm}/segment-{end:02}/command.r3er"))?;
+        let Record::Command(command) = read_record(root, &c)? else {
+            return Err(bad("PRE_START_REJECTED command kind"));
+        };
+        let Record::Segment(t) = read_record(&dir, &command.terminal)? else {
+            return Err(bad("PRE_START_REJECTED terminal kind"));
+        };
+        let n = t
+            .native
+            .ok_or_else(|| bad("PRE_START_REJECTED endpoint absent"))?;
+        let native = reference(root, &format!("{arm}/{}", n.file.locator))?;
+        if native.digest != n.file.digest {
+            return Err(bad("PRE_START_REJECTED endpoint digest"));
+        }
+        commands.push(c);
+        natives.push(native);
+        order.extend(
+            panel(&s, PanelKind::Ordinary)?
+                .cases
+                .iter()
+                .take(2)
+                .map(|o| (i as u8, *o)),
+        );
+    }
+    Ok(VerificationStart {
+        root: root.canonicalize()?.to_string_lossy().into_owned(),
+        pair: pair.ok_or_else(|| bad("empty verification"))?,
+        source: evaluator_source(),
+        binary: unhex(&file_hash(&std::env::current_exe()?)?)?,
+        inputs: inputs.try_into().map_err(|_| bad("verification inputs"))?,
+        commands: commands
+            .try_into()
+            .map_err(|_| bad("verification commands"))?,
+        natives: natives
+            .try_into()
+            .map_err(|_| bad("verification natives"))?,
+        generation_limit: order.len() as u64,
+        seconds_limit: 1800,
+        order,
+    })
+}
+fn verification_rows(
+    root: &Path,
+    start_ref: &FileRef,
+    start: &VerificationStart,
+) -> Result<Vec<(FileRef, EvalRow, f64)>> {
+    let mut rows = Vec::new();
+    let mut missing = false;
+    for (i, (arm, ordinal)) in start.order.iter().enumerate() {
+        let reservation = format!("preflight-row-{i:02}-start.r3er");
+        let name = format!("preflight-row-{i:02}.r3er");
+        if !root.join(&name).exists() {
+            missing = true;
+            continue;
+        }
+        if missing {
+            return Err(bad("verification row sequence gap"));
+        }
+        let Record::VerificationRow(reserved) = read_record(root, &reference(root, &reservation)?)?
+        else {
+            return Err(bad("verification entry kind"));
+        };
+        let r = reference(root, &name)?;
+        let Record::VerificationRow(v) = read_record(root, &r)? else {
+            return Err(bad("verification row kind"));
+        };
+        if reserved.start != *start_ref
+            || reserved.index != i as u32
+            || reserved.row.is_some()
+            || v.start != *start_ref
+            || v.index != i as u32
+        {
+            return Err(bad("verification row/intent binding"));
+        }
+        let row = v
+            .row
+            .ok_or_else(|| bad("missing returned verification row"))?;
+        let Record::Inputs(s) = read_record(root, &start.inputs[*arm as usize])? else {
+            return Err(bad("verification inputs kind"));
+        };
+        if row.ordinal != *ordinal
+            || row.case != case_hash(&s.cases[*ordinal as usize])
+            || !row.started
+        {
+            return Err(bad("verification case/entry binding"));
+        }
+        rows.push((r, row, v.elapsed.finite()?));
+    }
+    Ok(rows)
+}
+fn read_preflight_outcome(root: &Path) -> Result<Option<PreflightOutcome>> {
+    let start_path = root.join("preflight-start.r3er");
+    if !start_path.exists() {
+        if root.join("preflight-proof.r3er").exists() {
+            let Record::Preflight(p) =
+                read_record(root, &reference(root, "preflight-proof.r3er")?)?
+            else {
+                return Err(bad("legacy preflight kind"));
+            };
+            println!(
+                "PREFLIGHT_STATUS=LEGACY_SUCCESS_WITHOUT_ATTEMPT_INTENT GENERATION_API_ENTRIES={} ELAPSED_LOWER_BOUND={} NEW_GENERATIONS=0",
+                p.generations,
+                p.elapsed.finite()?
+            );
+            return Ok(Some(PreflightOutcome {
+                succeeded: true,
+                legacy: true,
+                entries: p.generations,
+                elapsed: p.elapsed.finite()?,
+                publication_reserve: 0.,
+            }));
+        }
+        let fragments = std::fs::read_dir(root)?
+            .collect::<std::io::Result<Vec<_>>>()?
+            .iter()
+            .any(|e| {
+                let n = e.file_name();
+                let n = n.to_string_lossy();
+                n.starts_with("preflight-row-")
+                    || n.starts_with("preflight-final")
+                    || n.starts_with(".preflight-")
+            });
+        if fragments
+            || root.join("preflight-A/parity.r3er").exists()
+            || root.join("preflight-B/parity.r3er").exists()
+        {
+            return Err(bad(
+                "INTERRUPTED_UNKNOWN verification fragments without intent; retry prohibited",
+            ));
+        }
+        return Ok(None);
+    }
+    let sr = reference(root, "preflight-start.r3er")?;
+    let Record::VerificationStart(start) = read_record(root, &sr)? else {
+        return Err(bad("verification intent kind"));
+    };
+    if start.root != root.canonicalize()?.to_string_lossy() {
+        return Err(bad("verification attempt moved outside registered root"));
+    }
+    for r in start
+        .inputs
+        .iter()
+        .chain(&start.commands)
+        .chain(&start.natives)
+    {
+        if reference(root, &r.locator)? != *r {
+            return Err(bad("verification input/endpoint changed"));
+        }
+    }
+    let rows = verification_rows(root, &sr, &start)?;
+    let entries = rows.len() as u64;
+    let tokens = rows
+        .iter()
+        .map(|(_, r, _)| r.tokens.len() as u64)
+        .sum::<u64>();
+    let elapsed = rows.last().map_or(0., |(_, _, t)| *t);
+    if !root.join("preflight-final.r3er").exists() {
+        println!(
+            "PREFLIGHT_STATUS=INTERRUPTED_UNKNOWN BEGIN_DURABLE=true GENERATION_API_ENTRIES_KNOWN={entries} OBSERVED_TOKENS_KNOWN={tokens} ELAPSED_LOWER_BOUND={elapsed} RESERVED_UPPER_BOUND={} RESERVED_SECONDS={} UNKNOWN_TAIL=true ELAPSED_TOTAL=UNKNOWN TOKEN_TOTAL=UNKNOWN NEW_GENERATIONS=0",
+            start.generation_limit, start.seconds_limit
+        );
+        return Ok(Some(PreflightOutcome {
+            succeeded: false,
+            legacy: false,
+            entries,
+            elapsed,
+            publication_reserve: start.seconds_limit as f64,
+        }));
+    }
+    let Record::VerificationFinal(f) =
+        read_record(root, &reference(root, "preflight-final.r3er")?)?
+    else {
+        return Err(bad("verification final kind"));
+    };
+    if f.start != sr
+        || f.rows != rows.iter().map(|(r, _, _)| r.clone()).collect::<Vec<_>>()
+        || f.entries < entries
+        || f.entries > start.generation_limit
+        || f.tokens < tokens
+        || f.elapsed.finite()? < elapsed
+    {
+        return Err(bad("verification final usage/raw binding"));
+    }
+    if f.succeeded {
+        let proof_ref = f
+            .proof
+            .as_ref()
+            .ok_or_else(|| bad("verification success without proof"))?;
+        let Record::Preflight(p) = read_record(root, proof_ref)? else {
+            return Err(bad("verification final proof kind"));
+        };
+        if proof_ref.locator != "preflight-proof.r3er"
+            || p.pair != start.pair
+            || p.source != start.source
+            || p.binary != start.binary
+            || p.commands != start.commands
+            || p.generations != f.entries
+            || entries != start.order.len() as u64
+            || f.tokens != tokens
+            || rows
+                .iter()
+                .any(|(_, r, _)| !r.completed || r.interruption.is_some())
+        {
+            return Err(bad("verification positive final/proof mismatch"));
+        }
+        for (arm, r) in p.panels.iter().enumerate() {
+            let Record::Evaluation(e) = read_record(root, r)? else {
+                return Err(bad("verification proof raw kind"));
+            };
+            let expected = rows
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| start.order[*i].0 as usize == arm)
+                .map(|(_, (_, row, _))| row)
+                .collect::<Vec<_>>();
+            let encode = |row: &EvalRow| {
+                let mut b = Vec::new();
+                row.encode(&mut b);
+                b
+            };
+            if e.rows.len() != expected.len()
+                || e.rows
+                    .iter()
+                    .zip(expected)
+                    .any(|(a, b)| encode(a) != encode(b))
+            {
+                return Err(bad("proof dropped/changed returned rows"));
+            }
+        }
+    }
+    println!(
+        "PREFLIGHT_STATUS={} BEGIN_DURABLE=true GENERATION_API_ENTRIES={} COMPLETED={} INTERRUPTED={} OBSERVED_TOKENS={} TEACHERS={} OPTIMIZER_CALLS=0 ELAPSED_LOWER_BOUND={} RESERVED_UPPER_BOUND={} UNKNOWN_TAIL={} PROOF_BOUND={} STOP={:?} ERROR={:?} SAVE_ERROR={:?} NEW_GENERATIONS=0",
+        if f.succeeded { "Succeeded" } else { "Failed" },
+        f.entries,
+        f.completed,
+        f.interrupted,
+        f.tokens,
+        f.teachers,
+        f.elapsed.finite()?,
+        start.generation_limit,
+        f.unknown_tail,
+        f.succeeded,
+        f.stop,
+        f.error,
+        f.save_error
+    );
+    Ok(Some(PreflightOutcome {
+        succeeded: f.succeeded,
+        legacy: false,
+        entries: f.entries,
+        elapsed: f.elapsed.finite()?,
+        // Last immutable publication cannot contain its own completed fsync duration.
+        // Retain its observed lower bound and charge the finite cleanup reservation, not zero.
+        publication_reserve: 120.,
+    }))
+}
+fn verification_fault(tiny: bool, boundary: &str, control: &mut RunControl) -> Result<()> {
+    #[cfg(feature = "test-support")]
+    if tiny {
+        let mode = std::env::var("R3ER_TEST_STOP").unwrap_or_default();
+        if boundary == "started" && mode == "pv-start-kill" {
+            std::process::exit(93);
+        }
+        if boundary == "started" && mode == "pv-hold-start" {
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        if boundary == "row" && mode.starts_with("pv-after-row") {
+            control.cancel.store(true, Ordering::Relaxed);
+        }
+        if boundary == "row" && mode == "pv-row-deadline" {
+            control.deadline = Instant::now();
+        }
+        if mode == format!("pv-{boundary}-write-fail")
+            || boundary == "final" && mode == "pv-after-row-final-write-fail"
+        {
+            return Err(
+                std::io::Error::other(format!("injected {boundary} publication failure")).into(),
+            );
+        }
+    }
+    let _ = (tiny, boundary, control);
+    Ok(())
+}
 fn verify_save_preflight(root: &Path, control: &mut RunControl, generate: bool) -> Result<()> {
+    if let Some(status) = read_preflight_outcome(root)? {
+        status.require_current_success()?;
+        return preflight_body(root, control, false, false, &mut Vec::new());
+    }
+    if !generate {
+        return Err(bad(
+            "missing verification intent/final; subsequent arm prohibited",
+        ));
+    }
+    let start = verification_intent(root)?;
+    let tiny = read_inputs(&root.join("preflight-A"))?.tiny_spec;
+    verification_fault(tiny, "start", control)?;
+    // hard_link(create-new) in the existing publisher elects a single observer. No work before success.
+    let sr = publish(
+        root,
+        "preflight-start.r3er",
+        &Record::VerificationStart(start.clone()),
+    )?;
+    println!(
+        "VERIFICATION_BEGIN_DURABLE=true CONTRACT={COOLDOWN_CONTRACT} ATTEMPT_ID={} RESERVED_UPPER_BOUND={} UNKNOWN_TAIL=true",
+        hex(&sr.digest),
+        start.generation_limit
+    );
+    let mut returned = Vec::new();
+    let result = (|| {
+        verification_fault(tiny, "started", control)?;
+        preflight_body(root, control, true, false, &mut returned)
+    })();
+    if let Err(e) = &result {
+        control.classify_error(e);
+    }
+    let _ = control.seal_terminal();
+    let rows = (0..returned.len())
+        .filter_map(|i| reference(root, &format!("preflight-row-{i:02}.r3er")).ok())
+        .collect::<Vec<_>>();
+    let proof = reference(root, "preflight-proof.r3er").ok();
+    let f = VerificationFinal {
+        start: sr,
+        unknown_tail: rows.len() != returned.len(),
+        rows,
+        proof,
+        succeeded: result.is_ok() && control.observed.is_empty(),
+        entries: control.generation_calls as u64,
+        completed: returned
+            .iter()
+            .filter(|r| r.completed && r.interruption.is_none())
+            .count() as u64,
+        interrupted: returned.iter().filter(|r| r.interruption.is_some()).count() as u64,
+        tokens: returned.iter().map(|r| r.tokens.len() as u64).sum(),
+        teachers: control.teacher_calls as u64,
+        elapsed: Scalar::F64(control.start.elapsed().as_secs_f64()),
+        stop: control.observed.clone(),
+        error: result.as_ref().err().map(ToString::to_string),
+        save_error: result
+            .as_ref()
+            .err()
+            .filter(|e| matches!(e, Error::Io(_)))
+            .map(ToString::to_string),
+    };
+    let saved = verification_fault(tiny, "final", control)
+        .and_then(|_| publish(root, "preflight-final.r3er", &Record::VerificationFinal(f)));
+    println!(
+        "VERIFICATION_COMMAND_ELAPSED={} FINAL_PUBLICATION_OK={} ORIGINAL_ERROR={:?} PUBLICATION_ERROR={:?}",
+        control.start.elapsed().as_secs_f64(),
+        saved.is_ok(),
+        result.as_ref().err(),
+        saved.as_ref().err()
+    );
+    saved?;
+    let status = read_preflight_outcome(root)?.ok_or_else(|| bad("verification outcome absent"))?;
+    result?;
+    status.require_current_success()
+}
+fn preflight_body(
+    root: &Path,
+    control: &mut RunControl,
+    generate: bool,
+    legacy: bool,
+    returned: &mut Vec<EvalRow>,
+) -> Result<()> {
     if generate {
         control.generation_limit = 8;
     }
@@ -3670,7 +4367,7 @@ fn verify_save_preflight(root: &Path, control: &mut RunControl, generate: bool) 
         control.check("preflight_verify")?;
         let dir = root.join(arm);
         let s = read_inputs(&dir)?;
-        if s.purpose != purpose || s.tape.len() != 2 || s.source != evaluator_source() {
+        if s.purpose != purpose || s.tape.len() != 2 || !legacy && s.source != evaluator_source() {
             return Err(bad("preflight purpose/source/budget"));
         }
         let closed = arm_commands(&dir, &s)?;
@@ -3761,13 +4458,45 @@ fn verify_save_preflight(root: &Path, control: &mut RunControl, generate: bool) 
         if generate {
             let mut rows = Vec::new();
             for &ordinal in spec.cases.iter().take(2) {
-                rows.push(evaluate_row(
+                let index = returned.len();
+                let start_ref = reference(root, "preflight-start.r3er")?;
+                let elapsed = control.start.elapsed().as_secs_f64();
+                let row = evaluate_row_with_entry(
                     l,
                     &s.cases[ordinal as usize],
                     ordinal,
                     control,
                     false,
-                )?);
+                    true,
+                    || {
+                        publish(
+                            root,
+                            &format!("preflight-row-{index:02}-start.r3er"),
+                            &Record::VerificationRow(VerificationRow {
+                                start: start_ref.clone(),
+                                index: index as u32,
+                                row: None,
+                                elapsed: Scalar::F64(elapsed),
+                            }),
+                        )
+                        .map(|_| ())
+                    },
+                )?;
+                returned.push(row.clone());
+                verification_fault(s.tiny_spec, "raw", control)?;
+                publish(
+                    root,
+                    &format!("preflight-row-{index:02}.r3er"),
+                    &Record::VerificationRow(VerificationRow {
+                        start: start_ref,
+                        index: index as u32,
+                        row: Some(row.clone()),
+                        elapsed: Scalar::F64(control.start.elapsed().as_secs_f64()),
+                    }),
+                )?;
+                rows.push(row);
+                verification_fault(s.tiny_spec, "row", control)?;
+                control.check("preflight_returned_row_saved")?;
             }
             let e = EvalPayload {
                 run: s.run,
@@ -3806,8 +4535,20 @@ fn verify_save_preflight(root: &Path, control: &mut RunControl, generate: bool) 
         return Err(bad("preflight native generation parity"));
     }
     let pair = a.authorization.as_ref().map_or(a.parent.model, |v| v.pair);
-    let source = evaluator_source();
-    let binary = unhex(&file_hash(&std::env::current_exe()?)?)?;
+    let source = a.source;
+    let binary = if legacy {
+        let origin = a
+            .origins
+            .iter()
+            .find(|o| o.role == "execution-binary")
+            .ok_or_else(|| bad("legacy binary provenance absent"))?;
+        if unhex(&file_hash(Path::new(&origin.original.locator))?)? != origin.original.digest {
+            return Err(bad("legacy binary changed"));
+        }
+        origin.original.digest
+    } else {
+        unhex(&file_hash(&std::env::current_exe()?)?)?
+    };
     let commands: [FileRef; 2] = commands
         .try_into()
         .map_err(|_| bad("preflight command count"))?;
@@ -3817,6 +4558,7 @@ fn verify_save_preflight(root: &Path, control: &mut RunControl, generate: bool) 
     ];
     if generate {
         control.check("preflight_proof_publish")?;
+        verification_fault(a.tiny_spec, "proof", control)?;
         publish(
             root,
             "preflight-proof.r3er",
@@ -3830,6 +4572,10 @@ fn verify_save_preflight(root: &Path, control: &mut RunControl, generate: bool) 
                 generations: control.generation_calls as u64,
             }),
         )?;
+        #[cfg(feature = "test-support")]
+        if a.tiny_spec && std::env::var("R3ER_TEST_STOP").as_deref() == Ok("pv-proof-kill") {
+            std::process::exit(93);
+        }
     } else {
         let Record::Preflight(p) = read_record(root, &reference(root, "preflight-proof.r3er")?)?
         else {
@@ -3935,6 +4681,15 @@ fn print_anchor_panel(s: &RunSnapshot, e: &EvalPayload, l: &Loaded) -> Result<()
     Ok(())
 }
 fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
+    if root.join("preflight-A").is_dir() {
+        let p = read_preflight_outcome(root)?.ok_or_else(|| bad("missing preflight attempt"))?;
+        if p.legacy {
+            // Report-only historical observation, never new run authorization.
+            preflight_body(root, control, false, true, &mut Vec::new())?;
+        } else {
+            p.require_current_success()?;
+        }
+    }
     let arms = if root.join("C50-R").exists() {
         ["C50-R", "A75-R"]
     } else {
@@ -4148,6 +4903,15 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
 }
 fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Result<()> {
     let s = read_inputs(root)?;
+    #[cfg(feature = "test-support")]
+    if s.tiny_spec && s.origins.iter().any(|o| o.role == "test-verification") {
+        let p = read_preflight_outcome(
+            root.parent()
+                .ok_or_else(|| bad("test verification parent"))?,
+        )?
+        .ok_or_else(|| bad("test verification intent absent"))?;
+        p.require_current_success()?;
+    }
     #[cfg(feature = "test-support")]
     if s.tiny_spec && s.origins.iter().any(|o| o.role == "test-pair") {
         let parent = root.parent().ok_or_else(|| bad("test pair parent"))?;

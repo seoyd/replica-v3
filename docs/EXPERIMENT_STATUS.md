@@ -1,5 +1,40 @@
 # 진단 및 구현 상태
 
+## P0–P2 진행 — preflight 시도·부분 결과·실패 회계 수리
+
+R3-PREFLIGHT-ONCE-AND-COOLDOWN-1.0 / 2026-09-18. 시작 HEAD198a1a032368f023d81ab744e59eccb1cd6b6e53,
+source50a0fb72f552cc130fbd5598019222c7a7bd95fe 이후 코드는 같고 tracked dirty는 없었다.
+기존487개 untracked 로그를 보존했다. Rust/Cargo1.98.1, CPU Accelerate/threads1,
+offline locked 의존을 유지한다. 부모 A75-R24310 physical SHA
+50b927dd41771c39ca5e7138ca28aaf8193a96460eff9a2aae92ed444015f09c를 실제 확인했다.
+새 증거 root=`artifacts/preflight-cooldown-20260918/`; originals.sha256가 기존 pair와
+preflight 파일을 이번 시작 시점에 묶는다. 과거 시점의 receipt 증명으로 소급하지 않는다.
+
+격리 기준 source+hook-only에서 첫 row 후 cancel의 Started 부재를 실제 재현했다
+(`p1-red.log`, TINY4). 수리 후 실제 process 회귀1 PASS: 최초 token 취소/nonfinite,
+row 후 취소/deadline, Started/proof 후 child exit, raw/proof/final publication 실패,
+재시도·후속 arm 차단, 정상 read-only 재확인, 두 writer 경쟁, corrupt final/다른 native.
+GREEN `p2-pv-process-fixed.log`: 실제 TINY4/verification generation16/teacher0,
+후속 optimizer0. 첫 실행 `p2-pv-process.log`는 TINY panel을 분기당2개로 잘못 가정한
+test assertion 실패(TINY4, verification generation7)였고 원래1개 fixture에 맞췄다.
+SMALL0. 직접 실행 누적 TINY12, scalar0; RED/실패를 PASS에 합산하지 않았다.
+이후 final quick는 한 번 실행해22 commands(19 test invocations),75 test executions/
+고유74 모두 PASS,0-test0, source_unchanged=true를 확인했다. quick TINY53을 포함한
+누적 TINY65/scalar0다. test-support 없는 train/product release build도 PASS다.
+quick source digest=9483d2b57bb1dacb2ad549efa2a6d330f84b08c3cf3055fef118398488155b5a.
+증거는 p2-quick.log, p2-quick/summary.json, p2-release-build.log다.
+
+Started/entry reservation/returned row/final은 typed R3ER이다. 같은 reader가 성공 여부와
+실패의 알려진 소비량을 출력한다. UNKNOWN tail은 예산을 잠그며 원래 SMALL proof는
+명시 legacy read-only로만 재사용한다. 회귀의 강제 종료는 장치 정전 검증이 아니다.
+PV01 direct process/quick=PASS. 새 release binary의 anchor-report가 기존 전체 raw와
+native/command/close를 read-only 재검산해 exit0이었다(p2-old-pair-recount.log).
+최종 C50-R dev241/CROSS461/QA170, A75-R240/462/181, dev 오류 각각1과 기존
+paired 표가 모두 일치했다. 새 SMALL generation/optimizer0. 오류의 개별 token/empty
+의미 분류는 P3에서 기존 row로 확인한다. P3–P5=NOT_RUN, INDEPENDENT_PENDING.
+새 연구는 최종 A75-R 부모의 K-KEEP/D-DECAY256씩이며 이전 C50/A75와 preflight4를
+반복하지 않는다. 모델 품질·S4/S5/S6·Goal1 수용은 그대로 미완료다.
+
 ## D4 최종 — 수리·저장·정식 pair 실행 완료, 모델 품질 미달
 
 MODE=IMPLEMENT; CONTRACT=R3-DURABILITY-PAIR-RESTART-1.0; RESULT=PARTIAL.

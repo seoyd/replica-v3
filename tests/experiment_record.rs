@@ -3,7 +3,8 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
+    time::{Duration, Instant},
 };
 fn call(args: &[&str], stop: Option<&str>, success: bool, log: &Path) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_replica-train"));
@@ -16,19 +17,272 @@ fn call(args: &[&str], stop: Option<&str>, success: bool, log: &Path) -> Output 
     if let Some(stop) = stop {
         command.env("R3ER_TEST_STOP", stop);
     }
-    let out = command.output().unwrap();
-    fs::write(log, [out.stdout.as_slice(), out.stderr.as_slice()].concat()).unwrap();
+    let file = fs::File::create(log).unwrap();
+    let mut child = command
+        .stdout(Stdio::from(file.try_clone().unwrap()))
+        .stderr(Stdio::from(file))
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("owned test child exceeded deadline: {args:?}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let out = Output {
+        status,
+        stdout: fs::read(log).unwrap(),
+        stderr: Vec::new(),
+    };
     print!("{}", String::from_utf8_lossy(&out.stdout));
     assert_eq!(
         out.status.success(),
         success,
         "args={args:?}\n{}",
-        String::from_utf8_lossy(&out.stderr)
+        String::from_utf8_lossy(&out.stdout)
     );
     out
 }
 fn p(p: &Path) -> &str {
     p.to_str().unwrap()
+}
+#[test]
+fn binary_preflight_attempt_failures_usage_and_single_writer() {
+    fn copy_dir(from: &Path, to: &Path) {
+        fs::create_dir(to).unwrap();
+        for e in fs::read_dir(from).unwrap() {
+            let e = e.unwrap();
+            let dest = to.join(e.file_name());
+            if e.file_type().unwrap().is_dir() {
+                copy_dir(&e.path(), &dest);
+            } else {
+                fs::copy(e.path(), dest).unwrap();
+            }
+        }
+    }
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = PathBuf::from(
+        std::env::var_os("R3ER_TEST_BOOTSTRAP").expect("reuse registered TINY bootstrap"),
+    );
+    let prepared = d.path().join("prepared");
+    call(
+        &[
+            "fixture-preflight",
+            "--from",
+            p(&bootstrap),
+            "--output",
+            p(&prepared),
+        ],
+        None,
+        true,
+        &d.path().join("prepare.log"),
+    );
+    let mut updates = 0;
+    for (arm, resume) in [
+        ("preflight-A", None),
+        ("preflight-B", None),
+        ("preflight-B", Some("segment-00/terminal.r3er")),
+    ] {
+        let path = prepared.join(arm);
+        let mut args = vec!["run", "--root", p(&path)];
+        if let Some(r) = resume {
+            args.extend(["--resume", r]);
+        }
+        let out = call(
+            &args,
+            None,
+            true,
+            &d.path()
+                .join(format!("prepare-{arm}-{}.log", resume.is_some())),
+        );
+        updates += String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| l.starts_with("ACTUAL_TINY_UPDATE="))
+            .count();
+    }
+    assert_eq!(updates, 4);
+    let prestart = d.path().join("prestart-rejected");
+    copy_dir(&prepared, &prestart);
+    let rejected = call(
+        &["save-preflight-verify", "--root", p(&prestart)],
+        Some("pv-start-write-fail"),
+        false,
+        &d.path().join("prestart.log"),
+    );
+    assert!(!prestart.join("preflight-start.r3er").exists());
+    assert!(
+        !String::from_utf8_lossy(&rejected.stdout).contains("VERIFICATION_GENERATION_API_ENTRY=")
+    );
+    assert!(!String::from_utf8_lossy(&rejected.stdout).contains("SAVE_CAPABLE="));
+    let mut entries = 0;
+    for (mode, expected, final_file, proof) in [
+        ("pv-first-token", 1, true, false),
+        ("pv-nonfinite", 1, true, false),
+        ("pv-after-row", 1, true, false),
+        ("pv-row-deadline", 1, true, false),
+        ("pv-start-kill", 0, false, false),
+        ("pv-raw-write-fail", 1, true, false),
+        ("pv-proof-write-fail", 2, true, false),
+        ("pv-proof-kill", 2, false, true),
+        ("pv-final-write-fail", 2, false, true),
+        ("pv-after-row-final-write-fail", 1, false, false),
+    ] {
+        let root = d.path().join(mode);
+        copy_dir(&prepared, &root);
+        let out = call(
+            &["save-preflight-verify", "--root", p(&root)],
+            Some(mode),
+            false,
+            &d.path().join(format!("{mode}.log")),
+        );
+        assert!(root.join("preflight-start.r3er").is_file());
+        assert_eq!(root.join("preflight-final.r3er").is_file(), final_file);
+        assert_eq!(root.join("preflight-proof.r3er").is_file(), proof);
+        let text = String::from_utf8_lossy(&out.stdout);
+        if final_file {
+            assert!(
+                text.contains(&format!("GENERATION_API_ENTRIES={expected}")),
+                "{text}"
+            );
+        }
+        if matches!(
+            mode,
+            "pv-first-token" | "pv-nonfinite" | "pv-after-row" | "pv-row-deadline"
+        ) {
+            assert!(root.join("preflight-row-00.r3er").is_file());
+            assert!(!root.join("preflight-row-01-start.r3er").exists());
+        }
+        let before = fs::read(root.join("preflight-start.r3er")).unwrap();
+        for args in [
+            vec!["save-preflight-verify", "--root", p(&root)],
+            vec!["run", "--root", p(&root.join("C50"))],
+            vec!["anchor-report", "--root", p(&root)],
+        ] {
+            let retry = call(&args, None, false, &d.path().join("retry.log"));
+            let text = String::from_utf8_lossy(&retry.stdout);
+            assert!(!text.contains("ACTUAL_TINY_UPDATE="));
+            assert!(!text.contains("VERIFICATION_BEGIN_DURABLE=true"));
+            if !final_file {
+                assert!(text.contains("UNKNOWN_TAIL=true"), "{text}");
+            }
+        }
+        assert_eq!(before, fs::read(root.join("preflight-start.r3er")).unwrap());
+        let actual = text
+            .lines()
+            .filter(|l| l.starts_with("VERIFICATION_GENERATION_API_ENTRY="))
+            .count();
+        assert_eq!(actual, expected);
+        entries += actual;
+    }
+    let root = d.path().join("positive");
+    copy_dir(&prepared, &root);
+    let out = call(
+        &["save-preflight-verify", "--root", p(&root)],
+        None,
+        true,
+        &d.path().join("positive.log"),
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("GENERATION_API_ENTRIES=2"));
+    entries += String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.starts_with("VERIFICATION_GENERATION_API_ENTRY="))
+        .count();
+    let proof = fs::read(root.join("preflight-proof.r3er")).unwrap();
+    let final_bytes = fs::read(root.join("preflight-final.r3er")).unwrap();
+    let out = call(
+        &["save-preflight-verify", "--root", p(&root)],
+        None,
+        true,
+        &d.path().join("readonly.log"),
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("ACTUAL_NEW_GENERATIONS=0"));
+    assert_eq!(proof, fs::read(root.join("preflight-proof.r3er")).unwrap());
+    assert_eq!(
+        final_bytes,
+        fs::read(root.join("preflight-final.r3er")).unwrap()
+    );
+    let mut corrupt = final_bytes.clone();
+    *corrupt.last_mut().unwrap() ^= 1;
+    fs::write(root.join("preflight-final.r3er"), corrupt).unwrap();
+    call(
+        &["save-preflight-verify", "--root", p(&root)],
+        None,
+        false,
+        &d.path().join("corrupt-final.log"),
+    );
+    fs::write(root.join("preflight-final.r3er"), final_bytes).unwrap();
+    fs::copy(
+        root.join("preflight-A/parent.r3m"),
+        root.join("preflight-A/segment-00/final.r3m"),
+    )
+    .unwrap();
+    call(
+        &["save-preflight-verify", "--root", p(&root)],
+        None,
+        false,
+        &d.path().join("wrong-native.log"),
+    );
+
+    let root = d.path().join("race");
+    copy_dir(&prepared, &root);
+    let race_log = d.path().join("race.log");
+    let file = fs::File::create(&race_log).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_replica-train"))
+        .args([
+            "recovery",
+            "native",
+            "save-preflight-verify",
+            "--root",
+            p(&root),
+        ])
+        .env("VECLIB_MAXIMUM_THREADS", "1")
+        .env("RAYON_NUM_THREADS", "1")
+        .env("R3ER_TEST_STOP", "pv-hold-start")
+        .stdout(Stdio::from(file.try_clone().unwrap()))
+        .stderr(Stdio::from(file))
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !root.join("preflight-start.r3er").exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(root.join("preflight-start.r3er").is_file());
+    call(
+        &["save-preflight-verify", "--root", p(&root)],
+        None,
+        false,
+        &d.path().join("race-second.log"),
+    );
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(
+                status.success(),
+                "{}",
+                fs::read_to_string(&race_log).unwrap()
+            );
+            break;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("race child timeout");
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    entries += fs::read_to_string(&race_log)
+        .unwrap()
+        .lines()
+        .filter(|l| l.starts_with("VERIFICATION_GENERATION_API_ENTRY="))
+        .count();
+    println!(
+        "PV01_ACTUAL_TINY_UPDATES={updates} VERIFICATION_GENERATION_ENTRIES={entries} TEACHERS=0 FOLLOWUP_OPTIMIZER_ENTRIES=0"
+    );
 }
 #[test]
 fn binary_save_preflight_and_partial_panel_process_resume() {
