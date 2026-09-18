@@ -125,6 +125,9 @@ impl TrainConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TrainingState {
+    /// None means legacy/unknown, never the default objective.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_binding: Option<ResumeBinding>,
     /// Full passes over base sixteen cases, optionally both evidence orders (32).
     /// Historical field name is retained; never the ordinary with-replacement sampler.
     #[serde(default)]
@@ -143,6 +146,149 @@ pub struct TrainingState {
     pub initial_weight_hash: String,
     pub train_loss: Option<f64>,
     pub validation_loss: Option<f64>,
+}
+
+/// Execution identity, independent of tensor/model identity and filesystem location.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResumeBinding {
+    pub version: u8,
+    /// 1: response CE, 2: normalized answer-byte span CE.
+    pub family: u8,
+    pub first_target_weight_bits: u64,
+    pub span_alpha_bits: Option<u64>,
+    /// 1: supervised-target denominator; 2: per-example mass then target denominator.
+    pub normalizer: u8,
+    pub annotation: Option<[u8; 32]>,
+    pub train_order: [u8; 32],
+    pub tokenizer: [u8; 32],
+    pub framing: [u8; 32],
+    pub config: [u8; 32],
+    pub corpus: [u8; 32],
+    pub validation: [u8; 32],
+    /// 0: generic config schedule; 1: bound native execution policy.
+    pub execution: u8,
+    pub policy: [u8; 32],
+    /// Original policy digest is retained across explicit format migration.
+    pub provenance: [u8; 32],
+}
+impl ResumeBinding {
+    pub fn digest_bytes(bytes: &[u8]) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(bytes).into()
+    }
+    pub fn encode(&self, b: &mut Vec<u8>) {
+        b.extend([self.version, self.family, self.normalizer, self.execution]);
+        b.extend(self.first_target_weight_bits.to_le_bytes());
+        b.push(u8::from(self.span_alpha_bits.is_some()));
+        if let Some(alpha) = self.span_alpha_bits {
+            b.extend(alpha.to_le_bytes());
+        }
+        b.push(u8::from(self.annotation.is_some()));
+        if let Some(annotation) = self.annotation {
+            b.extend(annotation);
+        }
+        for h in [
+            self.train_order,
+            self.tokenizer,
+            self.framing,
+            self.config,
+            self.corpus,
+            self.validation,
+            self.policy,
+            self.provenance,
+        ] {
+            b.extend(h);
+        }
+    }
+    pub fn digest(&self) -> [u8; 32] {
+        let mut b = b"R3-OBJECTIVE-RESUME-v1\0".to_vec();
+        self.encode(&mut b);
+        Self::digest_bytes(&b)
+    }
+    pub fn validate(&self, state: &TrainingState, tok: &ByteBpe) -> Result<()> {
+        if self.version != 1
+            || ![1, 2].contains(&self.family)
+            || self.execution > 1
+            || self.first_target_weight_bits != state.config.first_target_weight.to_bits()
+            || self.tokenizer != Self::digest_bytes(tok.semantic_id().as_bytes())
+            || self.framing != Self::digest_bytes(super::PROMPT_FORMAT.as_bytes())
+            || self.config != Self::config_digest(&state.config)
+            || self.corpus != Self::digest_bytes(state.corpus_hash.as_bytes())
+            || self.validation != Self::digest_bytes(state.validation_hash.as_bytes())
+            || (self.family == 1
+                && (self.normalizer != 1
+                    || self.span_alpha_bits.is_some()
+                    || self.annotation.is_some()))
+            || (self.family == 2
+                && (self.normalizer != 2
+                    || self.span_alpha_bits != Some(1f64.to_bits())
+                    || self.annotation.is_none()
+                    || self.execution != 1))
+        {
+            return Err(Error::Corrupt("OBJECTIVE_POLICY_BINDING_MISMATCH".into()));
+        }
+        Ok(())
+    }
+    pub fn config_digest(c: &TrainConfig) -> [u8; 32] {
+        let mut b = b"R3-TRAIN-CONFIG-v1\0".to_vec();
+        for f in [
+            c.lr,
+            c.beta1,
+            c.beta2,
+            c.eps,
+            c.weight_decay,
+            c.clip,
+            c.first_target_weight,
+        ] {
+            b.extend(f.to_bits().to_le_bytes());
+        }
+        for n in [
+            c.warmup,
+            c.max_steps,
+            c.microbatch,
+            c.sample_group_size,
+            c.accumulation,
+            c.seq_len,
+            c.validate_every,
+            c.curriculum_steps,
+            c.budget_start_step,
+        ] {
+            b.extend((n as u64).to_le_bytes());
+        }
+        for n in [c.max_tokens, c.seed, c.budget_start_tokens] {
+            b.extend(n.to_le_bytes());
+        }
+        Self::digest_bytes(&b)
+    }
+    pub fn default_for(s: &TrainingState, tok: &ByteBpe) -> Self {
+        let config = Self::config_digest(&s.config);
+        Self {
+            version: 1,
+            family: 1,
+            first_target_weight_bits: s.config.first_target_weight.to_bits(),
+            span_alpha_bits: None,
+            normalizer: 1,
+            annotation: None,
+            train_order: Self::digest_bytes(s.corpus_hash.as_bytes()),
+            tokenizer: Self::digest_bytes(tok.semantic_id().as_bytes()),
+            framing: Self::digest_bytes(super::PROMPT_FORMAT.as_bytes()),
+            config,
+            corpus: Self::digest_bytes(s.corpus_hash.as_bytes()),
+            validation: Self::digest_bytes(s.validation_hash.as_bytes()),
+            execution: 0,
+            policy: config,
+            provenance: config,
+        }
+    }
+    pub fn require_default(s: &TrainingState, tok: &ByteBpe) -> Result<()> {
+        let actual = s.resume_binding.as_ref().ok_or_else(|| Error::Invalid("LEGACY_OBJECTIVE_UNKNOWN: explicit provenance-backed migration required; optimizer_calls=0".into()))?;
+        actual.validate(s, tok)?;
+        if actual != &Self::default_for(s, tok) {
+            return Err(Error::Invalid("OBJECTIVE_POLICY_UNSUPPORTED: use the exact bound native policy; optimizer_calls=0".into()));
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -252,6 +398,9 @@ pub fn validate_metadata(m: &Manifest, tok: &ByteBpe) -> Result<()> {
     }
     if let Some(s) = &m.training {
         s.config.validate(m.architecture.context)?;
+        if let Some(binding) = &s.resume_binding {
+            binding.validate(s, tok)?;
+        }
         if s.step > s.config.max_steps
             || s.parent_checkpoint_hash
                 .as_ref()

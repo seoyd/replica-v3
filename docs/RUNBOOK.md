@@ -772,6 +772,51 @@ only missing CROSS512/ordinary400. Each observation directory is create-new; fai
 block further generation. Maximum new calls944 with reused dev, SMALL optimizer0; no checkpoint
 sweep, seal opening, model installation, budget renewal or operating pointer change.
 
+## Native source and objective binding
+
+New corpus inputs are files, with no directory/JSON auto-detection. Examples below
+use new outputs; keep original JSON and checkpoints read-only.
+
+```sh
+replica-train corpus import-legacy --source OLD_CORPUS --output source.r3c
+replica-train corpus import-legacy --source OLD_CORPUS --output source-raw.r3c --raw
+replica-train corpus verify --corpus source.r3c
+replica-train corpus inspect --corpus source.r3c
+replica-train recovery native upgrade-resume --root ORIGINAL_ARM --terminal segment-00/terminal.r3er --output parent-v2.r3m
+replica-train recovery native path-prepare --parent-arm ORIGINAL_ARM --parent parent-v2.r3m --corpus source.r3c --legacy-reference OLD_CORPUS --output NEW_PARITY
+replica-train recovery native token-cache-compile --root NEW_PARITY/native --output NEW_PARITY/native/cache
+replica-train recovery native run --root NEW_PARITY/legacy-reference
+replica-train recovery native run --root NEW_PARITY/native
+replica-train recovery native run --root NEW_PARITY/native --resume segment-00/terminal.r3er
+replica-train recovery native path-verify --root NEW_PARITY
+```
+
+Path parity is bounded at2+1+1 updates and cannot qualify a model. Generic
+`train --corpus source.r3c` requires a supported default v2 objective; standalone
+v1 is inference-only until explicit provenance migration. Normal
+`evaluate --corpus source.r3c --checkpoint MODEL --output evaluation.r3er`
+writes typed raw records. Source import is not tokenizer retraining. New native
+prepare consumes full source and registered lineage, retaining historical hash aliases.
+Historical JSON recovery commands require `recovery --legacy-json ...`; old
+optimizer entry points are unsupported and fail before forward/backward.
+
+`conditional-prepare --parent-arm A75 --base-arm BASE --output NEW_DIAGNOSTIC`
+freezes the24×6 development panel. Then `conditional-run --root NEW_DIAGNOSTIC
+--model 0` and `--model 1` each run once; `conditional-report --root NEW_DIAGNOSTIC`
+recounts saved binary outputs. A failed/started observation is not retry permission.
+`version-parity --parent-arm A75 --checkpoint MODEL --output NEW_OUTPUT` takes16
+metadata-selected dev cases; a second new process uses `--compare FIRST_OUTPUT`.
+`exposure-report --root BASE` and `objective-probes --root ORIGINAL_STUDY` are
+read-only recounts with no new optimizer or teacher calls.
+
+`source-measure --root NEW_PARITY/native --legacy OLD_CORPUS --raw source-raw.r3c
+--cold source.r3c --cache NEW_PARITY/native/cache --output NEW_MEASUREMENT
+--repetitions 3` alternates formats. Optional `--format` accepts `source-json`,
+`native-raw`, `native-zstd3`, `cache-raw`, `cache-zstd3` for fresh-process timing.
+The JSON benchmark is explicit; it is not a native execution dependency.
+Use one compute thread and external process RSS accounting; fresh is not OS-cold.
+Scoped verification is `replica-check quick --native-corpus --output NEW_DIRECTORY`.
+
 ## Binary evaluation and resume repair
 
 Use `replica-train recovery native --help` for the new canonical diagnostic path.

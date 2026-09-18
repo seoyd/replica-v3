@@ -751,6 +751,9 @@ pub fn train(
         return Err(Error::Invalid("contrast source hash".into()));
     }
     let mut loaded = checkpoint::load(path, Device::Cpu, false)?;
+    if let Some(state) = &loaded.manifest.training {
+        checkpoint::ResumeBinding::require_default(state, &loaded.tokenizer)?;
+    }
     if loaded.model.config != Config::small(loaded.tokenizer.vocab_size()) {
         return Err(Error::Invalid("contrast requires unchanged SMALL".into()));
     }
@@ -825,6 +828,7 @@ pub fn train(
         }
     }
     let mut state = TrainingState {
+        resume_binding: None,
         contrast16: true,
         parent_checkpoint_hash: Some(parent.clone()),
         config: config.clone(),
@@ -839,6 +843,10 @@ pub fn train(
         train_loss: None,
         validation_loss: None,
     };
+    state.resume_binding = Some(checkpoint::ResumeBinding::default_for(
+        &state,
+        &loaded.tokenizer,
+    ));
     let mut adam = Adam::new(&loaded.model.vars)?;
     let mut rng = Rng::new(17);
     std::fs::create_dir(output)?;

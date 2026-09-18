@@ -14,6 +14,9 @@ struct Cli {
 enum Commands {
     /// Frozen, bounded quality recovery diagnostics; never a product answer path.
     Recovery {
+        /// Explicit historical JSON controls; native commands need no legacy reader.
+        #[arg(long)]
+        legacy_json: bool,
         #[command(subcommand)]
         command: training::recovery::Command,
     },
@@ -223,6 +226,24 @@ enum Models {
 }
 #[derive(Subcommand)]
 enum Corpus {
+    /// Explicit read-only JSON import. Normal train/eval accepts only native source files.
+    ImportLegacy {
+        #[arg(long)]
+        source: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        raw: bool,
+    },
+    /// Read/hash/validate a native source without opening its historical origin paths.
+    Verify {
+        #[arg(long)]
+        corpus: PathBuf,
+    },
+    Inspect {
+        #[arg(long)]
+        corpus: PathBuf,
+    },
     /// Same-size training-only query/value pairs; preserve validation and other categories.
     BindingPairs {
         #[arg(long)]
@@ -281,9 +302,28 @@ enum Tokenizer {
 fn run() -> Result<()> {
     match Cli::parse().command {
         Commands::Corpus {
+            command:
+                Corpus::ImportLegacy {
+                    source,
+                    output,
+                    raw,
+                },
+        } => data::native::import_legacy(&source, &output, !raw),
+        Commands::Corpus {
+            command: Corpus::Verify { corpus } | Corpus::Inspect { corpus },
+        } => data::native::inspect(&corpus),
+        Commands::Corpus {
             command: Corpus::BindingPairs { source, output },
         } => data::binding_pairs(&source, &output),
-        Commands::Recovery { command } => training::recovery::run(command),
+        Commands::Recovery {
+            command,
+            legacy_json,
+        } => {
+            if !legacy_json && !matches!(command, training::recovery::Command::Native { .. }) {
+                return Err(replica_v3::Error::Invalid("historical recovery requires explicit --legacy-json; use recovery native for native source execution".into()));
+            }
+            training::recovery::run(command)
+        }
         Commands::Contrast { command } => {
             use training::contrast;
             match command {

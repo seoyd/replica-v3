@@ -238,6 +238,30 @@ own-model worker and added native generate/chat/history interfaces. S5 acceptanc
 still requires the final qualified model and actual memory/restart trials. S6 is
 not implemented. There is no accepted product model or Goal1 pass.
 
+## Objective-owned RESUME (2026-09-18)
+
+The current writer uses R3MODEL wire2; the reader explicitly supports wire1 and2.
+The same F32 weights and tokenizer mapping remain the inference model identity.
+RESUME v2 requires a typed ResumeBinding in TrainingState, with semantic revision,
+response-CE versus normalized-span family, exact first-target/alpha IEEE bits,
+normalizer/annotation, ordered training source, tokenizer/framing/config/corpus,
+and executed policy/provenance digests. The descriptor has a domain-separated
+digest; it does not recursively hash its containing checkpoint. Adam and all
+step/token/sampler/config fields retain the existing encoding and validation.
+
+Generic training accepts only an exact supported default descriptor. Native study
+resume compares its full registered descriptor, including actual continuation
+policy; nondefault checkpoints cannot silently become default after file moves.
+Wire1 has unknown objective, not implicit default. Inference and read-only recount
+continue to work. `recovery native upgrade-resume` needs explicit, verified original
+policy/native/terminal/close lineage; it writes a new file and preserves the old
+physical hash. Default and SPAN migrations are distinct from resume permission.
+A bound native policy remains unsupported by generic train even if its objective
+family is response CE; use the matching authorized native path.
+
+No topology, QK/RoPE/GQA/SwiGLU/KV equation, tokenizer mapping or optimizer formula
+changes accompany this format version. Storage parity is not intelligence recovery.
+
 ## 현재 제한 진단·native 저장 경로 (2026-09-17)
 
 위 run/JSON+safetensors 설명은 당시 S3/S4 기록이다. 현재 기본 runtime/trainer 저장은

@@ -1,5 +1,55 @@
 # B0 storage format v1
 
+## R3CORP v1 source corpus and native default
+
+`data::native` is train-only. Its Episode codec is shared with existing R3ER;
+the product inference library does not import generators, labels or annotations.
+R3CORP contains train/dev originals, not just tokens or an experiment tape.
+Each Episode preserves id/category/family/binding/sequence, request input/limits,
+all evidence and bundle metadata, answer, signed IDs/time, optional observed time,
+source/status/truncation/retrieval reason and relation kind/path/weight. Strings
+are exact UTF-8 bytes without trim or normalization, including JSON text payloads.
+
+Fixed prefix160 bytes (all fixed integers LE, typed strings/counts canonical ULEB):
+
+| Offset | Bytes | Meaning |
+| --- | ---: | --- |
+| 0 | 8 | `R3CORP` plus two zero bytes |
+| 8 / 10 / 11 | 2 / 1 / 1 | version1 / endian1 / flags0 |
+| 12 / 16 | 4 / 8 | header length / exact file length |
+| 24 / 28 / 32 / 36 | 4 each | train / dev / block / record counts |
+| 40 / 72 / 104 | 32 each | semantic / header / stored payload SHA256 |
+| 136 | 24 | reserved zero |
+
+Metadata preserves version/scope/permission/generator/seed/split rule, split
+descriptors, original manifest aliases, conversion time/source digest and explicit
+origin(role,path,physical hash,length). Origins are explanatory; the reader never
+reopens them. Block directory entries57 bytes: offset/stored length/raw length
+u64, codec u8 (raw0/Zstd3=1), decoded-block SHA256. Ordered record index entries12
+bytes: block/offset/length u32. Blocks target256KiB, records max64MiB, file128MiB,
+each split max100000. Compression falls back to raw only when not smaller.
+Counts/offsets/overlap/gaps/trailing bytes/duplicate IDs and decoded lengths/hash
+are checked before consuming owned records. Immutable create-new publisher and
+existing fsync/reader bounds apply. No JSON body, dictionary or mmap.
+
+CorpusSemanticHash includes a schema/domain tag, semantic manifest fields and
+ordered typed train/dev records. Compression, origin paths and conversion time
+are excluded. TrainOrderHash is the ordered typed train encoding, not set equality.
+PhysicalFileHash covers actual container bytes; legacy manifest/train/dev hashes
+stay explicitly historical. Native split hashes are semantic and never silently
+overwrite a checkpoint's old JSON corpus hash. Migration/path preparation verifies
+full ordered train/dev equality and records the new source binding separately.
+
+New source generator/transform/train/evaluate/prepare/cache APIs default to native.
+Explicit `corpus import-legacy` is the historical JSON boundary. R3ER kind22 binds
+the bounded input-path experiment, kind23 freezes conditional plan/raw/usage,
+kind24 stores measured preparation timings; these are typed records, not JSON maps.
+R3TOK remains a train-only derivative with its existing key and publication rules.
+The native run validates source and cache keys and uses decoded samples without
+tokenizing again; bad/missing cache fails rather than falling back to JSON.
+Existing JSON IPC, older explicit recovery readers, training config input and
+human/checker reports remain. This is not whole-project JSON removal.
+
 ## R3TOK v1 train derivative
 
 This immutable prototype is compiled from the verified R3ER owned train split,

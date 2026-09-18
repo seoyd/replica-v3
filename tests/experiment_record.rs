@@ -290,6 +290,37 @@ fn objective_policy_native_fresh_resume_and_zero_span_parity() {
                 .count();
         }
         assert!(root.join("train-final-final.r3er").is_file());
+        // Move only the file: loss authorization must not depend on adjacent policy names.
+        let isolated = d.path().join(if span {
+            "moved-span"
+        } else {
+            "moved-native-base"
+        });
+        fs::create_dir(&isolated).unwrap();
+        let endpoint = root.join(if span {
+            "segment-01/step-0002.r3m"
+        } else {
+            "segment-00/step-0002.r3m"
+        });
+        let moved = isolated.join("renamed.r3m");
+        fs::copy(&endpoint, &moved).unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_replica-train"))
+            .args([
+                "train",
+                "--resume",
+                p(&moved),
+                "--numeric-probe",
+                "--output",
+                p(&isolated.join("forbidden")),
+            ])
+            .env("VECLIB_MAXIMUM_THREADS", "1")
+            .env("RAYON_NUM_THREADS", "1")
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("OBJECTIVE_POLICY_UNSUPPORTED"));
+        assert!(!isolated.join("forbidden").exists());
+        assert_eq!(fs::read(endpoint).unwrap(), fs::read(moved).unwrap());
         roots.push(root);
     }
     call(
@@ -306,6 +337,283 @@ fn objective_policy_native_fresh_resume_and_zero_span_parity() {
     );
     assert_eq!(updates, 4);
     println!("OBJECTIVE_PROCESS_TINY_UPDATES={updates} SMALL_UPDATES=0");
+}
+#[test]
+fn native_corpus_standalone_default_two_vs_fresh_one_one() {
+    use replica_v3::neural::checkpoint;
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
+    let isolated = d.path().join("isolated");
+    call(
+        &[
+            "fixture-native-corpus",
+            "--from",
+            p(&bootstrap),
+            "--output",
+            p(&isolated),
+        ],
+        None,
+        true,
+        &d.path().join("prepare.log"),
+    );
+    let parent_step = checkpoint::metadata(&isolated.join("parent.r3m"))
+        .unwrap()
+        .0
+        .training
+        .unwrap()
+        .step;
+    assert!(fs::read_dir(&isolated).unwrap().all(|e| matches!(
+        e.unwrap().path().extension().and_then(|s| s.to_str()),
+        Some("r3c" | "r3m" | "r3er")
+    )));
+    // macOS denies the setuid /bin/ps used by the unchanged RSS gate inside
+    // sandbox-exec. Keep that gate: exercise an isolated native-only root and
+    // verify its contents, rather than disable resource observation for a test.
+    let mut compile = Command::new(env!("CARGO_BIN_EXE_replica-train"));
+    compile
+        .args([
+            "recovery",
+            "native",
+            "token-cache-compile",
+            "--root",
+            p(&isolated),
+            "--output",
+            p(&isolated.join("cache")),
+        ])
+        .env("VECLIB_MAXIMUM_THREADS", "1")
+        .env("RAYON_NUM_THREADS", "1");
+    let compiled = compile.output().unwrap();
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let run = |source: &Path, out: &Path, stop: bool| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_replica-train"));
+        c.args([
+            "train",
+            "--resume",
+            p(source),
+            "--corpus",
+            p(&isolated.join("source.r3c")),
+            "--output",
+            p(out),
+        ])
+        .env("VECLIB_MAXIMUM_THREADS", "1")
+        .env("RAYON_NUM_THREADS", "1");
+        if stop {
+            c.args(["--stop-after", &(parent_step + 1).to_string()]);
+        }
+        let o = c.output().unwrap();
+        print!(
+            "{}{}",
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        );
+        assert!(o.status.success());
+        let updates = String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .filter(|line| line.starts_with("step="))
+            .count();
+        assert_eq!(
+            updates,
+            if out.file_name().unwrap() == "continuous" {
+                2
+            } else {
+                1
+            }
+        );
+    };
+    let a = isolated.join("continuous");
+    let b = isolated.join("one");
+    let c = isolated.join("resumed");
+    run(&isolated.join("parent.r3m"), &a, false);
+    run(&isolated.join("parent.r3m"), &b, true);
+    let moved = isolated.join("only-checkpoint.r3m");
+    fs::copy(b.join("final"), &moved).unwrap();
+    run(&moved, &c, false);
+    let x = checkpoint::load(&a.join("final"), candle_core::Device::Cpu, true).unwrap();
+    let y = checkpoint::load(&c.join("final"), candle_core::Device::Cpu, true).unwrap();
+    assert_eq!(
+        x.model.weight_hash().unwrap(),
+        y.model.weight_hash().unwrap()
+    );
+    assert_eq!(x.manifest.training, y.manifest.training);
+    for (name, t) in &x.optimizer {
+        assert_eq!(
+            t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+            y.optimizer[name]
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap()
+        );
+    }
+    let evaluated = Command::new(env!("CARGO_BIN_EXE_replica-train"))
+        .args([
+            "evaluate",
+            "--checkpoint",
+            p(&c.join("final")),
+            "--corpus",
+            p(&isolated.join("source.r3c")),
+            "--output",
+            p(&isolated.join("evaluation.r3er")),
+            "--limit",
+            "1",
+        ])
+        .env("VECLIB_MAXIMUM_THREADS", "1")
+        .env("RAYON_NUM_THREADS", "1")
+        .output()
+        .unwrap();
+    assert!(
+        evaluated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&evaluated.stderr)
+    );
+    assert!(
+        fs::read(isolated.join("evaluation.r3er"))
+            .unwrap()
+            .starts_with(b"R3ER")
+    );
+    println!(
+        "NATIVE_DEFAULT_STANDALONE_PARITY=PASS TINY_OPTIMIZER_CALLS=4 SMALL_OPTIMIZER_CALLS=0"
+    );
+    let pair = d.path().join("native-pair");
+    fs::create_dir(&pair).unwrap();
+    for (name, split) in [("legacy-reference", false), ("native", true)] {
+        let dir = pair.join(name);
+        let mut args = vec![
+            "fixture-native-corpus",
+            "--from",
+            p(&bootstrap),
+            "--output",
+            p(&dir),
+        ];
+        if split {
+            args.push("--split");
+        }
+        call(&args, None, true, &d.path().join("pair-prepare.log"));
+        call(
+            &[
+                "token-cache-compile",
+                "--root",
+                p(&dir),
+                "--output",
+                p(&dir.join("cache")),
+            ],
+            None,
+            true,
+            &d.path().join("pair-cache.log"),
+        );
+        call(
+            &["run", "--root", p(&dir)],
+            None,
+            true,
+            &d.path().join("pair-run.log"),
+        );
+        if split {
+            call(
+                &[
+                    "run",
+                    "--root",
+                    p(&dir),
+                    "--resume",
+                    "segment-00/terminal.r3er",
+                ],
+                None,
+                true,
+                &d.path().join("pair-resume.log"),
+            );
+        }
+    }
+    call(
+        &["path-verify", "--root", p(&pair)],
+        None,
+        true,
+        &d.path().join("pair-verify.log"),
+    );
+    println!("NATIVE_CACHE_PROCESS_PARITY=PASS ADDITIONAL_TINY_OPTIMIZER_CALLS=4");
+}
+#[test]
+fn objective_policy_nonzero_span_continuous_and_process_resume() {
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
+    let mut roots = Vec::new();
+    let mut updates = 0;
+    for split in [false, true] {
+        let root = d.path().join(if split { "split" } else { "continuous" });
+        call(
+            &[
+                "fixture-fork",
+                "--from",
+                p(&bootstrap),
+                "--output",
+                p(&root),
+                "--objective-span",
+                "true",
+                "--nonzero-role",
+            ],
+            None,
+            true,
+            &d.path().join("prepare.log"),
+        );
+        let o = call(
+            &["run", "--root", p(&root)],
+            split.then_some("raw:1"),
+            true,
+            &d.path().join("run.log"),
+        );
+        updates += String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .filter(|s| s.starts_with("ACTUAL_TINY_UPDATE="))
+            .count();
+        if split {
+            let o = call(
+                &[
+                    "run",
+                    "--root",
+                    p(&root),
+                    "--resume",
+                    "segment-00/terminal.r3er",
+                ],
+                None,
+                true,
+                &d.path().join("resume.log"),
+            );
+            updates += String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|s| s.starts_with("ACTUAL_TINY_UPDATE="))
+                .count();
+        }
+        roots.push(root);
+    }
+    call(
+        &[
+            "fixture-check",
+            "--roots",
+            p(&roots[0]),
+            "--roots",
+            p(&roots[1]),
+        ],
+        None,
+        true,
+        &d.path().join("parity.log"),
+    );
+    let a = replica_v3::neural::checkpoint::load(
+        &roots[0].join("segment-00/step-0002.r3m"),
+        candle_core::Device::Cpu,
+        true,
+    )
+    .unwrap();
+    let b = replica_v3::neural::checkpoint::load(
+        &roots[1].join("segment-01/step-0002.r3m"),
+        candle_core::Device::Cpu,
+        true,
+    )
+    .unwrap();
+    assert_eq!(a.manifest.training, b.manifest.training);
+    assert_eq!(updates, 4);
+    println!("NONZERO_SPAN_RESUME=PASS TINY_UPDATES={updates} SMALL_UPDATES=0");
 }
 #[test]
 fn restart_and_cooldown_partial_panels_resume_to_close() {

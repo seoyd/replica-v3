@@ -2,7 +2,9 @@
 //! No JSON header, tokenizer parser, SQLite, or external model dependency in this loader.
 use super::{
     ByteBpe,
-    checkpoint::{self, LegacyIdentity, Loaded, Manifest, TrainConfig, TrainingState},
+    checkpoint::{
+        self, LegacyIdentity, Loaded, Manifest, ResumeBinding, TrainConfig, TrainingState,
+    },
     transformer::{Config, MIXER, Transformer},
 };
 use crate::{
@@ -19,7 +21,7 @@ use std::{
     time::Instant,
 };
 
-pub const WIRE_VERSION: u16 = 1;
+pub const WIRE_VERSION: u16 = 2;
 const PREFIX: usize = 64;
 const MAX_HEADER: usize = 2 * 1024 * 1024;
 const MAX_FILE: u64 = 192 * 1024 * 1024;
@@ -216,8 +218,13 @@ fn state_encode(b: &mut Vec<u8>, s: &TrainingState) {
             b.extend_from_slice(&v.to_le_bytes());
         }
     }
+    b.push(u8::from(s.resume_binding.is_some()));
+    if let Some(binding) = &s.resume_binding {
+        binding.encode(b);
+        b.extend(binding.digest());
+    }
 }
-fn state_decode(r: &mut Reader<'_>) -> Result<TrainingState> {
+fn state_decode(r: &mut Reader<'_>, wire: u16) -> Result<TrainingState> {
     let contrast16 = r.bool()?;
     let parent_checkpoint_hash = r.opt(digest_text)?;
     let mut c = TrainConfig {
@@ -265,7 +272,38 @@ fn state_decode(r: &mut Reader<'_>) -> Result<TrainingState> {
         initial_weight_hash,
         train_loss: r.opt(f64_read)?,
         validation_loss: r.opt(f64_read)?,
+        resume_binding: if wire == 1 {
+            None
+        } else {
+            r.opt(binding_decode)?
+        },
     })
+}
+fn binding_decode(r: &mut Reader<'_>) -> Result<ResumeBinding> {
+    fn digest(r: &mut Reader<'_>) -> Result<[u8; 32]> {
+        Ok(r.take(32)?.try_into().expect("checked"))
+    }
+    let s = ResumeBinding {
+        version: r.byte()?,
+        family: r.byte()?,
+        normalizer: r.byte()?,
+        execution: r.byte()?,
+        first_target_weight_bits: u64_read(r)?,
+        span_alpha_bits: r.opt(u64_read)?,
+        annotation: r.opt(digest)?,
+        train_order: digest(r)?,
+        tokenizer: digest(r)?,
+        framing: digest(r)?,
+        config: digest(r)?,
+        corpus: digest(r)?,
+        validation: digest(r)?,
+        policy: digest(r)?,
+        provenance: digest(r)?,
+    };
+    if digest(r)? != s.digest() {
+        return Err(bad("objective descriptor digest"));
+    }
+    Ok(s)
 }
 fn tokenizer_encode(b: &mut Vec<u8>, tok: &ByteBpe) {
     put_varint(b, 1); // mapping/segmentation schema: reserved 0..7, each ASCII digit/separator is a segment.
@@ -385,8 +423,9 @@ fn read_header(file: &mut File) -> Result<Header> {
     file.seek(SeekFrom::Start(0))?;
     let mut prefix = [0u8; PREFIX];
     file.read_exact(&mut prefix)?;
+    let wire = u16::from_le_bytes(prefix[8..10].try_into().expect("fixed"));
     if &prefix[..8] != MAGIC
-        || u16::from_le_bytes(prefix[8..10].try_into().expect("fixed")) != WIRE_VERSION
+        || ![1, WIRE_VERSION].contains(&wire)
         || prefix[11] != 0
         || prefix[56..].iter().any(|&b| b != 0)
     {
@@ -444,7 +483,7 @@ fn read_header(file: &mut File) -> Result<Header> {
     {
         return Err(bad("legacy tokenizer migration binding"));
     }
-    let training = r.opt(state_decode)?;
+    let training = r.opt(|r| state_decode(r, wire))?;
     if (kind == ArtifactKind::Resume) != training.is_some()
         || training
             .as_ref()
@@ -667,6 +706,11 @@ pub fn save_with_stats(
     let start = Instant::now();
     let mut stats = SaveStats::default();
     if let Some(s) = &manifest.training {
+        if s.resume_binding.is_none() {
+            return Err(bad(
+                "LEGACY_OBJECTIVE_UNKNOWN: native RESUME v2 requires verified objective binding",
+            ));
+        }
         manifest.trained_steps = s.step;
         manifest.diagnostic_only |= s.contrast16;
     }
@@ -970,7 +1014,10 @@ mod tests {
             &BTreeMap::new(),
         )
         .unwrap();
-        assert_eq!(std::fs::read(output).unwrap(), bytes); // production encoder versus independently written complete fixture.
+        let mut expected_v2 = bytes;
+        expected_v2[8..10].copy_from_slice(&2u16.to_le_bytes());
+        checksum(&mut expected_v2);
+        assert_eq!(std::fs::read(output).unwrap(), expected_v2); // v1 inference body unchanged; only explicit version and checksum differ.
     }
     #[test]
     fn native_container_rejects_independently_corrupted_fields() {
@@ -1009,7 +1056,7 @@ mod tests {
                     checksum(&mut b);
                 }
                 "flags" => b[11] = 1,
-                "version" => b[8] = 2,
+                "version" => b[8] = 3,
                 "header_checksum" => b[24] ^= 1,
                 "oversized_header" => b[12..16].copy_from_slice(&u32::MAX.to_le_bytes()),
                 "truncated" => {
@@ -1078,6 +1125,7 @@ mod tests {
         std::fs::write(&source, &bytes).unwrap();
         let mut loaded = load(&source, Device::Cpu, false).unwrap();
         loaded.manifest.training = Some(TrainingState {
+            resume_binding: None,
             contrast16: false,
             parent_checkpoint_hash: None,
             config: TrainConfig {
@@ -1099,6 +1147,26 @@ mod tests {
             train_loss: Some(0.25),
             validation_loss: Some(0.5),
         });
+        let state = loaded.manifest.training.as_mut().unwrap();
+        state.resume_binding = Some(ResumeBinding::default_for(state, &loaded.tokenizer));
+        ResumeBinding::require_default(state, &loaded.tokenizer).unwrap();
+        let valid = state.clone();
+        for change in 0..8 {
+            let mut invalid = valid.clone();
+            let binding = invalid.resume_binding.as_mut().unwrap();
+            match change {
+                0 => binding.family = 9,
+                1 => binding.version = 9,
+                2 => binding.policy[0] ^= 1,
+                3 => binding.span_alpha_bits = Some(2f64.to_bits()),
+                4 => binding.annotation = Some([9; 32]),
+                5 => binding.train_order[0] ^= 1,
+                6 => binding.tokenizer[0] ^= 1,
+                7 => invalid.resume_binding = None,
+                _ => unreachable!(),
+            }
+            assert!(ResumeBinding::require_default(&invalid, &loaded.tokenizer).is_err());
+        }
         for (name, var) in &loaded.model.vars {
             for role in ["m", "v"] {
                 loaded.optimizer.insert(
@@ -1147,6 +1215,7 @@ mod tests {
             state.config.microbatch = 4;
             state.config.sample_group_size = 4;
             state.config.accumulation = accumulation;
+            state.resume_binding = Some(ResumeBinding::default_for(state, &full.tokenizer));
             let path = d.path().join(format!("contrast-{accumulation}"));
             let result = save(
                 &path,

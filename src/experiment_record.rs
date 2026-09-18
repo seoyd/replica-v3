@@ -1,10 +1,8 @@
 //! Training-only, schema-specific immutable experiment records. Native control never parses JSON.
 use super::*;
-use replica_v3::{
-    codec::{Reader, publish_new, put_bytes, put_varint},
-    event::{GenerationLimits, RelationKind},
-    retrieval::{Evidence, EvidenceBundle, RelationStep},
-};
+use replica_v3::codec::{Reader, publish_new, put_bytes, put_varint};
+#[cfg(feature = "test-support")]
+use replica_v3::event::GenerationLimits;
 use sha2::{Digest as _, Sha256};
 use std::io::{Read, Seek, SeekFrom};
 #[path = "token_cache.rs"]
@@ -22,6 +20,7 @@ const ANCHOR_CONTRACT: &str = "R3-NATIVE-STORAGE-QUALITY-1.0";
 const RESTART_CONTRACT: &str = "R3-DURABILITY-PAIR-RESTART-1.0";
 const COOLDOWN_CONTRACT: &str = "R3-PREFLIGHT-ONCE-AND-COOLDOWN-1.0";
 const OBJECTIVE_CONTRACT: &str = "R3-DATA-BINARY-AND-TARGET-LOSS-1.0";
+const NATIVE_CORPUS_CONTRACT: &str = "R3-NATIVE-CORPUS-OBJECTIVE-BINDING-1.0";
 
 fn bad(s: &str) -> Error {
     Error::Corrupt(format!("R3ER: {s}"))
@@ -397,133 +396,7 @@ impl RunPurpose {
     }
 }
 
-fn episode_encode(e: &Episode, b: &mut Vec<u8>) {
-    string(b, &e.id);
-    put_varint(b, e.category as u64);
-    for s in [
-        &e.family,
-        &e.binding,
-        &e.sequence,
-        &e.request.request_id,
-        &e.request.system,
-        &e.request.input,
-        &e.answer,
-    ] {
-        string(b, s);
-    }
-    let limits = &e.request.limits;
-    for n in [
-        u64::from(limits.max_tokens),
-        u64::from(limits.context_tokens),
-        limits.timeout_ms,
-    ] {
-        put_varint(b, n);
-    }
-    let bundle = &e.request.evidence;
-    b.push(u8::from(bundle.truncated));
-    for n in [
-        bundle.visited,
-        bundle.candidates_fetched,
-        bundle.edges_fetched,
-        bundle.eligible,
-    ] {
-        put_varint(b, n as u64);
-    }
-    put_varint(b, bundle.items.len() as u64);
-    for item in &bundle.items {
-        signed(b, item.event_id);
-        string(b, &item.original_excerpt);
-        b.push(u8::from(item.excerpt_truncated));
-        string(b, &item.source);
-        signed(b, item.recorded_at);
-        optional(b, item.observed_at.as_ref(), |b, n| signed(b, *n));
-        string(b, &item.version_status);
-        string(b, &item.retrieval_reason);
-        put_varint(b, item.relation_path.len() as u64);
-        for relation in &item.relation_path {
-            signed(b, relation.from);
-            signed(b, relation.to);
-            b.push(relation.relation as u8);
-            signed(b, relation.origin);
-        }
-    }
-}
-fn episode_decode(r: &mut Reader<'_>) -> Result<Episode> {
-    let id = text(r)?;
-    let category = count(r, 1024)?;
-    let family = text(r)?;
-    let binding = text(r)?;
-    let sequence = text(r)?;
-    let request_id = text(r)?;
-    let system = text(r)?;
-    let input = text(r)?;
-    let answer = text(r)?;
-    let limits = GenerationLimits {
-        max_tokens: u32_read(r)?,
-        context_tokens: u32_read(r)?,
-        timeout_ms: r.var()?,
-    };
-    let truncated = r.bool()?;
-    let visited = count(r, 1_000_000)?;
-    let candidates_fetched = count(r, 1_000_000)?;
-    let edges_fetched = count(r, 1_000_000)?;
-    let eligible = count(r, 1_000_000)?;
-    let n = count(r, 256)?;
-    let mut items = Vec::with_capacity(n);
-    for _ in 0..n {
-        let event_id = signed_read(r)?;
-        let original_excerpt = text(r)?;
-        let excerpt_truncated = r.bool()?;
-        let source = text(r)?;
-        let recorded_at = signed_read(r)?;
-        let observed_at = r.opt(signed_read)?;
-        let version_status = text(r)?;
-        let retrieval_reason = text(r)?;
-        let count = count(r, 256)?;
-        let mut relation_path = Vec::with_capacity(count);
-        for _ in 0..count {
-            relation_path.push(RelationStep {
-                from: signed_read(r)?,
-                to: signed_read(r)?,
-                relation: RelationKind::from_tag(r.byte()?)?,
-                origin: signed_read(r)?,
-            });
-        }
-        items.push(Evidence {
-            event_id,
-            original_excerpt,
-            excerpt_truncated,
-            source,
-            recorded_at,
-            observed_at,
-            version_status,
-            retrieval_reason,
-            relation_path,
-        });
-    }
-    Ok(Episode {
-        id,
-        category,
-        family,
-        binding,
-        sequence,
-        answer,
-        request: ModelRequest {
-            request_id,
-            system,
-            input,
-            limits,
-            evidence: EvidenceBundle {
-                items,
-                truncated,
-                visited,
-                candidates_fetched,
-                edges_fetched,
-                eligible,
-            },
-        },
-    })
-}
+use crate::data::native::{episode_decode, episode_encode};
 fn case_hash(e: &Episode) -> Hash {
     let mut b = Vec::new();
     episode_encode(e, &mut b);
@@ -574,7 +447,7 @@ impl RunSnapshot {
         }
         if matches!(
             self.contract.as_str(),
-            RESTART_CONTRACT | COOLDOWN_CONTRACT | OBJECTIVE_CONTRACT
+            RESTART_CONTRACT | COOLDOWN_CONTRACT | OBJECTIVE_CONTRACT | NATIVE_CORPUS_CONTRACT
         ) {
             b.push(self.purpose.tag());
         }
@@ -609,7 +482,7 @@ impl RunSnapshot {
         b.push(u8::from(self.tiny_spec));
         if matches!(
             self.contract.as_str(),
-            RESTART_CONTRACT | COOLDOWN_CONTRACT | OBJECTIVE_CONTRACT
+            RESTART_CONTRACT | COOLDOWN_CONTRACT | OBJECTIVE_CONTRACT | NATIVE_CORPUS_CONTRACT
         ) {
             b.extend(self.source);
             for o in &self.origins {
@@ -668,7 +541,7 @@ impl RunSnapshot {
         };
         let purpose = if matches!(
             contract.as_str(),
-            RESTART_CONTRACT | COOLDOWN_CONTRACT | OBJECTIVE_CONTRACT
+            RESTART_CONTRACT | COOLDOWN_CONTRACT | OBJECTIVE_CONTRACT | NATIVE_CORPUS_CONTRACT
         ) {
             RunPurpose::read(r)?
         } else {
@@ -708,8 +581,10 @@ impl RunSnapshot {
         if matches!(
             self.purpose,
             RunPurpose::SaveContinuous | RunPurpose::SaveSplit
-        ) && (self.contract != RESTART_CONTRACT
-            || self.tape.len() != 2
+        ) && (!matches!(
+            self.contract.as_str(),
+            RESTART_CONTRACT | NATIVE_CORPUS_CONTRACT
+        ) || self.tape.len() != 2
             || !self.eval_steps.is_empty())
         {
             return Err(bad("preflight purpose/update/evaluation bounds"));
@@ -727,7 +602,9 @@ impl RunSnapshot {
             }
         }
         if self.contract
-            != if self.objective.is_some() {
+            != if self.path_parity() {
+                NATIVE_CORPUS_CONTRACT
+            } else if self.objective.is_some() {
                 OBJECTIVE_CONTRACT
             } else if self.cooldown() {
                 COOLDOWN_CONTRACT
@@ -742,7 +619,12 @@ impl RunSnapshot {
             }
             || self.parent.run != self.run
             || self.cases.is_empty()
-            || self.lr_policy > if self.continuation() { 3 } else { 1 }
+            || self.lr_policy
+                > if self.continuation() || self.path_parity() {
+                    3
+                } else {
+                    1
+                }
             || self.panels.len() != 4
             || self
                 .panels
@@ -889,6 +771,9 @@ impl RunSnapshot {
             RunPurpose::SaveContinuous | RunPurpose::SaveSplit
         ) || self.cooldown() && self.tiny_spec && self.eval_steps.is_empty()
     }
+    fn path_parity(&self) -> bool {
+        self.contract == NATIVE_CORPUS_CONTRACT
+    }
     fn cooldown(&self) -> bool {
         self.contract == COOLDOWN_CONTRACT
     }
@@ -905,7 +790,7 @@ impl RunSnapshot {
     fn supports_partial_resume(&self) -> bool {
         matches!(
             self.contract.as_str(),
-            RESTART_CONTRACT | COOLDOWN_CONTRACT | OBJECTIVE_CONTRACT
+            RESTART_CONTRACT | COOLDOWN_CONTRACT | OBJECTIVE_CONTRACT | NATIVE_CORPUS_CONTRACT
         ) && !self.historical
             && (self.tiny_spec || self.authorization.is_some())
     }
@@ -1702,6 +1587,11 @@ impl ComparisonReceipt {
 #[derive(Clone, Debug, Serialize)]
 #[allow(clippy::large_enum_variant)] // Bodies own their vectors; avoid an extra allocation per terminal read.
 enum Record {
+    PreparationMeasure {
+        bindings: [Hash; 5],
+        rows: Vec<PreparationTiming>,
+    },
+    Conditional(Box<ConditionalRecord>),
     Inputs(Box<RunSnapshot>),
     Evaluation(EvalPayload),
     Decision(EvalDecision),
@@ -1712,8 +1602,139 @@ enum Record {
     VerificationStart(VerificationStart),
     VerificationRow(VerificationRow),
     VerificationFinal(VerificationFinal),
-    VerificationPending { start: FileRef, final_digest: Hash },
+    VerificationPending {
+        start: FileRef,
+        final_digest: Hash,
+    },
     TrainProbe(TrainProbe),
+}
+#[derive(Clone, Debug, Serialize)]
+struct PreparationTiming {
+    format: String,
+    repetition: u8,
+    bytes: u64,
+    seconds: [f64; 9],
+    rss: Option<u64>,
+}
+#[derive(Clone, Debug, Serialize)]
+struct ConditionalRecord {
+    seed: u64,
+    source: Hash,
+    plan: Option<FileRef>,
+    models: Vec<CheckpointRef>,
+    cases: Vec<Episode>,
+    foils: Vec<String>,
+    rows: Vec<EvalRow>,
+    raw_bytes: Vec<Vec<u8>>,
+    model_index: u8,
+    generations: u64,
+    teachers: u64,
+    elapsed: Scalar,
+    complete: bool,
+    stop: Vec<StopReason>,
+    error: Option<String>,
+}
+impl ConditionalRecord {
+    fn encode(&self, b: &mut Vec<u8>) {
+        put_varint(b, self.seed);
+        b.extend(self.source);
+        optional(b, self.plan.as_ref(), |b, v| v.encode(b));
+        put_varint(b, self.models.len() as u64);
+        for v in &self.models {
+            v.encode(b);
+        }
+        put_varint(b, self.cases.len() as u64);
+        for e in &self.cases {
+            episode_encode(e, b);
+        }
+        put_varint(b, self.foils.len() as u64);
+        for f in &self.foils {
+            string(b, f);
+        }
+        put_varint(b, self.rows.len() as u64);
+        for row in &self.rows {
+            row.encode(b);
+        }
+        put_varint(b, self.raw_bytes.len() as u64);
+        for raw in &self.raw_bytes {
+            put_bytes(b, raw);
+        }
+        b.push(self.model_index);
+        put_varint(b, self.generations);
+        put_varint(b, self.teachers);
+        self.elapsed.encode(b);
+        b.push(u8::from(self.complete));
+        put_varint(b, self.stop.len() as u64);
+        for s in &self.stop {
+            b.push(stop_tag(*s));
+        }
+        optional(b, self.error.as_ref(), |b, s| string(b, s));
+    }
+    fn decode(r: &mut Reader<'_>) -> Result<Self> {
+        let seed = r.var()?;
+        let source = digest_read(r)?;
+        let plan = r.opt(FileRef::decode)?;
+        let n = count(r, 2)?;
+        let models = (0..n)
+            .map(|_| CheckpointRef::decode(r))
+            .collect::<Result<Vec<_>>>()?;
+        let n = count(r, 144)?;
+        let cases = (0..n)
+            .map(|_| episode_decode(r))
+            .collect::<Result<Vec<_>>>()?;
+        let n = count(r, 144)?;
+        let foils = (0..n).map(|_| text(r)).collect::<Result<Vec<_>>>()?;
+        let n = count(r, 144)?;
+        let rows = (0..n)
+            .map(|_| EvalRow::decode(r))
+            .collect::<Result<Vec<_>>>()?;
+        let n = count(r, 144)?;
+        let raw_bytes = (0..n)
+            .map(|_| r.bytes(MAX_TEXT))
+            .collect::<Result<Vec<_>>>()?;
+        let model_index = r.byte()?;
+        let generations = r.var()?;
+        let teachers = r.var()?;
+        let elapsed = Scalar::decode(r)?;
+        let complete = r.bool()?;
+        let n = count(r, 8)?;
+        let stop = (0..n).map(|_| stop_read(r)).collect::<Result<Vec<_>>>()?;
+        let error = r.opt(text)?;
+        if models.len() != 2
+            || model_index > 1
+            || generations > 144
+            || teachers > 144
+            || rows.len() != raw_bytes.len()
+            || elapsed.finite()? < 0.
+            || (plan.is_none() && (cases.len() != 144 || foils.len() != 144 || !rows.is_empty()))
+            || (plan.is_some() && (!cases.is_empty() || !foils.is_empty()))
+            || (complete
+                && (rows.len() != 144
+                    || generations != 144
+                    || teachers != 144
+                    || !stop.is_empty()
+                    || error.is_some()))
+        {
+            return Err(bad("conditional record shape/budget/completion"));
+        }
+        Ok(Self {
+            seed,
+            source,
+            plan,
+            models,
+            cases,
+            foils,
+            rows,
+            raw_bytes,
+            model_index,
+            generations,
+            teachers,
+            elapsed,
+            complete,
+            stop,
+            error,
+        })
+    }
 }
 #[derive(Clone, Debug, Serialize)]
 struct TrainProbe {
@@ -2050,10 +2071,33 @@ impl Record {
     fn encode(&self) -> Result<Vec<u8>> {
         let mut body = Vec::new();
         let kind = match self {
+            Self::PreparationMeasure { bindings, rows } => {
+                for h in bindings {
+                    body.extend(h);
+                }
+                put_varint(&mut body, rows.len() as u64);
+                for row in rows {
+                    string(&mut body, &row.format);
+                    body.push(row.repetition);
+                    put_varint(&mut body, row.bytes);
+                    for f in row.seconds {
+                        Scalar::F64(f).encode(&mut body);
+                    }
+                    optional(&mut body, row.rss.as_ref(), |b, n| put_varint(b, *n));
+                }
+                24
+            }
+            Self::Conditional(v) => {
+                v.encode(&mut body);
+                23
+            }
             Self::Inputs(v) => {
                 if matches!(
                     v.contract.as_str(),
-                    RESTART_CONTRACT | COOLDOWN_CONTRACT | OBJECTIVE_CONTRACT
+                    RESTART_CONTRACT
+                        | COOLDOWN_CONTRACT
+                        | OBJECTIVE_CONTRACT
+                        | NATIVE_CORPUS_CONTRACT
                 ) {
                     body.push(u8::from(v.authorization.is_some()));
                 }
@@ -2064,6 +2108,8 @@ impl Record {
                     13
                 } else if v.contract == RESTART_CONTRACT {
                     8
+                } else if v.path_parity() {
+                    22
                 } else if v.authorization.is_some() {
                     6
                 } else {
@@ -2174,8 +2220,41 @@ impl Record {
         }
         let mut r = Reader::new(&bytes[HEADER..]);
         let record = match kind {
-            1 | 6 | 8 | 13 | 19 => {
-                let authorized = if matches!(kind, 8 | 13 | 19) {
+            24 => {
+                let bindings = [
+                    digest_read(&mut r)?,
+                    digest_read(&mut r)?,
+                    digest_read(&mut r)?,
+                    digest_read(&mut r)?,
+                    digest_read(&mut r)?,
+                ];
+                let n = count(&mut r, 30)?;
+                let mut rows = Vec::new();
+                for _ in 0..n {
+                    let format = text(&mut r)?;
+                    let repetition = r.byte()?;
+                    let bytes = r.var()?;
+                    let mut seconds = [0.; 9];
+                    for f in &mut seconds {
+                        *f = Scalar::decode(&mut r)?.finite()?;
+                        if *f < 0. {
+                            return Err(bad("measurement negative time"));
+                        }
+                    }
+                    let rss = r.opt(|r| r.var())?;
+                    rows.push(PreparationTiming {
+                        format,
+                        repetition,
+                        bytes,
+                        seconds,
+                        rss,
+                    });
+                }
+                Self::PreparationMeasure { bindings, rows }
+            }
+            23 => Self::Conditional(Box::new(ConditionalRecord::decode(&mut r)?)),
+            1 | 6 | 8 | 13 | 19 | 22 => {
+                let authorized = if matches!(kind, 8 | 13 | 19 | 22) {
                     r.bool()?
                 } else {
                     kind == 6
@@ -2184,6 +2263,7 @@ impl Record {
                 if (kind == 8) != (s.contract == RESTART_CONTRACT)
                     || (kind == 13) != s.cooldown()
                     || (kind == 19) != s.objective.is_some()
+                    || (kind == 22) != s.path_parity()
                 {
                     return Err(bad("purpose record kind"));
                 }
@@ -2362,6 +2442,9 @@ fn evaluator_source() -> Hash {
     h.update(include_bytes!("training.rs"));
     h.update(include_bytes!("target_loss.rs"));
     h.update(include_bytes!("token_cache.rs"));
+    h.update(include_bytes!("native_corpus.rs"));
+    h.update(include_bytes!("neural/checkpoint.rs"));
+    h.update(include_bytes!("neural/artifact.rs"));
     h.finalize().into()
 }
 fn normal_error_class(error: &str) -> &'static str {
@@ -2769,17 +2852,876 @@ fn read_inputs(root: &Path) -> Result<RunSnapshot> {
         _ => Err(bad("inputs kind")),
     }
 }
-pub(super) fn reject_unbound_objective_resume(path: &Path) -> Result<()> {
-    if let Some(segment) = path.parent() {
-        for root in [Some(segment), segment.parent()].into_iter().flatten() {
-            if root.join("inputs.r3er").is_file() && read_inputs(root)?.objective.is_some() {
-                return Err(bad(
-                    "objective resume requires native run with its exact bound inputs policy",
-                ));
+fn objective_binding(
+    s: &RunSnapshot,
+    state: &TrainingState,
+    tok: &ByteBpe,
+) -> Result<checkpoint::ResumeBinding> {
+    let mut binding = checkpoint::ResumeBinding::default_for(state, tok);
+    binding.execution = 1;
+    binding.policy = s.binding();
+    binding.provenance = s.policy;
+    let mut ordered = Vec::new();
+    for &i in &s.train {
+        episode_encode(&s.cases[i as usize], &mut ordered);
+    }
+    binding.train_order = hash(&ordered);
+    if let Some(o) = &s.objective
+        && o.span
+    {
+        binding.family = 2;
+        binding.normalizer = 2;
+        binding.span_alpha_bits = Some(1f64.to_bits());
+        binding.annotation = Some(o.annotation);
+    }
+    binding.validate(state, tok)?;
+    Ok(binding)
+}
+fn native_source(root: &Path, s: &RunSnapshot) -> Result<data::native::Corpus> {
+    let origin = s
+        .origins
+        .iter()
+        .find(|o| o.role == "native-source")
+        .ok_or_else(|| bad("native source binding absent"))?;
+    let c = data::native::read(&owned_path(root, &origin.original.locator, true)?)?;
+    let expected = s
+        .train
+        .iter()
+        .map(|i| s.cases[*i as usize].clone())
+        .collect::<Vec<_>>();
+    let dev = panel(s, PanelKind::Dev)?
+        .cases
+        .iter()
+        .map(|i| s.cases[*i as usize].clone())
+        .collect::<Vec<_>>();
+    if c.physical != origin.original.digest
+        || data::native::ordered_bytes(&c.train) != data::native::ordered_bytes(&expected)
+        || data::native::ordered_bytes(&c.validation) != data::native::ordered_bytes(&dev)
+    {
+        return Err(bad("native source physical/order/content mismatch"));
+    }
+    Ok(c)
+}
+fn conditional_prepare(
+    parent: &Path,
+    base: &Path,
+    output: &Path,
+    seed: u64,
+    control: &mut RunControl,
+) -> Result<()> {
+    let mut models = Vec::new();
+    let mut prior = Vec::new();
+    for root in [parent, base] {
+        let s = read_inputs(root)?;
+        if s.objective.as_ref().is_some_and(|o| o.span) || s.tiny_spec {
+            return Err(bad("conditional requires actual default SMALL lineage"));
+        }
+        let commands = arm_commands(root, &s)?;
+        let (_, command) = commands
+            .last()
+            .ok_or_else(|| bad("conditional endpoint missing"))?;
+        close_native_inner(root, &command.terminal.locator, control, false)?;
+        let chain = lineage(root, &s, &command.terminal)?;
+        let mut n = chain
+            .last()
+            .unwrap()
+            .1
+            .native
+            .clone()
+            .ok_or_else(|| bad("conditional durable endpoint"))?;
+        let _ = resolve_native(root, &s, &n, true)?;
+        n.file.locator = owned_path(root, &n.file.locator, true)?
+            .canonicalize()?
+            .display()
+            .to_string();
+        models.push(n);
+        prior.extend(s.cases);
+    }
+    if models[0].step != 24310 || models[1].step != 24822 {
+        return Err(bad("conditional registered model steps"));
+    }
+    let (cases, foils) = data::conditional_panel(&prior, seed)?;
+    let p = ConditionalRecord {
+        seed,
+        source: evaluator_source(),
+        plan: None,
+        models,
+        cases,
+        foils,
+        rows: vec![],
+        raw_bytes: vec![],
+        model_index: 0,
+        generations: 0,
+        teachers: 0,
+        elapsed: Scalar::F64(0.),
+        complete: false,
+        stop: vec![],
+        error: None,
+    };
+    std::fs::create_dir(output)?;
+    publish(output, "plan.r3er", &Record::Conditional(Box::new(p)))?;
+    println!(
+        "CONDITIONAL_PLAN=FROZEN base=24 views=6 generation_budget=288 teacher_budget=288 quality_updates=0 SEAL=NOT_OPENED"
+    );
+    Ok(())
+}
+fn conditional_plan(root: &Path) -> Result<ConditionalRecord> {
+    let Record::Conditional(p) = read_record(root, &reference(root, "plan.r3er")?)? else {
+        return Err(bad("conditional plan kind"));
+    };
+    if p.plan.is_some() || p.source != evaluator_source() {
+        return Err(bad("conditional source/plan changed"));
+    }
+    Ok(*p)
+}
+fn version_parity(
+    parent: &Path,
+    path: &Path,
+    output: &Path,
+    compare: Option<&Path>,
+    control: &mut RunControl,
+) -> Result<()> {
+    let s = read_inputs(parent)?;
+    let commands = arm_commands(parent, &s)?;
+    let (_, c) = commands
+        .last()
+        .ok_or_else(|| bad("parity parent terminal"))?;
+    let chain = lineage(parent, &s, &c.terminal)?;
+    let n = chain
+        .last()
+        .unwrap()
+        .1
+        .native
+        .as_ref()
+        .ok_or_else(|| bad("parity saved endpoint"))?;
+    let l = checkpoint::load(path, Device::Cpu, false)?;
+    if unhex(&l.model.weight_hash()?)? != n.model
+        || unhex(&l.tokenizer.semantic_id())? != n.tokenizer
+        || l.manifest.trained_steps as u64 != n.step
+    {
+        return Err(bad("version parity endpoint identity"));
+    }
+    let mut ids = panel(&s, PanelKind::Dev)?.cases.clone();
+    ids.sort_by_key(|i| (&s.cases[*i as usize].family, &s.cases[*i as usize].id));
+    if ids.len() != 256 {
+        return Err(bad("version parity fixed dev denominator"));
+    }
+    let ids = (0..16).map(|i| ids[i * 16]).collect::<Vec<_>>();
+    let mut e = EvalPayload {
+        run: unhex(&file_hash(path)?)?,
+        binding: s.binding(),
+        source: evaluator_source(),
+        model: n.model,
+        tokenizer: n.tokenizer,
+        architecture: n.architecture,
+        step: n.step,
+        new_updates: 0,
+        kind: PanelKind::DevParity,
+        expected: 16,
+        rows: vec![],
+    };
+    std::fs::create_dir(output)?;
+    publish(output, "start.r3er", &Record::Evaluation(e.clone()))?;
+    control.generation_limit = 16;
+    for (i, ordinal) in ids.iter().enumerate() {
+        let row = evaluate_row(&l, &s.cases[*ordinal as usize], *ordinal, control, false)?;
+        e.rows.push(row);
+        publish(
+            output,
+            &format!("row-{i:02}.r3er"),
+            &Record::Evaluation(e.clone()),
+        )?;
+        control.check("version_parity_row_saved")?;
+    }
+    publish(output, "final.r3er", &Record::Evaluation(e.clone()))?;
+    if let Some(other) = compare {
+        let Record::Evaluation(old) =
+            Record::decode(&neural::read_bounded(&other.join("final.r3er"), MAX_FILE)?)?
+        else {
+            return Err(bad("version parity reference kind"));
+        };
+        if old.model != e.model
+            || old.tokenizer != e.tokenizer
+            || old.binding != e.binding
+            || old.rows.len() != 16
+            || old.step != e.step
+        {
+            return Err(bad("version parity comparison identity"));
+        }
+        for (a, b) in old.rows.iter().zip(&e.rows) {
+            if a.case != b.case
+                || a.prompt != b.prompt
+                || a.tokens != b.tokens
+                || a.eos != b.eos
+                || a.error != b.error
+                || a.finish != b.finish
+            {
+                return Err(bad("version normal greedy mismatch"));
+            }
+        }
+        println!("V1_V2_NORMAL_GREEDY_PARITY=16/16");
+    }
+    println!(
+        "VERSION_PARITY_GENERATIONS={} TEACHERS={} QUALITY_UPDATES=0 SELECTION=sorted_family_id_every16_frozen_dev",
+        control.generation_calls, control.teacher_calls
+    );
+    Ok(())
+}
+fn conditional_model(n: &CheckpointRef) -> Result<Loaded> {
+    if unhex(&file_hash(Path::new(&n.file.locator))?)? != n.file.digest {
+        return Err(bad("conditional checkpoint physical hash"));
+    }
+    let l = checkpoint::load(Path::new(&n.file.locator), Device::Cpu, false)?;
+    if unhex(&l.model.weight_hash()?)? != n.model
+        || unhex(&l.tokenizer.semantic_id())? != n.tokenizer
+        || l.manifest.trained_steps as u64 != n.step
+    {
+        return Err(bad("conditional model/tokenizer/step"));
+    }
+    Ok(l)
+}
+fn conditional_run(root: &Path, model: u8, control: &mut RunControl) -> Result<()> {
+    let p = conditional_plan(root)?;
+    let l = conditional_model(&p.models[model as usize])?;
+    let dir = root.join(format!("model-{model}"));
+    std::fs::create_dir(&dir)?;
+    let mut result = ConditionalRecord {
+        cases: vec![],
+        foils: vec![],
+        plan: Some(reference(root, "plan.r3er")?),
+        model_index: model,
+        ..p.clone()
+    };
+    publish(
+        &dir,
+        "start.r3er",
+        &Record::Conditional(Box::new(result.clone())),
+    )?;
+    control.generation_limit = 144;
+    control.teacher_limit = 144;
+    let outcome = (|| -> Result<()> {
+        for (i, e) in p.cases.iter().enumerate() {
+            control.check("conditional_before_generation")?;
+            let mut row = evaluate_row_with_entry(&l, e, i as u32, control, false, true, || {
+                // An entry without its returned row is an unknown tail; create-new blocks retry.
+                publish(
+                    &dir,
+                    &format!("entry-{i:03}.r3er"),
+                    &Record::Conditional(Box::new(result.clone())),
+                )?;
+                Ok(())
+            })?;
+            let bytes = l.tokenizer.decode_bytes(
+                &row.tokens
+                    .iter()
+                    .copied()
+                    .take_while(|id| *id >= neural::SPECIALS as u32)
+                    .collect::<Vec<_>>(),
+            )?;
+            result.raw_bytes.push(bytes);
+            result.rows.push(row.clone());
+            result.generations = control.generation_calls as u64;
+            result.elapsed = Scalar::F64(control.start.elapsed().as_secs_f64());
+            publish(
+                &dir,
+                &format!("generation-{i:03}.r3er"),
+                &Record::Conditional(Box::new(result.clone())),
+            )?;
+            control.check("conditional_before_teacher")?;
+            let prompt = l.tokenizer.prepare(
+                &e.request,
+                l.model.config.context as u32,
+                &l.model.config.id()?,
+            )?;
+            let t = teacher_with_foil(
+                &l,
+                e,
+                &prompt.token_ids,
+                &row.tokens,
+                control,
+                Some(&p.foils[i]),
+            )?;
+            row.teacher = teacher_record(&t)?;
+            row.diagnostic = Some(scalar_value(&t["conditional_foil"], "margin")?);
+            result.rows[i] = row;
+            result.teachers = control.teacher_calls as u64;
+            result.elapsed = Scalar::F64(control.start.elapsed().as_secs_f64());
+            publish(
+                &dir,
+                &format!("row-{i:03}.r3er"),
+                &Record::Conditional(Box::new(result.clone())),
+            )?;
+            if (i + 1) % 12 == 0 {
+                println!(
+                    "CONDITIONAL_MODEL={model} completed={}/144 generation_calls={} teacher_forwards={} elapsed_s={:.3} step={} QUALITY_UPDATES=0",
+                    i + 1,
+                    control.generation_calls,
+                    control.teacher_calls,
+                    control.start.elapsed().as_secs_f64(),
+                    l.manifest.trained_steps
+                );
+            }
+        }
+        Ok(())
+    })();
+    if let Err(e) = &outcome {
+        control.classify_error(e);
+    }
+    result.generations = control.generation_calls as u64;
+    result.teachers = control.teacher_calls as u64;
+    result.elapsed = Scalar::F64(control.start.elapsed().as_secs_f64());
+    result.stop = control.observed.clone();
+    result.error = outcome.as_ref().err().map(ToString::to_string);
+    result.complete = outcome.is_ok() && result.rows.len() == 144 && control.stop.is_none();
+    publish(&dir, "final.r3er", &Record::Conditional(Box::new(result)))?;
+    outcome
+}
+fn conditional_report(root: &Path, control: &mut RunControl) -> Result<()> {
+    let p = conditional_plan(root)?;
+    for model in 0..2 {
+        control.check("conditional_recount")?;
+        let dir = root.join(format!("model-{model}"));
+        let Record::Conditional(r) = read_record(&dir, &reference(&dir, "final.r3er")?)? else {
+            return Err(bad("conditional final kind"));
+        };
+        if r.plan != Some(reference(root, "plan.r3er")?)
+            || r.models != p.models
+            || r.model_index != model
+            || r.source != p.source
+        {
+            return Err(bad("conditional result binding"));
+        }
+        let l = conditional_model(&p.models[model as usize])?;
+        let mut good = [false; 144];
+        let mut views = [[0usize; 5]; 6];
+        let mut fields_count = BTreeMap::<String, [usize; 2]>::new();
+        let mut strata = BTreeMap::<String, [usize; 2]>::new();
+        let mut first = BTreeMap::<String, usize>::new();
+        let mut margins = [0usize; 6];
+        let mut prompt_lengths = [0u64; 6];
+        for (i, row) in r.rows.iter().enumerate() {
+            let e = &p.cases[i];
+            let raw = l.tokenizer.decode_bytes(
+                &row.tokens
+                    .iter()
+                    .copied()
+                    .take_while(|id| *id >= neural::SPECIALS as u32)
+                    .collect::<Vec<_>>(),
+            )?;
+            if row.ordinal as usize != i || row.case != case_hash(e) || raw != r.raw_bytes[i] {
+                return Err(bad("conditional row order/content/raw"));
+            }
+            let (actual, error) = row_output(row, &l)?;
+            let v = i % 6;
+            let exact = row.completed
+                && !error
+                && row.finish == Finish::Eos
+                && actual.as_deref() == Some(&e.answer);
+            good[i] = exact;
+            views[v][0] += usize::from(exact);
+            views[v][1] += usize::from(error);
+            views[v][2] += usize::from(row.finish == Finish::Eos);
+            views[v][3] += usize::from(raw.is_empty());
+            views[v][4] += usize::from(row.finish == Finish::Length);
+            prompt_lengths[v] += u64::from(row.prompt_len);
+            if let Some(m) = &row.diagnostic {
+                margins[v] += usize::from(m.finite()? > 0.);
+            }
+            let group = e
+                .family
+                .rsplit_once("/view-")
+                .map_or(e.family.as_str(), |(s, _)| s)
+                .to_string();
+            let g = strata.entry(group).or_default();
+            g[0] += usize::from(exact);
+            g[1] += 1;
+            for (name, value) in components(actual.as_deref(), &e.answer, &row.provided)
+                .as_object()
+                .into_iter()
+                .flatten()
+            {
+                if let Some(value) = value.as_bool() {
+                    let n = fields_count.entry(name.clone()).or_default();
+                    n[0] += usize::from(value && !error && row.finish == Finish::Eos);
+                    n[1] += 1;
+                }
+            }
+            if !exact {
+                let at = e
+                    .answer
+                    .as_bytes()
+                    .iter()
+                    .zip(&raw)
+                    .position(|(a, b)| a != b)
+                    .unwrap_or(e.answer.len().min(raw.len()));
+                *first.entry(field_at(&e.answer, at).into()).or_default() += 1;
+            }
+        }
+        let joint = (0..24)
+            .filter(|b| good[b * 6..b * 6 + 6].iter().all(|x| *x))
+            .count();
+        let paired = (1..6)
+            .map(|v| (0..24).filter(|b| good[b * 6] && good[b * 6 + v]).count())
+            .collect::<Vec<_>>();
+        println!(
+            "CONDITIONAL_RECOUNT model={model} step={} complete={} generations={} teachers={} total_exact={}/144 views_exact_error_eos_empty_length={views:?} base_joint={joint}/24 paired_v0_with_v1_to_v5={paired:?} gold_foil_positive={margins:?} prompt_length_sums={prompt_lengths:?} fields={fields_count:?} strata={strata:?} first_errors={first:?} FINAL_QUALITY_GATE=NOT_APPLIED",
+            p.models[model as usize].step,
+            r.complete,
+            r.generations,
+            r.teachers,
+            good.iter().filter(|x| **x).count()
+        );
+    }
+    Ok(())
+}
+fn exposure_report(root: &Path, control: &mut RunControl) -> Result<()> {
+    let s = read_inputs(root)?;
+    let commands = arm_commands(root, &s)?;
+    let (_, last) = commands
+        .last()
+        .ok_or_else(|| bad("exposure endpoint absent"))?;
+    let chain = lineage(root, &s, &last.terminal)?;
+    let n = chain
+        .last()
+        .unwrap()
+        .1
+        .native
+        .as_ref()
+        .ok_or_else(|| bad("exposure native absent"))?;
+    let l = resolve_native(root, &s, n, true)?;
+    let episodes = s
+        .train
+        .iter()
+        .map(|i| s.cases[*i as usize].clone())
+        .collect::<Vec<_>>();
+    let samples = samples(
+        &episodes,
+        &l.tokenizer,
+        l.manifest.training.as_ref().unwrap().config.seq_len,
+    )?;
+    let mut groups = BTreeMap::<String, (BTreeSet<String>, usize, u64, u64)>::new();
+    let key = |e: &Episode| {
+        format!(
+            "category={}/family={}/task={}",
+            e.category,
+            e.family.split('/').next().unwrap_or(""),
+            e.family.rsplit('/').next().unwrap_or("")
+        )
+    };
+    for e in &episodes {
+        let g = groups.entry(key(e)).or_default();
+        g.0.insert(scene(e).to_string());
+        g.1 += 1;
+    }
+    for (_, segment) in &chain {
+        for d in &segment.draws {
+            control.check("exposure_recount")?;
+            for i in &d.indices {
+                let i = *i as usize;
+                let g = groups.get_mut(&key(&episodes[i])).unwrap();
+                g.2 += 1;
+                g.3 += (samples[i].tokens.len() - samples[i].response_start) as u64;
             }
         }
     }
+    for (key, (bases, views, draws, targets)) in groups {
+        println!(
+            "EXPOSURE {key} unique_bases={} pool_views={views} actual_draws={draws} target_tokens={targets}",
+            bases.len()
+        );
+    }
+    let ordinary = panel(&s, PanelKind::Ordinary)?;
+    for i in &ordinary.cases {
+        let e = &s.cases[*i as usize];
+        if e.family.starts_with("copy/") {
+            let task = e.family.rsplit('/').next().unwrap();
+            let n = episodes
+                .iter()
+                .filter(|x| x.family.starts_with("copy/") && x.family.ends_with(task))
+                .count();
+            println!(
+                "AUX_COVERAGE task={task} pool_views={n} observation=coverage_not_causal_proof"
+            );
+        }
+    }
+    println!(
+        "EXPOSURE_RECOUNT=VERIFIED model_step={} updates={} NEW_OPTIMIZER=0",
+        n.step,
+        chain.iter().map(|(_, t)| t.draws.len()).sum::<usize>()
+    );
     Ok(())
+}
+fn path_prepare(
+    parent_arm: &Path,
+    parent: &Path,
+    corpus: &Path,
+    legacy: Option<&Path>,
+    output: &Path,
+    control: &mut RunControl,
+) -> Result<()> {
+    control.check("native_path_prepare")?;
+    let original = read_inputs(parent_arm)?;
+    let l = checkpoint::load(parent, Device::Cpu, true)?;
+    let state = l
+        .manifest
+        .training
+        .as_ref()
+        .ok_or_else(|| bad("parity parent Adam absent"))?;
+    let expected = objective_binding(&original, state, &l.tokenizer)?;
+    if state.resume_binding.as_ref() != Some(&expected) || expected.family != 1 {
+        return Err(bad("parity requires provenance-migrated default parent"));
+    }
+    let closed = arm_commands(parent_arm, &original)?;
+    let (_, last) = closed
+        .last()
+        .ok_or_else(|| bad("parity parent terminal absent"))?;
+    let chain = lineage(parent_arm, &original, &last.terminal)?;
+    let parent_reference = chain
+        .last()
+        .unwrap()
+        .1
+        .native
+        .as_ref()
+        .ok_or_else(|| bad("parity parent native absent"))?;
+    let verified = resolve_native(parent_arm, &original, parent_reference, true)?;
+    let mut old_state = verified.manifest.training.clone().unwrap();
+    old_state.resume_binding = None;
+    let mut new_state = state.clone();
+    new_state.resume_binding = None;
+    if verified.model.weight_hash()? != l.model.weight_hash()?
+        || optimizer_hash(&verified.optimizer)? != optimizer_hash(&l.optimizer)?
+        || old_state != new_state
+    {
+        return Err(bad("migrated parent differs from registered original"));
+    }
+    let source = data::native::read(corpus)?;
+    let frozen = original
+        .train
+        .iter()
+        .map(|i| original.cases[*i as usize].clone())
+        .collect::<Vec<_>>();
+    let dev = panel(&original, PanelKind::Dev)?
+        .cases
+        .iter()
+        .map(|i| original.cases[*i as usize].clone())
+        .collect::<Vec<_>>();
+    if data::native::ordered_bytes(&source.train) != data::native::ordered_bytes(&frozen) {
+        return Err(bad(
+            "native source differs from registered training content/order",
+        ));
+    }
+    if data::native::ordered_bytes(&source.validation) != data::native::ordered_bytes(&dev) {
+        return Err(bad(
+            "native development split differs from registered ordered cases",
+        ));
+    }
+    if let Some(legacy) = legacy {
+        let (old_manifest, old_train, old_dev) = data::load_legacy(legacy)?;
+        if data::native::ordered_bytes(&source.train) != data::native::ordered_bytes(&old_train)
+            || data::native::ordered_bytes(&source.validation)
+                != data::native::ordered_bytes(&old_dev)
+            || source.legacy.as_ref().is_none_or(|m| {
+                m.train.sha256 != old_manifest.train.sha256
+                    || m.validation.sha256 != old_manifest.validation.sha256
+            })
+        {
+            return Err(bad("native/legacy full logical equality absent"));
+        }
+    }
+    std::fs::create_dir(output)?;
+    for (name, purpose) in [
+        ("legacy-reference", RunPurpose::SaveContinuous),
+        ("native", RunPurpose::SaveSplit),
+    ] {
+        let dir = output.join(name);
+        std::fs::create_dir(&dir)?;
+        std::fs::copy(parent, dir.join("parent.r3m"))?;
+        std::fs::File::open(dir.join("parent.r3m"))?.sync_all()?;
+        std::fs::copy(corpus, dir.join("source.r3c"))?;
+        std::fs::File::open(dir.join("source.r3c"))?.sync_all()?;
+        let mut s = original.clone();
+        s.contract = NATIVE_CORPUS_CONTRACT.into();
+        s.historical = false;
+        s.authorization = None;
+        s.objective = None;
+        s.source = evaluator_source();
+        s.purpose = purpose;
+        s.tape.truncate(2);
+        s.eval_steps.clear();
+        s.lr_policy = 2;
+        s.lr_offset = 0;
+        // Same existing ordered tape, actual constant rate and Adam; only source preparation differs.
+        for (i, d) in s.tape.iter_mut().enumerate() {
+            d.sampler = state
+                .sampler_state
+                .checked_add(i as u64 + 1)
+                .ok_or_else(|| bad("parity cursor"))?;
+        }
+        s.run = hash(
+            &[
+                b"PATH_PARITY_ONLY-v1\0".as_slice(),
+                &source.semantic,
+                &unhex(&file_hash(parent)?)?,
+            ]
+            .concat(),
+        );
+        s.policy = hash(
+            &[
+                b"same-parent-tape-lr1e-4-two-updates\0".as_slice(),
+                &original.binding(),
+                &source.semantic,
+            ]
+            .concat(),
+        );
+        s.parent = native_reference(&dir, "parent.r3m", &s, &l, 0)?;
+        s.origins = vec![
+            Origin {
+                role: "native-source".into(),
+                original: reference(&dir, "source.r3c")?,
+            },
+            Origin {
+                role: "execution-binary".into(),
+                original: FileRef {
+                    locator: std::env::current_exe()?.display().to_string(),
+                    digest: unhex(&file_hash(&std::env::current_exe()?)?)?,
+                },
+            },
+        ];
+        if name == "legacy-reference"
+            && let Some(legacy) = legacy
+        {
+            s.origins.push(Origin {
+                role: "explicit-legacy-reference".into(),
+                original: FileRef {
+                    locator: legacy.canonicalize()?.display().to_string(),
+                    digest: source.semantic,
+                },
+            });
+        }
+        s.validate()?;
+        publish(&dir, "inputs.r3er", &Record::Inputs(Box::new(s)))?;
+    }
+    println!(
+        "PATH_PREPARE=VERIFIED QUALITY_UPDATES=0 PARITY_BUDGET=4 TAPE=2+1+1 JSON_NATIVE_FULL_EQUAL={}",
+        legacy.is_some()
+    );
+    Ok(())
+}
+fn path_verify(root: &Path, control: &mut RunControl) -> Result<()> {
+    let mut previous = None;
+    for (name, purpose, segments) in [
+        ("legacy-reference", RunPurpose::SaveContinuous, 1),
+        ("native", RunPurpose::SaveSplit, 2),
+    ] {
+        control.check("path_parity_recount")?;
+        let dir = root.join(name);
+        let s = read_inputs(&dir)?;
+        if !s.path_parity() || s.purpose != purpose {
+            return Err(bad("path parity registration"));
+        }
+        native_source(&dir, &s)?;
+        let commands = arm_commands(&dir, &s)?;
+        if commands.len() != segments {
+            return Err(bad("path parity process count"));
+        }
+        let last = &commands.last().unwrap().1;
+        let chain = lineage(&dir, &s, &last.terminal)?;
+        let t = &chain.last().unwrap().1;
+        if last.status != CommandStatus::Complete
+            || !t.complete
+            || !t.stop.is_empty()
+            || t.updates != 2
+            || chain.iter().map(|(_, t)| t.draws.len()).sum::<usize>() != 2
+        {
+            return Err(bad("path parity endpoint incomplete"));
+        }
+        close_native_inner(&dir, &last.terminal.locator, control, false)?;
+        let n = t
+            .native
+            .as_ref()
+            .ok_or_else(|| bad("path parity native absent"))?;
+        let l = resolve_native(&dir, &s, n, true)?;
+        let mut state = l.manifest.training.clone().unwrap();
+        let descriptor = state
+            .resume_binding
+            .as_ref()
+            .ok_or_else(|| bad("path objective absent"))?;
+        if descriptor != &objective_binding(&s, &state, &l.tokenizer)? || descriptor.family != 1 {
+            return Err(bad("path objective mismatch"));
+        }
+        // Per-run policy/provenance differs by explicit source path and split purpose.
+        // All executed model/optimizer/clock/config/token states still compare exactly.
+        state.resume_binding = None;
+        let rates = chain
+            .iter()
+            .flat_map(|(_, t)| t.lr_bits.clone().unwrap_or_default())
+            .collect::<Vec<_>>();
+        let actual = (
+            l.model.weight_hash()?,
+            optimizer_hash(&l.optimizer)?,
+            l.tokenizer.semantic_id(),
+            state,
+            rates,
+        );
+        if previous.as_ref().is_some_and(|old| old != &actual) {
+            return Err(bad("path weights/Adam/tokenizer/state/LR mismatch"));
+        }
+        println!(
+            "PATH_ENDPOINT arm={name} step={} weights={} adam={} lr_bits={:?} inputs={}",
+            n.step,
+            actual.0,
+            actual.1,
+            actual.4,
+            hex(&s.binding())
+        );
+        previous = Some(actual);
+    }
+    println!("PATH_PARITY=PASS ACTUAL_UPDATES=4 QUALITY_UPDATES=0 PROMOTION=NOT_AUTHORIZED");
+    Ok(())
+}
+fn upgrade_resume(
+    root: &Path,
+    terminal: &str,
+    output: &Path,
+    control: &mut RunControl,
+) -> Result<()> {
+    control.check("upgrade_resume")?;
+    let s = read_inputs(root)?;
+    if s.historical
+        || !matches!(
+            s.contract.as_str(),
+            CONTRACT
+                | RESTART_CONTRACT
+                | COOLDOWN_CONTRACT
+                | OBJECTIVE_CONTRACT
+                | NATIVE_CORPUS_CONTRACT
+        )
+    {
+        return Err(bad(
+            "LEGACY_OBJECTIVE_UNKNOWN: unsupported historical provenance",
+        ));
+    }
+    let chain = lineage(root, &s, &reference(root, terminal)?)?;
+    let t = &chain
+        .last()
+        .ok_or_else(|| bad("migration terminal absent"))?
+        .1;
+    let n = t
+        .native
+        .as_ref()
+        .ok_or_else(|| bad("migration durable native absent"))?;
+    let mut l = resolve_native(root, &s, n, true)?;
+    // Validate actual source policy/endpoint/panel/command bindings, not a filename whitelist.
+    close_native_inner(root, terminal, control, false)?;
+    let state = l
+        .manifest
+        .training
+        .as_mut()
+        .ok_or_else(|| bad("migration Adam absent"))?;
+    let expected = objective_binding(&s, state, &l.tokenizer)?;
+    if state
+        .resume_binding
+        .as_ref()
+        .is_some_and(|b| b != &expected)
+    {
+        return Err(bad("migration existing objective mismatch"));
+    }
+    state.resume_binding = Some(expected);
+    let before_model = l.model.weight_hash()?;
+    let before_adam = optimizer_hash(&l.optimizer)?;
+    checkpoint::save(output, &l.model, &l.tokenizer, l.manifest, &l.optimizer)?;
+    let reread = checkpoint::load(output, Device::Cpu, true)?;
+    if reread.model.weight_hash()? != before_model
+        || optimizer_hash(&reread.optimizer)? != before_adam
+    {
+        return Err(bad("migration tensor parity"));
+    }
+    println!(
+        "MIGRATION=VERIFIED OPTIMIZER_CALLS=0 OLD_PHYSICAL={} NEW_PHYSICAL={} MODEL={} ADAM={} STEP={}",
+        hex(&n.file.digest),
+        file_hash(output)?,
+        before_model,
+        before_adam,
+        n.step
+    );
+    Ok(())
+}
+pub(super) fn reject_unbound_objective_resume(path: &Path) -> Result<()> {
+    let (manifest, tok) = checkpoint::metadata(path)?;
+    let state = manifest
+        .training
+        .as_ref()
+        .ok_or_else(|| bad("resume state absent"))?;
+    checkpoint::ResumeBinding::require_default(state, &tok)
+}
+pub(super) fn evaluate_source(
+    checkpoint_path: &Path,
+    corpus: &Path,
+    output: &Path,
+    limit: usize,
+    split: &str,
+    control: &mut RunControl,
+) -> Result<()> {
+    if limit == 0 || limit > 512 {
+        return Err(bad("native source evaluation limit 1..512"));
+    }
+    let c = data::native::read(corpus)?;
+    let cases = match split {
+        "train" => &c.train,
+        "validation" => &c.validation,
+        _ => return Err(bad("native eval split")),
+    };
+    let l = checkpoint::load(checkpoint_path, Device::Cpu, false)?;
+    let selected = cases.iter().take(limit).cloned().collect::<Vec<_>>();
+    let mut e = EvalPayload {
+        run: unhex(&file_hash(checkpoint_path)?)?,
+        binding: c.physical,
+        source: evaluator_source(),
+        model: unhex(&l.model.weight_hash()?)?,
+        tokenizer: unhex(&l.tokenizer.semantic_id())?,
+        architecture: unhex(&l.model.config.semantic_id()?)?,
+        step: l.manifest.trained_steps as u64,
+        new_updates: 0,
+        kind: PanelKind::Dev,
+        expected: selected.len() as u32,
+        rows: vec![],
+    };
+    let root = output.parent().unwrap_or(Path::new("."));
+    let name = output
+        .file_name()
+        .and_then(|v| v.to_str())
+        .ok_or_else(|| bad("eval output name"))?;
+    publish(
+        root,
+        &format!("{name}.start.r3er"),
+        &Record::Evaluation(e.clone()),
+    )?;
+    control.generation_limit = selected.len();
+    let result = (|| -> Result<()> {
+        for (i, case) in selected.iter().enumerate() {
+            let row = evaluate_row(&l, case, i as u32, control, false)?;
+            e.rows.push(row);
+            publish(
+                root,
+                &format!("{name}.row-{i:03}.r3er"),
+                &Record::Evaluation(e.clone()),
+            )?;
+            control.check("native_source_eval_row_saved")?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = &result {
+        control.classify_error(error);
+    }
+    publish(root, name, &Record::Evaluation(e.clone()))?;
+    println!(
+        "NATIVE_SOURCE_EVAL planned={} completed={} generations={} JSON_READS=0 CANONICAL=R3ER STOP={:?}",
+        e.expected,
+        e.rows.iter().filter(|r| r.completed).count(),
+        control.generation_calls,
+        control.observed
+    );
+    result
 }
 fn native_reference(
     root: &Path,
@@ -2842,6 +3784,94 @@ fn resolve_native(root: &Path, s: &RunSnapshot, n: &CheckpointRef, resume: bool)
 
 #[derive(Subcommand)]
 pub enum Action {
+    VersionParity {
+        #[arg(long)]
+        parent_arm: PathBuf,
+        #[arg(long)]
+        checkpoint: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        compare: Option<PathBuf>,
+    },
+    SourceMeasure {
+        #[arg(long,value_parser=["source-json","native-raw","native-zstd3","cache-raw","cache-zstd3"])]
+        format: Option<String>,
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long)]
+        legacy: PathBuf,
+        #[arg(long)]
+        raw: PathBuf,
+        #[arg(long)]
+        cold: PathBuf,
+        #[arg(long)]
+        cache: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value_t = 3)]
+        repetitions: u8,
+    },
+    ConditionalPrepare {
+        #[arg(long)]
+        parent_arm: PathBuf,
+        #[arg(long)]
+        base_arm: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value_t = 19317)]
+        seed: u64,
+    },
+    ConditionalRun {
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long,value_parser=clap::value_parser!(u8).range(0..=1))]
+        model: u8,
+    },
+    ConditionalReport {
+        #[arg(long)]
+        root: PathBuf,
+    },
+    ExposureReport {
+        #[arg(long)]
+        root: PathBuf,
+    },
+    #[cfg(feature = "test-support")]
+    FixtureNativeCorpus {
+        #[arg(long)]
+        from: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        split: bool,
+    },
+    /// Native-only preparation of the bounded input-path parity pair, not a quality study.
+    PathPrepare {
+        #[arg(long)]
+        parent_arm: PathBuf,
+        #[arg(long)]
+        parent: PathBuf,
+        #[arg(long)]
+        corpus: PathBuf,
+        #[arg(long)]
+        legacy_reference: Option<PathBuf>,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Read-only comparison of the two authorized input-path endpoints.
+    PathVerify {
+        #[arg(long)]
+        root: PathBuf,
+    },
+    /// Explicit provenance-backed wire-v1 upgrade; originals and eligibility remain unchanged.
+    UpgradeResume {
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long)]
+        terminal: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Recount already completed train-only teacher probes without model calls.
     ObjectiveProbes {
         #[arg(long)]
@@ -2983,6 +4013,8 @@ pub enum Action {
         panel_rows: usize,
         #[arg(long, num_args = 1)]
         objective_span: Option<bool>,
+        #[arg(long, requires = "objective_span")]
+        nonzero_role: bool,
     },
     #[cfg(feature = "test-support")]
     FixturePreflight {
@@ -3015,6 +4047,151 @@ pub(super) fn command(action: Action) -> Result<()> {
     let mut control = RunControl::command(matches!(action, Action::Run { .. }))?;
     control.deadline = control.start + Duration::from_secs(1800);
     match action {
+        Action::VersionParity {
+            parent_arm,
+            checkpoint,
+            output,
+            compare,
+        } => version_parity(
+            &parent_arm,
+            &checkpoint,
+            &output,
+            compare.as_deref(),
+            &mut control,
+        ),
+        Action::SourceMeasure {
+            format,
+            root,
+            legacy,
+            raw,
+            cold,
+            cache,
+            output,
+            repetitions,
+        } => token_cache::measure_source(
+            &root,
+            &legacy,
+            &raw,
+            &cold,
+            &cache,
+            &output,
+            repetitions,
+            format.as_deref(),
+            &mut control,
+        ),
+        Action::ConditionalPrepare {
+            parent_arm,
+            base_arm,
+            output,
+            seed,
+        } => conditional_prepare(&parent_arm, &base_arm, &output, seed, &mut control),
+        Action::ConditionalRun { root, model } => conditional_run(&root, model, &mut control),
+        Action::ConditionalReport { root } => conditional_report(&root, &mut control),
+        Action::ExposureReport { root } => exposure_report(&root, &mut control),
+        #[cfg(feature = "test-support")]
+        Action::FixtureNativeCorpus {
+            from,
+            output,
+            split,
+        } => {
+            let mut s = read_inputs(&from)?;
+            if !s.tiny_spec {
+                return Err(bad("native fixture requires TINY"));
+            }
+            let mut l = resolve_native(&from, &s, &s.parent, true)?;
+            let train = vec![s.cases[0].clone()];
+            let dev = vec![s.cases[1].clone()];
+            let m = data::CorpusManifest {
+                version: 1,
+                scope: "TINY_PATH_REGRESSION".into(),
+                permission: "synthetic test".into(),
+                generator: "existing-native-fixture".into(),
+                seed: 17,
+                split_rule: "disjoint original fixture cases".into(),
+                train: data::native::split("train", &train),
+                validation: data::native::split("validation", &dev),
+            };
+            let c = data::native::from_episodes(m, train, dev)?;
+            std::fs::create_dir(&output)?;
+            data::native::write(&output.join("source.r3c"), &c, true)?;
+            let state = l.manifest.training.as_mut().unwrap();
+            state.corpus_hash = c.manifest.train.sha256;
+            state.validation_hash = c.manifest.validation.sha256;
+            state.previous_corpora.push(l.tokenizer.train_hash.clone());
+            state.previous_corpora.sort();
+            state.previous_corpora.dedup();
+            state.config.max_steps = state.step + 2;
+            state.config.warmup = 0;
+            state.config.validate_every = 100;
+            state.resume_binding =
+                Some(checkpoint::ResumeBinding::default_for(state, &l.tokenizer));
+            checkpoint::save(
+                &output.join("parent.r3m"),
+                &l.model,
+                &l.tokenizer,
+                l.manifest.clone(),
+                &l.optimizer,
+            )?;
+            s.contract = NATIVE_CORPUS_CONTRACT.into();
+            s.source = evaluator_source();
+            s.historical = false;
+            s.authorization = None;
+            s.objective = None;
+            s.purpose = if split {
+                RunPurpose::SaveSplit
+            } else {
+                RunPurpose::SaveContinuous
+            };
+            s.lr_policy = 2;
+            s.lr_offset = 0;
+            s.eval_steps.clear();
+            s.tape.truncate(2);
+            for (i, d) in s.tape.iter_mut().enumerate() {
+                d.sampler = l.manifest.training.as_ref().unwrap().sampler_state + i as u64 + 1;
+            }
+            s.panels
+                .iter_mut()
+                .find(|p| p.kind == PanelKind::Dev)
+                .unwrap()
+                .cases = vec![1];
+            s.parent = native_reference(&output, "parent.r3m", &s, &l, 0)?;
+            s.origins = vec![
+                Origin {
+                    role: "native-source".into(),
+                    original: reference(&output, "source.r3c")?,
+                },
+                Origin {
+                    role: "execution-binary".into(),
+                    original: FileRef {
+                        locator: std::env::current_exe()?.display().to_string(),
+                        digest: unhex(&file_hash(&std::env::current_exe()?)?)?,
+                    },
+                },
+            ];
+            publish(&output, "inputs.r3er", &Record::Inputs(Box::new(s)))?;
+            println!("NATIVE_FIXTURE=READY OPTIMIZER_CALLS=0 JSON_WRITES=0");
+            Ok(())
+        }
+        Action::PathPrepare {
+            parent_arm,
+            parent,
+            corpus,
+            legacy_reference,
+            output,
+        } => path_prepare(
+            &parent_arm,
+            &parent,
+            &corpus,
+            legacy_reference.as_deref(),
+            &output,
+            &mut control,
+        ),
+        Action::PathVerify { root } => path_verify(&root, &mut control),
+        Action::UpgradeResume {
+            root,
+            terminal,
+            output,
+        } => upgrade_resume(&root, &terminal, &output, &mut control),
         Action::ObjectiveProbes { root } => objective_probes(&root, &mut control),
         Action::TokenCacheCompile { root, output } => {
             token_cache::compile(&root, &output, &mut control)
@@ -3148,6 +4325,7 @@ pub(super) fn command(action: Action) -> Result<()> {
             cooldown_panel,
             panel_rows,
             objective_span,
+            nonzero_role,
         } => {
             fixture_fork_inner(
                 &from,
@@ -3166,6 +4344,11 @@ pub(super) fn command(action: Action) -> Result<()> {
                     s.lr_offset = 0;
                 }
                 if let Some(span) = objective_span {
+                    if nonzero_role {
+                        let e = &mut s.cases[s.train[0] as usize];
+                        e.answer = "원인은 확정되지 않았습니다.".into();
+                        e.category = 4;
+                    }
                     let l = resolve_native(&output, &s, &s.parent, true)?;
                     let episodes = s
                         .train
@@ -3178,6 +4361,21 @@ pub(super) fn command(action: Action) -> Result<()> {
                         l.manifest.training.as_ref().unwrap().config.seq_len,
                     )?;
                     let a = target_loss::annotations(&episodes, &samples, &l.tokenizer, &[])?;
+                    if nonzero_role {
+                        if !a.iter().any(|a| a.fractions.iter().any(|f| *f > 0.)) {
+                            return Err(bad("nonzero role fixture absent"));
+                        }
+                        for draw in &mut s.tape {
+                            let ids = draw.indices.iter().map(|i| *i as usize).collect::<Vec<_>>();
+                            draw.input = batch(&samples, &ids, &Device::Cpu)?.tokens as u64;
+                            draw.target = ids
+                                .iter()
+                                .map(|i| {
+                                    (samples[*i].tokens.len() - samples[*i].response_start) as u64
+                                })
+                                .sum();
+                        }
+                    }
                     s.contract = OBJECTIVE_CONTRACT.into();
                     s.purpose = RunPurpose::LrContinuous;
                     s.lr_policy = 2;
@@ -3304,7 +4502,7 @@ fn segment(root: &Path, r: &FileRef, s: &RunSnapshot) -> Result<SegmentReceipt> 
     {
         return Err(bad("objective trace policy/count mismatch"));
     }
-    if s.continuation() {
+    if s.continuation() || s.path_parity() {
         let rates = t
             .lr_bits
             .as_ref()
@@ -3315,7 +4513,7 @@ fn segment(root: &Path, r: &FileRef, s: &RunSnapshot) -> Result<SegmentReceipt> 
             .ok_or_else(|| bad("LR cursor"))?;
         if rates.len() != t.draws.len()
             || rates.iter().enumerate().any(|(i, bits)| {
-                (if s.objective.is_some() {
+                (if s.objective.is_some() || s.path_parity() {
                     Ok(1e-4)
                 } else {
                     cooldown_lr(s.lr_policy, first + i as u64 + 1)
@@ -5260,7 +6458,7 @@ fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
     if !s.preflight()
         && matches!(
             s.contract.as_str(),
-            RESTART_CONTRACT | COOLDOWN_CONTRACT | OBJECTIVE_CONTRACT
+            RESTART_CONTRACT | COOLDOWN_CONTRACT | OBJECTIVE_CONTRACT | NATIVE_CORPUS_CONTRACT
         )
     {
         let p = read_preflight_outcome(parent)?.ok_or_else(|| bad("missing preflight outcome"))?;
@@ -5955,16 +7153,28 @@ fn preflight_body(
     }
     let (a, al) = &endpoints[0];
     let (b, bl) = &endpoints[1];
-    let at = al
+    let mut at = al
         .manifest
         .training
         .as_ref()
-        .ok_or_else(|| bad("preflight training state"))?;
-    let bt = bl
+        .ok_or_else(|| bad("preflight training state"))?
+        .clone();
+    let mut bt = bl
         .manifest
         .training
         .as_ref()
-        .ok_or_else(|| bad("preflight training state"))?;
+        .ok_or_else(|| bad("preflight training state"))?
+        .clone();
+    if !legacy
+        && (at.resume_binding.as_ref() != Some(&objective_binding(a, &at, &al.tokenizer)?)
+            || bt.resume_binding.as_ref() != Some(&objective_binding(b, &bt, &bl.tokenizer)?))
+    {
+        return Err(bad("preflight objective/policy mismatch"));
+    }
+    // Each policy is validated above. Continuous/split purpose is provenance,
+    // and must not obscure equality of the executed numeric state.
+    at.resume_binding = None;
+    bt.resume_binding = None;
     if a.parent.file.digest != b.parent.file.digest
         || a.parent.adam != b.parent.adam
         || al.model.weight_hash()? != bl.model.weight_hash()?
@@ -6831,15 +8041,34 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
             }
         }
     }
-    if s.historical || (!s.tiny_spec && s.authorization.is_none()) {
+    if s.historical || (!s.tiny_spec && s.authorization.is_none() && !s.path_parity()) {
         return Err(bad(
             "this repair authorizes no SMALL optimizer updates; historical import cannot resume",
         ));
     }
+    if s.path_parity() {
+        if s.source != evaluator_source()
+            || s.tape.len() != 2
+            || !s.preflight()
+            || s.lr_policy != 2
+            || s.origins
+                .iter()
+                .find(|o| o.role == "execution-binary")
+                .is_none_or(|o| {
+                    file_hash(&std::env::current_exe().unwrap_or_default())
+                        .ok()
+                        .as_deref()
+                        != Some(hex(&o.original.digest).as_str())
+                })
+        {
+            return Err(bad("path parity fixed source/policy/budget"));
+        }
+        native_source(root, &s)?;
+    }
     if s.authorization.is_some() {
         if !matches!(
             s.contract.as_str(),
-            RESTART_CONTRACT | COOLDOWN_CONTRACT | OBJECTIVE_CONTRACT
+            RESTART_CONTRACT | COOLDOWN_CONTRACT | OBJECTIVE_CONTRACT | NATIVE_CORPUS_CONTRACT
         ) {
             return Err(bad("closed historical study is not restart authorization"));
         }
@@ -6972,6 +8201,18 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
             s.tape.len(),
             if s.cooldown() { 1_000_000 } else { 2_000_000 },
         )?;
+        let expected = objective_binding(&s, &state, &l.tokenizer)?;
+        if resume.is_some() && state.resume_binding.as_ref() != Some(&expected) {
+            return Err(bad(
+                "OBJECTIVE_POLICY_BINDING_MISMATCH: native resume; optimizer_calls=0",
+            ));
+        }
+        if resume.is_none() && state.resume_binding.is_none() && !s.tiny_spec {
+            return Err(bad(
+                "LEGACY_OBJECTIVE_UNKNOWN: migrate parent explicitly; optimizer_calls=0",
+            ));
+        }
+        state.resume_binding = Some(expected);
         let mut manifest = l.manifest.clone();
         manifest.training = Some(state.clone());
         checkpoint::validate_metadata(&manifest, &l.tokenizer)?;
@@ -6985,7 +8226,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
     let mut evaluations = Vec::new();
     let mut decisions = Vec::new();
     let mut draws = Vec::new();
-    let mut lr_bits = s.continuation().then(Vec::new);
+    let mut lr_bits = (s.continuation() || s.path_parity()).then(Vec::new);
     let mut objective_metrics = s.objective.as_ref().map(|_| Vec::new());
     let mut complete = false;
     let mut heartbeat = Instant::now();
@@ -6995,13 +8236,45 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
         None
     };
     let outcome = (|| -> Result<()> {
-        let episodes: Vec<_> = s
+        let mut episodes: Vec<_> = s
             .train
             .iter()
             .map(|i| s.cases[*i as usize].clone())
             .collect();
+        if s.path_parity() {
+            let source = native_source(root, &s)?;
+            episodes = source.train;
+            if let Some(legacy) = s
+                .origins
+                .iter()
+                .find(|o| o.role == "explicit-legacy-reference")
+            {
+                let (_, train, dev) = data::load_legacy(Path::new(&legacy.original.locator))?;
+                if data::native::ordered_bytes(&train) != data::native::ordered_bytes(&episodes)
+                    || data::native::ordered_bytes(&dev)
+                        != data::native::ordered_bytes(&source.validation)
+                {
+                    return Err(bad("legacy reference changed"));
+                }
+                episodes = train;
+                println!("PATH=EXPLICIT_LEGACY_REFERENCE JSON_READS=3");
+            } else {
+                println!("PATH=NATIVE_CORPUS JSON_READS=0");
+            }
+        }
         let preparation_started = Instant::now();
-        let framed = samples(&episodes, &l.tokenizer, state.config.seq_len)?;
+        let framed = if s.path_parity()
+            && !s
+                .origins
+                .iter()
+                .any(|o| o.role == "explicit-legacy-reference")
+        {
+            let framed = token_cache::load_samples(root, &s, &l, &root.join("cache"))?;
+            println!("INPUT_CACHE=R3TOK VERIFIED=true TOKENIZATION_CALLS=0");
+            framed
+        } else {
+            samples(&episodes, &l.tokenizer, state.config.seq_len)?
+        };
         let annotations = s
             .objective
             .as_ref()
@@ -7345,7 +8618,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                     ))
                 })
                 .collect::<Result<BTreeMap<_, _>>>()?;
-            let rate = if s.objective.is_some() {
+            let rate = if s.objective.is_some() || s.path_parity() {
                 1e-4
             } else if s.cooldown() {
                 cooldown_lr(s.lr_policy, n + 1)?
@@ -8391,7 +9664,8 @@ fn fixture(output: &Path) -> Result<()> {
             answer: "b".into(),
         });
     }
-    let state = TrainingState {
+    let mut state = TrainingState {
+        resume_binding: None,
         contrast16: false,
         parent_checkpoint_hash: None,
         config: TrainConfig {
@@ -8414,6 +9688,7 @@ fn fixture(output: &Path) -> Result<()> {
         train_loss: None,
         validation_loss: None,
     };
+    state.resume_binding = Some(checkpoint::ResumeBinding::default_for(&state, &l.tokenizer));
     let adam = Adam::new(&l.model.vars)?;
     save_arm(
         &mut l,
@@ -8576,7 +9851,13 @@ fn fixture_check(roots: &[PathBuf]) -> Result<()> {
             if rates.len() != 2 {
                 return Err(bad("TINY numeric actual LR count"));
             }
-            let current = (l.manifest.training.clone(), rates);
+            let mut state = l.manifest.training.clone().unwrap();
+            if state.resume_binding.as_ref() != Some(&objective_binding(&s, &state, &l.tokenizer)?)
+            {
+                return Err(bad("fixture objective policy mismatch"));
+            }
+            state.resume_binding = None;
+            let current = (Some(state), rates);
             if expected_lr_state
                 .as_ref()
                 .is_some_and(|old| *old != current)

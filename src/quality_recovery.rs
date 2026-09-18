@@ -10,6 +10,16 @@ mod experiment_record;
 pub(super) fn reject_unbound_objective_resume(path: &Path) -> Result<()> {
     experiment_record::reject_unbound_objective_resume(path)
 }
+pub(super) fn evaluate_native_source(
+    checkpoint: &Path,
+    corpus: &Path,
+    output: &Path,
+    limit: usize,
+    split: &str,
+    control: &mut RunControl,
+) -> Result<()> {
+    experiment_record::evaluate_source(checkpoint, corpus, output, limit, split, control)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -657,6 +667,12 @@ fn registry(path: &Path) -> Result<Value> {
     )
 }
 pub fn run(command: Command) -> Result<()> {
+    if matches!(
+        command,
+        Command::SkillRun { .. } | Command::ProgressArm { .. } | Command::Arm { .. }
+    ) {
+        return Err(Error::Invalid("legacy optimizer control has no supported v2 execution binding; use explicit migration and bound recovery native run; optimizer_calls=0".into()));
+    }
     if let Command::Native { action } = command {
         return experiment_record::command(action);
     }
@@ -773,10 +789,10 @@ pub fn run(command: Command) -> Result<()> {
                 return Err(Error::Invalid("H2 verified baseline required".into()));
             }
             data::copy_curriculum(&f.parent_corpus, &output, seed)?;
-            let (manifest, train, dev) = data::load(&output)?;
+            let (manifest, train, dev) = data::load_legacy(&output)?;
             let seal_descriptor: data::Split =
                 serde_json::from_value(read_json(&output.join("seal-manifest.json"))?)?;
-            let seal = data::load_split(&output, &seal_descriptor)?;
+            let seal = data::load_split_legacy(&output, &seal_descriptor)?;
             let l = checkpoint::load(&f.start, Device::Cpu, false)?;
             let checked = verify_copy_curriculum(&train, &dev, &seal, &l)?;
             let anchors = scan_controlled(&train[..2048], &l, 2048, Some(&mut budget))?;
@@ -903,8 +919,8 @@ pub fn run(command: Command) -> Result<()> {
             source_id,
             output,
         } => {
-            let (m, _, v) = data::load(&corpus)?;
-            let (p, _, _) = data::load(&parent_corpus)?;
+            let (m, _, v) = data::load_legacy(&corpus)?;
+            let (p, _, _) = data::load_legacy(&parent_corpus)?;
             let mut watch = Vec::new();
             let mut scenes = BTreeSet::new();
             for (category, count) in [7, 7, 6, 6, 6].into_iter().enumerate() {
@@ -1198,6 +1214,16 @@ fn teacher(
     raw: &[u32],
     control: &mut RunControl,
 ) -> Result<Value> {
+    teacher_with_foil(l, e, prompt, raw, control, None)
+}
+fn teacher_with_foil(
+    l: &Loaded,
+    e: &Episode,
+    prompt: &[u32],
+    raw: &[u32],
+    control: &mut RunControl,
+    foil: Option<&str>,
+) -> Result<Value> {
     control.check("teacher_started")?;
     control.teacher_calls += 1;
     let mut gold = l.tokenizer.encode(e.answer.as_bytes())?;
@@ -1273,9 +1299,14 @@ fn teacher(
         let rival=raw.get(i).copied().unwrap_or(predicted[i]);
         json!({"index":i,"gold_id":gold[i],"actual_id":raw.get(i),"teacher_argmax":predicted[i],"gold_log_probability":lp[i][gold[i] as usize],"gold_minus_rival_logit":lp[i][gold[i] as usize]-lp[i][rival as usize],"prefix":"gold; at first divergence identical to generation prefix"})
     });
+    let foil_difference = foil.map(|foil| -> Result<Value> {
+        let mut other=l.tokenizer.encode(foil.as_bytes())?; other.push(EOS);
+        let i=gold.iter().zip(&other).position(|(a,b)|a!=b).ok_or_else(||Error::Invalid("foil must differ from gold".into()))?;
+        Ok(json!({"index":i,"gold":gold[i],"foil":other[i],"margin":lp[i][gold[i] as usize]-lp[i][other[i] as usize],"prefix":"identical gold/foil token prefix; one full gold teacher forward"}))
+    }).transpose()?;
     control.check("teacher_completed")?;
     Ok(
-        json!({"target_tokens_including_eos":gold.len(),"mean_nll":nll.iter().sum::<f64>()/gold.len() as f64,"first_target_nll":nll[0],
+        json!({"conditional_foil":foil_difference,"target_tokens_including_eos":gold.len(),"mean_nll":nll.iter().sum::<f64>()/gold.len() as f64,"first_target_nll":nll[0],
         "remaining_mean_nll":nll.iter().skip(1).sum::<f64>()/(gold.len()-1).max(1) as f64,"objective":(nll.iter().sum::<f64>()+(w-1.)*nll[0])/gold.len() as f64,"first_target_weight":w,
         "teacher_forced_correct_tokens":gold.iter().zip(&predicted).filter(|(a,b)|a==b).count(),"first_target_correct":gold[0]==predicted[0],"last_content_correct":gold.len()>1 && gold[gold.len()-2]==predicted[gold.len()-2],"eos_correct":predicted.last()==Some(&EOS),
         "first_argmax":predicted[0],"first_eos_probability":lp[0][EOS as usize].exp(),"first_gold_probability":lp[0][gold[0] as usize].exp(),"first_argmax_probability":lp[0][predicted[0] as usize].exp(),"first_gold_id":gold[0],
@@ -1555,7 +1586,7 @@ fn replay_cases(f: &Frozen, panel: &str) -> Result<(Vec<Episode>, Value)> {
 }
 
 fn load_frozen_corpus(f: &Frozen) -> Result<(data::CorpusManifest, Vec<Episode>, Vec<Episode>)> {
-    let (m, train, validation) = data::load(&f.corpus)?;
+    let (m, train, validation) = data::load_legacy(&f.corpus)?;
     if m.validation.sha256 != f.validation_hash || m.train.sha256 != f.train_hash {
         return Err(Error::Corrupt(
             "FROZEN_INPUT_MISMATCH: frozen/current validation binding mismatch or train".into(),
@@ -1619,7 +1650,7 @@ fn load_verified_inputs(a0: &Path, policy: Option<&Value>) -> Result<VerifiedPro
     let (f, _, ordinary, frozen_hash) =
         verified_ordinary(&progress_path(&a, "baseline")?, Some(&a["baseline_hash"]))?;
     let p = policy.unwrap_or(&a);
-    let (manifest, train, dev) = data::load(&progress_path(p, "corpus")?)?;
+    let (manifest, train, dev) = data::load_legacy(&progress_path(p, "corpus")?)?;
     let cross_bytes = neural::read_bounded(&a0.join("cross-development.json"), 16 * 1024 * 1024)?;
     let cross_hash = neural::hash(&cross_bytes);
     let cross: Vec<Episode> = serde_json::from_slice(&cross_bytes)?;
@@ -2333,8 +2364,8 @@ fn chronology_citations(request: &ModelRequest) -> Option<Vec<i64>> {
 fn audit(fixture: &Path, output: &Path, control: &mut RunControl) -> Result<()> {
     control.check("audit_started")?;
     let f = load(fixture)?;
-    let (m, train, validation) = data::load(&f.corpus)?;
-    let (pm, parent, pv) = data::load(&f.parent_corpus)?;
+    let (m, train, validation) = data::load_legacy(&f.corpus)?;
+    let (pm, parent, pv) = data::load_legacy(&f.parent_corpus)?;
     if m.train.sha256 != f.train_hash
         || m.validation.sha256 != f.validation_hash
         || pm.train.sha256 != f.parent_train_hash
@@ -2419,8 +2450,8 @@ fn baseline(
     if !next_lr.is_finite() || next_lr <= 0. {
         return Err(Error::Corrupt("parent next LR".into()));
     }
-    let (manifest, train, validation) = data::load(corpus)?;
-    let (original_manifest, original_train, original_validation) = data::load(original)?;
+    let (manifest, train, validation) = data::load_legacy(corpus)?;
+    let (original_manifest, original_train, original_validation) = data::load_legacy(original)?;
     if state.corpus_hash != manifest.train.sha256
         || state.validation_hash != manifest.validation.sha256
         || manifest.validation.sha256 != original_manifest.validation.sha256
@@ -3009,7 +3040,7 @@ fn skill_run(
     let base_report = read_json(&baseline.join("summary.json"))?;
     let frozen = load(&baseline.join("frozen.json"))?;
     let prepared = read_json(&corpus.join("prepared.json"))?;
-    let (manifest, episodes, dev) = data::load(corpus)?;
+    let (manifest, episodes, dev) = data::load_legacy(corpus)?;
     if base_report["baseline_verified"] != true
         || prepared["status"] != "PRETRAIN_STRUCTURE_VERIFIED"
         || prepared["baseline_summary_hash"] != file_hash(&baseline.join("summary.json"))?
@@ -3029,6 +3060,13 @@ fn skill_run(
     }
     let continuation = resume.or(renew_from_quality_stop);
     let mut l = checkpoint::load(continuation.unwrap_or(&frozen.start), Device::Cpu, true)?;
+    checkpoint::ResumeBinding::require_default(
+        l.manifest
+            .training
+            .as_ref()
+            .ok_or_else(|| Error::Invalid("resume state absent".into()))?,
+        &l.tokenizer,
+    )?;
     control.check("skill_loaded")?;
     if l.model.config.profile != "NATIVE_TRPP_G1_SMALL"
         || l.tokenizer.semantic_id() != frozen.tokenizer
@@ -3345,7 +3383,7 @@ fn skill_run(
                         control.observe(StopReason::TimeBudget);
                         return control.stop_result();
                     }
-                    let (_, _, ordinary) = data::load(&frozen.corpus)?;
+                    let (_, _, ordinary) = data::load_legacy(&frozen.corpus)?;
                     let rows = evaluate_panel(&l, &ordinary, control);
                     full_qa = summarize(&rows)?;
                     save(
@@ -3364,7 +3402,7 @@ fn skill_run(
                         &json!({"model_content_hash":l.model.weight_hash()?,"dev":last["dev"],"new_updates":n}),
                     )?;
                     let descriptor: data::Split = serde_json::from_value(prepared["seal"].clone())?;
-                    let seal = data::load_split(corpus, &descriptor)?;
+                    let seal = data::load_split_legacy(corpus, &descriptor)?;
                     let rows = evaluate_panel(&l, &seal, control);
                     seal_score = skill_score(&rows)?;
                     save(
@@ -3784,7 +3822,7 @@ fn progress_renewal(
     p["generator"] = generated["generator"].clone();
     for (index, arm) in ["F", "N"].iter().enumerate() {
         let corpus = output.join(format!("corpus-{arm}"));
-        let (manifest, episodes, _) = data::load(&corpus)?;
+        let (manifest, episodes, _) = data::load_legacy(&corpus)?;
         let count = if index == 0 { 512 } else { 2048 };
         generated["arms"][*arm]["validation"] =
             verify_cross_panel(&episodes[2048..], &heldout, &l, count)?;
@@ -4207,6 +4245,13 @@ fn progress_arm(
     }
     let checkpoint = resume.map(|r| r.join("final")).unwrap_or(parent.clone());
     let mut l = checkpoint::load(&checkpoint, Device::Cpu, true)?;
+    checkpoint::ResumeBinding::require_default(
+        l.manifest
+            .training
+            .as_ref()
+            .ok_or_else(|| Error::Invalid("resume state absent".into()))?,
+        &l.tokenizer,
+    )?;
     let mut state = l
         .manifest
         .training
@@ -6088,7 +6133,7 @@ fn progress_baseline(
         .training
         .as_ref()
         .ok_or_else(|| Error::Invalid("native resume/Adam required".into()))?;
-    let (manifest, train, dev) = data::load(corpus)?;
+    let (manifest, train, dev) = data::load_legacy(corpus)?;
     if receipt["reason"] != "SCREENING_BUDGET_REACHED"
         || receipt["new_updates"] != 1024
         || receipt["resume_allowed"] != false
@@ -6316,7 +6361,7 @@ fn skill_diagnose(
     let policy = read_json(&policy_path)?;
     let receipt = read_json(&run.join("result.json"))?;
     let last = &receipt["last_evaluation"];
-    let (manifest, train, dev) = data::load(corpus)?;
+    let (manifest, train, dev) = data::load_legacy(corpus)?;
     let checkpoint = run.join("final");
     let l = checkpoint::load(&checkpoint, Device::Cpu, false)?;
     let state = l
@@ -6605,7 +6650,7 @@ fn numeric(fixture: &Path, path: &Path, output: &Path) -> Result<()> {
         }
     }
     // One real batch: labels/masks/EOS are independently derived from literal sample IDs.
-    let (_, train, _) = data::load(&f.corpus)?;
+    let (_, train, _) = data::load_legacy(&f.corpus)?;
     let s = samples(&train[..8], &l.tokenizer, 512)?;
     let b = batch(&s, &(0..8).collect::<Vec<_>>(), &Device::Cpu)?;
     let ids = b.input.to_vec2::<u32>()?;
@@ -6795,7 +6840,7 @@ fn schedule_report(
             }
         }
     }
-    let (manifest, episodes, _) = data::load(&f.corpus)?;
+    let (manifest, episodes, _) = data::load_legacy(&f.corpus)?;
     if manifest.train.sha256 != f.train_hash {
         return Err(Error::Corrupt("comparison corpus binding".into()));
     }
@@ -7459,7 +7504,7 @@ fn recount(
     control.check("recount_started")?;
     let f = load(fixture)?;
     let (validation, binding) = replay_cases(&f, "all")?;
-    let (manifest, train, _) = data::load(&f.corpus)?;
+    let (manifest, train, _) = data::load_legacy(&f.corpus)?;
     if manifest.train.sha256 != f.train_hash {
         return Err(Error::Corrupt("recount train binding".into()));
     }
@@ -7712,13 +7757,20 @@ fn arm_run(
         return Err(Error::Invalid("frozen training backend mismatch".into()));
     }
     let mut l = checkpoint::load(&f.start, Device::Cpu, true)?;
+    checkpoint::ResumeBinding::require_default(
+        l.manifest
+            .training
+            .as_ref()
+            .ok_or_else(|| Error::Invalid("resume state absent".into()))?,
+        &l.tokenizer,
+    )?;
     control.check("arm_loaded")?;
     if l.model.weight_hash()? != f.registry["U2_POLICY_START"]["model_content_hash"]
         || file_hash(&f.start)? != f.registry["U2_POLICY_START"]["physical_hash"]
     {
         return Err(Error::Corrupt("arm parent changed".into()));
     }
-    let (manifest, episodes, _) = data::load(&f.corpus)?;
+    let (manifest, episodes, _) = data::load_legacy(&f.corpus)?;
     control.check("arm_corpus_loaded")?;
     if manifest.train.sha256 != f.train_hash || manifest.validation.sha256 != f.validation_hash {
         return Err(Error::Corrupt("arm corpus changed".into()));
@@ -8053,6 +8105,7 @@ mod tests {
         save(&a0.join("summary.json"),&json!({"baseline":baseline,"baseline_hash":file_hash(&baseline.join("frozen.json")).unwrap(),
             "corpus":corpus,"train_hash":m.train.sha256,"dev_hash":m.validation.sha256,"cross":{"file_sha256":file_hash(&a0.join("cross-development.json")).unwrap()}})).unwrap();
         let mut state = TrainingState {
+            resume_binding: None,
             contrast16: false,
             parent_checkpoint_hash: None,
             config: TrainConfig {
@@ -8248,7 +8301,7 @@ mod tests {
                     }
                 }
                 repair_corpus(&before.frozen.corpus, &cases);
-                assert!(data::load(&before.frozen.corpus).is_ok());
+                assert!(data::load_legacy(&before.frozen.corpus).is_ok());
                 let baseline = progress_path(&before.a0, "baseline").unwrap();
                 let missing = dir.path().join("absent");
                 let out = dir.path().join("never-created");
@@ -8513,7 +8566,7 @@ mod tests {
                 serde_json::to_vec(&manifest).unwrap(),
             )
             .unwrap();
-            assert!(data::load(&corpus).is_ok());
+            assert!(data::load_legacy(&corpus).is_ok());
             let files: BTreeMap<_, _> = [
                 "Cargo.lock",
                 "src/training.rs",
@@ -8839,6 +8892,7 @@ mod tests {
         update(&l, &mut adam, 18);
         l.model.refresh_identity().unwrap();
         let state = TrainingState {
+            resume_binding: None,
             contrast16: false,
             parent_checkpoint_hash: None,
             config: c.clone(),
@@ -9242,6 +9296,7 @@ mod tests {
         let mut adam = Adam::new(&l.model.vars).unwrap();
         let n = update(&l, &mut adam, 18);
         let state = TrainingState {
+            resume_binding: None,
             contrast16: false,
             parent_checkpoint_hash: None,
             config: config.clone(),
@@ -9425,10 +9480,10 @@ mod tests {
         data::prepare(&source, 317, 20_000, &[], "entity-cue").unwrap();
         let source_hash = file_hash(&source.join("train.json")).unwrap();
         data::copy_curriculum(&source, &output, 917_260_311).unwrap();
-        let (_, train, dev) = data::load(&output).unwrap();
+        let (_, train, dev) = data::load_legacy(&output).unwrap();
         let seal_descriptor: data::Split =
             serde_json::from_value(read_json(&output.join("seal-manifest.json")).unwrap()).unwrap();
-        let seal = data::load_split(&output, &seal_descriptor).unwrap();
+        let seal = data::load_split_legacy(&output, &seal_descriptor).unwrap();
         let tok_path = dir.path().join("tokenizer");
         data::tokenizer(&output, &tok_path, 4096).unwrap();
         let tok = ByteBpe::load(&tok_path).unwrap();
@@ -9771,7 +9826,7 @@ mod tests {
         save(&fixture, &f).unwrap();
         episodes[0].request.input = "changed same ID".into();
         repair_corpus(&f.corpus, &episodes); // Updated manifest is valid for the changed bytes.
-        assert!(data::load(&f.corpus).is_ok());
+        assert!(data::load_legacy(&f.corpus).is_ok());
         let output = dir.path().join("new.jsonl");
         let mut control = repair_control();
         let result = replay(
@@ -9821,7 +9876,7 @@ mod tests {
                 }
             }
             repair_corpus(&f.corpus, &changed);
-            assert!(data::load(&f.corpus).is_ok());
+            assert!(data::load_legacy(&f.corpus).is_ok());
             if mutation < 3 {
                 assert_eq!(
                     digest(&original.iter().map(|e| &e.id).collect::<Vec<_>>()).unwrap(),
@@ -10492,6 +10547,7 @@ mod tests {
             ..Default::default()
         };
         l.manifest.training = Some(TrainingState {
+            resume_binding: None,
             contrast16: false,
             parent_checkpoint_hash: Some("1".repeat(64)),
             config: config.clone(),
@@ -11078,12 +11134,12 @@ mod tests {
         .unwrap();
         let output = dir.path().join("pair");
         std::fs::create_dir(&output).unwrap();
-        let original = data::load(&root).unwrap();
+        let original = data::load_legacy(&root).unwrap();
         let report = data::renewed_copy_curricula(&original, &dev, &output, 82119).unwrap();
         assert_eq!(report["arms"]["F"]["focus_views"], 512);
         assert_eq!(report["arms"]["N"]["focus_views"], 2048);
-        let (_, f, _) = data::load(&output.join("corpus-F")).unwrap();
-        let (_, n, _) = data::load(&output.join("corpus-N")).unwrap();
+        let (_, f, _) = data::load_legacy(&output.join("corpus-F")).unwrap();
+        let (_, n, _) = data::load_legacy(&output.join("corpus-N")).unwrap();
         assert_eq!(digest(&f[..2048]).unwrap(), digest(&old[..2048]).unwrap());
         assert_eq!(digest(&f).unwrap(), digest(&n[..2560]).unwrap());
         let mut l = repair_loaded();
@@ -11176,6 +11232,7 @@ mod tests {
                 ..Default::default()
             };
             let mut state = TrainingState {
+                resume_binding: None,
                 contrast16: false,
                 parent_checkpoint_hash: None,
                 config: config.clone(),
@@ -11278,6 +11335,7 @@ mod tests {
                 ..Default::default()
             };
             let mut state = TrainingState {
+                resume_binding: None,
                 contrast16: false,
                 parent_checkpoint_hash: None,
                 config: config.clone(),

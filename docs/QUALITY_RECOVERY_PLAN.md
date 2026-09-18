@@ -1,5 +1,52 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: R3-NATIVE-CORPUS-OBJECTIVE-BINDING-1.0
+
+Base source af63823346ebb6e11cc23451a8ba0c704eb34039, report
+5c35c8c452f6d6790f121af2e2a9e018cc01641c. Preserve all historical studies,
+unknown/failed usage and terminal eligibility. SPAN is not adopted or repeated.
+N0 identity/preservation → N1 checkpoint-owned objective → N2 lossless native
+source → N3 real default train/eval/cache and process parity → N4 fixed-weight
+conditional diagnosis → N5 equivalent preparation measurements and publication.
+
+Budgets: quality SMALL0; PATH_PARITY SMALL4 (legacy2 versus native1+fresh1);
+generation320 (version parity16+16, conditional144+144); own teacher288;
+TINY optimizer128 across failed and successful regressions. Command1800s and
+cleanup120s, one heavy process, no source edits during learning/measurements.
+Cancel, nonfinite, changed source/data, sync/checkpoint failure stop subsequent
+model work. Unknown killed-process usage is not zero. No sealed-panel opening.
+
+Required boundaries: standalone v1 resumes fail unknown; proven original default
+and span policies migrate to new v2 without changing weights/Adam/tokenizer/clock;
+generic default and supported span native process resume remain exact. Default
+source APIs consume R3CORP with no JSON fallback, cache uses verified owned train
+only, and every token/target/mask/role/order compares to the explicit legacy import.
+The SMALL parity endpoints are not quality candidates or future study parents.
+
+The conditional panel is frozen before outputs: 24 dependent bases × current,
+past question, value swap, evidence order, unused wording, unrelated distractor.
+Two fixed endpoints only: A75-R24310 and B-BASE24822. Preserve full raw tokens,
+strict bytes/EOS/error and binary usage. Teacher gold/foil first-divergence margin
+is distinct from normal greedy. Report joint/paired correct results and error
+strata, recount prior role probes and train task exposures; propose only one next
+hypothesis or UNKNOWN. No automatic learning authorization follows diagnosis.
+
+Warm3/fresh-process3 compare equal source JSON/raw/Zstd3; separate train-only cache
+table. Record read/hash/decode/tokenize/batch/encode/verify/durable publish, bytes
+and RSS. Fresh process is not cold OS cache. Preserve originals in retained totals;
+startup improvement is neither training throughput nor model-quality recovery.
+Code/format support, diagnostics, H3/S4/S5/S6 and Goal1 are separate verdicts.
+
+Current call map: `data::load` → owned native corpus; `load_legacy` → explicit
+historical/import only. `corpus prepare/binding-pairs/qa-pairs/subset` emit native;
+generic train/evaluate and tokenizer training read native. `native path-prepare`
+binds imported full source to the verified migrated parent and old ordered tape;
+`native run` consumes native source plus R3TOK and original batch/optimizer.
+`upgrade-resume` checks original binary policy/terminal/native/close before writing
+v2. Older JSON recovery controls require `--legacy-json`; unsupported old optimizer
+entry points reject before learning. Existing checker supports scoped
+`quick --native-corpus`; this does not claim all historical tests were rerun.
+
 ## Closed: R3-DATA-BINARY-AND-TARGET-LOSS-1.0
 
 E1/E2 direct process repairs verified; E3 objective implemented; E4 completed

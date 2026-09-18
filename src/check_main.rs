@@ -28,7 +28,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Checks {
     /// Offline source checks and direct regressions; no quality evaluation or learning.
-    Quick,
+    Quick {
+        /// Direct source-corpus/objective/resume regressions only; no unrelated storage suites.
+        #[arg(long)]
+        native_corpus: bool,
+    },
     /// Explicit normal/transfer generation and fresh-process restart, never a quality waiver.
     Model {
         #[arg(long)]
@@ -397,7 +401,7 @@ fn release_evidence(checkpoint: &Path, stages: [(&str, &Path); 3]) -> Result<Val
 fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
     write_new(&r.output.join("boundaries.json"), &boundaries(files)?)?;
     match &cli.command {
-        Checks::Quick => {
+        Checks::Quick { native_corpus } => {
             r.run(
                 "cargo",
                 &["fmt", "--all", "--", "--check"],
@@ -406,6 +410,45 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
             )?;
             r.cargo("check", &["--all-targets"], false)?;
             r.cargo("clippy", &["--all-targets", "--", "-D", "warnings"], false)?;
+            if *native_corpus {
+                r.cargo(
+                    "test",
+                    &["--lib", "neural::artifact::tests", "--", "--test-threads=1"],
+                    true,
+                )?;
+                for filter in [
+                    "native_corpus_",
+                    "conditional_panel_",
+                    "token_cache_",
+                    "partial_prefix_rejects",
+                ] {
+                    r.cargo(
+                        "test",
+                        &["--bin", "replica-train", filter, "--", "--test-threads=1"],
+                        true,
+                    )?;
+                }
+                for filter in [
+                    "native_corpus_standalone_default",
+                    "objective_policy_",
+                    "verification_published_final_sync_error",
+                    "restart_and_cooldown_partial_panels",
+                ] {
+                    r.cargo(
+                        "test",
+                        &[
+                            "--test",
+                            "experiment_record",
+                            filter,
+                            "--",
+                            "--test-threads=1",
+                            "--nocapture",
+                        ],
+                        true,
+                    )?;
+                }
+                return Ok(());
+            }
             r.cargo(
                 "test",
                 &["--lib", "neural::artifact::tests", "--", "--test-threads=1"],

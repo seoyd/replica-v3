@@ -398,8 +398,11 @@ fn inputs(root: &Path) -> Result<(RunSnapshot, Vec<u8>, Loaded)> {
     let Record::Inputs(s) = Record::decode(&raw)? else {
         return Err(bad("cache requires owned snapshot"));
     };
-    if s.objective.is_none() {
+    if s.objective.is_none() && !s.path_parity() {
         return Err(bad("cache requires explicit train role policy"));
+    }
+    if s.path_parity() {
+        native_source(root, &s)?;
     }
     let l = resolve_native(root, &s, &s.parent, true)?;
     Ok((*s, raw, l))
@@ -419,14 +422,40 @@ fn framed(s: &RunSnapshot, l: &Loaded) -> Result<(Vec<Sample>, Vec<target_loss::
         &episodes,
         &f,
         &l.tokenizer,
-        &s.authorization.as_ref().unwrap().pools[1],
+        s.authorization
+            .as_ref()
+            .map_or(&[][..], |a| a.pools[1].as_slice()),
     )?;
-    if hash(&target_loss::annotation_bytes(&annotations))
-        != s.objective.as_ref().unwrap().annotation
+    if s.objective
+        .as_ref()
+        .is_some_and(|o| hash(&target_loss::annotation_bytes(&annotations)) != o.annotation)
     {
         return Err(bad("cache annotation identity"));
     }
     Ok((f, annotations))
+}
+pub(super) fn load_samples(
+    root: &Path,
+    s: &RunSnapshot,
+    l: &Loaded,
+    cache: &Path,
+) -> Result<Vec<Sample>> {
+    let raw = neural::read_bounded(&root.join("inputs.r3er"), MAX_FILE)?;
+    let key = key(s, &raw, l)?;
+    let (_lock, hashes) = receipt(cache)?;
+    let bytes = neural::read_bounded(&cache.join("train.r3tok"), MAX_FILE)?;
+    if hash(&bytes) != hashes[0] {
+        return Err(bad("cache physical receipt"));
+    }
+    let packed = decode(bytes, &key)?;
+    let annotations = packed.annotations(s, &l.tokenizer)?;
+    if s.objective
+        .as_ref()
+        .is_some_and(|o| hash(&target_loss::annotation_bytes(&annotations)) != o.annotation)
+    {
+        return Err(bad("cache objective annotation"));
+    }
+    (0..packed.starts.len()).map(|i| packed.sample(i)).collect()
 }
 fn write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     publish_new(path, |f, _| {
@@ -790,6 +819,255 @@ pub(super) fn measure(
         json + snapshot + raw + 72,
         json + snapshot + raw + cold + 72,
         std::fs::metadata(owned_path(root, &s.parent.file.locator, true)?)?.len()
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)] // One bounded comparison of the same source plus its train-only cache.
+pub(super) fn measure_source(
+    root: &Path,
+    legacy: &Path,
+    raw: &Path,
+    cold: &Path,
+    cache: &Path,
+    output: &Path,
+    repetitions: u8,
+    selected_format: Option<&str>,
+    control: &mut RunControl,
+) -> Result<()> {
+    if !(1..=3).contains(&repetitions) {
+        return Err(bad("source measurement repetitions"));
+    }
+    let setup = Instant::now();
+    let (s, snapshot, l) = inputs(root)?;
+    let k = key(&s, &snapshot, &l)?;
+    let source = native_source(root, &s)?;
+    let (expected, annotations) = framed(&s, &l)?;
+    let (legacy_meta, legacy_train, legacy_dev) = data::load_legacy(legacy)?;
+    if data::native::ordered_bytes(&source.train) != data::native::ordered_bytes(&legacy_train)
+        || data::native::ordered_bytes(&source.validation)
+            != data::native::ordered_bytes(&legacy_dev)
+    {
+        return Err(bad("measurement logical scope"));
+    }
+    let (_lock, cache_hashes) = receipt(cache)?;
+    let bindings = [
+        source.semantic,
+        unhex(&file_hash(raw)?)?,
+        unhex(&file_hash(cold)?)?,
+        cache_hashes[0],
+        cache_hashes[1],
+    ];
+    let draws = s
+        .tape
+        .iter()
+        .take(5)
+        .map(|d| d.indices.iter().map(|i| *i as usize).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    if draws.is_empty() {
+        return Err(bad("measurement tape absent"));
+    }
+    std::fs::create_dir(output)?;
+    println!(
+        "SOURCE_MEASURE setup_s={} PROCESS={} repetitions={repetitions} OS_CACHE_COLD=false PHASES=read,physical_hash,decode_with_integrity,tokenize,first_batch,steady_batch,encode,verification,durable_publish SCOPE_SOURCE=full_train_dev_metadata SCOPE_CACHE=train_only",
+        setup.elapsed().as_secs_f64(),
+        std::process::id()
+    );
+    let formats = [
+        "source-json",
+        "native-raw",
+        "native-zstd3",
+        "cache-raw",
+        "cache-zstd3",
+    ];
+    if selected_format.is_some_and(|f| !formats.contains(&f)) {
+        return Err(bad("unknown source measurement format"));
+    }
+    let mut rows = Vec::new();
+    for rep in 0..repetitions {
+        for offset in 0..formats.len() {
+            control.check("source_measurement")?;
+            let format = formats[(offset + rep as usize) % formats.len()];
+            if selected_format.is_some_and(|selected| selected != format) {
+                continue;
+            }
+            let mut phase = [0.; 9];
+            let t = Instant::now();
+            let mut files = Vec::new();
+            if format == "source-json" {
+                for name in [
+                    "manifest.json",
+                    legacy_meta.train.file.as_str(),
+                    legacy_meta.validation.file.as_str(),
+                ] {
+                    files.push(neural::read_bounded(&legacy.join(name), MAX_FILE)?);
+                }
+            } else {
+                let path = match format {
+                    "native-raw" => raw.to_owned(),
+                    "native-zstd3" => cold.to_owned(),
+                    "cache-raw" => cache.join("train.r3tok"),
+                    _ => cache.join("train.r3tok.zst"),
+                };
+                files.push(neural::read_bounded(&path, MAX_FILE)?);
+            }
+            phase[0] = t.elapsed().as_secs_f64();
+            let size = files.iter().map(Vec::len).sum::<usize>();
+            let t = Instant::now();
+            for f in &files {
+                std::hint::black_box(hash(f));
+            }
+            phase[1] = t.elapsed().as_secs_f64();
+            let t = Instant::now();
+            let mut packed = None;
+            let mut episodes = None;
+            if format == "source-json" {
+                let m: data::CorpusManifest = serde_json::from_slice(&files[0])?;
+                if neural::hash(&files[1]) != m.train.sha256
+                    || neural::hash(&files[2]) != m.validation.sha256
+                {
+                    return Err(bad("measurement legacy hash"));
+                }
+                let train: Vec<Episode> = serde_json::from_slice(&files[1])?;
+                let dev: Vec<Episode> = serde_json::from_slice(&files[2])?;
+                data::validate_episodes(&train)?;
+                data::validate_episodes(&dev)?;
+                data::check_split(&train, &dev)?;
+                episodes = Some(train);
+            } else if format.starts_with("native-") {
+                let c = data::native::decode(&files[0])?;
+                if c.semantic != source.semantic {
+                    return Err(bad("measurement source mismatch"));
+                }
+                episodes = Some(c.train);
+            } else {
+                let bytes = if format == "cache-zstd3" {
+                    if hash(&files[0]) != cache_hashes[1] {
+                        return Err(bad("cold cache hash"));
+                    }
+                    decompress(&files[0])?
+                } else {
+                    files[0].clone()
+                };
+                if hash(&bytes) != cache_hashes[0] {
+                    return Err(bad("raw cache hash"));
+                }
+                packed = Some(decode(bytes, &k)?);
+            }
+            phase[2] = t.elapsed().as_secs_f64();
+            let t = Instant::now();
+            let plain = episodes
+                .as_ref()
+                .map(|e| samples(e, &l.tokenizer, k.seq))
+                .transpose()?;
+            phase[3] = if plain.is_some() {
+                t.elapsed().as_secs_f64()
+            } else {
+                0.
+            };
+            let t = Instant::now();
+            let first = if let Some(p) = &packed {
+                p.batch(&draws[0])?
+            } else {
+                batch(plain.as_ref().unwrap(), &draws[0], &Device::Cpu)?
+            };
+            phase[4] = t.elapsed().as_secs_f64();
+            same_batch(&first, &batch(&expected, &draws[0], &Device::Cpu)?)?;
+            if let Some(p) = &packed {
+                parity(p, &expected, &annotations)?;
+            } else {
+                for (a, b) in plain.as_ref().unwrap().iter().zip(&expected) {
+                    if a.tokens != b.tokens
+                        || a.response_start != b.response_start
+                        || a.curriculum != b.curriculum
+                    {
+                        return Err(bad("all train sample parity"));
+                    }
+                }
+            }
+            let t = Instant::now();
+            for ids in &draws {
+                if let Some(p) = &packed {
+                    std::hint::black_box(p.batch(ids)?);
+                } else {
+                    std::hint::black_box(batch(plain.as_ref().unwrap(), ids, &Device::Cpu)?);
+                }
+            }
+            phase[5] = t.elapsed().as_secs_f64() / draws.len() as f64;
+            let t = Instant::now();
+            let encoded = if format == "source-json" {
+                let train = serde_json::to_vec(&legacy_train)?;
+                let dev = serde_json::to_vec(&legacy_dev)?;
+                let mut exported = legacy_meta.clone();
+                exported.train.sha256 = neural::hash(&train);
+                exported.train.bytes = train.len();
+                exported.validation.sha256 = neural::hash(&dev);
+                exported.validation.bytes = dev.len();
+                vec![serde_json::to_vec_pretty(&exported)?, train, dev]
+            } else if format.starts_with("native-") {
+                vec![data::native::encode(&source, format == "native-zstd3")?]
+            } else {
+                let b = encode(&k, &expected, &annotations)?;
+                vec![if format == "cache-zstd3" {
+                    zstd::stream::encode_all(b.as_slice(), 3)?
+                } else {
+                    b
+                }]
+            };
+            phase[6] = t.elapsed().as_secs_f64();
+            let t = Instant::now();
+            if format == "source-json" {
+                let m: data::CorpusManifest = serde_json::from_slice(&encoded[0])?;
+                let train: Vec<Episode> = serde_json::from_slice(&encoded[1])?;
+                let dev: Vec<Episode> = serde_json::from_slice(&encoded[2])?;
+                if m.train.sha256 != neural::hash(&encoded[1])
+                    || m.validation.sha256 != neural::hash(&encoded[2])
+                    || data::native::ordered_bytes(&train)
+                        != data::native::ordered_bytes(&source.train)
+                    || data::native::ordered_bytes(&dev)
+                        != data::native::ordered_bytes(&source.validation)
+                {
+                    return Err(bad("measurement JSON export equality"));
+                }
+            } else if format.starts_with("native-") {
+                if data::native::decode(&encoded[0])?.semantic != source.semantic {
+                    return Err(bad("measurement native export equality"));
+                }
+            } else {
+                let b = if format == "cache-zstd3" {
+                    decompress(&encoded[0])?
+                } else {
+                    encoded[0].clone()
+                };
+                parity(&decode(b, &k)?, &expected, &annotations)?;
+            }
+            phase[7] = t.elapsed().as_secs_f64();
+            let t = Instant::now();
+            for (i, bytes) in encoded.iter().enumerate() {
+                write_bytes(&output.join(format!("{format}-{rep}-{i}.bytes")), bytes)?;
+            }
+            phase[8] = t.elapsed().as_secs_f64();
+            let rss = super::super::rss_kib().ok();
+            println!(
+                "SOURCE_MEASURE format={format} repetition={rep} bytes={size} first_batch_ready_s={} phases_s={phase:?} rss_KiB={rss:?} PARITY=PASS",
+                phase[..5].iter().sum::<f64>()
+            );
+            rows.push(PreparationTiming {
+                format: format.into(),
+                repetition: rep,
+                bytes: size as u64,
+                seconds: phase,
+                rss,
+            });
+        }
+    }
+    publish(
+        output,
+        "measurement.r3er",
+        &Record::PreparationMeasure { bindings, rows },
+    )?;
+    println!(
+        "STORAGE_MEASURED=PASS SMALL_UPDATES=0 GENERATIONS=0 TEACHERS=0 TRAINING_THROUGHPUT=NOT_RUN"
     );
     Ok(())
 }

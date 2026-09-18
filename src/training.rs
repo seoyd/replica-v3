@@ -442,6 +442,16 @@ pub fn evaluate_corpus(
     use std::io::Write;
     let mut control = recovery::RunControl::command(false)?;
     control.check("evaluate_corpus_started")?;
+    if !rephrase && matches!(field_ablation, FieldAblation::None) {
+        return recovery::evaluate_native_source(
+            checkpoint,
+            corpus,
+            output,
+            limit,
+            split,
+            &mut control,
+        );
+    }
     let rephrase_field = matches!(
         field_ablation,
         FieldAblation::Question | FieldAblation::QuestionAndRecord
@@ -932,6 +942,7 @@ fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<
         state
     } else {
         TrainingState {
+            resume_binding: None,
             contrast16: false,
             parent_checkpoint_hash: Some(loaded.manifest.weights_sha256.clone()),
             config: config.clone(),
@@ -968,6 +979,12 @@ fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<
     if state.corpus_hash != corpus_hash || state.validation_hash != validation_hash {
         return Err(Error::Corrupt("resume corpus/split mismatch".into()));
     }
+    // New runs and explicit extensions bind the exact executed generic schedule/loss.
+    // Ordinary resume was checked before any tensor work and cannot change this policy.
+    state.resume_binding = Some(checkpoint::ResumeBinding::default_for(
+        &state,
+        &loaded.tokenizer,
+    ));
     println!(
         "available_framed_train_tokens={} available_framed_validation_tokens={} frozen_tokenizer={} previous_corpora={:?}",
         train.iter().map(|s| s.tokens.len()).sum::<usize>(),
@@ -992,14 +1009,14 @@ fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<
     if let Some(mut manifest) = corpus_manifest {
         manifest.train.tokens = Some(train.iter().map(|s| s.tokens.len()).sum());
         manifest.validation.tokens = Some(validation.iter().map(|s| s.tokens.len()).sum());
-        neural::write_new(
-            &run.output.join("corpus-manifest.json"),
-            &serde_json::to_vec_pretty(&serde_json::json!({
+        println!(
+            "CORPUS_REPORT {}",
+            serde_json::json!({
                 "corpus":manifest,"source_directory":run.corpus,"tokenizer_sha256":loaded.tokenizer.id(),
                 "tokenizer_training_hash":loaded.tokenizer.train_hash,"previous_corpora":state.previous_corpora,
                 "token_count_kind":"available framed samples before sampling/repetition; LM overlap context included"
-            }))?,
-        )?;
+            })
+        );
     }
     let mut peak = control.last_rss_kib;
     let mut rng = Rng::new(state.sampler_state);

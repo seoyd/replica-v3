@@ -1,4 +1,6 @@
 //! Explicit training tool only. This module is not linked by the inference library.
+#[path = "native_corpus.rs"]
+pub mod native;
 use replica_v3::{
     Error, Result,
     event::GenerationLimits,
@@ -16,6 +18,62 @@ pub const GENERATOR_REVISION: &str = "educational-korean-v1";
 #[cfg(test)]
 mod harness_tests {
     use super::*;
+    #[test]
+    fn conditional_panel_facts_swap_order_and_independent_oracle() {
+        let (cases, foils) = conditional_panel(&[], 19317).unwrap();
+        assert_eq!(cases.len(), 144);
+        assert_eq!(foils.len(), 144);
+        for base in cases.as_chunks::<6>().0 {
+            for (view, e) in base.iter().enumerate() {
+                let status = if view == 1 { "superseded" } else { "current" };
+                let target = e
+                    .request
+                    .evidence
+                    .items
+                    .iter()
+                    .find(|r| {
+                        r.version_status == status && r.original_excerpt.contains(" 이동 지시는 ")
+                    })
+                    .unwrap();
+                assert_eq!(
+                    e.answer,
+                    format!("{} [event:{}]", target.original_excerpt, target.event_id)
+                );
+                assert_eq!(
+                    e.request.evidence.items.len(),
+                    if view == 5 { 3 } else { 2 }
+                );
+                assert_eq!(target.recorded_at, if view == 1 { 100 } else { 200 });
+                assert!(!e.request.input.contains(&e.answer));
+                assert!(
+                    e.request
+                        .input
+                        .contains(e.binding.split('/').next().unwrap())
+                );
+            }
+            assert_ne!(base[0].answer, base[1].answer);
+            assert_ne!(base[0].answer, base[2].answer);
+            for v in [3, 4, 5] {
+                assert_eq!(base[0].answer, base[v].answer);
+            }
+            assert_eq!(
+                base[0].request.evidence.items[0].event_id,
+                base[2].request.evidence.items[0].event_id
+            );
+            assert_eq!(
+                base[0].request.evidence.items[0].event_id,
+                base[3].request.evidence.items[1].event_id
+            );
+            assert_ne!(base[0].request.input, base[4].request.input);
+        }
+        let mut seen = BTreeSet::new();
+        for e in &cases {
+            assert!(seen.insert(e.id.clone()));
+        }
+        let (again, again_foils) = conditional_panel(&[], 19317).unwrap();
+        assert_eq!(native::ordered_bytes(&cases), native::ordered_bytes(&again));
+        assert_eq!(foils, again_foils);
+    }
     #[test]
     #[ignore = "isolated by bounded parent to avoid an in-process non-progress loop"]
     fn empty_key_child() {
@@ -110,7 +168,7 @@ pub struct Split {
     pub documents: usize,
     pub tokens: Option<usize>,
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CorpusManifest {
     pub version: u32,
@@ -122,7 +180,7 @@ pub struct CorpusManifest {
     pub train: Split,
     pub validation: Split,
 }
-pub fn load_split(root: &Path, split: &Split) -> Result<Vec<Episode>> {
+pub fn load_split_legacy(root: &Path, split: &Split) -> Result<Vec<Episode>> {
     if split.file.contains('/') || split.file.contains('\\') || split.file.starts_with('.') {
         return Err(Error::Invalid("split filename".into()));
     }
@@ -131,11 +189,18 @@ pub fn load_split(root: &Path, split: &Split) -> Result<Vec<Episode>> {
         return Err(Error::Corrupt("corpus hash/size".into()));
     }
     let docs: Vec<Episode> = serde_json::from_slice(&bytes)?;
-    if docs.len() != split.documents || docs.is_empty() || docs.len() > 100_000 {
+    if docs.len() != split.documents {
+        return Err(Error::Invalid("corpus count".into()));
+    }
+    validate_episodes(&docs)?;
+    Ok(docs)
+}
+pub(crate) fn validate_episodes(docs: &[Episode]) -> Result<()> {
+    if docs.is_empty() || docs.len() > 100_000 {
         return Err(Error::Invalid("corpus count".into()));
     }
     let mut ids = BTreeSet::new();
-    for e in &docs {
+    for e in docs {
         if !ids.insert(&e.id)
             || e.category > 4
             || e.request.input.len() > 262144
@@ -166,18 +231,22 @@ pub fn load_split(root: &Path, split: &Split) -> Result<Vec<Episode>> {
             return Err(Error::Invalid("training citation outside evidence".into()));
         }
     }
-    Ok(docs)
+    Ok(())
 }
-pub fn load(root: &Path) -> Result<(CorpusManifest, Vec<Episode>, Vec<Episode>)> {
+pub fn load_legacy(root: &Path) -> Result<(CorpusManifest, Vec<Episode>, Vec<Episode>)> {
     let manifest: CorpusManifest =
         serde_json::from_slice(&read_bounded(&root.join("manifest.json"), 65536)?)?;
     if manifest.version != 1 {
         return Err(Error::Invalid("corpus version".into()));
     }
-    let train = load_split(root, &manifest.train)?;
-    let validation = load_split(root, &manifest.validation)?;
+    let train = load_split_legacy(root, &manifest.train)?;
+    let validation = load_split_legacy(root, &manifest.validation)?;
     check_split(&train, &validation)?;
     Ok((manifest, train, validation))
+}
+pub fn load(root: &Path) -> Result<(CorpusManifest, Vec<Episode>, Vec<Episode>)> {
+    let c = native::read(root)?;
+    Ok((c.manifest, c.train, c.validation))
 }
 pub(crate) fn check_split(train: &[Episode], validation: &[Episode]) -> Result<()> {
     for field in [0, 1, 2, 3] {
@@ -1613,11 +1682,11 @@ pub fn prepare(
         });
     }
     check_split(&train, &validation)?;
-    std::fs::create_dir(root)?;
-    let manifest=CorpusManifest{version:1,scope:if local.is_empty(){"SYNTHETIC_ONLY"}else{"SYNTHETIC_AND_EXPLICIT_LOCAL"}.into(),permission:"project-generated; supplied paths explicitly authorized for training".into(),generator:revision.into(),seed,split_rule:"episode first; disjoint entity binding, template family and sequence; final test created independently".into(),train:save_split(root,"train",&train)?,validation:save_split(root,"validation",&validation)?};
-    write_new(
-        &root.join("manifest.json"),
-        &serde_json::to_vec_pretty(&manifest)?,
+    let manifest=CorpusManifest{version:1,scope:if local.is_empty(){"SYNTHETIC_ONLY"}else{"SYNTHETIC_AND_EXPLICIT_LOCAL"}.into(),permission:"project-generated; supplied paths explicitly authorized for training".into(),generator:revision.into(),seed,split_rule:"episode first; disjoint entity binding, template family and sequence; final test created independently".into(),train:native::split("train",&train),validation:native::split("validation",&validation)};
+    native::write(
+        root,
+        &native::from_episodes(manifest.clone(), train, validation.clone())?,
+        true,
     )?;
     println!("{}", serde_json::to_string_pretty(&manifest)?);
     if matches!(
@@ -1777,18 +1846,10 @@ pub fn binding_pairs(source: &Path, output: &Path) -> Result<()> {
         "Same training count; {changed} existing two-current-record QA0/QA2 cases become query/value pairs; other cases and validation bytes unchanged; parent train={parent_train}; {}",
         manifest.split_rule
     );
-    let validation_bytes = read_bounded(&source.join(&manifest.validation.file), MAX_CORPUS)?;
-    if hash(&validation_bytes) != manifest.validation.sha256 {
-        return Err(Error::Corrupt(
-            "binding pair validation changed during preparation".into(),
-        ));
-    }
-    std::fs::create_dir(output)?;
-    manifest.train = save_split(output, "train", &train)?;
-    write_new(&output.join(&manifest.validation.file), &validation_bytes)?;
-    write_new(
-        &output.join("manifest.json"),
-        &serde_json::to_vec_pretty(&manifest)?,
+    native::write(
+        output,
+        &native::from_episodes(manifest.clone(), train, validation)?,
+        true,
     )?;
     println!("{}", serde_json::to_string_pretty(&manifest)?);
     Ok(())
@@ -1935,12 +1996,10 @@ pub fn qa_pairs(source: &Path, output: &Path, groups: usize) -> Result<()> {
         manifest.train.sha256, manifest.validation.sha256, manifest.split_rule
     );
     manifest.generator.push_str("/qa-binding-pairs-v1");
-    std::fs::create_dir(output)?;
-    manifest.train = save_split(output, "train", &train)?;
-    manifest.validation = save_split(output, "validation", &validation)?;
-    write_new(
-        &output.join("manifest.json"),
-        &serde_json::to_vec_pretty(&manifest)?,
+    native::write(
+        output,
+        &native::from_episodes(manifest.clone(), train, validation)?,
+        true,
     )?;
     println!("{}", serde_json::to_string_pretty(&manifest)?);
     Ok(())
@@ -1971,12 +2030,10 @@ pub fn qa_subset(source: &Path, output: &Path, count: usize) -> Result<()> {
         "MEMORIZATION_DIAGNOSTIC_ONLY; first {count} nonempty non-copy QA from each existing split; episodes unchanged; parent train={} validation={}; {}",
         manifest.train.sha256, manifest.validation.sha256, manifest.split_rule
     );
-    std::fs::create_dir(output)?;
-    manifest.train = save_split(output, "train", &train)?;
-    manifest.validation = save_split(output, "validation", &validation)?;
-    write_new(
-        &output.join("manifest.json"),
-        &serde_json::to_vec_pretty(&manifest)?,
+    native::write(
+        output,
+        &native::from_episodes(manifest.clone(), train, validation)?,
+        true,
     )?;
     println!("{}", serde_json::to_string_pretty(&manifest)?);
     Ok(())
@@ -1984,7 +2041,7 @@ pub fn qa_subset(source: &Path, output: &Path, count: usize) -> Result<()> {
 /// Materialized H3 education, isolated from inference. Reuses the existing corpus format.
 pub fn copy_curriculum(source: &Path, output: &Path, seed: u64) -> Result<()> {
     use replica_v3::neural::transformer::Rng;
-    let (parent, original, validation) = load(source)?;
+    let (parent, original, validation) = load_legacy(source)?;
     let mut rng = Rng::new(seed);
     let shuffle = |indices: &mut Vec<usize>, rng: &mut Rng| {
         for i in (1..indices.len()).rev() {
@@ -2210,6 +2267,149 @@ pub fn crossed_copy_development(
     seed: u64,
 ) -> Result<(Vec<Episode>, serde_json::Value)> {
     crossed_copy_panel(prior, seed, 128, false)
+}
+/// Frozen development contrasts only. Labels stay outside ModelRequest.
+pub fn conditional_panel(prior: &[Episode], seed: u64) -> Result<(Vec<Episode>, Vec<String>)> {
+    use replica_v3::neural::transformer::Rng;
+    let mut rng = Rng::new(seed);
+    let mut used: BTreeSet<String> = prior
+        .iter()
+        .flat_map(|e| e.request.evidence.items.iter())
+        .filter_map(|e| {
+            e.original_excerpt
+                .split_once("의 ")
+                .map(|(s, _)| s.to_owned())
+        })
+        .collect();
+    let mut cases = Vec::new();
+    let mut foils = Vec::new();
+    for base in 0..24 {
+        let digits = [2, 4, 6, 8][base % 4];
+        let repeated = (base / 4) % 2 == 1;
+        let kind = (base / 4 + base / 8) % 2;
+        let mut entity = None;
+        for _ in 0..10000 {
+            let d = (rng.next_u64() % 10) as u8 + b'0';
+            let mut number = vec![d; digits];
+            if !repeated {
+                for (i, n) in number.iter_mut().enumerate() {
+                    *n = b'0' + ((d - b'0' + i as u8) % 10);
+                }
+            }
+            let s = format!(
+                "{}{}",
+                ["장치", "설비", "센서", "장비"][(rng.next_u64() % 4) as usize],
+                std::str::from_utf8(&number).unwrap()
+            );
+            if !used.contains(&s)
+                && usize::from_str_radix(&hash(s.as_bytes())[..8], 16).unwrap() % 3 != 2
+            {
+                entity = Some(s);
+                break;
+            }
+        }
+        let entity = entity
+            .ok_or_else(|| Error::Invalid("conditional panel unseen stratum capacity".into()))?;
+        used.insert(entity.clone());
+        let context = format!("구역{}", rng.next_u64() % 99999);
+        let values = if kind == 0 {
+            let directions = [
+                "오른쪽",
+                "왼쪽",
+                "직진",
+                "대기",
+                "북쪽",
+                "남쪽",
+                "동쪽",
+                "서쪽",
+            ];
+            let i = (rng.next_u64() % 8) as usize;
+            [
+                directions[i].to_string(),
+                directions[(i + 1 + (rng.next_u64() % 7) as usize) % 8].to_string(),
+            ]
+        } else {
+            let n = rng.next_u64() % 100000;
+            [
+                format!("경로{n:05}"),
+                format!("경로{:05}", (n + 1 + rng.next_u64() % 99999) % 100000),
+            ]
+        };
+        let current = 1 + (rng.next_u64() % 900000) as i64;
+        let past = current + 1000000;
+        for view in 0..6 {
+            let swap = usize::from(view == 2);
+            let selected = usize::from(view == 1);
+            let mut records = Vec::new();
+            for (i, id) in [current, past].into_iter().enumerate() {
+                let original =
+                    format!("{entity}의 {context} 이동 지시는 {}이다.", values[i ^ swap]);
+                let mut record =
+                    evidence(id, original, if i == 0 { "current" } else { "superseded" });
+                record.recorded_at = if i == 0 { 200 } else { 100 };
+                record.observed_at = Some(record.recorded_at - 1);
+                records.push(record);
+            }
+            let answer = format!(
+                "{} [event:{}]",
+                records[selected].original_excerpt, records[selected].event_id
+            );
+            let foil = format!(
+                "{} [event:{}]",
+                records[1 - selected].original_excerpt,
+                records[1 - selected].event_id
+            );
+            if view == 3 {
+                records.reverse();
+            }
+            if view == 5 {
+                records.push(evidence(
+                    current + 2000000,
+                    "기록 보관실의 점검 시간은 오후 세 시이다.".into(),
+                    "current",
+                ));
+            }
+            let input = match view {
+                1 => format!(
+                    "{entity}의 {context}에서 과거에 유효했던 사건의 원문을 빠짐없이 쓰고 그 사건을 인용해줘."
+                ),
+                4 => format!(
+                    "{context}에 있는 {entity}에 대해 지금 적용되는 기록은 무엇인가요? 해당 원문 전체와 사건 인용을 알려주세요."
+                ),
+                _ => format!(
+                    "{entity}의 {context}에서 현재 유효한 사건의 원문을 빠짐없이 쓰고 그 사건을 인용해줘."
+                ),
+            };
+            let id = format!("conditional-development/{seed}/{base}/{view}");
+            cases.push(Episode {
+                id: id.clone(),
+                category: 0,
+                family: format!(
+                    "conditional/digits-{digits}/repeated-{repeated}/kind-{kind}/view-{view}"
+                ),
+                binding: format!("{entity}/{context}/{}", values[selected ^ swap]),
+                sequence: format!("conditional/{seed}/{base}"),
+                answer,
+                request: ModelRequest {
+                    request_id: id,
+                    system: SYSTEM.into(),
+                    input,
+                    evidence: EvidenceBundle {
+                        items: records,
+                        ..Default::default()
+                    },
+                    limits: GenerationLimits {
+                        context_tokens: 2048,
+                        max_tokens: 128,
+                        timeout_ms: 30000,
+                    },
+                },
+            });
+            foils.push(foil);
+        }
+    }
+    validate_episodes(&cases)?;
+    Ok((cases, foils))
 }
 fn crossed_copy_panel(
     prior: &[Episode],

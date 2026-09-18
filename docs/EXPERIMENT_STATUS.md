@@ -1,5 +1,45 @@
 # 진단 및 구현 상태
 
+## Native corpus / objective binding — 구현 경계
+
+R3-NATIVE-CORPUS-OBJECTIVE-BINDING-1.0. 기준 source
+af63823346ebb6e11cc23451a8ba0c704eb34039, 시작 report HEAD
+5c35c8c452f6d6790f121af2e2a9e018cc01641c. 기존 tracked dirty0 및
+untracked487개를 보존했다. 새 근거 root는
+`artifacts/native-corpus-objective-20260918/`이며 원본이나 실험 종료 상태를 바꾸지 않는다.
+
+EXECUTED_THIS_RUN: fmt/check/clippy/release 성공. 관련 단위10개 및 직접 process5개
+통과. 초기 quick는 v1 golden/version/config fixture3개에서 실패했고 수정 후 통과했다.
+두 번째 quick는 JSON deny sandbox의 macOS setuid ps 제한으로 자원 관측이 실패했다.
+RSS gate를 끄지 않고 JSON 없는 격리 폴더의 compile/train/fresh resume/eval로 검증했다.
+따라서 OS 수준 전 시스템 open 추적 증거는 없으며, 실제 native 경로 실행과 loader
+의존성 검사를 구분한다. 새 binding으로 preflight 연속/분할 정책 값이 달라지는 비교도
+각 정책 검증 후 실행 수치 비교로 수정했고 post-link 오류 차단 회귀를 재통과했다.
+전체 quick PASS로 합산하지 않는다. 실패를 포함한 TINY optimizer64/128, scalar0.
+
+N1: standalone SPAN에 인접 정책이 없을 때 기존 binary는 tensor 준비까지 진입했다
+(없는 corpus에서 중단, optimizer0). 새 v1은 LEGACY_OBJECTIVE_UNKNOWN, 새 v2 SPAN은
+OBJECTIVE_POLICY_UNSUPPORTED로 tensor 준비/optimizer/성공 출력 전에 거부한다.
+기본 및 nonzero SPAN TINY 각각 연속2와 fresh1+1의 weights/Adam/state가 일치했다.
+실제 원본의 policy/native/terminal/raw close를 검증한 migration은 default와 SPAN 모두
+성공했다. inference graph와 tokenizer 및 Adam/clock을 변경하지 않는다.
+
+| 원본 | 새 v2 physical SHA | 동일 model SHA |
+| --- | --- | --- |
+| A75-R24310 | 81d18002580fd2b662f4fb4c7a7acfd45833b8f0ca1de49a62193b56bb3a6142 | dfc3efb664351578340e39d3cfc95b90f270541041d4641d72d6f41a53871b11 |
+| S-SPAN24822 | 883af65bb658923197df0bfa0d1b44e06239c209af3f160656a94ec7123d304b | 8536fc7d57c27920ed5095bbdf0c79c0bb9bdece9ad851675f2d3a10101b363f |
+
+N2: native full source codec/import/loader/generator/transform 연결, corpus-F와
+goal1-corpus-v9의 원문·순서·train/dev 전체 동등성을 실제 검사했다. 원 JSON은 역사 자료다.
+N3 TINY: native 일반 trainer와 cache-backed native run 모두 연속2/fresh1+1 통과.
+N3 SMALL4, v1/v2 생성32, N4 조건부 생성288/teacher288, N5 측정은 이 절 시점 NOT_RUN.
+quality SMALL0이며 기존 H3/S4 미달, S5/S6/Goal1 미완료는 유지한다.
+
+고정 release binary SHA=ec3dccc0055b24a24d1412b36a1a0b9aa61d41fd8a584e6f8c1e5d714ea005dc.
+실행 경로는 root의 `native-runner`, 현재 diff는 `n5-tested.patch`와 새 native_corpus.rs의
+별도 해시로 기록했다. 원자료와 binary는 git에 올리지 않는다. 후속 실행 결과는 다음
+보고 절에서 실제 counts/hash와 함께 갱신하며 이전 실패 파일은 보존한다.
+
 ## 최종 게시와 검토 전달
 
 최종 candidate source=`af63823346ebb6e11cc23451a8ba0c704eb34039`.
