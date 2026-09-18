@@ -1,5 +1,60 @@
 # 진단 및 구현 상태
 
+## P4 완료 — 고정 LR 비교 실행 완료, H3 조건 미달
+
+R3-PREFLIGHT-ONCE-AND-COOLDOWN-1.0 / EXECUTED_THIS_RUN / 2026-09-18.
+수리 source7cd0a58bc989373ec8494fdf99131c7850ad0f37와 연구 source
+0e8aa3049a90626264052e6d117370c15089f4c7를 정상 push/remote SHA 확인했다.
+두 군 실행 source=0e8aa3049a90626264052e6d117370c15089f4c7,
+source digest926952e2ef451b67fb85d2699fd0bc001e285b47bd03d270eca478fa14bee071,
+binary c3cc1587754f6c674805bce2d1d8c6e31bd12251cf6302622d3e48f6a4861f65.
+실행 도중 소스·바이너리·tape·정책을 바꾸지 않았다. 이 절은 report-only 변경이다.
+
+각 군은 같은 A75-R24310 부모에서 실제1회→저장→새 process 검증→255회로 끝났다.
+첫 native 전체 SHA는 두 군 모두6158c3cff72925e9c76724aa3822a28690f0c56c9adf2f2220d2a0939b08c7ec였다.
+첫 LR와 weights/Adam/state가 같은 실제 SMALL 저장 관측이며 추가 preflight4가 아니다.
+두 최종 command는 STOP=[],complete=true,resume=false,candidate=false,
+COMMAND_FINALIZATION=Complete로 exit0. 첫 TimePause는 예산에 포함된 사전등록 저장 경계다.
+
+| 동일 endpoint 평가 | dev full/entity/event (/256) | CROSS full/entity/event (/512) | QA /336 | aux /64 | dev/CROSS/ordinary 오류 |
+| --- | --- | --- | ---: | ---: | --- |
+| 부모 A75-R24310, 재집계 | 240 /247 /250 | 462 /499 /500 | 181 | 53 | 1 /0 /0 |
+| K 중간128,24438 | 238 /247 /250 | NOT_RUN | NOT_RUN | NOT_RUN | 1 /NOT_RUN /NOT_RUN |
+| D 중간128,24438 | 240 /247 /250 | NOT_RUN | NOT_RUN | NOT_RUN | 1 /NOT_RUN /NOT_RUN |
+| K 최종256,24566 | 238 /247 /251 | 458 /497 /501 | 177 | 54 | 1 /0 /0 |
+| D 최종256,24566 | 237 /247 /250 | 459 /498 /501 | 181 | 53 | 1 /0 /0 |
+
+중간 watch는 K20/32,D19/32, 최종 watch는 K20/32,D21/32다. 최종 watch는
+동일 ordinary subset이며 중복 생성이 아니다. 모든 최종 필수 출력은 EOS를 가졌지만
+양군 dev의 ordinal2772는49 tokens/EOS48 뒤 strict UTF-8 오류로 실패했다.
+정상 생성 원시 출력과 고정 expected를 그대로 채점했고, 오류를 분모에서 제외하지 않았다.
+
+| 실제 새 소비 | SMALL updates | input tokens | target tokens | anchor/focus draws | generation / teacher |
+| --- | ---: | ---: | ---: | --- | --- |
+| 부모 parity | 0 | 학습0 | 학습0 | 0 /0 | 16 /0 |
+| K-KEEP | 256 | 627563 | 65772 | 1536 /512 | 1456 /0 |
+| D-DECAY | 256 | 627563 | 65772 | 1536 /512 | 1456 /0 |
+| 합계 | 512 /512 한도 | 1255126 | 131544 | 3072 /1024 | 2928 /4096 한도, teacher0 |
+
+TINY는 실패·quick·최종 관련 재검증까지85/128, scalar optimizer0.
+K actual LR=1e-4; D final LR=1e-5(bits4532020583610935537), midpoint bits는
+4543282299299812598로 사전등록·실제 trace가 같았다. Adam absolute step은24566이며
+모델 하나에512회를 더한 것이 아니라 두 모델 각256회다. 이전1028회 예산과 합치지 않는다.
+
+허용된 로컬 근거 root=`artifacts/preflight-cooldown-20260918/`:
+`p4-k-first.log`, `p4-k-resume.log`, `p4-d-first.log`, `p4-d-resume.log`가 실제 실행 로그다.
+`study/{K-KEEP,D-DECAY}/inputs.r3er`, `segment-00/final.r3m`,
+`segment-01/step-0128.r3m`, `segment-01/step-0256.r3m`, 같은 segment의 raw panels,
+decision/terminal/command 및 arm의 comparison.r3er를 보존한다. 코퍼스·DB·원래 실패는 그대로다.
+
+K final physical=ded3dbd682bd5b889bdd818bd749646a7de841363756547cfd8686c1b17a64e6,
+model=d8c59bfa04d29d862bc017c784356ef57d052a2af6a98359a9759ae026acb476.
+D final physical=81e28fdfb8b319647a924b4023297c86edb7ac9574875f63a72ec9edff0021af,
+model=c36685cbc5b4e5972fe44ce4076c283e77e5524ad6fcc5cd7b4f5172bd96fe77.
+P5 독립 raw 재집계/paired 비교는 진행 중이다. 품질 후보 추가 생성은 선행 joint 실패로
+NOT_RUN이며 seal NOT_OPENED, S4/S5/S6와 GOAL1_READY/ACCEPTED는 false/미통과다.
+도구 수리 PASS와 학습 실행 완료를 모델 품질 PASS로 바꾸지 않는다.
+
 ## P0–P2 진행 — preflight 시도·부분 결과·실패 회계 수리
 
 R3-PREFLIGHT-ONCE-AND-COOLDOWN-1.0 / 2026-09-18. 시작 HEAD198a1a032368f023d81ab744e59eccb1cd6b6e53,
