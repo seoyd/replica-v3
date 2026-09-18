@@ -1,6 +1,43 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: R3-QUALITY-FIRST-BRIDGE-1.0
+## Active: R3-BRIDGE-EVIDENCE-RESTART-1.0
+
+Base source2a1010105e0914e4c84cc94b7da707171baaecbe, report
+5833ee9f6790b7c0c9489b648e9f4f2e0b229acd. The failed original parent observation
+remains FAILED_PUBLICATION/INTERRUPTED_UNKNOWN and cannot resume. This contract
+authorizes exactly one separate replacement-01 after the direct repairs pass.
+
+B0 preserve identities/raw → B1 root registration and pure teacher verifier →
+B2 actual separate-file TINY observation/approval/fresh resume/close → freeze source
+and binary → B3 register replacement, reuse identical data and A75-R24310, observe
+sanity64/dev256 and own teacher64 once → B4 C/T first1+fresh511 each → B5 recount.
+Missing registered children block retry and later models. Successful zero scores
+permit admission; cancellation, nonfinite values, integrity/publication failure or
+unknown completion block it. No automatic replacement-02 or repaired old final.
+
+The only learning variable stays the nonselected entity in existing C/T corpora.
+Both arms retain the native parent/Adam/tokenizer/default loss/first weight8,
+constant actualLR1e-4, F32 CPU Accelerate threads1, same6:2 tape,512 updates.
+New budgets: SMALL1024, additional parity SMALL0, TINY128; generation4608 maximum
+(320 parent +576 mid +3136 final +conditional48 =4080 planned), own teacher192,
+input2M/target500k per arm, model7200s, command1800s/cleanup120s. Previously spent
+generation320/teacher64 and unknown tail remain historical, never zeroed or reused.
+
+R3ER registration/proof variants retain explicit file references and typed data.
+Reports use the same pure teacher verifier as scope3 approval and perform no
+collection or publication. Test-sized denominators retain the production separate
+start/entry/row/final layout; synthetic64-row schema tests are not64 forwards.
+Root registration only detects missing children while the root evidence survives;
+it cannot detect deletion/rollback of the entire root and all external evidence.
+
+Primary final512: newdev256 T−C paired gain/loss and64 base×4-view joint correctness.
+Signal: T>=192, T−C>=26, base4>=40, newdev errors0, QA>=178. H3 joint remains
+olddev244/entity254/event254, CROSS487/entity507/event507, QA178, required errors0,
+same durable native endpoint. Report aux64 and original conditional144 separately.
+Signal and H3 are separate; seal/S4/S5/S6/Goal1 acceptance are not authorized here.
+Only a joint/signal candidate permits metadata-selected fresh48 within this budget.
+
+## Closed attempt: R3-QUALITY-FIRST-BRIDGE-1.0
 
 Base source a89fbc977ed9421489a43fc4b4eb6f42a5ebbd25, report
 91ce87ba3286637e9372f7e70f337b73de1b0aaf. Preserve all prior raw, corpus,

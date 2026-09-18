@@ -64,6 +64,103 @@ fn copy_fixture(from: &Path, to: &Path) {
         }
     }
 }
+fn evidence_manifest(root: &Path) -> Vec<(PathBuf, bool, u64, Vec<u8>)> {
+    use sha2::{Digest, Sha256};
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<(PathBuf, bool, u64, Vec<u8>)>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let m = fs::symlink_metadata(entry.path()).unwrap();
+            assert!(!m.is_symlink());
+            out.push((
+                entry.path().strip_prefix(root).unwrap().to_path_buf(),
+                m.is_dir(),
+                if m.is_dir() { 0 } else { m.len() },
+                if m.is_dir() {
+                    vec![]
+                } else {
+                    Sha256::digest(fs::read(entry.path()).unwrap()).to_vec()
+                },
+            ));
+            if m.is_dir() {
+                walk(root, &entry.path(), out);
+            }
+        }
+    }
+    let mut out = vec![];
+    walk(root, root, &mut out);
+    out.sort();
+    out
+}
+#[test]
+fn conditional_root_registration_survives_missing_child() {
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
+    let root = d.path().join("plan");
+    call(
+        &[
+            "fixture-conditional",
+            "--from",
+            p(&bootstrap),
+            "--output",
+            p(&root),
+        ],
+        None,
+        true,
+        &d.path().join("prepare.log"),
+    );
+    call(
+        &["conditional-run", "--root", p(&root), "--model", "0"],
+        Some("pv-start-kill"),
+        false,
+        &d.path().join("start.log"),
+    );
+    fs::rename(root.join("model-0"), d.path().join("quarantine")).unwrap();
+    let preserved = evidence_manifest(&root);
+    for model in ["0", "1"] {
+        let out = call(
+            &["conditional-run", "--root", p(&root), "--model", model],
+            None,
+            false,
+            &d.path().join("retry.log"),
+        );
+        let log = String::from_utf8_lossy(&out.stdout);
+        assert!(!log.contains("VERIFICATION_GENERATION_API_ENTRY="));
+        assert!(!log.contains("CONDITIONAL_MODEL_LOAD="));
+        assert!(!root.join(format!("model-{model}")).exists());
+    }
+    assert_eq!(preserved, evidence_manifest(&root));
+    let root = d.path().join("sync-failure");
+    call(
+        &[
+            "fixture-conditional",
+            "--from",
+            p(&bootstrap),
+            "--output",
+            p(&root),
+        ],
+        None,
+        true,
+        &d.path().join("prepare-sync.log"),
+    );
+    let out = call(
+        &["conditional-run", "--root", p(&root), "--model", "0"],
+        Some("conditional-registration-sync"),
+        false,
+        &d.path().join("sync.log"),
+    );
+    assert!(root.join("attempt-0.r3er").exists());
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("CONDITIONAL_MODEL_LOAD="));
+    for model in ["0", "1"] {
+        call(
+            &["conditional-run", "--root", p(&root), "--model", model],
+            None,
+            false,
+            &d.path().join("sync-retry.log"),
+        );
+        assert!(!root.join(format!("model-{model}")).exists());
+    }
+    println!("ROOT_REGISTRATION_REGRESSION TINY_UPDATES=0 SMALL_UPDATES=0");
+}
 #[test]
 fn bridge_observation_teacher_receipt_survives_fresh_read_and_cannot_retry() {
     let d = tempfile::tempdir().unwrap();
@@ -91,6 +188,7 @@ fn bridge_observation_teacher_receipt_survives_fresh_read_and_cannot_retry() {
     let log = String::from_utf8_lossy(&observed.stdout);
     assert!(log.contains("TEACHERS=2"));
     let final_bytes = fs::read(root.join("preflight-final.r3er")).unwrap();
+    let manifest = evidence_manifest(&root);
     let report = call(
         &["bridge-observe-report", "--root", p(&root)],
         None,
@@ -101,6 +199,49 @@ fn bridge_observation_teacher_receipt_survives_fresh_read_and_cannot_retry() {
         String::from_utf8_lossy(&report.stdout)
             .contains("NEW_GENERATIONS=0 NEW_TEACHERS=0 NEW_SMALL_UPDATES=0")
     );
+    assert_eq!(manifest, evidence_manifest(&root));
+    for name in [
+        "parent-probe-start.r3er",
+        "parent-probe-entry-00.r3er",
+        "parent-probe-row-00.r3er",
+        "parent-probe-final.r3er",
+    ] {
+        let bytes = fs::read(root.join(name)).unwrap();
+        for missing in [true, false] {
+            if missing {
+                fs::remove_file(root.join(name)).unwrap();
+            } else {
+                fs::write(root.join(name), b"corrupt teacher evidence").unwrap();
+            }
+            let before = evidence_manifest(&root);
+            let out = call(
+                &["bridge-observe-report", "--root", p(&root)],
+                None,
+                false,
+                &d.path().join("negative-report.log"),
+            );
+            assert!(
+                !String::from_utf8_lossy(&out.stdout)
+                    .contains("VERIFICATION_GENERATION_API_ENTRY=")
+            );
+            let study = d.path().join("must-not-exist");
+            call(
+                &[
+                    "bridge-prepare",
+                    "--observation",
+                    p(&root),
+                    "--output",
+                    p(&study),
+                ],
+                None,
+                false,
+                &d.path().join("negative-prepare.log"),
+            );
+            assert!(!study.exists());
+            assert_eq!(before, evidence_manifest(&root));
+            fs::write(root.join(name), &bytes).unwrap();
+        }
+    }
     call(
         &["bridge-observe", "--root", p(&root)],
         None,
@@ -111,7 +252,110 @@ fn bridge_observation_teacher_receipt_survives_fresh_read_and_cannot_retry() {
         final_bytes,
         fs::read(root.join("preflight-final.r3er")).unwrap()
     );
-    println!("BRIDGE_RECEIPT TINY_GENERATIONS=2 TINY_TEACHERS=2 TINY_UPDATES=0 SMALL_UPDATES=0");
+    let study = d.path().join("study");
+    call(
+        &[
+            "bridge-prepare",
+            "--observation",
+            p(&root),
+            "--output",
+            p(&study),
+        ],
+        None,
+        true,
+        &d.path().join("admission.log"),
+    );
+    let mut updates = 0;
+    for arm in ["C-COPYMATCH", "T-TEMPORAL"] {
+        let dir = study.join(arm);
+        for resume in [false, true] {
+            let mut args = vec!["run", "--root", p(&dir)];
+            if resume {
+                args.extend(["--resume", "segment-00/terminal.r3er"]);
+            }
+            let out = call(&args, None, true, &d.path().join("run.log"));
+            updates += String::from_utf8_lossy(&out.stdout)
+                .matches("ACTUAL_TINY_UPDATE=")
+                .count();
+        }
+    }
+    assert_eq!(updates, 4);
+    let before = evidence_manifest(&study);
+    call(
+        &["anchor-report", "--root", p(&study)],
+        None,
+        true,
+        &d.path().join("pair-report.log"),
+    );
+    assert_eq!(before, evidence_manifest(&study));
+    assert_eq!(manifest, evidence_manifest(&root));
+    println!("PRODUCTION_LAYOUT_E2E TINY_UPDATES={updates} SMALL_UPDATES=0");
+    println!(
+        "BRIDGE_OBSERVATION_ONLY TINY_GENERATIONS=2 TINY_TEACHERS=2 TINY_UPDATES=0 SMALL_UPDATES=0"
+    );
+}
+#[test]
+fn bridge_teacher_failure_is_sticky_and_report_does_not_repair() {
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
+    for mode in [
+        "bridge-teacher-cancel",
+        "conditional-teacher-error",
+        "pv-final-write-fail",
+    ] {
+        let root = d.path().join(mode);
+        call(
+            &[
+                "fixture-bridge",
+                "--from",
+                p(&bootstrap),
+                "--output",
+                p(&root),
+                "--observation",
+            ],
+            None,
+            true,
+            &d.path().join("prepare.log"),
+        );
+        call(
+            &["bridge-observe", "--root", p(&root)],
+            Some(mode),
+            false,
+            &d.path().join("observe.log"),
+        );
+        assert!(root.join("parent-probe-entry-00.r3er").exists());
+        let before = evidence_manifest(&root);
+        // A complete raw-only report may describe a failed command, but never grants admission.
+        call(
+            &["bridge-observe-report", "--root", p(&root)],
+            None,
+            mode == "pv-final-write-fail",
+            &d.path().join("report.log"),
+        );
+        assert_eq!(before, evidence_manifest(&root));
+        let study = d.path().join(format!("study-{mode}"));
+        call(
+            &[
+                "bridge-prepare",
+                "--observation",
+                p(&root),
+                "--output",
+                p(&study),
+            ],
+            None,
+            false,
+            &d.path().join("admission.log"),
+        );
+        call(
+            &["bridge-observe", "--root", p(&root)],
+            None,
+            false,
+            &d.path().join("retry.log"),
+        );
+        assert!(!study.exists());
+        assert_eq!(before, evidence_manifest(&root));
+    }
+    println!("BRIDGE_FAILURE_REGRESSION TINY_UPDATES=0 SMALL_UPDATES=0");
 }
 #[test]
 fn bridge_policy_two_updates_equal_one_plus_one_in_fresh_processes() {

@@ -1,5 +1,61 @@
 # 진단 및 구현 상태
 
+## B0–B2 — 관측 증거 경계 수리와 교체 시도 준비
+
+R3-BRIDGE-EVIDENCE-RESTART-1.0 / 2026-09-19. 시작 HEAD
+5833ee9f6790b7c0c9489b648e9f4f2e0b229acd, 기준 source
+2a1010105e0914e4c84cc94b7da707171baaecbe. Rust/Cargo1.98.1,
+기존 lock/offline/Accelerate threads1. 이전 untracked 로그와 원 관측 파일 보존.
+로컬 실행 증거: `artifacts/bridge-evidence-restart-20260919/`.
+
+ER01: plan 루트 immutable 등록 후에만 child/start/model load에 진입한다.
+등록은 plan/source/binary/model/attempt/안전한 상대 경로/예정 사례 순서를 묶는다.
+새 process에서 child 이동·누락 및 등록 공개 후 sync 실패를 차단한다.
+`er01-red.log`는 수정 전 실제 재실행 허용으로 FAIL,
+`er01-green.log`는 수정 후 같은/다음 모델 진입 차단 PASS다.
+
+ER02/03: 별도 teacher collector와 순수 verifier를 분리했다. start/entry/row/final,
+native 실제 file/weights/tokenizer/architecture/step, 고정 metadata 순서,
+prompt/expected와 finite 수치·token 범위를 검증한다. 새 scope3 proof는 전체
+파일 참조를 명시적으로 묶는 R3ER kind27이다. 구형 proof에 binding을 자동 보충하지
+않는다. parent/endpoint 보고와 승인에서 같은 verifier를 사용하며 보고에 collector
+호출이나 누락 파일 복구가 없다. 기존 scalar bits, 모델/코퍼스/토크나이저 포맷 유지.
+
+`b2-e2e-first.log`: 실제 TINY 별도 teacher2·generation2 → scope3 proof/final →
+fresh pure report → prepare → 두 arm 첫1+fresh1 → close/pair report PASS.
+학습4회는 TINY이며 SMALL0. 정상 부모0점을 실행 오류로 취급하지 않았다.
+teacher 네 파일 종류의 누락/손상은 report/prepare 거부, 출력 등록 없음,
+정상/오류 report 전후 전체 경로·유형·길이·SHA 동일을 확인했다.
+`b2-schema-fixed.log`: 실제 TINY2generation/2teacher, 수치/identity19변조 거부,
+합성64행·누락/중복 스키마 검사 PASS. 합성 행을 실제 forward로 세지 않는다.
+
+개발 중 실패도 보존: 첫 TINY 분리 시험의 중복 ordinal 및 native content ID와
+기존 weight hash 혼동을 수정했다. 각각 모델 호출2+teacher2 후 실패였다.
+스키마 시험의 Ctrl-C handler 중복 오류는 모델 호출 전 실패, 필터 오지정 실행은
+0-test/NOT_RUN이며 PASS로 합산하지 않는다. clippy 경고와 컴파일 실패도 별도 로그다.
+최종 범위 검사 `quick --bridge-receipts`는13명령/14테스트 PASS,
+source_unchanged=true, source digest
+`2e0f52004908e0fc8adda697df7a0040eeddd2d35e2a59243c036426757b311d`.
+fmt/check/clippy, root missing-child/sync, separate teacher 파일의 정상/누락/손상,
+취소/teacher 오류/최종 발행 실패, native corpus 두 지정 회귀, 주변 policy 비의존,
+기존 pending/단일 writer/부분 패널/LR·Adam·기본 loss 재개를 실제 검사했다.
+앞선 범위 검사도13명령/14테스트 PASS지만 최종 재실행과 고유 테스트 수를 중복
+합산하지 않는다. TINY optimizer 누계92/128=직접E2E4+앞선quick44+최종quick44.
+SMALL/scalar optimizer0. TINY generation/teacher와 강제 종료 UNKNOWN은 각
+process log의 entry/returned/final로 구분한다. ER02/03 수정 전 근거는 SOURCE_READ,
+수정 후는 실제 위조/누락/정상 process 검사이며 모두 RED 재현했다고 하지 않는다.
+
+교체 등록은 R3ER kind29로 이전 실패 root 전체 파일hash/실행source/보존binary와
+새 계약/attempt/source SHA/source digest/binary/예산을 묶는다. 데이터는 기존 파일
+hash·membership·순서·C/T target/prompt 길이를 재검증하며 재생성하지 않는다.
+새 관측 보고는 과거 같은 모델의 sanity/dev raw token/EOS/error를 대조한다.
+최종 release와 source 게시 후 계산·저장 code를 동결하고 승인된 한 번만 진행한다.
+
+OLD_ATTEMPT=FAILED_PUBLICATION/INTERRUPTED_UNKNOWN/NOT_AUTHORIZED_TO_RESUME.
+REPLACEMENT_AUTHORIZATION=ONE_EXPLICIT_ATTEMPT, REPLACEMENT_EXECUTION=NOT_RUN.
+H3/S4/S5/S6/GOAL1=NOT_PASSED, INDEPENDENT_ACCEPTANCE=NOT_RUN.
+신규 영구 소스 모듈0, 기존 파일만 수정. 이후 실제 검사·학습 결과는 별도 기록한다.
+
 ## Q6 — candidate 전달, 전체 품질 실험은 미완료
 
 SOURCE_COMMIT=`2a1010105e0914e4c84cc94b7da707171baaecbe`.

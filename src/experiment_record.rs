@@ -22,6 +22,7 @@ const COOLDOWN_CONTRACT: &str = "R3-PREFLIGHT-ONCE-AND-COOLDOWN-1.0";
 const OBJECTIVE_CONTRACT: &str = "R3-DATA-BINARY-AND-TARGET-LOSS-1.0";
 const NATIVE_CORPUS_CONTRACT: &str = "R3-NATIVE-CORPUS-OBJECTIVE-BINDING-1.0";
 const BRIDGE_CONTRACT: &str = "R3-QUALITY-FIRST-BRIDGE-1.0";
+const BRIDGE_RESTART_CONTRACT: &str = "R3-BRIDGE-EVIDENCE-RESTART-1.0";
 
 fn bad(s: &str) -> Error {
     Error::Corrupt(format!("R3ER: {s}"))
@@ -747,20 +748,21 @@ impl RunSnapshot {
         if let Some(a) = &self.authorization {
             let all: BTreeSet<_> = a.pools.iter().flatten().copied().collect();
             if self.historical
-                || self.tiny_spec
+                || self.tiny_spec && !self.bridge()
                 || !matches!(a.anchors, 4 | 6)
-                || self.parent.step != if self.continuation() { 24310 } else { 23798 }
+                || !self.tiny_spec
+                    && self.parent.step != if self.continuation() { 24310 } else { 23798 }
                 || self.parent.adam.is_none()
                 || self.parent.file.digest != a.expected_parent
                 || !self.continuation() && (self.lr_policy != 1 || self.lr_offset != 1024)
                 || self.continuation() && a.anchors != 6
                 || self.anchor_floor != 178
-                || self.train.len() != 2560
-                || a.pools[0].len() != 2048
-                || a.pools[1].len() != 512
-                || all != (0..2560).collect()
+                || self.train.len() != if self.tiny_spec { 2 } else { 2560 }
+                || a.pools[0].len() != if self.tiny_spec { 1 } else { 2048 }
+                || a.pools[1].len() != if self.tiny_spec { 1 } else { 512 }
+                || all != (0..if self.tiny_spec { 2 } else { 2560 }).collect()
                 || self.tape.len()
-                    != if self.preflight() {
+                    != if self.preflight() || self.tiny_spec {
                         2
                     } else if self.cooldown() {
                         256
@@ -768,7 +770,9 @@ impl RunSnapshot {
                         512
                     }
                 || self.eval_steps
-                    != if self.preflight() {
+                    != if self.tiny_spec {
+                        vec![1, 2]
+                    } else if self.preflight() {
                         vec![]
                     } else if self.cooldown() {
                         vec![128, 256]
@@ -1653,6 +1657,26 @@ enum Record {
         rows: Vec<PreparationTiming>,
     },
     Conditional(Box<ConditionalRecord>),
+    BridgeReplacement {
+        source_sha: String,
+        source: Hash,
+        binary: Hash,
+        root: String,
+        old_root: String,
+        old_source: Hash,
+        old_binary: FileRef,
+        preserved: Vec<FileRef>,
+    },
+    ConditionalRegistration {
+        plan: FileRef,
+        source: Hash,
+        binary: Hash,
+        model: u8,
+        native: CheckpointRef,
+        attempt: Hash,
+        child: String,
+        cases: Vec<Hash>,
+    },
     Inputs(Box<RunSnapshot>),
     Evaluation(EvalPayload),
     Decision(EvalDecision),
@@ -1679,6 +1703,7 @@ struct PreparationTiming {
 }
 #[derive(Clone, Debug, Serialize)]
 struct ConditionalRecord {
+    registration: Option<FileRef>,
     seed: u64,
     source: Hash,
     plan: Option<FileRef>,
@@ -1780,6 +1805,7 @@ impl ConditionalRecord {
             return Err(bad("conditional record shape/budget/completion"));
         }
         Ok(Self {
+            registration: None,
             seed,
             source,
             plan,
@@ -2085,6 +2111,7 @@ impl VerificationFinal {
 }
 #[derive(Clone, Debug, Serialize)]
 struct PreflightReceipt {
+    teacher_evidence: Option<Vec<FileRef>>,
     pair: Hash,
     source: Hash,
     binary: Hash,
@@ -2117,6 +2144,7 @@ impl PreflightReceipt {
         let commands = [FileRef::decode(r)?, FileRef::decode(r)?];
         let n = if extended { count(r, 3)? } else { 2 };
         let p = Self {
+            teacher_evidence: None,
             pair,
             source,
             binary,
@@ -2135,6 +2163,34 @@ impl Record {
     fn encode(&self) -> Result<Vec<u8>> {
         let mut body = Vec::new();
         let kind = match self {
+            Self::BridgeReplacement {
+                source_sha,
+                source,
+                binary,
+                root,
+                old_root,
+                old_source,
+                old_binary,
+                preserved,
+            } => {
+                string(&mut body, BRIDGE_RESTART_CONTRACT);
+                string(&mut body, "replacement-01");
+                string(&mut body, source_sha);
+                body.extend(source);
+                body.extend(binary);
+                string(&mut body, root);
+                string(&mut body, old_root);
+                body.extend(old_source);
+                old_binary.encode(&mut body);
+                for limit in [1024, 4608, 192, 7200, 1800, 120] {
+                    put_varint(&mut body, limit);
+                }
+                put_varint(&mut body, preserved.len() as u64);
+                for r in preserved {
+                    r.encode(&mut body);
+                }
+                29
+            }
             Self::PreparationMeasure { bindings, rows } => {
                 for h in bindings {
                     body.extend(h);
@@ -2153,7 +2209,35 @@ impl Record {
             }
             Self::Conditional(v) => {
                 v.encode(&mut body);
-                23
+                if let Some(registration) = &v.registration {
+                    registration.encode(&mut body);
+                    28
+                } else {
+                    23
+                }
+            }
+            Self::ConditionalRegistration {
+                plan,
+                source,
+                binary,
+                model,
+                native,
+                attempt,
+                child,
+                cases,
+            } => {
+                plan.encode(&mut body);
+                body.extend(source);
+                body.extend(binary);
+                body.push(*model);
+                native.encode(&mut body);
+                body.extend(attempt);
+                string(&mut body, child);
+                put_varint(&mut body, cases.len() as u64);
+                for case in cases {
+                    body.extend(case);
+                }
+                26
             }
             Self::Inputs(v) => {
                 if matches!(
@@ -2210,9 +2294,20 @@ impl Record {
                 7
             }
             Self::Preflight(v) => {
-                let extended = v.generations > 8 || v.panels.len() != 2;
+                let extended =
+                    v.teacher_evidence.is_some() || v.generations > 8 || v.panels.len() != 2;
                 v.encode(&mut body, extended);
-                if extended { 16 } else { 9 }
+                if let Some(refs) = &v.teacher_evidence {
+                    put_varint(&mut body, refs.len() as u64);
+                    for r in refs {
+                        r.encode(&mut body);
+                    }
+                    27
+                } else if extended {
+                    16
+                } else {
+                    9
+                }
             }
             Self::VerificationStart(v) => {
                 if v.scope != 0 || v.publication_v2 {
@@ -2319,7 +2414,76 @@ impl Record {
                 }
                 Self::PreparationMeasure { bindings, rows }
             }
-            23 => Self::Conditional(Box::new(ConditionalRecord::decode(&mut r)?)),
+            29 => {
+                if text(&mut r)? != BRIDGE_RESTART_CONTRACT || text(&mut r)? != "replacement-01" {
+                    return Err(bad("replacement contract/attempt"));
+                }
+                let source_sha = text(&mut r)?;
+                if source_sha.len() != 40 || !source_sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(bad("replacement source SHA"));
+                }
+                let source = digest_read(&mut r)?;
+                let binary = digest_read(&mut r)?;
+                let root = text(&mut r)?;
+                let old_root = text(&mut r)?;
+                let old_source = digest_read(&mut r)?;
+                let old_binary = FileRef::decode(&mut r)?;
+                for limit in [1024, 4608, 192, 7200, 1800, 120] {
+                    if r.var()? != limit {
+                        return Err(bad("replacement budget"));
+                    }
+                }
+                let count = count(&mut r, 4096)?;
+                let preserved = (0..count)
+                    .map(|_| FileRef::decode(&mut r))
+                    .collect::<Result<Vec<_>>>()?;
+                if count == 0 || preserved.windows(2).any(|w| w[0].locator >= w[1].locator) {
+                    return Err(bad("replacement preservation manifest"));
+                }
+                Self::BridgeReplacement {
+                    source_sha,
+                    source,
+                    binary,
+                    root,
+                    old_root,
+                    old_source,
+                    old_binary,
+                    preserved,
+                }
+            }
+            23 | 28 => {
+                let mut v = ConditionalRecord::decode(&mut r)?;
+                if kind == 28 {
+                    v.registration = Some(FileRef::decode(&mut r)?);
+                }
+                Self::Conditional(Box::new(v))
+            }
+            26 => {
+                let plan = FileRef::decode(&mut r)?;
+                let source = digest_read(&mut r)?;
+                let binary = digest_read(&mut r)?;
+                let model = r.byte()?;
+                let native = CheckpointRef::decode(&mut r)?;
+                let attempt = digest_read(&mut r)?;
+                let child = text(&mut r)?;
+                let n = count(&mut r, 144)?;
+                let cases = (0..n)
+                    .map(|_| digest_read(&mut r))
+                    .collect::<Result<Vec<_>>>()?;
+                if model > 1 || child != format!("model-{model}") || n == 0 {
+                    return Err(bad("conditional registration bounds/locator"));
+                }
+                Self::ConditionalRegistration {
+                    plan,
+                    source,
+                    binary,
+                    model,
+                    native,
+                    attempt,
+                    child,
+                    cases,
+                }
+            }
             1 | 6 | 8 | 13 | 19 | 22 | 25 => {
                 let authorized = if matches!(kind, 8 | 13 | 19 | 22 | 25) {
                     r.bool()?
@@ -2342,7 +2506,21 @@ impl Record {
             4 | 14 | 21 => Self::Segment(SegmentReceipt::decode(&mut r, kind != 4, kind == 21)?),
             5 => Self::Comparison(ComparisonReceipt::decode(&mut r)?),
             7 => Self::Command(CommandOutcome::decode(&mut r)?),
-            9 | 16 => Self::Preflight(PreflightReceipt::decode(&mut r, kind == 16)?),
+            9 | 16 | 27 => {
+                let mut p = PreflightReceipt::decode(&mut r, kind != 9)?;
+                if kind == 27 {
+                    let n = count(&mut r, 130)?;
+                    if n < 6 || n % 2 != 0 {
+                        return Err(bad("teacher evidence reference count"));
+                    }
+                    p.teacher_evidence = Some(
+                        (0..n)
+                            .map(|_| FileRef::decode(&mut r))
+                            .collect::<Result<_>>()?,
+                    );
+                }
+                Self::Preflight(p)
+            }
             10 | 15 | 17 => {
                 let scope = if kind != 10 { r.byte()? } else { 0 };
                 Self::VerificationStart(VerificationStart::decode(&mut r, scope, kind == 17)?)
@@ -3010,6 +3188,7 @@ fn conditional_prepare(
     }
     let (cases, foils) = data::conditional_panel(&prior, seed)?;
     let p = ConditionalRecord {
+        registration: None,
         seed,
         source: evaluator_source(),
         plan: None,
@@ -3180,6 +3359,12 @@ fn conditional_record(
     {
         return Err(bad("conditional attempt identity"));
     }
+    let parent = root.parent().ok_or_else(|| bad("conditional root"))?;
+    if parent.join(format!("attempt-{model}.r3er")).exists()
+        && r.registration != Some(reference(parent, &format!("attempt-{model}.r3er"))?)
+    {
+        return Err(bad("conditional child registration reference"));
+    }
     for (i, row) in r.rows.iter().enumerate() {
         if row.ordinal as usize != i || row.case != case_hash(&p.cases[i]) || !row.started {
             return Err(bad("conditional row identity/order"));
@@ -3201,12 +3386,59 @@ fn conditional_attempt(
     root: &Path,
     p: &ConditionalRecord,
     model: u8,
+    historical: bool,
 ) -> Result<Option<ConditionalRecord>> {
     let dir = root.join(format!("model-{model}"));
-    if !dir.exists() {
-        return Ok(None);
-    }
     let plan = reference(root, "plan.r3er")?;
+    let registration_name = format!("attempt-{model}.r3er");
+    let registered = root.join(&registration_name).exists();
+    if registered {
+        let Record::ConditionalRegistration {
+            plan: registered_plan,
+            source,
+            binary,
+            model: index,
+            native,
+            attempt,
+            child,
+            cases,
+        } = read_record(root, &reference(root, &registration_name)?)?
+        else {
+            return Err(bad("conditional registration kind"));
+        };
+        let mut identity = plan.digest.to_vec();
+        identity.extend(p.source);
+        identity.push(model);
+        string(&mut identity, &root.canonicalize()?.display().to_string());
+        if registered_plan != plan
+            || source != p.source
+            || index != model
+            || !historical && binary != unhex(&file_hash(&std::env::current_exe()?)?)?
+            || native != p.models[model as usize]
+            || attempt != hash(&identity)
+            || child != format!("model-{model}")
+            || cases != p.cases.iter().map(case_hash).collect::<Vec<_>>()
+        {
+            return Err(bad("conditional root registration identity"));
+        }
+        if !dir.is_dir() {
+            return Err(bad("MISSING_ATTEMPT_EVIDENCE UNKNOWN usage; plan blocked"));
+        }
+    } else {
+        if !dir.exists() {
+            if std::fs::read_dir(root)?.any(|e| {
+                e.is_ok_and(|e| e.file_name().to_string_lossy().contains(&registration_name))
+            }) {
+                return Err(bad("conditional registration pending; UNKNOWN usage"));
+            }
+            return Ok(None);
+        }
+        if !historical {
+            return Err(bad(
+                "conditional historical child without root registration; plan blocked",
+            ));
+        }
+    }
     let start = conditional_record(&dir, "start.r3er", p, &plan, model)?;
     if !start.rows.is_empty()
         || start.generations != 0
@@ -3214,6 +3446,7 @@ fn conditional_attempt(
         || start.complete
         || !start.stop.is_empty()
         || start.error.is_some()
+        || registered && start.registration != Some(reference(root, &registration_name)?)
     {
         return Err(bad("conditional start state"));
     }
@@ -3326,7 +3559,7 @@ fn conditional_run(root: &Path, model: u8, control: &mut RunControl) -> Result<(
     let p = conditional_plan(root, true)?;
     let mut completed = 0;
     for i in 0..2 {
-        if conditional_attempt(root, &p, i)?.is_some() {
+        if conditional_attempt(root, &p, i, false)?.is_some() {
             completed += 1;
         }
     }
@@ -3334,8 +3567,28 @@ fn conditional_run(root: &Path, model: u8, control: &mut RunControl) -> Result<(
         return Err(bad("conditional model order/retry; plan blocked"));
     }
     let dir = root.join(format!("model-{model}"));
+    let plan = reference(root, "plan.r3er")?;
+    let mut identity = plan.digest.to_vec();
+    identity.extend(p.source);
+    identity.push(model);
+    string(&mut identity, &root.canonicalize()?.display().to_string());
+    let registration = publish(
+        root,
+        &format!("attempt-{model}.r3er"),
+        &Record::ConditionalRegistration {
+            plan: plan.clone(),
+            source: p.source,
+            binary: unhex(&file_hash(&std::env::current_exe()?)?)?,
+            model,
+            native: p.models[model as usize].clone(),
+            attempt: hash(&identity),
+            child: format!("model-{model}"),
+            cases: p.cases.iter().map(case_hash).collect(),
+        },
+    )?;
     std::fs::create_dir(&dir)?;
     let mut result = ConditionalRecord {
+        registration: Some(registration),
         cases: vec![],
         foils: vec![],
         plan: Some(reference(root, "plan.r3er")?),
@@ -3350,6 +3603,7 @@ fn conditional_run(root: &Path, model: u8, control: &mut RunControl) -> Result<(
     control.generation_limit = p.cases.len();
     control.teacher_limit = p.cases.len();
     let outcome = (|| -> Result<()> {
+        println!("CONDITIONAL_MODEL_LOAD=1 MODEL_INDEX={model}");
         let l = conditional_model(&p.models[model as usize])?;
         let tiny = l.model.config.profile == "TINY_NUMERIC_TEST_ONLY";
         verification_fault(tiny, "started", control)?;
@@ -3485,7 +3739,7 @@ fn conditional_report(root: &Path, control: &mut RunControl) -> Result<()> {
     lock.try_lock_shared()
         .map_err(|e| Error::Conflict(format!("conditional plan reader: {e}")))?;
     for model in 0..2 {
-        conditional_attempt(root, &p, model)?;
+        conditional_attempt(root, &p, model, true)?;
     }
     println!(
         "CONDITIONAL_RAW_SOURCE={} RECOUNT_SOURCE={} NEW_GENERATIONS=0 NEW_TEACHERS=0",
@@ -3688,17 +3942,108 @@ fn bridge_origins(s: &RunSnapshot) -> Result<()> {
             return Err(bad("bridge frozen origin changed"));
         }
     }
+    if let Some(origin) = s
+        .origins
+        .iter()
+        .find(|o| o.role == "bridge-replacement-registration")
+    {
+        let Record::BridgeReplacement {
+            source,
+            binary,
+            old_root,
+            old_binary,
+            preserved,
+            ..
+        } = Record::decode(&neural::read_bounded(
+            Path::new(&origin.original.locator),
+            MAX_FILE,
+        )?)?
+        else {
+            return Err(bad("replacement registration kind"));
+        };
+        if source != s.source
+            || s.origins
+                .iter()
+                .find(|o| o.role == "execution-binary")
+                .is_none_or(|o| o.original.digest != binary)
+            || unhex(&file_hash(Path::new(&old_binary.locator))?)? != old_binary.digest
+        {
+            return Err(bad("replacement source/binary binding"));
+        }
+        for r in preserved {
+            if reference(Path::new(&old_root), &r.locator)? != r {
+                return Err(bad("original failed evidence changed"));
+            }
+        }
+    }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // One explicit replacement, retaining its failed predecessor.
 fn bridge_observe_prepare(
     parent: &Path,
     checkpoint_path: &Path,
     data: &Path,
     conditional: &Path,
     output: &Path,
+    replacement_of: &Path,
+    previous_binary: &Path,
     control: &mut RunControl,
 ) -> Result<()> {
+    if output.file_name().and_then(|n| n.to_str()) != Some("replacement-01") {
+        return Err(bad(
+            "only the explicitly authorized replacement-01 is permitted",
+        ));
+    }
+    let old_attempt = read_inputs(replacement_of)?;
+    let old_outcome = read_preflight_outcome(replacement_of)?
+        .ok_or_else(|| bad("replacement missing failed predecessor"))?;
+    if !old_attempt.bridge() || !old_attempt.historical || old_outcome.succeeded {
+        return Err(bad("replacement predecessor must remain failed"));
+    }
+    let Record::VerificationStart(previous_start) = read_record(
+        replacement_of,
+        &reference(replacement_of, "preflight-start.r3er")?,
+    )?
+    else {
+        return Err(bad("replacement old intent"));
+    };
+    if previous_start.binary != unhex(&file_hash(previous_binary)?)? {
+        return Err(bad("replacement original observation binary"));
+    }
+    let mut preserved = std::fs::read_dir(replacement_of)?
+        .map(|e| {
+            let e = e?;
+            if !e.file_type()?.is_file() {
+                return Err(bad(
+                    "replacement preservation expects original flat observation",
+                ));
+            }
+            reference(replacement_of, &e.file_name().to_string_lossy())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    preserved.sort_by(|a, b| a.locator.cmp(&b.locator));
+    let registration_root = output
+        .parent()
+        .ok_or_else(|| bad("replacement registration root"))?;
+    let registered_root = registration_root.canonicalize()?.join("replacement-01");
+    let registration = publish(
+        registration_root,
+        "replacement-01.r3er",
+        &Record::BridgeReplacement {
+            source_sha: source_commit()?,
+            source: evaluator_source(),
+            binary: unhex(&file_hash(&std::env::current_exe()?)?)?,
+            root: registered_root.display().to_string(),
+            old_root: replacement_of.canonicalize()?.display().to_string(),
+            old_source: old_attempt.source,
+            old_binary: FileRef {
+                locator: previous_binary.canonicalize()?.display().to_string(),
+                digest: previous_start.binary,
+            },
+            preserved,
+        },
+    )?;
     let old = read_inputs(parent)?;
     let commands = arm_commands(parent, &old)?;
     let command = &commands
@@ -3710,6 +4055,27 @@ fn bridge_observe_prepare(
     let n = chain.last().unwrap().1.native.as_ref().unwrap();
     let original = resolve_native(parent, &old, n, true)?;
     let l = checkpoint::load(checkpoint_path, Device::Cpu, true)?;
+    if old_attempt.parent.model != unhex(&l.model.weight_hash()?)?
+        || old_attempt.parent.file.digest != unhex(&file_hash(checkpoint_path)?)?
+    {
+        return Err(bad("replacement must retain exact previous parent"));
+    }
+    for (role, path) in [
+        ("bridge-control-corpus", data.join("C-COPYMATCH.r3c")),
+        ("bridge-temporal-corpus", data.join("T-TEMPORAL.r3c")),
+        ("bridge-sanity-corpus", data.join("sanity.r3c")),
+    ] {
+        if old_attempt
+            .origins
+            .iter()
+            .find(|o| o.role == role)
+            .is_none_or(|o| {
+                unhex(&file_hash(&path).unwrap_or_default()).ok() != Some(o.original.digest)
+            })
+        {
+            return Err(bad("replacement data must retain original bytes"));
+        }
+    }
     let state = l
         .manifest
         .training
@@ -3753,10 +4119,48 @@ fn bridge_observe_prepare(
     for (a, b) in c.train[2048..].iter().zip(&t.train[2048..]) {
         data::bridge_pair(a, b, &l.tokenizer)?;
     }
+    let cf = samples(&c.train[2048..], &l.tokenizer, state.config.seq_len)?;
+    let tf = samples(&t.train[2048..], &l.tokenizer, state.config.seq_len)?;
+    if cf.iter().zip(&tf).any(|(a, b)| {
+        a.response_start != b.response_start
+            || a.tokens[a.response_start..] != b.tokens[b.response_start..]
+    }) {
+        return Err(bad("replacement prompt length/target token mismatch"));
+    }
     for e in &t.validation {
         data::bridge_support(e)?;
     }
+    for (name, cases) in [
+        ("retained-control", &c.train[2048..]),
+        ("retained-temporal", &t.train[2048..]),
+        ("retained-dev", t.validation.as_slice()),
+        ("retained-sanity", sanity.validation.as_slice()),
+    ] {
+        bridge_audit(name, cases, &l, true)?;
+    }
     let conditional_plan = conditional_plan(conditional, false)?;
+    for (kind, current) in [
+        (PanelKind::Dev, &t.validation),
+        (PanelKind::Sanity, &sanity.validation),
+        (PanelKind::Conditional, &conditional_plan.cases),
+    ] {
+        let retained = panel(&old_attempt, kind)?
+            .cases
+            .iter()
+            .map(|i| old_attempt.cases[*i as usize].clone())
+            .collect::<Vec<_>>();
+        if data::native::ordered_bytes(current) != data::native::ordered_bytes(&retained) {
+            return Err(bad("replacement frozen membership/order changed"));
+        }
+    }
+    let retained_train = old_attempt
+        .train
+        .iter()
+        .map(|i| old_attempt.cases[*i as usize].clone())
+        .collect::<Vec<_>>();
+    if data::native::ordered_bytes(&t.train) != data::native::ordered_bytes(&retained_train) {
+        return Err(bad("replacement original focus/anchor membership"));
+    }
     let mut s = old.clone();
     s.contract = BRIDGE_CONTRACT.into();
     s.source = evaluator_source();
@@ -3818,6 +4222,17 @@ fn bridge_observe_prepare(
         });
     }
     s.origins.clear();
+    s.origins.push(Origin {
+        role: "bridge-replacement-registration".into(),
+        original: FileRef {
+            locator: registration_root
+                .join(&registration.locator)
+                .canonicalize()?
+                .display()
+                .to_string(),
+            digest: registration.digest,
+        },
+    });
     for (role, path) in [
         ("execution-binary", std::env::current_exe()?),
         ("bridge-parent-inputs", parent.join("inputs.r3er")),
@@ -3881,6 +4296,14 @@ fn bridge_observe(root: &Path, control: &mut RunControl) -> Result<()> {
     let s = read_inputs(root)?;
     if !s.bridge() || !s.historical || s.source != evaluator_source() {
         return Err(bad("bridge observation source/mode"));
+    }
+    if !s.tiny_spec
+        && !s
+            .origins
+            .iter()
+            .any(|o| o.role == "bridge-replacement-registration")
+    {
+        return Err(bad("bridge requires explicit replacement registration"));
     }
     bridge_origins(&s)?;
     if read_preflight_outcome(root)?.is_some() {
@@ -3949,7 +4372,7 @@ fn bridge_observe(root: &Path, control: &mut RunControl) -> Result<()> {
                         &s.cases[ordinal as usize],
                         ordinal,
                         control,
-                        s.tiny_spec,
+                        false,
                         true,
                         || {
                             publish(
@@ -3987,13 +4410,13 @@ fn bridge_observe(root: &Path, control: &mut RunControl) -> Result<()> {
                     &Record::Evaluation(e),
                 )?);
             }
-            if !s.tiny_spec {
-                bridge_teacher(root, "parent-probe", &s, &s.parent, &l, control)?;
-            }
+            collect_bridge_teacher(root, "parent-probe", &s, &s.parent, &l, control)?;
+            let teacher = read_verified_bridge_teacher(root, "parent-probe", &s, &s.parent)?;
             publish(
                 root,
                 "preflight-proof.r3er",
                 &Record::Preflight(PreflightReceipt {
+                    teacher_evidence: Some(teacher.files),
                     pair: start.pair,
                     source: start.source,
                     binary: start.binary,
@@ -4044,29 +4467,35 @@ fn bridge_prepare(observation: &Path, output: &Path, control: &mut RunControl) -
         return Err(bad("bridge baseline raw"));
     };
     let baseline = rescore(&old, &dev, &l, true)?;
-    let parent = PathBuf::from(
-        &old.origins
+    let watch = if old.tiny_spec {
+        // Explicit small test panel; the authorization and admission below are shared.
+        baseline.clone()
+    } else {
+        let parent = PathBuf::from(
+            &old.origins
+                .iter()
+                .find(|o| o.role == "bridge-parent-inputs")
+                .unwrap()
+                .original
+                .locator,
+        );
+        let parent = parent.parent().unwrap();
+        let prior = read_inputs(parent)?;
+        let closed = arm_commands(parent, &prior)?;
+        let previous = close_native_inner(
+            parent,
+            &closed.last().unwrap().1.terminal.locator,
+            control,
+            false,
+        )?;
+        previous
+            .panels
             .iter()
-            .find(|o| o.role == "bridge-parent-inputs")
+            .find(|(k, _)| *k == PanelKind::Watch)
             .unwrap()
-            .original
-            .locator,
-    );
-    let parent = parent.parent().unwrap();
-    let prior = read_inputs(parent)?;
-    let closed = arm_commands(parent, &prior)?;
-    let previous = close_native_inner(
-        parent,
-        &closed.last().unwrap().1.terminal.locator,
-        control,
-        false,
-    )?;
-    let watch = &previous
-        .panels
-        .iter()
-        .find(|(k, _)| *k == PanelKind::Watch)
-        .unwrap()
-        .1;
+            .1
+            .clone()
+    };
     let registered = output
         .parent()
         .ok_or_else(|| bad("bridge root"))?
@@ -4084,16 +4513,25 @@ fn bridge_prepare(observation: &Path, output: &Path, control: &mut RunControl) -
         s.historical = false;
         s.purpose = purpose;
         let name = s.arm_name();
-        let source = origin_path(
-            &old,
-            if purpose == RunPurpose::LrContinuous {
-                "bridge-control-corpus"
-            } else {
-                "bridge-temporal-corpus"
-            },
-        )?;
-        let data = data::native::read(&source)?;
-        s.cases[..2560].clone_from_slice(&data.train);
+        let train = if old.tiny_spec {
+            old.train
+                .iter()
+                .map(|i| old.cases[*i as usize].clone())
+                .collect::<Vec<_>>()
+        } else {
+            let source = origin_path(
+                &old,
+                if purpose == RunPurpose::LrContinuous {
+                    "bridge-control-corpus"
+                } else {
+                    "bridge-temporal-corpus"
+                },
+            )?;
+            data::native::read(&source)?.train
+        };
+        for (&ordinal, e) in s.train.iter().zip(&train) {
+            s.cases[ordinal as usize] = e.clone();
+        }
         s.origins.push(Origin {
             role: "bridge-observation-final".into(),
             original: FileRef {
@@ -4119,13 +4557,15 @@ fn bridge_prepare(observation: &Path, output: &Path, control: &mut RunControl) -
         s.parent.run = s.run;
         s.baseline = [baseline.exact, watch.exact, baseline.errors + watch.errors];
         s.anchor_floor = 178;
+        let anchor_count = if s.tiny_spec { 1 } else { 2048 };
+        let horizon: usize = if s.tiny_spec { 2 } else { 512 };
         let pools = [
-            (0..2048).collect::<Vec<_>>(),
-            (2048..2560).collect::<Vec<_>>(),
+            (0..anchor_count).collect::<Vec<_>>(),
+            (anchor_count..train.len() as u32).collect::<Vec<_>>(),
         ];
-        let framed = samples(&data.train, &l.tokenizer, state.config.seq_len)?;
-        s.tape = anchor_tape_through(&pools, 6, s.parent.counters[2], &framed, 512)?.0;
-        s.eval_steps = vec![256, 512];
+        let framed = samples(&train, &l.tokenizer, state.config.seq_len)?;
+        s.tape = anchor_tape_through(&pools, 6, s.parent.counters[2], &framed, horizon as u64)?.0;
+        s.eval_steps = vec![(horizon / 2) as u32, horizon as u32];
         s.authorization = Some(AnchorAuthorization {
             pair,
             baseline: proof.digest,
@@ -4133,23 +4573,26 @@ fn bridge_prepare(observation: &Path, output: &Path, control: &mut RunControl) -
             anchors: 6,
             pools,
         });
-        let mut exposures = vec![0; 2560];
+        let mut exposures = vec![0; train.len()];
         for d in &s.tape {
             for i in &d.indices {
                 exposures[*i as usize] += 1;
             }
         }
-        if exposures[2048..].iter().any(|n| *n != 2) {
+        if exposures[anchor_count as usize..]
+            .iter()
+            .any(|n| *n != if s.tiny_spec { 4 } else { 2 })
+        {
             return Err(bad("bridge focus twice exact exposure"));
         }
         s.validate()?;
-        for n in [1, 256, 512] {
+        for n in [1, horizon / 2, horizon] {
             let mut future = state.clone();
             fork_budget(
                 &mut future,
                 s.parent.step,
                 s.parent.counters[0],
-                512,
+                horizon,
                 2_000_000,
             )?;
             future.step += n;
@@ -4162,7 +4605,8 @@ fn bridge_prepare(observation: &Path, output: &Path, control: &mut RunControl) -
             checkpoint::validate_metadata(&m, &l.tokenizer)?;
         }
         println!(
-            "BRIDGE_AUTHORIZATION arm={name} updates=512 focus_exposure=1024 each_view=2 actual_lr_bits={} inherited_config_lr={} first_target_weight={} input={} target={} parent_step={} model={} Adam={} source={} binding={} ACTUAL_UPDATES=0",
+            "BRIDGE_AUTHORIZATION arm={name} planned_updates={horizon} focus_exposure={} actual_lr_bits={} inherited_config_lr={} first_target_weight={} input={} target={} parent_step={} model={} Adam={} source={} binding={} ACTUAL_UPDATES=0",
+            horizon * 2,
             1e-4f64.to_bits(),
             state.config.lr,
             state.config.first_target_weight,
@@ -4197,6 +4641,34 @@ fn bridge_observe_report(root: &Path, control: &mut RunControl) -> Result<()> {
     }
     bridge_origins(&s)?;
     let l = resolve_native(root, &s, &s.parent, true)?;
+    let previous = s
+        .origins
+        .iter()
+        .find(|o| o.role == "bridge-replacement-registration")
+        .map(|o| -> Result<_> {
+            let Record::BridgeReplacement {
+                old_root,
+                old_source,
+                ..
+            } = Record::decode(&neural::read_bounded(
+                Path::new(&o.original.locator),
+                MAX_FILE,
+            )?)?
+            else {
+                return Err(bad("replacement report kind"));
+            };
+            let old_root = PathBuf::from(old_root);
+            let old = read_inputs(&old_root)?;
+            if old.source != old_source
+                || old.parent.file.digest != s.parent.file.digest
+                || old.parent.model != s.parent.model
+                || old.parent.step != s.parent.step
+            {
+                return Err(bad("replacement prior observation identity"));
+            }
+            Ok((old_root, old))
+        })
+        .transpose()?;
     for kind in [PanelKind::Sanity, PanelKind::Dev] {
         let Record::Evaluation(e) =
             read_record(root, &reference(root, &format!("{}.r3er", kind.name()))?)?
@@ -4204,6 +4676,37 @@ fn bridge_observe_report(root: &Path, control: &mut RunControl) -> Result<()> {
             return Err(bad("bridge observation panel"));
         };
         print_anchor_panel(&s, &e, &l)?;
+        if let Some((old_root, old)) = &previous {
+            let Record::Evaluation(prior) = read_record(
+                old_root,
+                &reference(old_root, &format!("{}.r3er", kind.name()))?,
+            )?
+            else {
+                return Err(bad("previous raw panel kind"));
+            };
+            rescore(old, &prior, &l, true)?;
+            if prior.rows.len() != e.rows.len()
+                || prior.rows.iter().zip(&e.rows).any(|(a, b)| {
+                    a.ordinal != b.ordinal
+                        || a.case != b.case
+                        || a.prompt != b.prompt
+                        || a.tokens != b.tokens
+                        || a.eos != b.eos
+                        || a.finish != b.finish
+                        || a.error != b.error
+                        || a.completed != b.completed
+                        || a.interruption != b.interruption
+                })
+            {
+                return Err(bad("replacement fixed-weight raw token/EOS/error mismatch"));
+            }
+            println!(
+                "PREDECESSOR_RAW_PARITY panel={} equal={}/{} OLD_COMMAND_REMAINS_FAILED=true NEW_GENERATIONS=0 NEW_TEACHERS=0",
+                kind.name(),
+                e.rows.len(),
+                e.expected
+            );
+        }
         if kind == PanelKind::Sanity {
             for view in 0..4 {
                 let mut count = [0u64; 2];
@@ -4228,11 +4731,10 @@ fn bridge_observe_report(root: &Path, control: &mut RunControl) -> Result<()> {
             }
         }
     }
-    if !s.tiny_spec {
-        reference(root, "parent-probe-final.r3er")?;
-        control.teacher_limit = 0;
-        bridge_teacher(root, "parent-probe", &s, &s.parent, &l, control)?;
-    }
+    print_bridge_teacher(
+        &read_verified_bridge_teacher(root, "parent-probe", &s, &s.parent)?,
+        s.parent.step,
+    )?;
     println!(
         "BRIDGE_OBSERVATION_READ_ONLY generation_entries_known={} elapsed_lower_bound={} historical_attempt_succeeded={} UNKNOWN_TAIL={} NEW_GENERATIONS={} NEW_TEACHERS={} NEW_SMALL_UPDATES=0 NOT_AUTHORIZED_TO_RESUME=true",
         outcome.entries,
@@ -4263,7 +4765,7 @@ fn bridge_probe_indices(s: &RunSnapshot) -> Result<Vec<u32>> {
 }
 // Teacher-only observations use existing typed rows; started=false/tokens=[] means
 // no free generation was performed. retained=[foil index,gold ID,foil ID].
-fn bridge_teacher(
+fn collect_bridge_teacher(
     root: &Path,
     prefix: &str,
     s: &RunSnapshot,
@@ -4276,18 +4778,9 @@ fn bridge_teacher(
     raw.expected = indices.len() as u32;
     let start = format!("{prefix}-start.r3er");
     if root.join(&start).exists() {
-        let Record::Evaluation(existing) = read_record(root, &reference(root, &start)?)? else {
-            return Err(bad("bridge probe start"));
-        };
-        if existing.binding != raw.binding
-            || existing.model != raw.model
-            || existing.step != raw.step
-        {
-            return Err(bad("bridge probe start identity"));
-        }
-    } else {
-        publish(root, &start, &Record::Evaluation(raw.clone()))?;
+        return print_bridge_teacher(&read_verified_bridge_teacher(root, prefix, s, n)?, n.step);
     }
+    publish(root, &start, &Record::Evaluation(raw.clone()))?;
     for (index, &ordinal) in indices.iter().enumerate() {
         let result = format!("{prefix}-row-{index:02}.r3er");
         let entry = format!("{prefix}-entry-{index:02}.r3er");
@@ -4297,27 +4790,6 @@ fn bridge_teacher(
             l.model.config.context as u32,
             &l.model.config.id()?,
         )?;
-        if root.join(&result).exists() {
-            let Record::Evaluation(saved) = read_record(root, &reference(root, &result)?)? else {
-                return Err(bad("bridge probe raw"));
-            };
-            reference(root, &entry)?;
-            if saved.model != n.model
-                || saved.binding != s.binding()
-                || saved.step != n.step
-                || saved.rows.len() != 1
-                || saved.rows[0].ordinal != ordinal
-                || saved.rows[0].case != case_hash(e)
-                || saved.rows[0].prompt != token_hash(&prompt.token_ids)
-                || !matches!(saved.rows[0].teacher, TeacherRecord::Measured(_))
-                || saved.rows[0].started
-                || !saved.rows[0].tokens.is_empty()
-            {
-                return Err(bad("bridge probe recovered identity"));
-            }
-            raw.rows.push(saved.rows[0].clone());
-            continue;
-        }
         if root.join(&entry).exists() {
             return Err(bad("bridge teacher interrupted UNKNOWN; no retry"));
         }
@@ -4329,9 +4801,7 @@ fn bridge_teacher(
             ));
         }
         control.check("bridge_before_teacher")?;
-        let selected = data::bridge_support(e)?;
-        let other = &e.request.evidence.items[1 - selected];
-        let foil = format!("{} [event:{}]", other.original_excerpt, other.event_id);
+        let foil = bridge_foil(s, e)?;
         let mut row = EvalRow {
             ordinal,
             case: case_hash(e),
@@ -4357,6 +4827,12 @@ fn bridge_teacher(
         let mut one = raw.clone();
         one.rows = vec![row.clone()];
         publish(root, &entry, &Record::Evaluation(one.clone()))?;
+        verification_fault(s.tiny_spec, "teacher", control)?;
+        #[cfg(feature = "test-support")]
+        if s.tiny_spec && std::env::var("R3ER_TEST_STOP").as_deref() == Ok("bridge-teacher-cancel")
+        {
+            control.cancel.store(true, Ordering::Relaxed);
+        }
         let v = teacher_with_foil(l, e, &prompt.token_ids, &[], control, Some(&foil))?;
         row.teacher = teacher_record(&v)?;
         row.diagnostic = Some(scalar_value(&v["conditional_foil"], "margin")?);
@@ -4373,15 +4849,212 @@ fn bridge_teacher(
         raw.rows.push(row);
     }
     let final_path = format!("{prefix}-final.r3er");
-    let encoded = Record::Evaluation(raw.clone());
-    if root.join(&final_path).exists() {
-        if read_record(root, &reference(root, &final_path)?)?.encode()? != encoded.encode()? {
-            return Err(bad("bridge probe final binding"));
-        }
-    } else {
-        publish(root, &final_path, &encoded)?;
+    publish(root, &final_path, &Record::Evaluation(raw))?;
+    print_bridge_teacher(&read_verified_bridge_teacher(root, prefix, s, n)?, n.step)
+}
+
+fn bridge_foil(s: &RunSnapshot, e: &Episode) -> Result<String> {
+    #[cfg(feature = "test-support")]
+    if s.tiny_spec {
+        return Ok(format!("{}a", e.answer));
     }
-    for (group, rows) in raw.rows.chunks(indices.len() / 2).enumerate() {
+    let _ = s;
+    let selected = data::bridge_support(e)?;
+    let other = &e.request.evidence.items[1 - selected];
+    Ok(format!(
+        "{} [event:{}]",
+        other.original_excerpt, other.event_id
+    ))
+}
+
+struct VerifiedTeacherEvidence {
+    files: Vec<FileRef>,
+    rows: Vec<EvalRow>,
+}
+
+// Pure reader: no RunControl, forward, collector, publisher or writable lock.
+fn read_verified_bridge_teacher(
+    root: &Path,
+    prefix: &str,
+    s: &RunSnapshot,
+    n: &CheckpointRef,
+) -> Result<VerifiedTeacherEvidence> {
+    let indices = bridge_probe_indices(s)?;
+    if indices.len() != if s.tiny_spec { 2 } else { 64 } {
+        return Err(bad("teacher fixed metadata denominator"));
+    }
+    verify_bridge_teacher_rows(root, prefix, s, n, &indices)
+}
+
+fn verify_bridge_teacher_rows(
+    root: &Path,
+    prefix: &str,
+    s: &RunSnapshot,
+    n: &CheckpointRef,
+    indices: &[u32],
+) -> Result<VerifiedTeacherEvidence> {
+    let native = owned_path(root, &n.file.locator, true)?;
+    if unhex(&file_hash(&native)?)? != n.file.digest {
+        return Err(bad("teacher native file changed"));
+    }
+    let loaded = checkpoint::load(&native, Device::Cpu, false)?;
+    let model = unhex(&loaded.model.weight_hash()?)?;
+    let manifest = loaded.manifest;
+    let tok = loaded.tokenizer;
+    if model != n.model
+        || unhex(&tok.semantic_id())? != n.tokenizer
+        || unhex(&manifest.architecture.semantic_id()?)? != n.architecture
+        || manifest.trained_steps as u64 != n.step
+    {
+        return Err(bad("teacher actual native identity"));
+    }
+    if indices.is_empty()
+        || indices.len() > 64
+        || !indices.len().is_multiple_of(2)
+        || indices.iter().collect::<BTreeSet<_>>().len() != indices.len()
+    {
+        return Err(bad("teacher fixed metadata sample"));
+    }
+    let mut expected = bridge_payload(s, n, PanelKind::Dev, vec![]);
+    expected.expected = indices.len() as u32;
+    let mut files = Vec::new();
+    let mut read = |name: String| -> Result<EvalPayload> {
+        let reference = reference(root, &name)?;
+        let Record::Evaluation(v) = read_record(root, &reference)? else {
+            return Err(bad("teacher record kind"));
+        };
+        let mut header = v.clone();
+        header.rows.clear();
+        if Record::Evaluation(header).encode()? != Record::Evaluation(expected.clone()).encode()? {
+            return Err(bad("teacher snapshot/source/model/step/sample identity"));
+        }
+        files.push(reference);
+        Ok(v)
+    };
+    if !read(format!("{prefix}-start.r3er"))?.rows.is_empty() {
+        return Err(bad("teacher start rows"));
+    }
+    let mut rows = Vec::new();
+    for (index, &ordinal) in indices.iter().enumerate() {
+        let entry = read(format!("{prefix}-entry-{index:02}.r3er"))?;
+        let returned = read(format!("{prefix}-row-{index:02}.r3er"))?;
+        if entry.rows.len() != 1 || returned.rows.len() != 1 {
+            return Err(bad("teacher row denominator"));
+        }
+        let e = &s.cases[ordinal as usize];
+        let prompt = tok.prepare(
+            &e.request,
+            manifest.architecture.context as u32,
+            &manifest.architecture.id()?,
+        )?;
+        let r = &returned.rows[0];
+        let mut before = r.clone();
+        before.teacher = TeacherRecord::NotRequested;
+        before.completed = false;
+        before.retained.clear();
+        before.diagnostic = None;
+        if !same_conditional_rows(&[before], &entry.rows)
+            || r.ordinal != ordinal
+            || r.case != case_hash(e)
+            || r.prompt != token_hash(&prompt.token_ids)
+            || r.prompt_len as usize != prompt.token_ids.len()
+            || r.native_prompt != unhex(&prompt.token_digest)?
+            || r.provided != prompt.provided
+            || r.excluded != prompt.excluded
+            || r.started
+            || !r.completed
+            || r.interruption.is_some()
+            || !r.tokens.is_empty()
+            || r.eos.is_some()
+            || r.finish != Finish::NotStarted
+            || r.error.is_some()
+            || r.error_class.is_some()
+            || r.timing.is_some()
+            || r.effective_timeout.is_some()
+        {
+            return Err(bad("teacher entry/returned case/prompt/state"));
+        }
+        let TeacherRecord::Measured(t) = &r.teacher else {
+            return Err(bad("teacher not measured"));
+        };
+        let mut gold = tok.encode(e.answer.as_bytes())?;
+        gold.push(EOS);
+        let mut foil = tok.encode(bridge_foil(s, e)?.as_bytes())?;
+        foil.push(EOS);
+        let difference = gold
+            .iter()
+            .zip(&foil)
+            .position(|(a, b)| a != b)
+            .ok_or_else(|| bad("teacher foil identical"))?;
+        if r.retained != [difference as u32, gold[difference], foil[difference]]
+            || t.target != gold.len() as u64
+            || t.target == 0
+            || t.correct > t.target
+            || t.first_gold != gold[0]
+            || t.first_argmax as usize >= tok.vocab_size()
+            || t.first_correct != (t.first_argmax == t.first_gold)
+            || !t.prompt_matches
+            || !t.answer_roundtrip
+            || t.first_weight.finite()?.to_bits()
+                != manifest
+                    .training
+                    .as_ref()
+                    .ok_or_else(|| bad("teacher training metadata"))?
+                    .config
+                    .first_target_weight
+                    .to_bits()
+            || t.field_accuracy.iter().any(|f| f.correct > f.total)
+            || t.field_accuracy.iter().map(|f| f.total).sum::<u64>() != t.target
+            || t.field_accuracy.iter().map(|f| f.correct).sum::<u64>() != t.correct
+        {
+            return Err(bad("teacher measured token/count/foil contract"));
+        }
+        for scalar in [
+            &t.mean,
+            &t.first,
+            &t.remaining,
+            &t.objective,
+            &t.first_weight,
+        ] {
+            if scalar.finite()? < 0. {
+                return Err(bad("teacher negative loss/weight"));
+            }
+        }
+        for scalar in [
+            &t.eos_probability,
+            &t.gold_probability,
+            &t.argmax_probability,
+        ] {
+            if !(0. ..=1.).contains(&scalar.finite()?) {
+                return Err(bad("teacher probability"));
+            }
+        }
+        r.diagnostic
+            .as_ref()
+            .ok_or_else(|| bad("teacher missing foil margin"))?
+            .finite()?;
+        if let Some(d) = &t.difference {
+            if d.index as usize >= gold.len()
+                || d.gold != gold[d.index as usize]
+                || d.argmax as usize >= tok.vocab_size()
+                || d.actual.is_some_and(|id| id as usize >= tok.vocab_size())
+            {
+                return Err(bad("teacher difference token range"));
+            }
+            d.log_probability.finite()?;
+            d.margin.finite()?;
+        }
+        rows.push(r.clone());
+    }
+    let final_record = read(format!("{prefix}-final.r3er"))?;
+    if !same_conditional_rows(&rows, &final_record.rows) {
+        return Err(bad("teacher final ordered rows"));
+    }
+    Ok(VerifiedTeacherEvidence { files, rows })
+}
+
+fn print_bridge_teacher(evidence: &VerifiedTeacherEvidence, step: u64) -> Result<()> {
+    for (group, rows) in evidence.rows.chunks(evidence.rows.len() / 2).enumerate() {
         let mut nll = 0.;
         let mut margin = 0.;
         let mut correct = 0;
@@ -4398,7 +5071,7 @@ fn bridge_teacher(
         println!(
             "BRIDGE_TEACHER group={} step={} cases={} mean_case_nll={} mean_foil_margin={} teacher_correct_tokens={correct} target_tokens={tokens} FREE_GENERATIONS=0",
             if group == 0 { "train" } else { "dev" },
-            n.step,
+            step,
             rows.len(),
             nll / rows.len() as f64,
             margin / rows.len() as f64
@@ -5145,6 +5818,10 @@ pub enum Action {
         conditional: PathBuf,
         #[arg(long)]
         output: PathBuf,
+        #[arg(long)]
+        replacement_of: PathBuf,
+        #[arg(long)]
+        previous_binary: PathBuf,
     },
     BridgeObserve {
         #[arg(long)]
@@ -5491,6 +6168,16 @@ pub(super) fn command(action: Action) -> Result<()> {
             s.parent.segment = 0;
             s.parent.file.locator = "parent.r3m".into();
             s.origins.clear();
+            // Separate train/dev ordinals for the same production teacher layout.
+            s.train = vec![1, 2];
+            for e in &mut s.cases {
+                e.answer = "c".into();
+            }
+            s.panels
+                .iter_mut()
+                .find(|p| p.kind == PanelKind::Watch)
+                .unwrap()
+                .cases = vec![3];
             if continuous {
                 s.origins.push(Origin {
                     role: "bridge-continuous-test".into(),
@@ -5540,12 +6227,16 @@ pub(super) fn command(action: Action) -> Result<()> {
             data,
             conditional,
             output,
+            replacement_of,
+            previous_binary,
         } => bridge_observe_prepare(
             &parent_arm,
             &checkpoint,
             &data,
             &conditional,
             &output,
+            &replacement_of,
+            &previous_binary,
             &mut control,
         ),
         Action::BridgeObserve { root } => bridge_observe(&root, &mut control),
@@ -5612,6 +6303,7 @@ pub(super) fn command(action: Action) -> Result<()> {
                 cases.push(e);
             }
             let p = ConditionalRecord {
+                registration: None,
                 seed: 17,
                 source: evaluator_source(),
                 plan: None,
@@ -8001,6 +8693,7 @@ fn cooldown_verify(root: &Path, confirmation: bool, control: &mut RunControl) ->
                     binary: start.binary,
                     commands: start.commands.clone(),
                     panels: proof_panels,
+                    teacher_evidence: None,
                     elapsed: Scalar::F64(control.start.elapsed().as_secs_f64()),
                     generations: control.generation_calls as u64,
                 }),
@@ -8476,11 +9169,7 @@ fn read_preflight_outcome(root: &Path) -> Result<Option<PreflightOutcome>> {
             let Record::Inputs(s) = read_record(root, &start.inputs[0])? else {
                 return Err(bad("bridge teacher intent snapshot"));
             };
-            let expected = if s.tiny_spec {
-                start.order.len() as u64
-            } else {
-                bridge_probe_indices(&s)?.len() as u64
-            };
+            let expected = bridge_probe_indices(&s)?.len() as u64;
             if !s.bridge() || !s.historical || f.teachers != expected {
                 return Err(bad("bridge teacher completed usage"));
             }
@@ -8492,6 +9181,29 @@ fn read_preflight_outcome(root: &Path) -> Result<Option<PreflightOutcome>> {
         let Record::Preflight(p) = read_record(root, proof_ref)? else {
             return Err(bad("verification final proof kind"));
         };
+        if start.scope == 3 {
+            let Record::Inputs(s) = read_record(root, &start.inputs[0])? else {
+                return Err(bad("bridge teacher inputs"));
+            };
+            let teacher = read_verified_bridge_teacher(root, "parent-probe", &s, &s.parent)?;
+            if p.teacher_evidence.as_ref() != Some(&teacher.files)
+                || f.teachers != teacher.rows.len() as u64
+                || start.source != s.source
+                || start.pair != s.run
+                || start.natives[0] != s.parent.file
+            {
+                return Err(bad("bridge teacher proof references/observation identity"));
+            }
+            println!(
+                "TEACHER_EVIDENCE_VERIFIED={} FILES={} EXECUTION_SOURCE={} RECOUNT_SOURCE={}",
+                teacher.rows.len(),
+                teacher.files.len(),
+                hex(&s.source),
+                hex(&evaluator_source())
+            );
+        } else if p.teacher_evidence.is_some() {
+            return Err(bad("unexpected teacher binding outside scope3"));
+        }
         if proof_ref.locator != "preflight-proof.r3er"
             || p.pair != start.pair
             || p.source != start.source
@@ -9013,6 +9725,7 @@ fn preflight_body(
             "preflight-proof.r3er",
             &Record::Preflight(PreflightReceipt {
                 pair,
+                teacher_evidence: None,
                 source,
                 binary,
                 commands,
@@ -9494,7 +10207,10 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
         };
         if bridge {
             reference(&dir, "final-probe-final.r3er")?;
-            bridge_teacher(&dir, "final-probe", &s, native, &l, control)?;
+            print_bridge_teacher(
+                &read_verified_bridge_teacher(&dir, "final-probe", &s, native)?,
+                native.step,
+            )?;
             let observation = origin_path(&s, "bridge-observation-final")?;
             let observation = observation.parent().unwrap();
             read_preflight_outcome(observation)?
@@ -9503,13 +10219,14 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
             let parent = read_inputs(observation)?;
             let pl = resolve_native(observation, &parent, &parent.parent, true)?;
             reference(observation, "parent-probe-final.r3er")?;
-            bridge_teacher(
-                observation,
-                "parent-probe",
-                &parent,
-                &parent.parent,
-                &pl,
-                control,
+            print_bridge_teacher(
+                &read_verified_bridge_teacher(
+                    observation,
+                    "parent-probe",
+                    &parent,
+                    &parent.parent,
+                )?,
+                parent.parent.step,
             )?;
             for kind in [PanelKind::Sanity, PanelKind::Dev] {
                 let Record::Evaluation(e) = read_record(
@@ -9975,7 +10692,11 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
         let (_, generations, seconds) = anchor_budget(root, &s)?;
         if s.objective.is_some() || s.bridge() {
             let parent = root.parent().ok_or_else(|| bad("objective pair root"))?;
-            let mut teachers = if s.bridge() { 64 } else { 0 };
+            let mut teachers = if s.bridge() {
+                bridge_probe_indices(&s)?.len()
+            } else {
+                0
+            };
             for arm in s.study_arms() {
                 let dir = parent.join(arm);
                 let other = read_inputs(&dir)?;
@@ -10473,8 +11194,8 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                         control,
                     )?;
                 }
-                if s.bridge() && !s.tiny_spec {
-                    bridge_teacher(
+                if s.bridge() {
+                    collect_bridge_teacher(
                         root,
                         "final-probe",
                         &s,
@@ -11848,6 +12569,139 @@ fn fixture_check(roots: &[PathBuf]) -> Result<()> {
 #[cfg(test)]
 mod binary_tests {
     use super::*;
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn bridge_teacher_raw_mutations_and_64_row_schema() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("observation");
+        let from = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
+        command(Action::FixtureBridge {
+            from,
+            output: root.clone(),
+            continuous: false,
+            observation: true,
+        })
+        .unwrap();
+        let mut control = RunControl::new(
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(120),
+            u64::MAX,
+        )
+        .unwrap();
+        bridge_observe(&root, &mut control).unwrap();
+        assert_eq!((control.generation_calls, control.teacher_calls), (2, 2));
+        let s = read_inputs(&root).unwrap();
+        let original = read_verified_bridge_teacher(&root, "parent-probe", &s, &s.parent).unwrap();
+        let row_path = root.join("parent-probe-row-00.r3er");
+        let bytes = std::fs::read(&row_path).unwrap();
+        for mutation in 0..19 {
+            let Record::Evaluation(mut e) = Record::decode(&bytes).unwrap() else {
+                unreachable!()
+            };
+            let row = &mut e.rows[0];
+            let TeacherRecord::Measured(t) = &mut row.teacher else {
+                unreachable!()
+            };
+            match mutation {
+                0 => e.source[0] ^= 1,
+                1 => e.model[0] ^= 1,
+                2 => e.step += 1,
+                3 => row.ordinal += 1,
+                4 => row.case[0] ^= 1,
+                5 => row.prompt[0] ^= 1,
+                6 => row.native_prompt[0] ^= 1,
+                7 => row.provided.push(999),
+                8 => row.completed = false,
+                9 => row.interruption = Some(StopReason::Cancelled),
+                10 => t.correct = t.target + 1,
+                11 => t.mean = Scalar::Nonfinite64(f64::NAN.to_bits()),
+                12 => row.diagnostic = Some(Scalar::Nonfinite64(f64::INFINITY.to_bits())),
+                13 => row.retained[1] = u32::MAX,
+                14 => t.first_argmax = u32::MAX,
+                15 => t.gold_probability = Scalar::F64(1.1),
+                16 => t.field_accuracy[0].correct = t.target + 1,
+                17 => e.expected -= 1,
+                18 => row.excluded.push(999),
+                _ => unreachable!(),
+            }
+            std::fs::write(&row_path, Record::Evaluation(e).encode().unwrap()).unwrap();
+            assert!(
+                read_verified_bridge_teacher(&root, "parent-probe", &s, &s.parent).is_err(),
+                "mutation {mutation}"
+            );
+            assert!(
+                read_preflight_outcome(&root).is_err(),
+                "approval mutation {mutation}"
+            );
+            std::fs::write(&row_path, &bytes).unwrap();
+        }
+        // 64 synthetic copies of two actual TINY measurements: schema coverage,
+        // never reported as 64 forwards or as model quality.
+        let mut expanded = s.clone();
+        let template = expanded.cases[original.rows[0].ordinal as usize].clone();
+        expanded.cases = (0..64)
+            .map(|i| {
+                let mut e = template.clone();
+                e.id = format!("schema-only/{i}");
+                e
+            })
+            .collect();
+        let indices = (0..64).collect::<Vec<u32>>();
+        let mut all = bridge_payload(&expanded, &expanded.parent, PanelKind::Dev, vec![]);
+        all.expected = 64;
+        publish(&root, "schema-start.r3er", &Record::Evaluation(all.clone())).unwrap();
+        for &i in &indices {
+            let mut row = original.rows[0].clone();
+            row.ordinal = i;
+            row.case = case_hash(&expanded.cases[i as usize]);
+            let mut one = all.clone();
+            one.rows = vec![row.clone()];
+            publish(
+                &root,
+                &format!("schema-row-{i:02}.r3er"),
+                &Record::Evaluation(one.clone()),
+            )
+            .unwrap();
+            one.rows[0].teacher = TeacherRecord::NotRequested;
+            one.rows[0].completed = false;
+            one.rows[0].diagnostic = None;
+            one.rows[0].retained.clear();
+            publish(
+                &root,
+                &format!("schema-entry-{i:02}.r3er"),
+                &Record::Evaluation(one),
+            )
+            .unwrap();
+            all.rows.push(row);
+        }
+        publish(&root, "schema-final.r3er", &Record::Evaluation(all.clone())).unwrap();
+        assert_eq!(
+            verify_bridge_teacher_rows(&root, "schema", &expanded, &expanded.parent, &indices)
+                .unwrap()
+                .rows
+                .len(),
+            64
+        );
+        all.rows.pop();
+        std::fs::write(
+            root.join("schema-final.r3er"),
+            Record::Evaluation(all).encode().unwrap(),
+        )
+        .unwrap();
+        assert!(
+            verify_bridge_teacher_rows(&root, "schema", &expanded, &expanded.parent, &indices)
+                .is_err()
+        );
+        let swapped = std::fs::read(root.join("schema-row-01.r3er")).unwrap();
+        std::fs::write(root.join("schema-row-00.r3er"), swapped).unwrap();
+        assert!(
+            verify_bridge_teacher_rows(&root, "schema", &expanded, &expanded.parent, &indices)
+                .is_err()
+        );
+        println!(
+            "TEACHER_SCHEMA SYNTHETIC_ROWS=64 ACTUAL_TINY_GENERATIONS=2 ACTUAL_TINY_TEACHERS=2 TINY_UPDATES=0 SMALL_UPDATES=0"
+        );
+    }
     #[test]
     fn partial_prefix_rejects_content_identity_denominator_and_complete_duplicates() {
         let row = EvalRow {

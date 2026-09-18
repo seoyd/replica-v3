@@ -422,13 +422,21 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                     &[
                         "--bin",
                         "replica-train",
-                        "bridge_pairs_serialized_temporal_oracle_and_negative_facts",
+                        "bridge_",
                         "--",
                         "--test-threads=1",
                     ],
                     true,
                 )?;
-                for filter in ["bridge_", "verification_published_final_sync_error"] {
+                for filter in [
+                    "bridge_",
+                    "conditional_",
+                    "native_resume_ignores_ambient_policy_json",
+                    "verification_published_final_sync_error",
+                    "binary_preflight_attempt_failures_usage_and_single_writer",
+                    "restart_and_cooldown_partial_panels_resume_to_close",
+                    "objective_policy_native_fresh_resume_and_zero_span_parity",
+                ] {
                     r.cargo(
                         "test",
                         &[
