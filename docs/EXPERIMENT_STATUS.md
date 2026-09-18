@@ -1,5 +1,50 @@
 # 진단 및 구현 상태
 
+## B3 — replacement-01 부모 관측·순수 검증·C/T 등록 완료
+
+EXECUTED_THIS_RUN. 실행 source는
+`e08687eff768dd8b6426accebdfe148d3ce8b556`, 정상 push 후 원격 전체 SHA 일치.
+release 빌드18.13초 PASS, 바이너리 SHA256
+`a0db28bed4d8b4ff93d6495a66c16088e11b117538c6ef827ab011a9a0a8d0c3`.
+R3ER execution source digest
+`50edf5c171c1028d4cfa3aadaa547c87f91b53440d1678b5c92635346625f8b2`.
+checker의 전체 source digest와 R3ER의 포함 파일 digest는 서로 다른 정의다.
+이후 source/test/계산·저장 바이너리는 고정하며 보고 문서 commit은 분리한다.
+
+`artifacts/bridge-evidence-restart-20260919/replacement-01.r3er`에 단 한 번
+등록했다. 원 `quality-first-bridge-20260919/parent-observation`은 그대로
+FAILED_PUBLICATION/INTERRUPTED_UNKNOWN/NOT_AUTHORIZED_TO_RESUME다.
+기존 C/T/sanity 물리 hash와 순서·내용·target token·prompt 길이 일치,
+제외된 근거0·상충 target0을 기존 native 자료에서 재검증했다. 재생성0.
+부모는 원 migrated A75-R24310 물리hash81d180…6142, model dfc3ef…1b11,
+Adam fb0dc945…3e19로 검증했다. 원본 전체 보존 hash도 재검증 OK.
+
+새 관측 정상 종료: generation entries/returned320/320, teacher64,
+반환 token8577, SMALL optimizer0. sanity0/64(생성오류1), 새dev0/256(오류2).
+teacher train32 NLL3.4527065266943033/token736/1229,
+dev32 NLL4.0264493192556605/token708/1268. 이는 아직 학습하지 않은 새 focus다.
+완료 elapsed lower bound39.704044833초, publication 이후 command39.719602542초,
+프로세스 실제 wall41.67초. 정상 final/proof가 존재하고 UNKNOWN_TAIL=false.
+
+새 process pure report: teacher64의130개 파일 binding 검증,
+원 실패 관측과 normal token/EOS/error parity sanity64/64+dev256/256.
+보고 전후 전체 경로·유형·파일 크기·SHA 동일, 신규 generation/teacher/update0.
+과거 실패 command를 성공으로 바꾸지 않았다. 보고 actual wall4.36초.
+
+실제 bridge-prepare에서 두 군 등록 완료, 신규 optimizer0.
+동일 parent/Adam, actualLR1e-4(bits4547007122018943789), first weight8,
+6:2 batch8, 각512회·focus1024노출/각view2회. 각 군 등록된 실제 tape 예산은
+input1,349,176/target132,892로 상한 내이며 미래 step24822 메타데이터를
+검증했을 뿐 미래 weights는 만들지 않았다. 상속 config.lr=0.00003와
+실제 고정 LR1e-4를 구분해 로그에 남겼다. 등록 실행 wall42.48초,
+학습 정책 준비 wall25.82초. 네 명령 wall합114.33초, 빌드/회귀 제외.
+
+근거: `b3-register.log`, `b3-observe.log`, `b3-pure-report.log`,
+`b3-prepare.log`, `b3-{before,after}-report*`.
+B1/B2 repair=PASS, B3 observation/admission=PASS, C/T 학습=NOT_RUN,
+SMALL0/TINY92/scalar0, 새SMALLgeneration320/teacher64.
+LAST_DURABLE_NATIVE=기존24310, H3/S4/S5/S6/Goal1=NOT_PASSED.
+
 ## B0–B2 — 관측 증거 경계 수리와 교체 시도 준비
 
 R3-BRIDGE-EVIDENCE-RESTART-1.0 / 2026-09-19. 시작 HEAD
