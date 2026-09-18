@@ -1,6 +1,11 @@
 # Replica v3 B0 runbook
 
-## Current preflight repair and bounded cooldown study
+## Completed preflight repair and bounded cooldown study
+
+The one registered cooldown study is closed: K256/D256 completed, both joint gates
+failed. Commands below describe its preserved evidence and cannot authorize another
+training attempt. Read-only anchor-report is permitted; no new model calls, retries,
+candidate promotion or sealed evaluation follow this negative result automatically.
 
 R3-PREFLIGHT-ONCE-AND-COOLDOWN-1.0 preserves the completed ratio pair and its old proof.
 New `save-preflight-verify` writes intent before native validation/generation and closes

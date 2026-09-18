@@ -1,5 +1,105 @@
 # 진단 및 구현 상태
 
+## P5 최종 — 수리 검증 및 제한 실험 종료, 모델 joint 품질 실패
+
+R3-PREFLIGHT-ONCE-AND-COOLDOWN-1.0 / RESULT=PARTIAL / 2026-09-18.
+REPAIR_SCOPE=IMPLEMENTER_VERIFIED, STUDY_EXECUTION=COMPLETE_512,
+MODEL_QUALITY=STUDY_COMPLETE_QUALITY_FAIL. 전체 합격이나 Goal1 완료가 아니다.
+P4 report2e10ca064c949bc6912c3ba360eaf30cb073dc21도 정상 push/remote SHA를 확인했다.
+
+최종 요구 대조에서 ordinary paired 통계를 QA336/aux64로 나누는 보고를 보완했다.
+학습 종료 후 변경은 src/experiment_record.rs의 보고 집계·관련 inline test뿐이며
+학습 source0e8aa3049a90626264052e6d117370c15089f4c7와 p3-train은 보존했다.
+새 감사 binary는 p5-audit(SHA aa83f501d24b82b76d248b48e6d7028b50e75f263a6cad9420dafb43df8f624a),
+그 source file SHA는2e43ffc474470c88b90112878ce84d9a3a218970dcb27b9ef7cf8abf4f5bbeda다.
+이 감사 source에서 모델을 더 학습하거나 새 출력을 생성하지 않았다.
+
+`p5-recount.log`와 `p5-final-recount.log`의 새 process 재감사는 모두 exit0이었다.
+완전한 raw/native/step/source/policy/command/guard/분모를 읽어 다시 채점했고,
+기존 comparison과 일치했다. 보고용 분리 집계 unit1 PASS, clippy/release PASS
+(`p5-paired-unit.log`, `p5-clippy.log`, `p5-build.log`). 최종 quick는 P2의1회뿐이다.
+P3/P5 후속 소스는 해당 직접 회귀로 구분하며 옛 quick를 새 전체 PASS로 세지 않는다.
+
+### 같은 최종 checkpoint의 paired 변화
+
+아래 벡터는 [둘 다 오답, gain, loss, 둘 다 정답]이다. QA와 aux 분류는 고정
+episode metadata의 family이며, 정오 여부로 분모를 바꾸지 않았다.
+
+| panel | 부모→K | 부모→D | K→D |
+| --- | --- | --- | --- |
+| dev256 | [15,1,3,237] | [16,0,3,237] | [18,0,1,237] |
+| CROSS512 | [48,2,6,456] | [48,2,5,457] | [47,7,6,452] |
+| ordinary400 | [140,26,29,205] | [144,22,22,212] | [153,16,13,218] |
+| QA336 | [130,25,29,152] | [133,22,22,159] | [143,16,12,165] |
+| aux64 | [10,1,0,53] | [11,0,0,53] | [10,0,1,53] |
+
+CONDITIONAL_LR_EFFECT: 이 부모·tape의 D는 K보다 QA4/CROSS1 높고 dev1 낮았다.
+D의 QA181은 부모181을 유지했지만 dev237/CROSS459는 부모240/462보다 낮다.
+후기 LR 감소 하나로 복사·QA의 동시 기준을 충족하지 못했다. 망각·tokenizer·모델 수식의
+근본 원인은 UNRESOLVED다. 단일 seed의 작은 차이를 통계적 우월성으로 주장하지 않는다.
+
+### 노출·하위집단·관측 사용량
+
+양군 각각 anchor/focus unique views1255/512, unique bases1255/128, draws1536/512다.
+pool별 actual input481562/146001, supervised46710/19062로 양군이 정확히 같았다.
+base4/4는 K dev56/64,CROSS106/128,ordinary39/100; D55/64,106/128,41/100이다.
+256/512 correlated view를 독립 base256/512개로 해석하지 않는다.
+
+| 최종 하위집단(정답/분모) | K | D |
+| --- | --- | --- |
+| dev input bytes64–95 /96–127 | 60/64,178/192 | 60/64,177/192 |
+| CROSS input bytes64–95 /96–127 | 114/128,344/384 | 113/128,346/384 |
+| ordinary category0/1/2 | 29/68,22/68,4/68 | 29/68,24/68,4/68 |
+| ordinary category3/4 | 114/132,62/64 | 114/132,63/64 |
+| ordinary input bytes32–63 /64–95 /96–127 | 54/64,153/308,24/28 | 53/64,156/308,25/28 |
+
+길이는 request.input의 UTF-8 byte 수이며 전체 evidence/prompt 길이가 아니다.
+질문 family, H3 digits/kind/pattern(반복 패턴), 범주별 전체 행은 p5-final-recount.log의
+STRATUM에 보존한다. 바로 앞 NODE의 arm/step/panel에 속하며 중간과 최종을 합치지 않는다.
+ordinary category 표는400 전체다; QA336/aux64 별도 점수·paired 표와 혼동하지 않는다.
+
+실제 SMALL generation2928/4096, 관측 generated tokens100891(EOS 포함), teacher0.
+부모16회525 tokens + K1456회50146 + D1456회50220이며, final watch 중복을 제거한
+고유(step,ordinal) raw 개수와 실제 API counts가 일치했다. 실제 모델 실행의 UNKNOWN tail은 없다.
+실패 TINY/강제 종료 회귀의 UNKNOWN은 원래대로 실패 기록이며 수치0으로 바꾸지 않았다.
+TINY 총85/128, scalar optimizer0, SMALL512/512; 새 학습·generation 재시도는 없다.
+각 arm command receipt 시간 합은 K615.495029584s,D601.397650542s다.
+parent verification lower bound44.542827458s와120s publication reserve를 더한 집계는
+1381.435507584s로7200s 안이다. 단일 command도1800s 이내였다. 마지막 immutable
+record 자신의 fsync/exit 시간은 그 record의 elapsed에 넣을 수 없으며 실제0이라고 하지 않는다.
+컴파일·read-only 재감사 시간은 모델 학습/생성 성능 측정에 합산하지 않았다.
+
+최종 native는 양군 각각115285312 bytes. K Adam=d924a316f1404414457680bf62ad866a2e03327615661e3adc6e3c41f0e6ba71,
+D Adam=3089ed191d713054950cd71ee6609ef342a87c8cf335cdb08a8677dd40efa460.
+양군 counters=[43940822,3384495,6741870243436089269], step24566이다.
+원래 config LR0.00003과 이번 실제 LR trace는 별도 값이다. 새 inference-only export는 만들지 않았다.
+
+### 최종 판정과 보존
+
+| 필드 | 판정 |
+| --- | --- |
+| PV01_CODE / PV01_REAL_PROCESS / PREFLIGHT_USAGE_ACCOUNTING | IMPLEMENTER_VERIFIED |
+| PARENT_RAW_RECOUNT / SOURCE_AND_BINARY_BINDING | VERIFIED |
+| LR_STUDY | COMPLETE_K256_D256; 추가 예산 없음 |
+| NORMAL_H3_DEV / CROSS | 양군 FAIL |
+| ORDINARY_RETENTION | K177 FAIL / D181 FLOOR_PASS(178), joint 아님 |
+| JOINT_DEV_GATE / MODEL_QUALITY_RECOVERED | FAIL / false |
+| FRESH_CONFIRMATION | NOT_RUN_NO_JOINT_CANDIDATE; 실제 gate command exit0, 생성0 |
+| H3_SEAL_NOT_OPENED | true |
+| S4 / S5 / S6 | NOT_PASSED / NOT_RUN_THIS_SCOPE / NOT_RUN_THIS_SCOPE |
+| GOAL1_READY / GOAL1_ACCEPTED | false / false |
+| INDEPENDENT_REVIEW | PENDING_EXTERNAL; 자체 독립 승인 아님 |
+
+인가된 원자료 경로는 아래 P4/P3 절과 동일하다. 시작에 등록한 원본63개 SHA가 전부
+유지됐다(p5-originals-verified.log,exit0). 기존487개 untracked도 유지했다.
+새 canonical intent/raw/final/LR 상태는 typed R3ER이고 .r3m은 기존 native binary다.
+legacy JSON corpus/policy/명시 import, 비기준 개발 JSON 보고와 기존 model inspect의
+사람용 JSON 출력은 남아 있다. 새 identity나 재개 상태로 JSON 재직렬화를 쓰지 않았다.
+journal/DB/압축/tokenizer/코어/precision/loss/decay 계수는 그대로다.
+현 계약은 종료한다. NEXT_GATE는 새 명시 인가와 미해결 품질 가설이며, 추가 학습이나
+봉인 평가를 자동 시작하지 않는다. 이 절을 포함한 마지막 감사 source/report commit의
+remote SHA 확인은 로컬 p5-publication.log에 기록한다.
+
 ## P4 완료 — 고정 LR 비교 실행 완료, H3 조건 미달
 
 R3-PREFLIGHT-ONCE-AND-COOLDOWN-1.0 / EXECUTED_THIS_RUN / 2026-09-18.

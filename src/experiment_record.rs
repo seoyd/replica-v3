@@ -5530,6 +5530,14 @@ fn preflight_body(
 
 fn print_anchor_panel(s: &RunSnapshot, e: &EvalPayload, l: &Loaded) -> Result<()> {
     let score = rescore(s, e, l, true)?;
+    println!(
+        "RAW_USAGE panel={} step={} observed_tokens={} completed={}/{}",
+        e.kind.name(),
+        e.step,
+        e.rows.iter().map(|r| r.tokens.len()).sum::<usize>(),
+        score.completed,
+        score.planned
+    );
     let mut context = 0;
     let mut value = 0;
     let mut empty = 0;
@@ -5620,39 +5628,47 @@ fn print_anchor_panel(s: &RunSnapshot, e: &EvalPayload, l: &Loaded) -> Result<()
 fn paired_panel(
     a: (&RunSnapshot, &EvalPayload, &Loaded),
     b: (&RunSnapshot, &EvalPayload, &Loaded),
-) -> Result<[u64; 4]> {
-    let marks = |(s, e, l): (&RunSnapshot, &EvalPayload, &Loaded)| -> Result<Vec<(Hash, bool)>> {
-        rescore(s, e, l, true)?;
-        e.rows
-            .iter()
-            .map(|r| {
-                let case = &s.cases[r.ordinal as usize];
-                let (actual, _) = row_output(r, l)?;
-                Ok((
-                    case_hash(case),
-                    r.completed
-                        && r.interruption.is_none()
-                        && strict_answer_match(
-                            actual.as_deref(),
-                            &case.answer,
-                            r.finish == Finish::Eos,
-                            r.error.is_some(),
-                        ),
-                ))
-            })
-            .collect()
-    };
+) -> Result<[[u64; 4]; 3]> {
+    let marks =
+        |(s, e, l): (&RunSnapshot, &EvalPayload, &Loaded)| -> Result<Vec<(Hash, bool, bool)>> {
+            rescore(s, e, l, true)?;
+            e.rows
+                .iter()
+                .map(|r| {
+                    let case = &s.cases[r.ordinal as usize];
+                    let (actual, _) = row_output(r, l)?;
+                    Ok((
+                        case_hash(case),
+                        r.completed
+                            && r.interruption.is_none()
+                            && strict_answer_match(
+                                actual.as_deref(),
+                                &case.answer,
+                                r.finish == Finish::Eos,
+                                r.error.is_some(),
+                            ),
+                        case.family.starts_with("copy/"),
+                    ))
+                })
+                .collect()
+        };
     let a = marks(a)?;
     let b = marks(b)?;
+    paired_counts(&a, &b)
+}
+// Same frozen family classification as rescore; correctness never changes a denominator.
+fn paired_counts(a: &[(Hash, bool, bool)], b: &[(Hash, bool, bool)]) -> Result<[[u64; 4]; 3]> {
     if a.len() != b.len() {
         return Err(bad("paired denominator"));
     }
-    let mut counts = [0; 4];
-    for (a, b) in a.iter().zip(&b) {
-        if a.0 != b.0 {
+    let mut counts = [[0; 4]; 3];
+    for (a, b) in a.iter().zip(b) {
+        if a.0 != b.0 || a.2 != b.2 {
             return Err(bad("paired source contents"));
         }
-        counts[usize::from(a.1) * 2 + usize::from(b.1)] += 1;
+        let index = usize::from(a.1) * 2 + usize::from(b.1);
+        counts[0][index] += 1;
+        counts[if a.2 { 2 } else { 1 }][index] += 1;
     }
     Ok(counts)
 }
@@ -5774,6 +5790,38 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
         let h = verified_history(&dir, &s, &chain)?;
         let t = &chain.last().unwrap().1;
         let l = resolve_native(&dir, &s, t.native.as_ref().unwrap(), true)?;
+        let native = t.native.as_ref().unwrap();
+        let command_seconds = arm_commands(&dir, &s)?
+            .iter()
+            .map(|(_, c)| c.elapsed.finite())
+            .collect::<Result<Vec<_>>>()?
+            .iter()
+            .sum::<f64>();
+        let mut raw_tokens = BTreeMap::new();
+        for er in h.evaluations.values() {
+            let Record::Evaluation(e) = read_record(&dir, &er.payload)? else {
+                return Err(bad("usage panel kind"));
+            };
+            for r in e.rows {
+                if let Some(old) = raw_tokens.insert((e.step, r.ordinal), r.tokens.clone())
+                    && old != r.tokens
+                {
+                    return Err(bad("derived watch raw differs from ordinary"));
+                }
+            }
+        }
+        println!(
+            "VERIFIED_NATIVE arm={arm} file={} physical={} model={} Adam={} counters={:?} actual_final_LR_bits={:?} inherited_config_LR={} command_seconds={command_seconds} unique_generation_rows={} observed_tokens={} SOURCE=DERIVED_FROM_EXISTING_RAW",
+            native.file.locator,
+            hex(&native.file.digest),
+            hex(&native.model),
+            hex(&native.adam.ok_or_else(|| bad("report Adam absent"))?),
+            native.counters,
+            t.lr_bits.as_ref().and_then(|r| r.last()),
+            l.manifest.training.as_ref().unwrap().config.lr,
+            raw_tokens.len(),
+            raw_tokens.values().map(Vec::len).sum::<usize>()
+        );
         let framed = samples(
             &s.train
                 .iter()
@@ -5843,9 +5891,16 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
                 let (b, bl) = payload(&dir, &s, &h.evaluations[&(s.parent.step + 256, kind)])?;
                 let counts = paired_panel((&old, &a, &al), (&s, &b, &bl))?;
                 println!(
-                    "PAIRED parent_A75_R512_to={arm} updates=256 panel={} both_wrong/gain/loss/both_correct={counts:?}",
-                    kind.name()
+                    "PAIRED parent_A75_R512_to={arm} updates=256 panel={} both_wrong/gain/loss/both_correct={:?}",
+                    kind.name(),
+                    counts[0]
                 );
+                if kind == PanelKind::Ordinary {
+                    println!(
+                        "PAIRED parent_A75_R512_to={arm} updates=256 QA336={:?} AUX64={:?}",
+                        counts[1], counts[2]
+                    );
+                }
             }
         }
         endpoints.push((s, h, candidate));
@@ -5877,6 +5932,7 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
                                         r.error.is_some(),
                                     ) && r.completed
                                         && r.interruption.is_none(),
+                                    c.family.starts_with("copy/"),
                                 ))
                             })
                             .collect::<Result<Vec<_>>>()?,
@@ -5884,17 +5940,18 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
                 }
             }
             if rows.len() == 2 {
-                let mut counts = [0; 4];
-                for (a, b) in rows[0].iter().zip(&rows[1]) {
-                    if a.0 != b.0 {
-                        return Err(bad("paired case content"));
-                    }
-                    counts[usize::from(a.1) * 2 + usize::from(b.1)] += 1;
-                }
+                let counts = paired_counts(&rows[0], &rows[1])?;
                 println!(
-                    "PAIRED updates={n} panel={} both_wrong/gain/loss/both_correct={counts:?}",
-                    kind.name()
+                    "PAIRED updates={n} panel={} both_wrong/gain/loss/both_correct={:?}",
+                    kind.name(),
+                    counts[0]
                 );
+                if kind == PanelKind::Ordinary {
+                    println!(
+                        "PAIRED updates={n} QA336={:?} AUX64={:?}",
+                        counts[1], counts[2]
+                    );
+                }
             }
         }
     }
@@ -7770,6 +7827,32 @@ mod binary_tests {
         assert!(cooldown_lr(1, 1).is_err());
         assert!(cooldown_lr(3, 2).unwrap() > cooldown_lr(3, 128).unwrap());
         println!("LR_FORMULA_OBSERVATIONS=6 SCALAR_OPTIMIZER_CALLS=0 TINY_UPDATES=0");
+    }
+    #[test]
+    fn paired_qa_aux_denominators_are_frozen_and_separate() {
+        let a = vec![
+            ([0; 32], false, false),
+            ([1; 32], true, false),
+            ([2; 32], false, true),
+            ([3; 32], true, true),
+        ];
+        let b = vec![
+            ([0; 32], true, false),
+            ([1; 32], false, false),
+            ([2; 32], false, true),
+            ([3; 32], true, true),
+        ];
+        assert_eq!(
+            paired_counts(&a, &b).unwrap(),
+            [[1, 1, 1, 1], [0, 1, 1, 0], [1, 0, 0, 1]]
+        );
+        assert!(paired_counts(&a, &b[..3]).is_err());
+        let mut changed = b.clone();
+        changed[0].2 = true;
+        assert!(paired_counts(&a, &changed).is_err());
+        changed = b;
+        changed[0].0 = [9; 32];
+        assert!(paired_counts(&a, &changed).is_err());
     }
     use std::fs;
     #[test]

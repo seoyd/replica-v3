@@ -1,6 +1,15 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: R3-PREFLIGHT-ONCE-AND-COOLDOWN-1.0
+## Closed: R3-PREFLIGHT-ONCE-AND-COOLDOWN-1.0
+
+P0–P5 completed within SMALL512/generation2928/TINY85/scalar-optimizer0. PV01 and
+real native one-update/fresh-process resume were verified. Final K: dev238/CROSS458/
+QA177; D:237/459/181, each one dev UTF-8 error. Complete raw recount and separate
+QA/aux paired counts agree with saved results. STUDY_COMPLETE_QUALITY_FAIL; fresh
+confirmation NOT_RUN_NO_JOINT_CANDIDATE, seal NOT_OPENED, Goal1 not ready.
+Original63 registered file hashes and487 untracked files were preserved. No automatic
+learning extension or candidate promotion. The specification below records this closed
+study, not permission for another fork. See EXPERIMENT_STATUS for source/binary/evidence.
 
 Base source50a0fb72f552cc130fbd5598019222c7a7bd95fe, report198a1a032368f023d81ab744e59eccb1cd6b6e53.
 P0 preserves the previous preflight, completed C50-R/A75-R, failed pair and raw inputs.
