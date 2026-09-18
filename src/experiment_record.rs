@@ -723,12 +723,11 @@ impl RunSnapshot {
                 || self.lr_offset != 0
                 || !matches!(self.purpose, RunPurpose::LrContinuous | RunPurpose::LrSplit)
                 || self.tape.len() != if self.tiny_spec { 2 } else { 256 }
-                || self.eval_steps
-                    != if self.tiny_spec {
-                        vec![]
-                    } else {
-                        vec![128, 256]
-                    })
+                || if self.tiny_spec {
+                    !self.eval_steps.is_empty() && self.eval_steps != [1, 2]
+                } else {
+                    self.eval_steps != [128, 256]
+                })
         {
             return Err(bad("cooldown fixed horizon/policy/purpose"));
         }
@@ -823,10 +822,15 @@ impl RunSnapshot {
         matches!(
             self.purpose,
             RunPurpose::SaveContinuous | RunPurpose::SaveSplit
-        ) || self.cooldown() && self.tiny_spec
+        ) || self.cooldown() && self.tiny_spec && self.eval_steps.is_empty()
     }
     fn cooldown(&self) -> bool {
         self.contract == COOLDOWN_CONTRACT
+    }
+    fn supports_partial_resume(&self) -> bool {
+        matches!(self.contract.as_str(), RESTART_CONTRACT | COOLDOWN_CONTRACT)
+            && !self.historical
+            && (self.tiny_spec || self.authorization.is_some())
     }
     fn arm_name(&self) -> &'static str {
         match self.purpose {
@@ -1601,9 +1605,11 @@ enum Record {
     VerificationStart(VerificationStart),
     VerificationRow(VerificationRow),
     VerificationFinal(VerificationFinal),
+    VerificationPending { start: FileRef, final_digest: Hash },
 }
 #[derive(Clone, Debug, Serialize)]
 struct VerificationStart {
+    publication_v2: bool,
     // 0: two-step save parity; 1: registered parent parity; 2: one joint candidate confirmation.
     scope: u8,
     root: String,
@@ -1639,7 +1645,7 @@ impl VerificationStart {
         put_varint(b, self.generation_limit);
         put_varint(b, self.seconds_limit);
     }
-    fn decode(r: &mut Reader<'_>, scope: u8) -> Result<Self> {
+    fn decode(r: &mut Reader<'_>, scope: u8, publication_v2: bool) -> Result<Self> {
         let root = text(r)?;
         let pair = digest_read(r)?;
         let source = digest_read(r)?;
@@ -1669,6 +1675,7 @@ impl VerificationStart {
             return Err(bad("verification intent bounds"));
         }
         Ok(Self {
+            publication_v2,
             scope,
             root,
             pair,
@@ -1900,11 +1907,17 @@ impl Record {
                 if extended { 16 } else { 9 }
             }
             Self::VerificationStart(v) => {
-                if v.scope != 0 {
+                if v.scope != 0 || v.publication_v2 {
                     body.push(v.scope);
                 }
                 v.encode(&mut body);
-                if v.scope == 0 { 10 } else { 15 }
+                if v.publication_v2 {
+                    17
+                } else if v.scope == 0 {
+                    10
+                } else {
+                    15
+                }
             }
             Self::VerificationRow(v) => {
                 v.encode(&mut body);
@@ -1913,6 +1926,14 @@ impl Record {
             Self::VerificationFinal(v) => {
                 v.encode(&mut body);
                 12
+            }
+            Self::VerificationPending {
+                start,
+                final_digest,
+            } => {
+                start.encode(&mut body);
+                body.extend(final_digest);
+                18
             }
         };
         if body.len() > MAX_FILE - HEADER {
@@ -1972,12 +1993,16 @@ impl Record {
             5 => Self::Comparison(ComparisonReceipt::decode(&mut r)?),
             7 => Self::Command(CommandOutcome::decode(&mut r)?),
             9 | 16 => Self::Preflight(PreflightReceipt::decode(&mut r, kind == 16)?),
-            10 | 15 => {
-                let scope = if kind == 15 { r.byte()? } else { 0 };
-                Self::VerificationStart(VerificationStart::decode(&mut r, scope)?)
+            10 | 15 | 17 => {
+                let scope = if kind != 10 { r.byte()? } else { 0 };
+                Self::VerificationStart(VerificationStart::decode(&mut r, scope, kind == 17)?)
             }
             11 => Self::VerificationRow(VerificationRow::decode(&mut r)?),
             12 => Self::VerificationFinal(VerificationFinal::decode(&mut r)?),
+            18 => Self::VerificationPending {
+                start: FileRef::decode(&mut r)?,
+                final_digest: digest_read(&mut r)?,
+            },
             _ => return Err(bad("record kind")),
         };
         if !r.finished() {
@@ -1991,6 +2016,12 @@ impl Record {
     }
 }
 fn publish(root: &Path, locator: &str, record: &Record) -> Result<FileRef> {
+    #[cfg(feature = "test-support")]
+    if std::env::var("R3ER_TEST_STOP").as_deref() == Ok("pv-final-sync-and-record-fail")
+        && root.join("preflight-final.r3er").exists()
+    {
+        return Err(std::io::Error::other("injected all subsequent record writes fail").into());
+    }
     let path = owned_path(root, locator, false)?;
     let bytes = record.encode()?;
     publish_new(&path, |file, _| {
@@ -2303,6 +2334,18 @@ fn evaluate(
     let spec = panel(s, kind)?;
     let mut heartbeat = Instant::now();
     for ordinal in spec.cases.iter().skip(rows.len()) {
+        #[cfg(feature = "test-support")]
+        if s.tiny_spec && kind == PanelKind::Dev {
+            let boundary = if step - s.parent.step == 1 { 128 } else { 256 };
+            let mode = std::env::var("R3ER_TEST_STOP").unwrap_or_default();
+            if mode == format!("partial-dev:{boundary}:{}", rows.len()) {
+                println!(
+                    "TINY_LOGICAL_BOUNDARY={boundary} COMPLETED_PREFIX={}",
+                    rows.len()
+                );
+                control.deadline = Instant::now();
+            }
+        }
         if control.generation_calls >= control.generation_limit {
             control.observe(StopReason::ResourceLimit);
             break;
@@ -2685,6 +2728,10 @@ pub enum Action {
         untrained: bool,
         #[arg(long)]
         restart_spec: bool,
+        #[arg(long)]
+        cooldown_panel: bool,
+        #[arg(long, default_value_t = 1)]
+        panel_rows: usize,
     },
     #[cfg(feature = "test-support")]
     FixturePreflight {
@@ -2820,14 +2867,47 @@ pub(super) fn command(action: Action) -> Result<()> {
             output,
             untrained,
             restart_spec,
-        } => fixture_fork_inner(
-            &from,
-            &output,
-            untrained,
-            false,
-            RunPurpose::Anchor,
-            restart_spec,
-        ),
+            cooldown_panel,
+            panel_rows,
+        } => {
+            fixture_fork_inner(
+                &from,
+                &output,
+                untrained,
+                false,
+                RunPurpose::Anchor,
+                restart_spec || cooldown_panel,
+            )?;
+            if cooldown_panel || panel_rows != 1 {
+                let mut s = read_inputs(&output)?;
+                if cooldown_panel {
+                    s.contract = COOLDOWN_CONTRACT.into();
+                    s.purpose = RunPurpose::LrContinuous;
+                    s.lr_policy = 2;
+                    s.lr_offset = 0;
+                }
+                if !(1..=3).contains(&panel_rows) {
+                    return Err(bad("TINY panel fixture bound"));
+                }
+                let mut ordinals = panel(&s, PanelKind::Dev)?.cases.clone();
+                for i in 1..panel_rows {
+                    let mut e = s.cases[ordinals[0] as usize].clone();
+                    e.id = format!("tiny-prefix-{i}");
+                    ordinals.push(s.cases.len() as u32);
+                    s.cases.push(e);
+                }
+                s.panels
+                    .iter_mut()
+                    .find(|p| p.kind == PanelKind::Dev)
+                    .unwrap()
+                    .cases = ordinals;
+                std::fs::write(
+                    output.join("inputs.r3er"),
+                    Record::Inputs(Box::new(s)).encode()?,
+                )?;
+            }
+            Ok(())
+        }
         #[cfg(feature = "test-support")]
         Action::FixtureCooldown { from, output } => {
             std::fs::create_dir(&output)?;
@@ -3080,6 +3160,33 @@ struct History {
     guard: [u64; 3],
     quality: bool,
 }
+fn preserves_partial_prefix(previous: &EvalPayload, next: &EvalPayload) -> bool {
+    let prefix = previous
+        .rows
+        .iter()
+        .take_while(|r| r.completed && r.interruption.is_none())
+        .collect::<Vec<_>>();
+    prefix.len() < previous.expected as usize
+        && previous.model == next.model
+        && previous.run == next.run
+        && previous.binding == next.binding
+        && previous.tokenizer == next.tokenizer
+        && previous.architecture == next.architecture
+        && previous.source == next.source
+        && previous.step == next.step
+        && previous.new_updates == next.new_updates
+        && previous.kind == next.kind
+        && previous.expected == next.expected
+        && next.rows.len() >= prefix.len()
+        && next.rows.len() <= next.expected as usize
+        && prefix.iter().zip(&next.rows).all(|(a, b)| {
+            let mut x = Vec::new();
+            let mut y = Vec::new();
+            a.encode(&mut x);
+            b.encode(&mut y);
+            x == y
+        })
+}
 fn verified_history(
     root: &Path,
     s: &RunSnapshot,
@@ -3091,7 +3198,7 @@ fn verified_history(
         guard: [0; 3],
         quality: false,
     };
-    for (_, t) in chain {
+    for (segment_index, (_, t)) in chain.iter().enumerate() {
         for r in &t.evaluations {
             let (e, _) = payload(root, s, r)?;
             if r.native.as_ref().unwrap().segment > t.segment
@@ -3104,22 +3211,15 @@ fn verified_history(
                 && old.payload.digest != r.payload.digest
             {
                 let (previous, _) = payload(root, s, old)?;
-                let prefix = previous
-                    .rows
+                let origin = chain[..segment_index]
                     .iter()
-                    .take_while(|r| r.completed && r.interruption.is_none())
-                    .collect::<Vec<_>>();
-                if s.contract != RESTART_CONTRACT
-                    || prefix.len() == previous.expected as usize
-                    || previous.model != e.model
-                    || e.rows.len() < prefix.len()
-                    || prefix.iter().zip(&e.rows).any(|(a, b)| {
-                        let mut x = Vec::new();
-                        let mut y = Vec::new();
-                        a.encode(&mut x);
-                        b.encode(&mut y);
-                        x != y
-                    })
+                    .rev()
+                    .find(|(_, t)| t.evaluations.iter().any(|r| r.payload == old.payload))
+                    .ok_or_else(|| bad("same-segment duplicate raw observation"))?;
+                if !s.supports_partial_resume()
+                    || effective_outcome(root, s, &origin.0)?.status != CommandStatus::TimePause
+                    || origin.1.save_error.is_some()
+                    || !preserves_partial_prefix(&previous, &e)
                 {
                     return Err(bad("ambiguous same-step raw observation"));
                 }
@@ -4446,6 +4546,7 @@ fn cooldown_verify(root: &Path, confirmation: bool, control: &mut RunControl) ->
         })
         .collect::<Vec<_>>();
     let start = VerificationStart {
+        publication_v2: true,
         scope,
         root: target.canonicalize()?.display().to_string(),
         pair: study
@@ -4846,6 +4947,7 @@ fn verification_intent(root: &Path) -> Result<VerificationStart> {
         );
     }
     Ok(VerificationStart {
+        publication_v2: true,
         scope: 0,
         root: root.canonicalize()?.to_string_lossy().into_owned(),
         pair: pair.ok_or_else(|| bad("empty verification"))?,
@@ -4922,6 +5024,16 @@ fn verification_rows(
 }
 fn read_preflight_outcome(root: &Path) -> Result<Option<PreflightOutcome>> {
     let start_path = root.join("preflight-start.r3er");
+    // Readers serialize with the final publisher on the immutable intent inode.
+    // A live publisher is not a completed authorization, even if final bytes are visible.
+    let _lock = if start_path.exists() {
+        let file = std::fs::File::open(&start_path)?;
+        file.try_lock_shared()
+            .map_err(|e| Error::Conflict(format!("verification publication in progress: {e}")))?;
+        Some(file)
+    } else {
+        None
+    };
     if !start_path.exists() {
         if root.join("preflight-proof.r3er").exists() {
             let Record::Preflight(p) =
@@ -4950,6 +5062,7 @@ fn read_preflight_outcome(root: &Path) -> Result<Option<PreflightOutcome>> {
                 let n = n.to_string_lossy();
                 n.starts_with("preflight-row-")
                     || n.starts_with("preflight-final")
+                    || n.starts_with("preflight-publication")
                     || n.starts_with(".preflight-")
             });
         if fragments
@@ -4986,7 +5099,27 @@ fn read_preflight_outcome(root: &Path) -> Result<Option<PreflightOutcome>> {
         .map(|(_, r, _)| r.tokens.len() as u64)
         .sum::<u64>();
     let elapsed = rows.last().map_or(0., |(_, _, t)| *t);
-    if !root.join("preflight-final.r3er").exists() {
+    let pending = root.join("preflight-publication-pending.r3er");
+    if pending.exists() {
+        let Record::VerificationPending {
+            start: pending_start,
+            final_digest,
+        } = read_record(
+            root,
+            &reference(root, "preflight-publication-pending.r3er")?,
+        )?
+        else {
+            return Err(bad("publication pending kind"));
+        };
+        if !start.publication_v2
+            || pending_start != sr
+            || root.join("preflight-final.r3er").exists()
+                && reference(root, "preflight-final.r3er")?.digest != final_digest
+        {
+            return Err(bad("publication pending/final attempt conflict"));
+        }
+    }
+    if pending.exists() || !root.join("preflight-final.r3er").exists() {
         println!(
             "PREFLIGHT_STATUS=INTERRUPTED_UNKNOWN BEGIN_DURABLE=true GENERATION_API_ENTRIES_KNOWN={entries} OBSERVED_TOKENS_KNOWN={tokens} ELAPSED_LOWER_BOUND={elapsed} RESERVED_UPPER_BOUND={} RESERVED_SECONDS={} UNKNOWN_TAIL=true ELAPSED_TOTAL=UNKNOWN TOKEN_TOTAL=UNKNOWN NEW_GENERATIONS=0",
             start.generation_limit, start.seconds_limit
@@ -5144,7 +5277,7 @@ fn read_preflight_outcome(root: &Path) -> Result<Option<PreflightOutcome>> {
     );
     Ok(Some(PreflightOutcome {
         succeeded: f.succeeded,
-        legacy: false,
+        legacy: !start.publication_v2,
         entries: f.entries,
         elapsed: f.elapsed.finite()?,
         // Last immutable publication cannot contain its own completed fsync duration.
@@ -5210,6 +5343,13 @@ fn finish_verification_attempt(
         "preflight-start.r3er",
         &Record::VerificationStart(start.clone()),
     )?;
+    let publication_lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(root.join("preflight-start.r3er"))?;
+    publication_lock
+        .try_lock()
+        .map_err(|e| Error::Conflict(format!("verification writer: {e}")))?;
     println!(
         "VERIFICATION_BEGIN_DURABLE=true CONTRACT={COOLDOWN_CONTRACT} ATTEMPT_ID={} RESERVED_UPPER_BOUND={} UNKNOWN_TAIL=true",
         hex(&sr.digest),
@@ -5229,7 +5369,7 @@ fn finish_verification_attempt(
         .collect::<Vec<_>>();
     let proof = reference(root, "preflight-proof.r3er").ok();
     let f = VerificationFinal {
-        start: sr,
+        start: sr.clone(),
         unknown_tail: rows.len() != returned.len(),
         rows,
         proof,
@@ -5251,8 +5391,22 @@ fn finish_verification_attempt(
             .filter(|e| matches!(e, Error::Io(_)))
             .map(ToString::to_string),
     };
+    let final_record = Record::VerificationFinal(f);
+    // Pending is durable BEFORE publication. No error path removes this blocker.
+    publish(
+        root,
+        "preflight-publication-pending.r3er",
+        &Record::VerificationPending {
+            start: sr,
+            final_digest: hash(&final_record.encode()?),
+        },
+    )?;
+    #[cfg(feature = "test-support")]
+    if tiny && std::env::var("R3ER_TEST_STOP").as_deref() == Ok("pv-pending-kill") {
+        std::process::exit(94);
+    }
     let saved = verification_fault(tiny, "final", control)
-        .and_then(|_| publish(root, "preflight-final.r3er", &Record::VerificationFinal(f)));
+        .and_then(|_| publish(root, "preflight-final.r3er", &final_record));
     println!(
         "VERIFICATION_COMMAND_ELAPSED={} FINAL_PUBLICATION_OK={} ORIGINAL_ERROR={:?} PUBLICATION_ERROR={:?}",
         control.start.elapsed().as_secs_f64(),
@@ -5261,6 +5415,19 @@ fn finish_verification_attempt(
         saved.as_ref().err()
     );
     saved?;
+    verification_fault(tiny, "pending-release", control)?;
+    // Authorization linearizes at unlink under the writer lock, only after final
+    // file AND directory sync succeeded. Unlink failure leaves Pending blocked.
+    std::fs::remove_file(root.join("preflight-publication-pending.r3er"))?;
+    // Final is already durable. Cleanup sync failure may resurrect Pending after
+    // a crash (fail closed); it cannot lose the committed final. This is a warning,
+    // never a command failure that a later reader could launder into success.
+    let cleanup = verification_fault(tiny, "cleanup", control)
+        .and_then(|_| std::fs::File::open(root)?.sync_all().map_err(Error::from));
+    if let Err(e) = cleanup {
+        eprintln!("PUBLICATION_COMMITTED=true CLEANUP_WARNING={e}");
+    }
+    drop(publication_lock);
     let status = read_preflight_outcome(root)?.ok_or_else(|| bad("verification outcome absent"))?;
     result?;
     status.require_current_success()
@@ -6522,7 +6689,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
             r.native = native.clone();
         }
     }
-    if !(matches!(s.contract.as_str(), RESTART_CONTRACT | COOLDOWN_CONTRACT) && control.observed == [StopReason::TimeBudget]) && evaluations.iter().any(|r| read_record(root,&r.payload).is_ok_and(|v| matches!(v,
+    if !(s.supports_partial_resume() && control.observed == [StopReason::TimeBudget]) && evaluations.iter().any(|r| read_record(root,&r.payload).is_ok_and(|v| matches!(v,
         Record::Evaluation(e) if e.rows.len()!=e.expected as usize || e.rows.iter().any(|r|!r.completed || r.interruption.is_some())))) {
         control.observe(StopReason::AuditIncomplete);
     }
@@ -7684,6 +7851,78 @@ fn fixture_check(roots: &[PathBuf]) -> Result<()> {
 #[cfg(test)]
 mod binary_tests {
     use super::*;
+    #[test]
+    fn partial_prefix_rejects_content_identity_denominator_and_complete_duplicates() {
+        let row = EvalRow {
+            ordinal: 0,
+            case: [1; 32],
+            prompt: [2; 32],
+            prompt_len: 1,
+            native_prompt: [3; 32],
+            provided: vec![],
+            excluded: vec![],
+            tokens: vec![EOS],
+            eos: Some(0),
+            started: true,
+            completed: true,
+            finish: Finish::Eos,
+            error: None,
+            error_class: None,
+            interruption: None,
+            effective_timeout: Some(30000),
+            timing: None,
+            retained: vec![],
+            teacher: TeacherRecord::NotRequested,
+            diagnostic: None,
+        };
+        let old = EvalPayload {
+            run: [1; 32],
+            binding: [2; 32],
+            source: [3; 32],
+            model: [4; 32],
+            tokenizer: [5; 32],
+            architecture: [6; 32],
+            step: 128,
+            new_updates: 1,
+            kind: PanelKind::Dev,
+            expected: 3,
+            rows: vec![row.clone()],
+        };
+        let mut next = old.clone();
+        next.rows.push(row);
+        assert!(preserves_partial_prefix(&old, &next));
+        for field in 0..14 {
+            let mut altered = next.clone();
+            match field {
+                0 => altered.rows[0].tokens.push(9),
+                1 => altered.rows[0].ordinal += 1,
+                2 => altered.model[0] ^= 1,
+                3 => altered.tokenizer[0] ^= 1,
+                4 => altered.binding[0] ^= 1,
+                5 => altered.expected += 1,
+                6 => altered.rows.clear(),
+                7 => altered.run[0] ^= 1,
+                8 => altered.source[0] ^= 1,
+                9 => altered.architecture[0] ^= 1,
+                10 => altered.step += 1,
+                11 => altered.new_updates += 1,
+                12 => altered.rows[0].diagnostic = Some(Scalar::F64(0.009906130842864513)),
+                13 => altered.kind = PanelKind::Watch,
+                _ => unreachable!(),
+            }
+            assert!(!preserves_partial_prefix(&old, &altered), "field {field}");
+        }
+        let mut complete = old.clone();
+        complete.expected = 1;
+        assert!(!preserves_partial_prefix(&complete, &complete));
+        let mut empty = old.clone();
+        empty.rows.clear();
+        assert!(preserves_partial_prefix(&empty, &next));
+        let mut interrupted = old.clone();
+        interrupted.rows[0].completed = false;
+        interrupted.rows[0].interruption = Some(StopReason::TimeBudget);
+        assert!(preserves_partial_prefix(&interrupted, &next));
+    }
     #[cfg(feature = "test-support")]
     #[test]
     fn anchor_fork_exhausted_parent_budget_native_save() {

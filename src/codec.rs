@@ -487,6 +487,16 @@ pub fn publish_new_measured<T>(
     std::fs::hard_link(&cleanup.0, path)?;
     timing.link_ms = phase.elapsed().as_secs_f64() * 1000.;
     let phase = std::time::Instant::now();
+    #[cfg(feature = "test-support")]
+    if path
+        .file_name()
+        .is_some_and(|n| n == "preflight-final.r3er")
+        && std::env::var("R3ER_TEST_STOP").is_ok_and(|v| v.starts_with("pv-final-sync"))
+    {
+        return Err(
+            std::io::Error::other("injected parent sync error AFTER final hard_link").into(),
+        );
+    }
     File::open(parent)?.sync_all()?;
     timing.directory_sync_ms = phase.elapsed().as_secs_f64() * 1000.;
     drop(cleanup);

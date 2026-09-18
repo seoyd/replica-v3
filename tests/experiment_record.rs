@@ -52,6 +52,118 @@ fn call(args: &[&str], stop: Option<&str>, success: bool, log: &Path) -> Output 
 fn p(p: &Path) -> &str {
     p.to_str().unwrap()
 }
+fn copy_fixture(from: &Path, to: &Path) {
+    fs::create_dir(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let path = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_fixture(&entry.path(), &path);
+        } else {
+            fs::copy(entry.path(), path).unwrap();
+        }
+    }
+}
+#[test]
+fn verification_published_final_sync_error_cannot_authorize_fresh_process() {
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
+    let root = d.path().join("publication");
+    call(
+        &[
+            "fixture-preflight",
+            "--from",
+            p(&bootstrap),
+            "--output",
+            p(&root),
+        ],
+        None,
+        true,
+        &d.path().join("prepare.log"),
+    );
+    let mut updates = 0;
+    for (arm, resume) in [
+        ("preflight-A", None),
+        ("preflight-B", None),
+        ("preflight-B", Some("segment-00/terminal.r3er")),
+    ] {
+        let dir = root.join(arm);
+        let mut args = vec!["run", "--root", p(&dir)];
+        if let Some(r) = resume {
+            args.extend(["--resume", r]);
+        }
+        let out = call(&args, None, true, &d.path().join("train.log"));
+        updates += String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| l.starts_with("ACTUAL_TINY_UPDATE="))
+            .count();
+    }
+    println!("PF_PUBLISH_ACTUAL_TINY_UPDATES={updates} SMALL_UPDATES=0");
+    let prepared = root;
+    for (mode, success, final_exists) in [
+        ("pv-final-sync-fail", false, true),
+        ("pv-final-sync-and-record-fail", false, true),
+        ("pv-pending-kill", false, false),
+        ("pv-pending-release-write-fail", false, true),
+        ("pv-cleanup-write-fail", true, true),
+    ] {
+        let root = d.path().join(mode);
+        copy_fixture(&prepared, &root);
+        let out = call(
+            &["save-preflight-verify", "--root", p(&root)],
+            Some(mode),
+            success,
+            &d.path().join("fault.log"),
+        );
+        if mode.starts_with("pv-final-sync") {
+            assert!(String::from_utf8_lossy(&out.stdout).contains("AFTER final hard_link"));
+        }
+        let final_bytes = fs::read(root.join("preflight-final.r3er")).ok();
+        assert_eq!(final_bytes.is_some(), final_exists);
+        if success {
+            assert!(
+                String::from_utf8_lossy(&out.stdout)
+                    .contains("PUBLICATION_COMMITTED=true CLEANUP_WARNING=")
+            );
+            let out = call(
+                &["save-preflight-verify", "--root", p(&root)],
+                None,
+                true,
+                &d.path().join("positive.log"),
+            );
+            assert!(
+                !String::from_utf8_lossy(&out.stdout)
+                    .contains("VERIFICATION_GENERATION_API_ENTRY=")
+            );
+            continue;
+        }
+        for args in [
+            vec!["save-preflight-verify", "--root", p(&root)],
+            vec!["run", "--root", p(&root.join("C50"))],
+            vec!["anchor-report", "--root", p(&root)],
+        ] {
+            let out = call(&args, None, false, &d.path().join("consumer.log"));
+            let text = String::from_utf8_lossy(&out.stdout);
+            assert!(!text.contains("VERIFICATION_GENERATION_API_ENTRY="));
+            assert!(!text.contains("ACTUAL_TINY_UPDATE="));
+        }
+        assert_eq!(
+            final_bytes,
+            fs::read(root.join("preflight-final.r3er")).ok()
+        );
+        assert!(root.join("preflight-publication-pending.r3er").is_file());
+        let pending = root.join("preflight-publication-pending.r3er");
+        let mut bytes = fs::read(&pending).unwrap();
+        *bytes.last_mut().unwrap() ^= 1;
+        fs::write(&pending, bytes).unwrap();
+        call(
+            &["save-preflight-verify", "--root", p(&root)],
+            None,
+            false,
+            &d.path().join("corrupt-pending.log"),
+        );
+    }
+}
 #[test]
 fn cooldown_actual_lr_continuous_and_fresh_process_resume() {
     let d = tempfile::tempdir().unwrap();
@@ -126,6 +238,86 @@ fn cooldown_actual_lr_continuous_and_fresh_process_resume() {
         "COOLDOWN_NUMERIC TINY_UPDATES={} GENERATIONS=0 SCALAR_OPTIMIZER=0",
         rates(&a).len() + split_rates.len()
     );
+}
+#[test]
+fn restart_and_cooldown_partial_panels_resume_to_close() {
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
+    let mut updates = 0;
+    for flag in ["--restart-spec", "--cooldown-panel"] {
+        for boundary in [128, 256] {
+            for prefix in [0, 1, 2] {
+                let root = d.path().join(format!("{flag}-{boundary}-{prefix}"));
+                call(
+                    &[
+                        "fixture-fork",
+                        "--from",
+                        p(&bootstrap),
+                        "--output",
+                        p(&root),
+                        flag,
+                        "--panel-rows",
+                        "3",
+                    ],
+                    None,
+                    true,
+                    &d.path().join("prepare.log"),
+                );
+                let out = call(
+                    &["run", "--root", p(&root)],
+                    Some(&format!("partial-dev:{boundary}:{prefix}")),
+                    true,
+                    &d.path().join("pause.log"),
+                );
+                updates += String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .filter(|l| l.starts_with("ACTUAL_TINY_UPDATE="))
+                    .count();
+                assert!(
+                    String::from_utf8_lossy(&out.stdout).contains("COMMAND_FINALIZATION=TimePause")
+                );
+                let raw_name = format!(
+                    "segment-00/dev-{:04}.r3er",
+                    if boundary == 128 { 1 } else { 2 }
+                );
+                let original = fs::read(root.join(&raw_name)).unwrap();
+                let out = call(
+                    &[
+                        "run",
+                        "--root",
+                        p(&root),
+                        "--resume",
+                        "segment-00/terminal.r3er",
+                    ],
+                    None,
+                    true,
+                    &d.path().join("resume.log"),
+                );
+                updates += String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .filter(|l| l.starts_with("ACTUAL_TINY_UPDATE="))
+                    .count();
+                assert_eq!(original, fs::read(root.join(raw_name)).unwrap());
+                call(
+                    &[
+                        "close",
+                        "--root",
+                        p(&root),
+                        "--terminal",
+                        "segment-01/terminal.r3er",
+                    ],
+                    None,
+                    true,
+                    &d.path().join("close.log"),
+                );
+                println!(
+                    "PARTIAL_PROCESS contract={flag} logical={boundary} prefix={prefix} CLOSED=true TINY_UPDATES_CUMULATIVE={updates}"
+                );
+            }
+        }
+    }
+    assert_eq!(updates, 24);
+    println!("PARTIAL_RESUME_ACTUAL_TINY_UPDATES={updates} SMALL_UPDATES=0");
 }
 #[test]
 fn binary_preflight_attempt_failures_usage_and_single_writer() {

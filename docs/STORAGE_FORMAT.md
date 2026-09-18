@@ -1,5 +1,25 @@
 # B0 storage format v1
 
+## Verification publication authorization v2
+
+R3ER kind17 is the new intent (explicit scope plus the existing typed fields);
+kind18 binds the intent FileRef and physical final digest as publication Pending.
+Kinds10/15 remain legacy read-only; no markers are backfilled into old experiments.
+Readers take a shared OS lock on the immutable intent inode; the finalizer holds
+an exclusive lock. Intent/pending/partial raw are preserved after failures.
+
+| Boundary | Return/consumer meaning |
+| --- | --- |
+| Intent only, missing final, or Pending present | Incomplete/UNKNOWN; no approval or retry |
+| Final link visible but file/directory publication returned Err | Pending remains; same blocked outcome in a fresh process |
+| Final file and directory sync succeeded; Pending unlink fails | Error, Pending remains, blocked |
+| Pending unlink succeeds under writer lock | Authorization linearization point; final was already durable |
+| Following cleanup directory sync fails | Committed success with explicit cleanup warning; crash may resurrect Pending and block conservatively |
+
+Cleanup cannot delete raw/final evidence. No failure log write is required to retain
+the earlier durable blocker. This is cooperative file/OS-lock serialization, not a
+multi-file transaction or a guarantee against arbitrary device power-loss behavior.
+
 ## R3ER verification intent and outcome
 
 PV01 adds bounded typed record kinds10(verification start),11(entry reservation or

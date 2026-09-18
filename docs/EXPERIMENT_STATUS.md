@@ -1,5 +1,37 @@
 # 진단 및 구현 상태
 
+## E0–E2 — publication 승인 및 부분 평가 재개 수리
+
+R3-DATA-BINARY-AND-TARGET-LOSS-1.0 / 2026-09-18 / EXECUTED_THIS_RUN.
+시작HEAD1e25be2cef801dd67a6515e5c33823a0d1b06a92, main/origin seoyd/replica-v3.
+tracked clean, 기존 untracked487 보존. Rust/Cargo1.98.1. 기존 등록 원본63개와
+A75-R/K/D 실제 native SHA 확인. A75-R24310 물리SHA는 승인된50b927dd…f09c와
+전체값이 일치한다. 근거 root=`artifacts/data-binary-target-loss-20260918/`.
+
+E1: 격리 기준 코드에 실제 hard_link 뒤 fault만 추가한 실행에서 최초 명령Err,
+final bytes 존재, 새process verification 성공을 재현했다(e1-red-actual.log).
+초기 e1-red.log는 오래된 bootstrap binding 거부이며 결함 재현으로 세지 않는다.
+수리 후 pending+OS lock으로 관측된 발행 실패를 차단했다. 최종 process 시험은
+post-link sync 오류, 이후 모든 record 쓰기 실패 조건, Pending 후 process 종료,
+Pending 해제 실패, commit 후 cleanup 경고, 손상 pending, 새process 같은 검증/
+후속 arm/report 차단과 정상 읽기 전용 승인까지 PASS(e1-final-process.log).
+정리 sync 경고는 이미 durable한 final의 commit 실패로 반환하지 않는다.
+
+E2: isolated source에서 기존 RESTART-only consumer 조건을 유지해 COOLDOWN
+partial resume의 최종 close 거부를 재현(e2-red.log); 이 source에는 E1 수리와
+TINY fixture 확장이 포함되어 있으며 원 기준 전체와 동일하다고 하지 않는다.
+공통 capability와 byte-exact prefix 검증 후 RESTART/COOLDOWN × 논리128/256 ×
+prefix0/1/2의12개 fresh-process/segment/close 모두 PASS(e2-green.log).
+실제 optimizer24회이며128/256 labels를 실제 학습step으로 세지 않았다.
+후속 helper의 prefix/모델/tokenizer/policy/분모/complete 중복 거부 unit1 PASS,
+관련 clippy PASS. 잘못된 exact-name 호출0-test는 PASS에서 제외했다.
+
+현재 누적 실제 TINY38/128: E1 RED4+최초GREEN4+최종GREEN4, E2 GREEN24+RED2.
+SMALL optimizer/generation/teacher=0/0/0, scalar optimizer0. 기존 bootstrap은
+읽기 전용 재사용. 영향 quick는 E3 source 안정화 뒤1회 예정이며 아직 NOT_RUN.
+PF_PUBLISH/ PARTIAL_RESUME=IMPLEMENTER_VERIFIED; 모델 연구와 token cache는
+NOT_RUN. H3/S4/Goal1 미통과 유지, 독립 검토 대기. 다음 인가 단계E3.
+
 ## P5 최종 — 수리 검증 및 제한 실험 종료, 모델 joint 품질 실패
 
 R3-PREFLIGHT-ONCE-AND-COOLDOWN-1.0 / RESULT=PARTIAL / 2026-09-18.

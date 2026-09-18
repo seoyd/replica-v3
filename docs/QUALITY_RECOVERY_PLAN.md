@@ -1,5 +1,47 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: R3-DATA-BINARY-AND-TARGET-LOSS-1.0
+
+Base1e25be2cef801dd67a6515e5c33823a0d1b06a92; preserve closed studies and all originals.
+Evidence: `artifacts/data-binary-target-loss-20260918/`. Rust/Cargo1.98.1, offline lock,
+CPU Accelerate/F32/threads1, one heavy process. E0 identity → E1 publication pending
+→ E2 partial-panel resume → E3 train-only role objective/probe64 → E4 BASE/SPAN
+→ E5 independent token-cache parity/measurement → E6 recount/publication.
+
+E1 requires durable Pending before final publication, serialized readers, and no
+authorization after an observed commit failure. E2 allows explicit RESTART/COOLDOWN
+pure-time pauses with unchanged complete binary row prefixes, panel/model/step/policy
+identity and exactly-once complete guard decisions. New objective resume must explicitly
+use the same capability. Failed/unknown/ambiguous states never authorize another arm.
+
+E3/E4 parent is A75-R24310, physical SHA
+50b927dd41771c39ca5e7138ca28aaf8193a96460eff9a2aae92ed444015f09c.
+Same Adam, exact6:2 tape/batch8, actualLR1e-4, tokenizer/model/F32/clip/decay/greedy.
+Change only target role overlap weighting: b=1+r; per episode Z=sum(a)/sum(a*b);
+objective=sum(Z*a*b*CE)/actual target count. The original first-target weight stays
+in a, prompt/padding remain zero, EOS remains supervised. Use full-answer token raw
+byte overlap; preserve per-episode weight mass. Annotations stay training-only.
+Unsupported ordinary grammar retains baseline with coverage disclosed; all focus
+grammar must validate. Concrete label contradictions stop DATA_CONTRACT_FAIL.
+Train64 teacher probes are fixed by metadata before outcomes, never dev-failure selection.
+
+Budget: SMALL1024 (BASE512+SPAN512), generation4096, own-model teacher256 (planned192),
+TINY optimizer128 including failed/quick runs. Each command1800s/study7200s/cleanup120s.
+Parent parity16; each mid256 dev/watch288; each final512 dev/CROSS/ordinary1168;
+one joint-candidate fresh1168 only if eligible. Final watch is derived. Final absolute
+step24822; no intermediate selection, old-study restart, or automatic budget extension.
+Joint gates: dev244/entity254/event254; CROSS487/entity507/event507; ordinaryQA178;
+zero errors and all native/panel/stop bindings. Existing guards stay fixed. No joint
+candidate means no seal/H4–H8/S4–S6 advancement. Goal1 remains separate.
+
+E5 follows the study on a separately identified source. Compile a bounded immutable
+typed cache from owned train snapshots, preserving tokens/masks/response_start/order
+and source/tokenizer/framing/policy hashes. Measure JSON, R3ER, raw u16/u32 cache and
+Zstd3: retained-total bytes, read/hash/parse/tokenize/first batch (warm3/fresh-process3),
+and consumed tape batch preparation5. Fresh process is not cold OS cache. No raw
+deletion, silent rebuild, model format/DB/journal changes, or storage-to-quality claims.
+Commit/push only verified closed stages and verify actual full remote SHA.
+
 ## Closed: R3-PREFLIGHT-ONCE-AND-COOLDOWN-1.0
 
 P0–P5 completed within SMALL512/generation2928/TINY85/scalar-optimizer0. PV01 and
