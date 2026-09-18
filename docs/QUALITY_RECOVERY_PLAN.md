@@ -1,5 +1,43 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: R3-QUALITY-FIRST-BRIDGE-1.0
+
+Base source a89fbc977ed9421489a43fc4b4eb6f42a5ebbd25, report
+91ce87ba3286637e9372f7e70f337b73de1b0aaf. Preserve all prior raw, corpus,
+checkpoint, failed studies and local changes. Rust1.98.1/offline lock, F32 CPU
+Accelerate/one thread. Existing native storage, SQLite compatibility and IPC stay fixed.
+
+Q0 identity → Q1 ambient-policy resume / plan-wide sticky failures / native caller
+regressions → Q2 coverage and frozen16×4 bridge sanity → Q3 registered matched
+data and native resume smoke → Q4 C-COPYMATCH versus T-TEMPORAL → Q5 raw recount
+and transfer/preservation → Q6 publication. No storage framework or new codec.
+
+Both arms use the verified A75-R24310 migrated v2 parent, retained Adam/tokenizer,
+default response loss and first-target weight, constant actualLR1e-4, batch8
+with the same ordinary anchor6/focus2 tape. Only the nonselected record's entity
+differs: alias in C, same entity in T. Two records, same query, answer, values,
+IDs/status/time/order; token length parity is measured. Focus128bases×4views,
+each view exactly twice across512 updates. T development64 unseen bases×4views.
+Seal namespace stays reserved without opening its files. Original conditional144
+is reused only for development transfer, not copied into training.
+
+Budgets: quality SMALL1024 (each arm1+fresh511), extra SMALL parity0;
+TINY optimizer128 total, scalar counted separately; generations4608 maximum
+(4080 planned including conditional candidate48); own teacher192 maximum.
+Each arm input2M/target500k tokens; pair7200seconds, command1800/cleanup120.
+Cancel/nonfinite/data/source/save failure blocks the other arm; only validated
+pure-time pause can resume. No re-registration, automatic extension or best-midpoint
+selection. Normal wrong output is distinct from execution failure.
+
+Mid256: newdev256/watch32; saved final512: oldH3dev256/CROSS512/ordinary400,
+newdev256 and conditional144. Parent newdev256 once; existing old panels reused
+only after identity checks. Teacher metadata train32/dev32 for parent/C/T.
+Limited signal requires T newdev>=192, T−C>=26, all4-view correct>=40/64,
+newdev errors0 and QA>=178; disclose every oldcopy/entity/event/aux result.
+H3 joint stays dev244/entity254/event254, CROSS487/entity507/event507, QA178,
+required-panel errors0 and durable same endpoint. Signal and H3 are separate.
+S4/S5/S6/seal/Goal1 are not automatically authorized by this study.
+
 ## Closed: R3-NATIVE-CORPUS-OBJECTIVE-BINDING-1.0
 
 N0–N5 implementation and bounded observations completed. Exact objective resume,

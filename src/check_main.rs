@@ -430,6 +430,8 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                 }
                 for filter in [
                     "native_corpus_standalone_default",
+                    "native_resume_ignores_ambient_policy_json",
+                    "conditional_plan_sticky_failure",
                     "objective_policy_",
                     "verification_published_final_sync_error",
                     "restart_and_cooldown_partial_panels",
@@ -443,6 +445,36 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                             "--",
                             "--test-threads=1",
                             "--nocapture",
+                        ],
+                        true,
+                    )?;
+                }
+                for filter in [
+                    "full_population_binding_pairs_require_question_and_value_without_split_growth",
+                    "qa_memorization_subset_preserves_episodes_and_split_boundaries",
+                    "full_qa_pairs_keep_split_and_bind_question_value_citation_in_both_orders",
+                    "harness_m01_m02_malformed_cli_rejects_before_output_or_model_load",
+                    "query_pairs_require_question_and_evidence_with_validation_unchanged",
+                    "field_pairs_change_only_training_questions_and_selected_value",
+                    "field_cue_targets_are_supported_and_ordinary_qa_is_unchanged",
+                    "entity_cue_auxiliary_pairs_require_evidence_and_preserve_ordinary_qa",
+                    "record_copy_targets_keep_source_bytes_and_temporal_qa",
+                    "evidence_first_training_preserves_questions_records_and_supported_answers",
+                    "counterfactual_corpus_requires_evidence_for_identical_questions",
+                    "curriculum_corpus_keeps_copy_training_explicit_and_time_independent",
+                    "balanced_corpus_varies_distractor_identity_context_and_version_order",
+                    "grounding_corpus_teaches_binding_and_supported_sequence_without_runtime_renderer",
+                    "corpus_and_tokenizer_use_train_only_and_reject_split_leakage",
+                ] {
+                    r.cargo(
+                        "test",
+                        &[
+                            "--test",
+                            "training",
+                            filter,
+                            "--",
+                            "--exact",
+                            "--test-threads=1",
                         ],
                         true,
                     )?;

@@ -755,24 +755,6 @@ fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<
         ));
     }
     let started = Instant::now();
-    if run.resume
-        && let Some(root) = run.checkpoint.parent().and_then(Path::parent)
-    {
-        let policy = root.join("policy.json");
-        if policy.is_file() {
-            let policy: serde_json::Value =
-                serde_json::from_slice(&neural::read_bounded(&policy, 16 * 1024 * 1024)?)?;
-            if policy["stage"] == "H3" && policy.get("constant_lr").is_some() {
-                return Err(Error::Invalid("constant-rate skill checkpoint requires recovery skill-run --resume and its frozen policy".into()));
-            }
-            if policy["entry"] == "EXPERIMENT_FORK" {
-                return Err(Error::Invalid(
-                    "controlled experiment requires recovery progress-arm and its frozen policy"
-                        .into(),
-                ));
-            }
-        }
-    }
     let mut loaded = checkpoint::load(run.checkpoint, Device::Cpu, run.resume)?;
     control.check("training_loaded")?;
     let mut config = if run.resume {

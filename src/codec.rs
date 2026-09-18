@@ -488,6 +488,15 @@ pub fn publish_new_measured<T>(
     timing.link_ms = phase.elapsed().as_secs_f64() * 1000.;
     let phase = std::time::Instant::now();
     #[cfg(feature = "test-support")]
+    if path.file_name().is_some_and(|n| n == "final.r3er")
+        && parent.file_name().is_some_and(|n| n == "model-0")
+        && std::env::var("R3ER_TEST_STOP").as_deref() == Ok("conditional-final-sync")
+    {
+        return Err(
+            std::io::Error::other("injected conditional sync error AFTER final hard_link").into(),
+        );
+    }
+    #[cfg(feature = "test-support")]
     if path
         .file_name()
         .is_some_and(|n| n == "preflight-final.r3er")

@@ -240,6 +240,208 @@ fn cooldown_actual_lr_continuous_and_fresh_process_resume() {
     );
 }
 #[test]
+fn conditional_plan_sticky_failure_and_normal_wrong_completion() {
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
+    let mut generations = 0;
+    for mode in [
+        "pv-first-token",
+        "pv-row-deadline",
+        "conditional-teacher-error",
+        "pv-final-write-fail",
+        "conditional-final-sync",
+        "pv-start-kill",
+        "normal",
+    ] {
+        let root = d.path().join(mode);
+        call(
+            &[
+                "fixture-conditional",
+                "--from",
+                p(&bootstrap),
+                "--output",
+                p(&root),
+            ],
+            None,
+            true,
+            &d.path().join("prepare.log"),
+        );
+        let first = call(
+            &["conditional-run", "--root", p(&root), "--model", "0"],
+            (mode != "normal").then_some(mode),
+            mode == "normal",
+            &d.path().join("first.log"),
+        );
+        generations += String::from_utf8_lossy(&first.stdout)
+            .matches("VERIFICATION_GENERATION_API_ENTRY=")
+            .count();
+        if mode == "normal" {
+            assert!(String::from_utf8_lossy(&first.stdout).contains("CONDITIONAL_EXACT=0/6"));
+        }
+        let original = root.join("model-0");
+        let preserved = fs::read_dir(&original)
+            .unwrap()
+            .map(|e| {
+                let e = e.unwrap();
+                (e.file_name(), fs::read(e.path()).unwrap())
+            })
+            .collect::<Vec<_>>();
+        let second = call(
+            &["conditional-run", "--root", p(&root), "--model", "1"],
+            None,
+            mode == "normal",
+            &d.path().join("second.log"),
+        );
+        let log = String::from_utf8_lossy(&second.stdout);
+        let calls = log.matches("VERIFICATION_GENERATION_API_ENTRY=").count();
+        generations += calls;
+        if mode == "normal" {
+            assert_eq!(calls, 6);
+        } else {
+            assert_eq!(calls, 0);
+            assert!(!root.join("model-1").exists());
+            assert!(!log.contains("TRAIN_PROBE_API_ENTRY="));
+            let retry = call(
+                &["conditional-run", "--root", p(&root), "--model", "0"],
+                None,
+                false,
+                &d.path().join("retry.log"),
+            );
+            assert!(
+                !String::from_utf8_lossy(&retry.stdout)
+                    .contains("VERIFICATION_GENERATION_API_ENTRY=")
+            );
+        }
+        if matches!(
+            mode,
+            "pv-first-token" | "pv-row-deadline" | "conditional-teacher-error"
+        ) {
+            assert!(original.join("generation-000.r3er").is_file());
+        }
+        if mode == "conditional-final-sync" {
+            assert!(original.join("publication-pending.r3er").is_file());
+            assert!(original.join("final.r3er").is_file());
+        }
+        for (name, bytes) in preserved {
+            assert_eq!(fs::read(original.join(name)).unwrap(), bytes);
+        }
+    }
+    let root = d.path().join("locked");
+    call(
+        &[
+            "fixture-conditional",
+            "--from",
+            p(&bootstrap),
+            "--output",
+            p(&root),
+        ],
+        None,
+        true,
+        &d.path().join("prepare.log"),
+    );
+    let lock = fs::File::open(root.join("plan.r3er")).unwrap();
+    lock.lock().unwrap();
+    call(
+        &["conditional-run", "--root", p(&root), "--model", "0"],
+        None,
+        false,
+        &d.path().join("locked.log"),
+    );
+    assert!(!root.join("model-0").exists());
+    println!("CONDITIONAL_STICKY_TINY_GENERATIONS={generations} TINY_UPDATES=0 SMALL_UPDATES=0");
+}
+#[test]
+fn native_resume_ignores_ambient_policy_json() {
+    use replica_v3::neural::checkpoint;
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
+    let fixture = d.path().join("fixture");
+    call(
+        &[
+            "fixture-native-corpus",
+            "--from",
+            p(&bootstrap),
+            "--output",
+            p(&fixture),
+        ],
+        None,
+        true,
+        &d.path().join("prepare.log"),
+    );
+    let parent =
+        checkpoint::load(&fixture.join("parent.r3m"), candle_core::Device::Cpu, true).unwrap();
+    let step = parent.manifest.training.as_ref().unwrap().step;
+    let mut expected = None;
+    for (name, policy) in [
+        ("absent", None),
+        (
+            "irrelevant",
+            Some(br#"{"stage":"H3","constant_lr":0.0001,"entry":"EXPERIMENT_FORK"}"#.as_slice()),
+        ),
+        ("malformed", Some(b"{not-json".as_slice())),
+    ] {
+        let root = d.path().join(name);
+        fs::create_dir_all(root.join("segment")).unwrap();
+        let path = root.join("segment").join(if name == "malformed" {
+            "renamed.r3m"
+        } else {
+            "parent.r3m"
+        });
+        fs::copy(fixture.join("parent.r3m"), &path).unwrap();
+        if let Some(bytes) = policy {
+            fs::write(root.join("policy.json"), bytes).unwrap();
+        }
+        let out = root.join("trained");
+        let result = Command::new(env!("CARGO_BIN_EXE_replica-train"))
+            .args([
+                "train",
+                "--resume",
+                p(&path),
+                "--corpus",
+                p(&fixture.join("source.r3c")),
+                "--output",
+                p(&out),
+                "--stop-after",
+                &(step + 1).to_string(),
+            ])
+            .env("VECLIB_MAXIMUM_THREADS", "1")
+            .env("RAYON_NUM_THREADS", "1")
+            .output()
+            .unwrap();
+        print!(
+            "{}{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(result.status.success(), "{name}");
+        let actual = checkpoint::load(&out.join("final"), candle_core::Device::Cpu, true).unwrap();
+        assert_eq!(actual.manifest.trained_steps, step + 1);
+        let state = (
+            actual.model.weight_hash().unwrap(),
+            actual.manifest.training,
+            actual
+                .optimizer
+                .iter()
+                .map(|(n, t)| {
+                    (
+                        n.clone(),
+                        t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+        if let Some(prior) = &expected {
+            assert_eq!(prior, &state);
+        }
+        expected = Some(state);
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            fs::read(fixture.join("parent.r3m")).unwrap()
+        );
+    }
+    println!("AMBIENT_RESUME_TINY_UPDATES=3 SMALL_UPDATES=0");
+}
+#[test]
 fn objective_policy_same_filename_different_weights_rejected_before_work() {
     use candle_core::{Device, Tensor};
     use replica_v3::neural::{artifact, checkpoint};

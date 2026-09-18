@@ -1,5 +1,51 @@
 # 진단 및 구현 상태
 
+## Q1 — 세 직접 경계 회귀 완료
+
+EXECUTED_THIS_RUN. `q1-quick`의29 commands(fmt/check/clippy 포함),33 tests PASS/exit0,
+source_unchanged=true. native corpus 관련 필터에 실제 기존 caller15개를 추가했고,
+두 지정 회귀는 typed Episode·ordered content/physical source 보존을 검증한다.
+다른 기존 필드 assertion은 real native reader의 결과를 test 메모리에서만 투영한다.
+generator가 JSON을 다시 쓰거나 제품 fallback을 추가한 것은 아니다.
+CK01/CK02의 subprocess 및 기존 native default/Span/동일명다른weights/공개후sync/
+부분평가 재개 회귀가 함께 통과했다. 수정 전 CK01/CK03 실패 로그는 보존한다.
+
+신규 SMALL optimizer0, 품질 generation0/teacher0. TINY optimizer51/128=
+CK01 red1+green3+quick47. CK02 별도 직접 회귀와 quick의 실제 TINY generation은
+각27이며, 자체 teacher는 각각25다. 다른 TINY 관측은 각 command 로그에 분리한다.
+이 단계의 PASS는 수리 범위이며 H3/S4/S5/S6/Goal1 승인이나 품질 개선이 아니다.
+Q2~Q5는 아직 실행하지 않았으며 저장 확장 대신 승인된 자료 대조로 이어간다.
+
+## Q0 — 조건부 기록 선택 대조 시작
+
+R3-QUALITY-FIRST-BRIDGE-1.0 / 2026-09-19. 시작 HEAD91ce87ba3286637e9372f7e70f337b73de1b0aaf,
+main/origin=https://github.com/seoyd/replica-v3.git. 기준a89fbc9 이후 변경은 두 상태 문서다.
+시작 tracked dirty0, 소유 학습 process0. 기존 untracked 경로 목록과 원본8개 hash
+대조는 `artifacts/quality-first-bridge-20260919/q0-*`에 기록했다. Rust/Cargo1.98.1.
+신규 연구는 과거 N0–N5/BASE/SPAN의 실패·종료·예산을 재개하거나 변경하지 않는다.
+
+CK01 수정 전 실제 TINY default1step은 주변JSON 없을 때 성공했지만, 같은 bytes의
+상위 폴더에 무관한 H3 policy가 있으면 거부됐다(`ck01-red.log`, 신규TINY1).
+ambient JSON 탐색 제거 후 없음/무관한valid/malformed 세 위치의 실제1step
+weights/Adam/state가 일치했다(`ck01-green.log`, 신규TINY3). OS syscall trace가
+아닌 source 검사와 실제 배치 조건의 근거다. SMALL optimizer0.
+CK03 기존 binding-pairs 회귀의 NotADirectory 실패를 재현한 후 native reader의
+typed Episode/ordered split 비교로 복구했다. 원래 source bytes 보존·질문/값 대조
+assertion을 유지했다. 같은 prepare/transform/subset의 직접 caller도 함께 이관한다.
+
+CK02 수정 전은 SOURCE_READ 결함 확인이며 동적 RED 실행으로 부르지 않는다.
+실제 TINY subprocess는 첫토큰취소/raw후deadline/teacher오류/final쓰기실패/
+공개후sync실패/start후종료에서 새 model1과 재시도를 차단했다. 정상 오답 완주는
+다음 모델을 허용했다. plan inode 배타잠금, 반환 raw/teacher entry, pending/final
+검증을 기존 binary record/publisher로 연결했다. 첫 관련 실행 TINY generations27,
+teacher25, optimizer0 (`ck02-process.log`); 이후 quick 횟수는 별도 실제 집계한다.
+현재 Q1 관련 quick 실행 중이며 아직 전체 범위 PASS로 표시하지 않는다.
+
+허용 입력은 기존 durability-pair-restart-20260918/attempt-R/A75-R,
+data-binary-target-loss-20260918/study/B-BASE 및 native-corpus-objective-20260918의
+A75-R24310-v2.r3m/source-raw.r3c/conditional/이다. 봉인 H3·운영 DB는 탐색하지 않는다.
+Q2~Q5 SMALL optimizer/generation/teacher는 이 절 시점 NOT_RUN, 이전 품질 미달 유지.
+
 ## N5 최종 결과와 검토 전달
 
 R3-NATIVE-CORPUS-OBJECTIVE-BINDING-1.0 / N0–N5 계약 범위 PASS.

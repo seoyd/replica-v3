@@ -1706,12 +1706,13 @@ impl ConditionalRecord {
             || teachers > 144
             || rows.len() != raw_bytes.len()
             || elapsed.finite()? < 0.
-            || (plan.is_none() && (cases.len() != 144 || foils.len() != 144 || !rows.is_empty()))
+            || (plan.is_none()
+                && (cases.is_empty() || foils.len() != cases.len() || !rows.is_empty()))
             || (plan.is_some() && (!cases.is_empty() || !foils.is_empty()))
             || (complete
-                && (rows.len() != 144
-                    || generations != 144
-                    || teachers != 144
+                && (rows.is_empty()
+                    || generations != rows.len() as u64
+                    || teachers != rows.len() as u64
                     || !stop.is_empty()
                     || error.is_some()))
         {
@@ -2972,6 +2973,18 @@ fn conditional_plan(root: &Path, require_execution_source: bool) -> Result<Condi
     if p.plan.is_some() || require_execution_source && p.source != evaluator_source() {
         return Err(bad("conditional source/plan changed"));
     }
+    if p.cases.len() != 144 {
+        #[cfg(feature = "test-support")]
+        if p.cases.len() == 6
+            && p.models.iter().all(|n| {
+                checkpoint::metadata(Path::new(&n.file.locator))
+                    .is_ok_and(|(m, _)| m.architecture.profile == "TINY_NUMERIC_TEST_ONLY")
+            })
+        {
+            return Ok(*p);
+        }
+        return Err(bad("conditional production panel count"));
+    }
     Ok(*p)
 }
 fn version_parity(
@@ -3074,18 +3087,185 @@ fn conditional_model(n: &CheckpointRef) -> Result<Loaded> {
     let l = checkpoint::load(Path::new(&n.file.locator), Device::Cpu, false)?;
     if unhex(&l.model.weight_hash()?)? != n.model
         || unhex(&l.tokenizer.semantic_id())? != n.tokenizer
+        || unhex(&l.model.config.semantic_id()?)? != n.architecture
         || l.manifest.trained_steps as u64 != n.step
     {
         return Err(bad("conditional model/tokenizer/step"));
     }
     Ok(l)
 }
+fn conditional_record(
+    root: &Path,
+    name: &str,
+    p: &ConditionalRecord,
+    plan: &FileRef,
+    model: u8,
+) -> Result<ConditionalRecord> {
+    let Record::Conditional(r) = read_record(root, &reference(root, name)?)? else {
+        return Err(bad("conditional record kind"));
+    };
+    if r.plan.as_ref() != Some(plan)
+        || r.source != p.source
+        || r.models != p.models
+        || r.seed != p.seed
+        || r.model_index != model
+        || r.rows.len() > p.cases.len()
+    {
+        return Err(bad("conditional attempt identity"));
+    }
+    for (i, row) in r.rows.iter().enumerate() {
+        if row.ordinal as usize != i || row.case != case_hash(&p.cases[i]) || !row.started {
+            return Err(bad("conditional row identity/order"));
+        }
+    }
+    Ok(*r)
+}
+fn same_conditional_rows(a: &[EvalRow], b: &[EvalRow]) -> bool {
+    let encode = |rows: &[EvalRow]| {
+        let mut bytes = Vec::new();
+        for row in rows {
+            row.encode(&mut bytes);
+        }
+        bytes
+    };
+    encode(a) == encode(b)
+}
+fn conditional_attempt(
+    root: &Path,
+    p: &ConditionalRecord,
+    model: u8,
+) -> Result<Option<ConditionalRecord>> {
+    let dir = root.join(format!("model-{model}"));
+    if !dir.exists() {
+        return Ok(None);
+    }
+    let plan = reference(root, "plan.r3er")?;
+    let start = conditional_record(&dir, "start.r3er", p, &plan, model)?;
+    if !start.rows.is_empty()
+        || start.generations != 0
+        || start.teachers != 0
+        || start.complete
+        || !start.stop.is_empty()
+        || start.error.is_some()
+    {
+        return Err(bad("conditional start state"));
+    }
+    let mut observed = start;
+    let mut entries = 0;
+    let mut teacher_entries = 0;
+    for i in 0..p.cases.len() {
+        for (prefix, expected_rows) in [
+            ("entry", i),
+            ("generation", i + 1),
+            ("teacher-entry", i + 1),
+            ("row", i + 1),
+        ] {
+            let name = format!("{prefix}-{i:03}.r3er");
+            if !dir.join(&name).exists() {
+                continue;
+            }
+            let r = conditional_record(&dir, &name, p, &plan, model)?;
+            if r.rows.len() != expected_rows
+                || r.generations < observed.generations
+                || r.teachers < observed.teachers
+                || r.elapsed.finite()? < observed.elapsed.finite()?
+            {
+                return Err(bad("conditional progress counters"));
+            }
+            let prior = i.min(observed.rows.len());
+            if !same_conditional_rows(&r.rows[..prior], &observed.rows[..prior])
+                || r.raw_bytes[..prior] != observed.raw_bytes[..prior]
+            {
+                return Err(bad("conditional immutable prefix"));
+            }
+            if prefix == "entry" {
+                entries += 1;
+            }
+            if prefix == "teacher-entry" {
+                teacher_entries += 1;
+            }
+            observed = r;
+        }
+    }
+    if !dir.join("final.r3er").exists() || dir.join("publication-pending.r3er").exists() {
+        println!(
+            "CONDITIONAL_ATTEMPT={model} STATUS=INCOMPLETE_OR_UNCERTAIN KNOWN_GENERATIONS={} GENERATION_ENTRIES={entries} KNOWN_TEACHERS={} TEACHER_ENTRIES={teacher_entries} ELAPSED_LOWER_BOUND={} UNKNOWN_TAIL=true RESERVED_UPPER_BOUND={} NEW_GENERATIONS=0 NEW_TEACHERS=0",
+            observed.generations,
+            observed.teachers,
+            observed.elapsed.finite()?,
+            p.cases.len()
+        );
+        return Err(bad(
+            "conditional incomplete/pending attempt; UNKNOWN usage; plan blocked",
+        ));
+    }
+    let final_state = conditional_record(&dir, "final.r3er", p, &plan, model)?;
+    if final_state.generations < observed.generations
+        || final_state.teachers < observed.teachers
+        || final_state.elapsed.finite()? < observed.elapsed.finite()?
+        || final_state.rows.len() < observed.rows.len()
+    {
+        return Err(bad("conditional final lost observed usage"));
+    }
+    if !final_state.complete || !final_state.stop.is_empty() || final_state.error.is_some() {
+        println!(
+            "CONDITIONAL_ATTEMPT={model} STATUS=FAILED KNOWN_GENERATIONS={} KNOWN_TEACHERS={} OBSERVED_TOKENS={} STOP={:?} ERROR={:?} NEW_GENERATIONS=0 NEW_TEACHERS=0",
+            final_state.generations,
+            final_state.teachers,
+            final_state
+                .rows
+                .iter()
+                .map(|r| r.tokens.len())
+                .sum::<usize>(),
+            final_state.stop,
+            final_state.error
+        );
+        return Err(bad("conditional persisted execution failure; plan blocked"));
+    }
+    let historical_teacher_entries = teacher_entries == 0 && p.source != evaluator_source();
+    if final_state.rows.len() != p.cases.len()
+        || entries != p.cases.len()
+        || (teacher_entries != p.cases.len() && !historical_teacher_entries)
+        || !same_conditional_rows(&final_state.rows, &observed.rows)
+        || final_state.raw_bytes != observed.raw_bytes
+    {
+        return Err(bad("conditional final coverage/prefix"));
+    }
+    for (i, row) in final_state.rows.iter().enumerate() {
+        let generation =
+            conditional_record(&dir, &format!("generation-{i:03}.r3er"), p, &plan, model)?;
+        let returned = conditional_record(&dir, &format!("row-{i:03}.r3er"), p, &plan, model)?;
+        let mut raw = row.clone();
+        raw.teacher = TeacherRecord::NotRequested;
+        raw.diagnostic = None;
+        if !same_conditional_rows(&[raw], &generation.rows[i..])
+            || !same_conditional_rows(&final_state.rows[..=i], &returned.rows)
+            || !row.completed
+            || row.interruption.is_some()
+            || !matches!(row.teacher, TeacherRecord::Measured(_))
+        {
+            return Err(bad("conditional completed raw/teacher agreement"));
+        }
+    }
+    Ok(Some(final_state))
+}
 fn conditional_run(root: &Path, model: u8, control: &mut RunControl) -> Result<()> {
     if model > 1 {
         return Err(bad("conditional model index"));
     }
+    let lock = std::fs::File::open(root.join("plan.r3er"))?;
+    lock.try_lock()
+        .map_err(|e| Error::Conflict(format!("conditional plan writer: {e}")))?;
     let p = conditional_plan(root, true)?;
-    let l = conditional_model(&p.models[model as usize])?;
+    let mut completed = 0;
+    for i in 0..2 {
+        if conditional_attempt(root, &p, i)?.is_some() {
+            completed += 1;
+        }
+    }
+    if completed != model || root.join(format!("model-{model}")).exists() {
+        return Err(bad("conditional model order/retry; plan blocked"));
+    }
     let dir = root.join(format!("model-{model}"));
     std::fs::create_dir(&dir)?;
     let mut result = ConditionalRecord {
@@ -3100,9 +3280,12 @@ fn conditional_run(root: &Path, model: u8, control: &mut RunControl) -> Result<(
         "start.r3er",
         &Record::Conditional(Box::new(result.clone())),
     )?;
-    control.generation_limit = 144;
-    control.teacher_limit = 144;
+    control.generation_limit = p.cases.len();
+    control.teacher_limit = p.cases.len();
     let outcome = (|| -> Result<()> {
+        let l = conditional_model(&p.models[model as usize])?;
+        let tiny = l.model.config.profile == "TINY_NUMERIC_TEST_ONLY";
+        verification_fault(tiny, "started", control)?;
         for (i, e) in p.cases.iter().enumerate() {
             control.check("conditional_before_generation")?;
             let mut row = evaluate_row_with_entry(&l, e, i as u32, control, false, true, || {
@@ -3114,6 +3297,10 @@ fn conditional_run(root: &Path, model: u8, control: &mut RunControl) -> Result<(
                 )?;
                 Ok(())
             })?;
+            result.rows.push(row.clone());
+            result.raw_bytes.push(Vec::new());
+            result.generations = control.generation_calls as u64;
+            result.elapsed = Scalar::F64(control.start.elapsed().as_secs_f64());
             let bytes = l.tokenizer.decode_bytes(
                 &row.tokens
                     .iter()
@@ -3121,21 +3308,25 @@ fn conditional_run(root: &Path, model: u8, control: &mut RunControl) -> Result<(
                     .take_while(|id| *id >= neural::SPECIALS as u32)
                     .collect::<Vec<_>>(),
             )?;
-            result.raw_bytes.push(bytes);
-            result.rows.push(row.clone());
-            result.generations = control.generation_calls as u64;
-            result.elapsed = Scalar::F64(control.start.elapsed().as_secs_f64());
+            result.raw_bytes[i] = bytes;
             publish(
                 &dir,
                 &format!("generation-{i:03}.r3er"),
                 &Record::Conditional(Box::new(result.clone())),
             )?;
+            verification_fault(tiny, "row", control)?;
             control.check("conditional_before_teacher")?;
             let prompt = l.tokenizer.prepare(
                 &e.request,
                 l.model.config.context as u32,
                 &l.model.config.id()?,
             )?;
+            publish(
+                &dir,
+                &format!("teacher-entry-{i:03}.r3er"),
+                &Record::Conditional(Box::new(result.clone())),
+            )?;
+            verification_fault(tiny, "teacher", control)?;
             let t = teacher_with_foil(
                 &l,
                 e,
@@ -3156,8 +3347,9 @@ fn conditional_run(root: &Path, model: u8, control: &mut RunControl) -> Result<(
             )?;
             if (i + 1) % 12 == 0 {
                 println!(
-                    "CONDITIONAL_MODEL={model} completed={}/144 generation_calls={} teacher_forwards={} elapsed_s={:.3} step={} QUALITY_UPDATES=0",
+                    "CONDITIONAL_MODEL={model} completed={}/{} generation_calls={} teacher_forwards={} elapsed_s={:.3} step={} QUALITY_UPDATES=0",
                     i + 1,
+                    p.cases.len(),
                     control.generation_calls,
                     control.teacher_calls,
                     control.start.elapsed().as_secs_f64(),
@@ -3175,14 +3367,59 @@ fn conditional_run(root: &Path, model: u8, control: &mut RunControl) -> Result<(
     result.elapsed = Scalar::F64(control.start.elapsed().as_secs_f64());
     result.stop = control.observed.clone();
     result.error = outcome.as_ref().err().map(ToString::to_string);
-    result.complete = outcome.is_ok() && result.rows.len() == 144 && control.stop.is_none();
-    publish(&dir, "final.r3er", &Record::Conditional(Box::new(result)))?;
+    result.complete =
+        outcome.is_ok() && result.rows.len() == p.cases.len() && control.stop.is_none();
+    let exact = result
+        .rows
+        .iter()
+        .zip(&result.raw_bytes)
+        .zip(&p.cases)
+        .filter(|((r, raw), e)| {
+            r.completed
+                && r.finish == Finish::Eos
+                && r.error.is_none()
+                && raw.as_slice() == e.answer.as_bytes()
+        })
+        .count();
+    println!("CONDITIONAL_EXACT={exact}/{}", p.cases.len());
+    let final_record = Record::Conditional(Box::new(result));
+    publish(
+        &dir,
+        "publication-pending.r3er",
+        &Record::VerificationPending {
+            start: reference(&dir, "start.r3er")?,
+            final_digest: hash(&final_record.encode()?),
+        },
+    )?;
+    let tiny = p.cases.len() == 6;
+    let saved = verification_fault(tiny, "final", control)
+        .and_then(|_| publish(&dir, "final.r3er", &final_record));
+    println!(
+        "CONDITIONAL_FINAL NEW_GENERATIONS={} NEW_TEACHERS={} COMPLETE={} ORIGINAL_ERROR={:?} SAVE_ERROR={:?}",
+        control.generation_calls,
+        control.teacher_calls,
+        outcome.is_ok(),
+        outcome.as_ref().err(),
+        saved.as_ref().err()
+    );
+    saved?;
+    std::fs::remove_file(dir.join("publication-pending.r3er"))?;
+    if let Err(e) = std::fs::File::open(&dir)?.sync_all() {
+        eprintln!("PUBLICATION_COMMITTED=true CLEANUP_WARNING={e}");
+    }
     outcome
 }
 fn conditional_report(root: &Path, control: &mut RunControl) -> Result<()> {
     // Read-only recount retains the registered execution source; a newer scorer
     // cannot authorize generation under that old plan.
     let p = conditional_plan(root, false)?;
+    // The same durable admission checks protect reports; incomplete attempts never become comparisons.
+    let lock = std::fs::File::open(root.join("plan.r3er"))?;
+    lock.try_lock_shared()
+        .map_err(|e| Error::Conflict(format!("conditional plan reader: {e}")))?;
+    for model in 0..2 {
+        conditional_attempt(root, &p, model)?;
+    }
     println!(
         "CONDITIONAL_RAW_SOURCE={} RECOUNT_SOURCE={} NEW_GENERATIONS=0 NEW_TEACHERS=0",
         hex(&p.source),
@@ -3811,6 +4048,13 @@ fn resolve_native(root: &Path, s: &RunSnapshot, n: &CheckpointRef, resume: bool)
 
 #[derive(Subcommand)]
 pub enum Action {
+    #[cfg(feature = "test-support")]
+    FixtureConditional {
+        #[arg(long)]
+        from: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
     VersionParity {
         #[arg(long)]
         parent_arm: PathBuf,
@@ -4112,6 +4356,46 @@ pub(super) fn command(action: Action) -> Result<()> {
             output,
             seed,
         } => conditional_prepare(&parent_arm, &base_arm, &output, seed, &mut control),
+        #[cfg(feature = "test-support")]
+        Action::FixtureConditional { from, output } => {
+            let s = read_inputs(&from)?;
+            if !s.tiny_spec {
+                return Err(bad("conditional fixture requires TINY"));
+            }
+            let _ = resolve_native(&from, &s, &s.parent, true)?;
+            let mut n = s.parent.clone();
+            n.file.locator = owned_path(&from, &n.file.locator, true)?
+                .canonicalize()?
+                .display()
+                .to_string();
+            let mut cases = Vec::new();
+            for i in 0..6 {
+                let mut e = s.cases[0].clone();
+                e.id = format!("conditional-fixture/{i}");
+                e.answer = "cccc".into();
+                cases.push(e);
+            }
+            let p = ConditionalRecord {
+                seed: 17,
+                source: evaluator_source(),
+                plan: None,
+                models: vec![n.clone(), n],
+                cases,
+                foils: vec!["dddd".into(); 6],
+                rows: vec![],
+                raw_bytes: vec![],
+                model_index: 0,
+                generations: 0,
+                teachers: 0,
+                elapsed: Scalar::F64(0.),
+                complete: false,
+                stop: vec![],
+                error: None,
+            };
+            std::fs::create_dir(&output)?;
+            publish(&output, "plan.r3er", &Record::Conditional(Box::new(p)))?;
+            Ok(())
+        }
         Action::ConditionalRun { root, model } => conditional_run(&root, model, &mut control),
         Action::ConditionalReport { root } => conditional_report(&root, &mut control),
         Action::ExposureReport { root } => exposure_report(&root, &mut control),

@@ -1242,6 +1242,14 @@ fn teacher_with_foil(
         )?
         .narrow(1, prompt.len() - 1, gold.len())?
         .squeeze(0)?;
+    #[cfg(feature = "test-support")]
+    if l.model.config.profile == "TINY_NUMERIC_TEST_ONLY"
+        && std::env::var("R3ER_TEST_STOP").as_deref() == Ok("conditional-teacher-error")
+    {
+        return Err(Error::Model(
+            "nonfinite injected after conditional teacher forward".into(),
+        ));
+    }
     control.check("teacher_returned")?;
     let lp = candle_nn::ops::log_softmax(&logits, 1)?.to_vec2::<f32>()?;
     if lp.iter().flatten().any(|x| !x.is_finite()) {
