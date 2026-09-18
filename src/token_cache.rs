@@ -519,14 +519,15 @@ pub(super) fn compile(root: &Path, output: &Path, control: &mut RunControl) -> R
         eprintln!("CACHE_COMMITTED_CLEANUP_WARNING={e}");
     }
     println!(
-        "TOKEN_CACHE_COMPILE=PASS samples={} tokens={} width={} raw_bytes={} zstd3_bytes={} cold_selected={cold} metadata_bytes={} setup_native_s={setup} tokenize_annotation_s={tokenize} encode_verify_s={encode_seconds} compress_verify_s={compress_seconds} durable_publish_s={} PARITY=ALL_SAMPLES_AND_5_BATCHES SMALL_UPDATES=0 GENERATIONS=0 TEACHERS=0",
+        "TOKEN_CACHE_COMPILE=PASS samples={} tokens={} width={} raw_bytes={} zstd3_bytes={} cold_selected={cold} metadata_bytes={} setup_native_s={setup} tokenize_annotation_s={tokenize} encode_verify_s={encode_seconds} compress_verify_s={compress_seconds} durable_publish_s={} PARITY=ALL_SAMPLES_AND_REGISTERED_BATCHES batch_count={} SMALL_UPDATES=0 GENERATIONS=0 TEACHERS=0",
         f.len(),
         packed.offsets.last().unwrap(),
         packed.width,
         bytes.len(),
         compressed.len(),
         receipt.len(),
-        started.elapsed().as_secs_f64()
+        started.elapsed().as_secs_f64(),
+        s.tape.len().min(5)
     );
     println!(
         "CACHE_SHA={} SNAPSHOT_SHA={} SPLIT_SHA={} ORDINAL_SHA={} TOKENIZER_SHA={} FRAMING_SHA={} POLICY_SHA={}",

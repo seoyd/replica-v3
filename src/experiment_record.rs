@@ -8804,14 +8804,17 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
         &Record::Segment(t.clone()),
     )?;
     println!(
-        "SEGMENT={index} NEW_TINY_UPDATES={} NEW_SMALL_UPDATES={} GENERATIONS={} TEACHERS={} STOP={:?} resume={} complete={} CANONICAL_JSON_WRITES=0 LEGACY_JSON_READS=0",
+        "SEGMENT={index} NEW_TINY_UPDATES={} NEW_SMALL_UPDATES={} GENERATIONS={} TEACHERS={} STOP={:?} resume={} complete={} CANONICAL_JSON_WRITES=0 EXPLICIT_LEGACY_REFERENCE={}",
         if s.tiny_spec { t.updates - start } else { 0 },
         if s.tiny_spec { 0 } else { t.updates - start },
         t.generations,
         t.teachers,
         t.stop,
         t.resume,
-        t.complete
+        t.complete,
+        s.origins
+            .iter()
+            .any(|o| o.role == "explicit-legacy-reference")
     );
     #[cfg(feature = "test-support")]
     if crash_after_cancelled_terminal {

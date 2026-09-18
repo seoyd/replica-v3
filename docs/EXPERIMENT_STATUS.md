@@ -1,5 +1,32 @@
 # 진단 및 구현 상태
 
+## N3 — 실제 SMALL 입력 경로 동등성 완료
+
+EXECUTED_THIS_RUN. 구현 source b1565eb26d289086f3d195165a8d1ff5aa1852e6를
+정상 push하고 원격 SHA 일치를 확인했다. 이 source의 고정 native-runner로
+legacy-reference2와 native/cache1→새 process1을 실행했다. 신규 품질 SMALL0,
+경로 검증 SMALL4/4, generation0/320, teacher0/288. 각 경로 입력5135/target541,
+실제 LR bits4547007122018943789 (1e-4), 마지막 durable step24312.
+연속/재개 weights=3aecde88cf8593552229bf3ad4a04037965a60941cca917c2e454d7132ae48e9,
+Adam=bc9a00b1a9ba915d539aa12a3a3e2e7b2770d8aff309fc32b5011ab0de85374c가 일치했다.
+tokenizer·step·sampler·loss·config·consumed/target counters도 정확히 비교했다.
+각 descriptor를 해당 정책과 검증한 뒤 실행 방식/경로를 묶은 policy/provenance
+차이만 비교에서 분리했다. 이 endpoint는 품질 후보/후속 학습 부모가 아니다.
+
+native branch는 원 JSON 경로가 없는 owned native source/cache/parent/snapshot만
+소비했다. raw sample2560 및790401 tokens 전체 token/response/target/mask/annotation
+동등성이 통과했다. 실제 tape batch 검사는2개다. 초기 compile 로그의 고정
+`ALL_SAMPLES_AND_5_BATCHES`는 이 짧은 tape에서 부정확했고 표시를 실제 count로
+수정했다. legacy-reference의 `PATH` 줄은 JSON_READS=3이며 기존 공통 SEGMENT
+footer의 JSON_READS=0 문구는 잘못된 표시였다. footer를 explicit legacy 경로
+여부로 수정했다. 원 로그는 수정하지 않았으며 계산/저장 결과는 바뀌지 않는다.
+
+원자료: root의 `path-parity/legacy-reference/segment-00/final.r3m`,
+`path-parity/native/segment-00/final.r3m`, `segment-01/final.r3m`와 각 binary
+inputs/command/terminal/comparison 및 `n3-*.log`. native source semantic
+3a2625940a67877f3f305718166f5e2638f99b562e1207cd887de45b92952365.
+표시 수정 뒤 추가 SMALL 재실행은 하지 않는다. 허용 optimizer4회는 모두 사용했다.
+
 ## Native corpus / objective binding — 구현 경계
 
 R3-NATIVE-CORPUS-OBJECTIVE-BINDING-1.0. 기준 source
