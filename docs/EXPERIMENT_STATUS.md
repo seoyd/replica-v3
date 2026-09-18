@@ -1,5 +1,67 @@
 # 진단 및 구현 상태
 
+## E4 — BASE/SPAN 실행 완료, 공동 품질 실패
+
+실행 source414e1d3434224be1007e9717cb339109792dd333 정상 push/remote full SHA 확인.
+위 source와 e4-train binary를 두 군 전체에서 고정했다. 새 SMALL1024/1024,
+generation2928/4096(부모16+각1456), 자체 teacher192/256(부모64+각final64),
+TINY109/128. 추가 학습·generation retry 없음. 양군 command Complete/STOP=[]이고
+최종 native는 각각 step24822,115285312B다. 운영 모델/기존 checkpoint 미교체.
+
+| 같은 final512 모델 | dev full/entity/event/errors | CROSS full/entity/event/errors | QA336 | aux64 |
+| --- | --- | --- | --- | --- |
+| 부모24310, 기존 raw 재집계 | 240/247/250/1 | 462/499/500/0 | 181 | 53 |
+| B-BASE24822 | 229/247/248/1 | 455/486/500/0 | 181 | 22 |
+| S-SPAN24822 | 172/226/231/1 | 332/421/452/0 | 170 | 27 |
+
+중간256은 B/S 모두 dev238/entity247/event251/errors1,watch20/19였으며
+primary endpoint로 대체하지 않았다. B256 model hash는 이전 K256과 동일하다.
+최종 원시 오류도 전체 분모에 포함했다. aux를 QA에 합산하지 않았다.
+SPAN은 BASE 대비 dev−57/CROSS−123/QA−11,aux+5이고 부모 대비도 회복하지 못했다.
+단일 부모/seed 관측이며 일반적인 loss 우월성이나 근본 원인 확정으로 해석하지 않는다.
+
+각 군 exact input1255342/target131787, anchor/focus draws3072/1024,
+unique views2048/512,focus bases128이다. pool별 input963340/292002,
+target93663/38124, 동일 actualLR bits4547007122018943789(1e-4), 동일 초기Adam 유지.
+최종 weights/Adam/cursor는 raw/native/종료와 검산했고 모델별 실제512를 합계1024
+추가학습한 한 모델로 표기하지 않았다.
+
+| actual phase/metric | BASE | SPAN |
+| --- | ---: | ---: |
+| batch prepare seconds | .015837 | .010704 |
+| forward+loss seconds | 180.851960 | 175.540418 |
+| backward seconds | 549.656262 | 525.189599 |
+| optimizer seconds | 10.348126 | 9.894748 |
+| mean gradient norm | .168975 | .235300 |
+| mean update norm | .029985 | .041260 |
+| clip calls /512 | 5 | 23 |
+| command seconds | 986.491213 | 949.129424 |
+
+새 목적함수의 gradient/update 크기와 clip 빈도가 실제 달랐다. 가중치 질량 정규화가
+같은 gradient를 보장하지 않는다. 서로 다른 objective 평균을 직접 품질로 비교하지
+않는다. teacher64의 공통 CE/역할별 NLL 재집계는 후속 무학습 보고에서 분리한다.
+시간은 단일 순차 실행 관측이며 속도 우월성 주장/동시 조건 benchmark가 아니다.
+SPAN terminal 뒤 command close가 끝나기 전 report launcher를 시작한 짧은 겹침이
+있었고, 그 이후 process 확인에서 report만 남았다. 추가 forward/optimizer/generation
+겹침은 없었으나 마지막 close 시간은 격리 성능측정으로 해석하지 않는다.
+
+새 process `e4-recount.log` exit0. 전체 panel을 다시 채점하고 저장 점수와 일치,
+native/step/receipt/stop 검증 후 `STUDY_COMPLETE_QUALITY_FAIL`을 확인했다.
+paired [둘다오답,gain,loss,둘다정답] B→S:
+dev[15,12,69,160],CROSS[46,11,134,321],QA[145,10,21,160],aux[35,7,2,20].
+base-all-views B→S:dev[9,3,19,33],CROSS[20,8,40,60],ordinary[65,2,5,28].
+부모→B/S 상세 case/base counts는 같은 log에 보존한다.
+
+최종 physical SHA:
+B=6e27095cfeb29dcc986db80867b030576989f030797c834aa44212601a313f4c,
+S=253345504cf412134914f21737415192db7d8fe37a9d67242104fafb8e0c150d.
+경로: `artifacts/data-binary-target-loss-20260918/study/{B-BASE,S-SPAN}/segment-00/step-0512.r3m`.
+원 raw는 같은 segment의 dev/cross/ordinary-0512.r3er, 입력은 각 inputs.r3er,
+실행 로그 e4-base.log/e4-span.log, 부모 parity e4-parent-parity.log다.
+fresh confirmation은 실제 gate 명령에서 NOT_RUN_NO_JOINT_CANDIDATE,
+H3_SEAL=NOT_OPENED. H3_JOINT=FAIL; S4/S5/S6/GOAL1=NOT_PASSED;
+독립 승인 대기. 다음 E5는 학습 종료 이후 별도 source의 저장 동등성 측정이다.
+
 ## E3 — train-only objective 구현과 실행 준비
 
 R3-DATA-BINARY-AND-TARGET-LOSS-1.0 / EXECUTED_THIS_RUN / 2026-09-18.
