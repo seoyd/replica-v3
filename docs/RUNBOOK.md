@@ -1,5 +1,33 @@
 # Replica v3 B0 runbook
 
+## Closed target-loss study and train cache prototype
+
+BASE512/SPAN512 is complete with both joint gates failed. Preserve the registered
+study and binary; no automatic learning, candidate confirmation, seal or next-stage
+quality run follows. `recovery native anchor-report --root STUDY` recounts raw panels;
+`objective-probes --root STUDY` reads the completed train64 teacher observations with
+zero new model calls. Training source and later cache source are recorded separately
+in EXPERIMENT_STATUS. Generic optimizer resume from an objective run directory is
+rejected; exact bound policy and remaining authorization are required.
+
+After the model study, explicit offline cache commands are:
+
+```sh
+replica-train recovery native token-cache-compile --root STUDY/B-BASE --output NEW_CACHE_DIRECTORY
+replica-train recovery native token-cache-measure --root STUDY/B-BASE --cache CACHE_DIRECTORY --corpus ORIGINAL_F_CORPUS --repetitions 3
+replica-train recovery native token-cache-measure --root STUDY/B-BASE --cache CACHE_DIRECTORY --corpus ORIGINAL_F_CORPUS --repetitions 1
+```
+
+Use the last command in three fresh OS processes for that measurement. Fresh does
+not imply cold OS cache. The common verified native/tokenizer and reference-sample
+setup is timed separately. Read/hash/parse-integrity/role restoration/tokenization/
+first batch and five indexed draws are measured with exact tensor/mask parity.
+No optimizer, teacher or generation runs. Source JSON is a read-only comparison input;
+cache compile itself only uses owned binary episodes. A mismatched source, mapping,
+framing or policy fails explicitly. Never remove pending/overwrite to recover a failed
+compile; preserve it and use an explicit new path. Cache is an opt-in derivative
+prototype, not an automatic migration of existing runs or the product memory store.
+
 ## Completed preflight repair and bounded cooldown study
 
 The one registered cooldown study is closed: K256/D256 completed, both joint gates

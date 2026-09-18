@@ -1,5 +1,112 @@
 # 진단 및 구현 상태
 
+## E5/E6 — 저장 원형 검증과 최종 대조
+
+R3-DATA-BINARY-AND-TARGET-LOSS-1.0 / 2026-09-18 / RESULT=PARTIAL.
+저장·수리 구현과 승인된 모델 비교를 완료했지만 모델 공동 품질은 실패했다.
+E4 report b771350ccc94c0baf6643290c3dd1387ac704c97 정상 push/remote SHA 확인.
+E5는 학습 종료 이후 source다. 모든 기존 raw/corpus/DB/native/종료 기록을 유지했다.
+
+### 저장 범위와 실제 측정
+
+data::load의 원본 manifest/train/validation JSON loader는 남아 있다. native run은
+R3ER owned Episodes를 한번 읽어 samples()/annotation을 준비하고 메모리 batch를
+사용한다. 매 update JSON parsing을 하거나 이번 연구가 새 cache로 학습했다고 하지
+않는다. `.r3m` weights/Adam, tokenizer, 원문 기억·SQLite·graph 형식은 변경하지 않았다.
+token_cache.rs는 train-only packed derivative와 한정된 compile/measurement 명령이다.
+기존 batch()/Candle와 실제 token/target/mask/role 동등성을 검증하며 기존 run의 준비
+경로를 자동 교체하지 않는다. 향후 학습 사용은 새 정책·인가가 필요한 prototype이다.
+
+Apple M4, Rust1.98.1, release/Accelerate, threads1, warm3회/새process3회.
+공통 native/tokenizer/reference-sample setup 약1.22초는 별도 로그로 분리했다.
+OS cache를 비우지 않았고 fresh process를 OS cold라고 부르지 않는다. 아래는 각3회
+관측의 median이며 원 read/hash/parse/tokenize/first-batch 값은 그대로 로그에 있다.
+
+| 경로·내용 | 실제 bytes | warm ready-first-batch ms | fresh-process median ms |
+| --- | ---: | ---: | ---: |
+| 원 JSON corpus: train2560+dev256+manifest | 4,633,037 | 161.015 | 163.333 |
+| R3ER: 전체3728 episode+panels+tape/policy | 4,028,751 | 144.593 | 147.942 |
+| R3TOK raw: train2560,790401tokens,u16,희소span | 1,726,385 | 10.211 | 10.352 |
+| 동일 R3TOK whole-file Zstd3 | 158,645 | 8.022 | 8.029 |
+
+각 경로는 **같은 train sample/batch**를 재현하지만 저장하는 전체 정보의 범위가 다르다.
+JSON↔snapshot↔cache 수치를 같은 원문 전체의 단순 압축률로 해석하지 않는다.
+raw/Zstd만 완전히 같은 container bytes의 무손실 압축 비교다. Zstd는 더 작아 cold
+산출물로 보존했으며 random access 전에 전체 해제가 필요하다. raw indexed batch5는
+약4.5–8.8µs, baseline memory batch는 약3.3–14.3µs였다. startup 개선과 batch/학습
+throughput 개선을 구분한다. E4 backward만 각549.7/525.2초였고 tokenization은
+초기에 한번 약0.13초였다. 이번 cache로 전체 학습속도나 정답률이 개선됐다는 실험은 없다.
+
+warm read/hash/parse-integrity-role/tokenize median(ms):
+JSON .698/8.003/25.623/125.572; snapshot .439/6.870/10.639/126.188;
+raw .162/2.961/7.114/0; Zstd .049/.272/7.694/0. parse includes decoder integrity;
+Zstd includes decompression. 독립 parity 비교는 측정한 first-batch 이후 수행했다.
+각 repetition마다 같은 소비 tape5개를 실제 tensor로 준비해 exact parity도 검사했다.
+공통 setup을 제외한 input 준비 비용이며 전체 CLI 시작시간으로 표기하지 않는다.
+
+해당 비교 파일 subtotal: source+snapshot8,661,788B; raw cache+completion을 더하면
+10,388,245B; cold도 보존하면10,546,890B. cache 추가로 총 디스크는 증가했다.
+모델·이전 실험·로그는 이 데이터 subtotal 밖이다. 별도 보존된 원래 goal1-corpus-v9는
+manifest713/train32164769/validation653687B이며 F corpus의 anchor provenance다.
+모델 resume file은 기존과 같은115285312B; cache 성과를 weights binary 전환으로
+부르지 않는다. cache compile: tokenize/annotation .147755s, encode/검사 .013429s,
+compression/복원 .002457s, durable publication .029882s; native setup1.09339s 별도.
+
+측정 binary=`e5-storage`, SHA256
+72d5738223eff76321906563fcf481b63acf1f008858010d940f9d68078ff70a;
+당시 source digest=b16a74eadcdd5f2104ecbfc94b78e4968f8f6ba98302c74423c4678ef9f01843.
+이후 변경은 unequal-target/mixed-fallback scalar 회귀 보강과 문서뿐이며, 측정 코드와
+학습 수식은 그대로다. 모든 실측은 해당 보존 binary의 결과로 표기한다.
+cache raw SHA=10a4b3fc61f30bfd2c5649199ccce9a01b5a37ba9af7e7c55115aaced41f70cd.
+실제 입력/산출물은 evidence root의 study/B-BASE/inputs.r3er,cache/train.r3tok,
+cache/train.r3tok.zst,cache/complete.bin이다. source JSON은
+artifacts/h3-controlled-20260917/a2/corpus-F/{manifest,train,validation}.json이다.
+
+### 학습 관측 재집계와 한계
+
+고정 metadata train64/2051 targets의 teacher 결과(독립 일반화 점수가 아님):
+
+| 동일 train64 | 맞은tokens | 전체teacher 일치 | 기존 가중 objective | span objective |
+| --- | ---: | ---: | ---: | ---: |
+| 부모 | 2046 | 59 | .006447 | .006233 |
+| BASE512 | 2047 | 60 | .006499 | .006264 |
+| SPAN512 | 2043 | 56 | .008177 | .008040 |
+
+모든 첫 오류 역할은 value였고 각각5/4/8개다. 부모 가중 NLL 합에서 format6.17664,
+value6.29666이며, entity.10034/context.05785/citation.58141/status.01037이다.
+format이 손실을 압도한다는 원인은 지지되지 않는다. SPAN에서는 format7.62606,
+entity1.14672/citation1.31322/value6.59122로 증가했다. 이 값은 역할별 NLL 합이며
+역할별 token 평균이나 normal greedy 정확도가 아니다. 기본 loss와 span loss는
+서로 다른 식이므로 loss 숫자가 작다는 이유로 품질 승리를 부여하지 않았다.
+자세한 mass/NLL/first-error/category 집계는 e5-probe-recount.log에 있다. 새teacher0.
+
+근본 원인은 UNRESOLVED. 다음 단일 가설 후보는 현재 anchor pool에서 제외된
+기존 auxiliary 과제의 보존 여부다: 새 자료 생성 없이 anchor task 구성 하나를
+비교해 aux 하락과 관계를 확인하는 별도 인가를 제안한다. 부모aux53→BASE22/SPAN27,
+BASE의 QA181 유지와 구분되는 손실이 근거다. 이것이 H3 실패 원인이라는 결론이나
+새 학습 승인은 아니다. 같은 LR/암기 시험으로 자동 되돌아가지 않았다.
+
+### 검증과 최종 판정
+
+E5 cache 직접3 tests PASS: u16/u32/압축/실제 batch,6개 호환identity 및24개 corrupt
+mutation/잘못된ID/offset/EOS/trailing,미확정·동시writer 거부. 전체2560 sample과
+희소→dense annotation exact parity, warm3/fresh3의 각5batch PASS. clippy/release PASS.
+후속 scalar1 PASS는 target 길이2/3의 실제 분모5, padding, microbatch gradient,
+finite difference 및 혼합 zero-span gradient 보존을 추가로 확인했다(optimizer0).
+quick1회 FAIL과 후속 지정 회귀 성공은 E3 기록대로 구분하며 전체 재실행하지 않았다.
+새 SMALL1024, generation2928, 자체teacher192, TINY109로 종료했다.
+
+PF_PUBLISH=IMPLEMENTER_VERIFIED; PARTIAL_RESUME=IMPLEMENTER_VERIFIED;
+RAW_RECOUNT=VERIFIED; STORAGE_SCOPE=DOCUMENTED; TOKEN_CACHE_PARITY=PASS;
+STORAGE_MEASURED=PASS; OBJECTIVE_IMPLEMENTED=PASS; STUDY_EXECUTED=COMPLETE;
+OBJECTIVE_EFFECT=NEGATIVE_ON_PRIMARY_ENDPOINT; H3_JOINT=FAIL;
+H3_SEAL=NOT_OPENED; S4/S5/S6=NOT_PASSED; GOAL1=false;
+INDEPENDENT_REVIEW=PENDING. 최종 대조에서 등록 원본63개 SHA 전부 일치,
+A75-R/K/D endpoint 전체SHA 일치, 기존 untracked487개 누락0을 확인했다.
+정책/원문/실패/기존 종료파일을 수정하지 않았다. 관련 fmt/clippy/diff 검사도 통과했다.
+임시 지시문은 그대로 로컬에 있고 source/영구문서 의존은 없으며 기존 deny-pattern만
+검출됐다. 최종 source/report/remote SHA는 아래 게시 기록과 분리해 확인한다.
+
 ## E4 — BASE/SPAN 실행 완료, 공동 품질 실패
 
 실행 source414e1d3434224be1007e9717cb339109792dd333 정상 push/remote full SHA 확인.

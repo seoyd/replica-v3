@@ -1,6 +1,14 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: R3-DATA-BINARY-AND-TARGET-LOSS-1.0
+## Closed: R3-DATA-BINARY-AND-TARGET-LOSS-1.0
+
+E1/E2 direct process repairs verified; E3 objective implemented; E4 completed
+BASE512/SPAN512 with both joint gates failed; E5 cache prototype and equivalent
+batch measurements verified. SMALL1024, generation2928, own teacher192, TINY109.
+No budget remains for SMALL learning and no joint candidate authorizes confirmation
+or seal. The failed quality result and original records remain immutable. E6 publishes
+the verified implementation, measurements and negative study; independent review and
+H3/S4/S5/S6/Goal1 acceptance remain outstanding. The following records the closed scope.
 
 Base1e25be2cef801dd67a6515e5c33823a0d1b06a92; preserve closed studies and all originals.
 Evidence: `artifacts/data-binary-target-loss-20260918/`. Rust/Cargo1.98.1, offline lock,

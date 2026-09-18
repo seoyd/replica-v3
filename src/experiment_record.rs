@@ -7,6 +7,8 @@ use replica_v3::{
 };
 use sha2::{Digest as _, Sha256};
 use std::io::{Read, Seek, SeekFrom};
+#[path = "token_cache.rs"]
+mod token_cache;
 
 type Hash = [u8; 32];
 const HEADER: usize = 48;
@@ -171,7 +173,7 @@ impl FileRef {
         })
     }
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 struct CheckpointRef {
     file: FileRef,
     run: Hash,
@@ -2359,6 +2361,7 @@ fn evaluator_source() -> Hash {
     h.update(include_bytes!("quality_recovery.rs"));
     h.update(include_bytes!("training.rs"));
     h.update(include_bytes!("target_loss.rs"));
+    h.update(include_bytes!("token_cache.rs"));
     h.finalize().into()
 }
 fn normal_error_class(error: &str) -> &'static str {
@@ -2839,6 +2842,29 @@ fn resolve_native(root: &Path, s: &RunSnapshot, n: &CheckpointRef, resume: bool)
 
 #[derive(Subcommand)]
 pub enum Action {
+    /// Recount already completed train-only teacher probes without model calls.
+    ObjectiveProbes {
+        #[arg(long)]
+        root: PathBuf,
+    },
+    /// Compile an immutable train-only derivative after the bounded model study.
+    TokenCacheCompile {
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Measure equivalent source/snapshot/cache batches; no optimizer or generation.
+    TokenCacheMeasure {
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long)]
+        cache: PathBuf,
+        #[arg(long)]
+        corpus: PathBuf,
+        #[arg(long, default_value_t = 3)]
+        repetitions: u8,
+    },
     /// Register the single BASE/SPAN target-loss study from the preserved A75-R endpoint.
     ObjectivePrepare {
         #[arg(long)]
@@ -2989,6 +3015,16 @@ pub(super) fn command(action: Action) -> Result<()> {
     let mut control = RunControl::command(matches!(action, Action::Run { .. }))?;
     control.deadline = control.start + Duration::from_secs(1800);
     match action {
+        Action::ObjectiveProbes { root } => objective_probes(&root, &mut control),
+        Action::TokenCacheCompile { root, output } => {
+            token_cache::compile(&root, &output, &mut control)
+        }
+        Action::TokenCacheMeasure {
+            root,
+            cache,
+            corpus,
+            repetitions,
+        } => token_cache::measure(&root, &cache, &corpus, repetitions, &mut control),
         Action::ObjectivePrepare {
             parent_arm,
             expected_parent,
@@ -6589,6 +6625,90 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
         endpoints[0].2,
         endpoints[1].2
     );
+    Ok(())
+}
+fn objective_probes(root: &Path, control: &mut RunControl) -> Result<()> {
+    for (arm, label) in [
+        ("B-BASE", "parent"),
+        ("B-BASE", "final"),
+        ("S-SPAN", "final"),
+    ] {
+        control.check("objective_probe_recount")?;
+        let dir = root.join(arm);
+        let s = read_inputs(&dir)?;
+        let policy = s
+            .objective
+            .as_ref()
+            .ok_or_else(|| bad("probe report policy"))?;
+        let Record::TrainProbe(p) = read_record(
+            &dir,
+            &reference(&dir, &format!("train-{label}-final.r3er"))?,
+        )?
+        else {
+            return Err(bad("probe report kind"));
+        };
+        let native = if label == "parent" {
+            s.parent.clone()
+        } else {
+            let commands = arm_commands(&dir, &s)?;
+            let (t, c) = commands
+                .last()
+                .ok_or_else(|| bad("probe report missing command"))?;
+            if c.status != CommandStatus::Complete || !t.complete {
+                return Err(bad("probe report incomplete endpoint"));
+            }
+            t.native
+                .clone()
+                .ok_or_else(|| bad("probe report native absent"))?
+        };
+        if !p.complete
+            || p.source != s.source
+            || p.binding != s.binding()
+            || p.native != native
+            || p.rows.iter().map(|(i, _)| *i).collect::<Vec<_>>() != policy.probes
+            || unhex(&file_hash(&owned_path(&dir, &native.file.locator, true)?)?)?
+                != native.file.digest
+        {
+            return Err(bad("probe report native/source/panel binding"));
+        }
+        let mut targets = 0u64;
+        let mut correct = 0u64;
+        let mut exact = 0u64;
+        let mut base = 0.;
+        let mut span = 0.;
+        let mut mass = [0.; 6];
+        let mut nll = [0.; 6];
+        let mut weighted = [0.; 6];
+        let mut first = [0u64; 7];
+        let mut tasks: BTreeMap<usize, [u64; 3]> = BTreeMap::new();
+        for (ordinal, r) in &p.rows {
+            targets += u64::from(r.targets);
+            correct += u64::from(r.correct);
+            exact += u64::from(r.correct == r.targets);
+            base += r.base * f64::from(r.targets);
+            span += r.span * f64::from(r.targets);
+            first[r.first_error_role.map_or(6, usize::from)] += 1;
+            for i in 0..6 {
+                mass[i] += r.mass[i];
+                nll[i] += r.nll[i];
+                weighted[i] += r.weighted_nll[i];
+            }
+            let v = tasks
+                .entry(s.cases[*ordinal as usize].category)
+                .or_default();
+            v[0] += 1;
+            v[1] += u64::from(r.correct);
+            v[2] += u64::from(r.targets);
+        }
+        println!(
+            "TRAIN_PROBE_RECOUNT arm={arm} label={label} step={} rows={} targets={targets} correct={correct} full_teacher={exact} BASE_OBJECTIVE={} SPAN_OBJECTIVE={} ROLE_ORDER={:?} mass={mass:?} unweighted_nll={nll:?} weighted_nll={weighted:?} first_error_or_none={first:?} category_cases_correct_targets={tasks:?} SOURCE=DERIVED_FROM_EXISTING_TRAIN_PROBES NEW_TEACHERS=0 INDEPENDENT_GENERALIZATION=false",
+            native.step,
+            p.rows.len(),
+            base / targets as f64,
+            span / targets as f64,
+            target_loss::ROLE_NAMES
+        );
+    }
     Ok(())
 }
 #[allow(clippy::too_many_arguments)] // Existing owned run/native/samples and one bounded train-only observation.

@@ -1,5 +1,55 @@
 # B0 storage format v1
 
+## R3TOK v1 train derivative
+
+This immutable prototype is compiled from the verified R3ER owned train split,
+after the BASE/SPAN study. Existing study preparation is not automatically changed.
+Source JSON and the full episode snapshot remain the provenance and reprocessing
+inputs. R3TOK contains tokens and sparse answer-byte roles, not a replacement for
+original text, memory or model weights. It uses the existing bounded Reader and
+create-new/fsync publisher; no JSON payload or Rust struct memory image is stored.
+
+All fixed integers are little-endian. Header320 bytes:
+
+| Offset | Bytes | Meaning |
+| --- | ---: | --- |
+| 0 | 8 | R3TOK plus3 zero bytes |
+| 8 | 2 | wire1 |
+| 10 | 1 | byte order1 |
+| 11 | 1 | token width2 or4 from actual vocabulary/IDs |
+| 12 | 4 | header length320 |
+| 16 | 8 | exact total length |
+| 24 | 4 | sample count |
+| 28 | 4 | sequence bound |
+| 32 | 8 | total tokens |
+| 40/48/56 | 8 each | index/token/span offsets |
+| 64 | 192 | six SHA256: physical snapshot, typed ordered train contents, ordered ordinals, tokenizer semantic identity, framing+sequence, bound role/run policy |
+| 256 | 32 | body SHA256 |
+| 288 | 32 | first288 header bytes SHA256 |
+
+Body: token offsets u64[N+1], response_start u32[N], source ordinal u32[N],
+curriculum u8[N], supported-role flag u8[N], span offsets u64[N+1], packed u16/u32
+tokens, then spans(start u32,end u32,role u8). Span offsets count intervals. Bounds
+are128MiB/16384 samples/8192 sequence/32 spans per sample. Exact adjacent sections,
+offset order, BOS/EOS/assistant boundary, vocabulary and target control IDs are
+checked. The reader consumes the same owned bytes it hashed; no retokenization
+fallback. Dense role fractions reconstruct from stored intervals and original answer
+bytes with the same tokenizer. Model/sequence/policy mismatch requires a new compile.
+
+`compile.pending` is durable before artifact publication. Directory shared/exclusive
+OS locks serialize compile/reader; raw/Zstd and complete.bin are immutable. complete.bin
+is72 bytes: R3TKDONE plus raw/cold physical SHA256 (cold zero if not smaller). Pending
+or missing/corrupt completion blocks consumption. Pending unlink after durable outputs
+is the commit boundary; later directory cleanup sync failure warns, as for verification
+authorization. Failed artifacts are preserved. Checksums detect corruption, not hostile
+re-signing by a writer with filesystem access; OS permissions remain a trust boundary.
+
+The prototype uses indexed packed sample access followed by the existing Rust batch()
+and Candle tensors. It verifies all sample IDs/order/targets/masks/roles, and five actual
+draws. Disk u16 does not halve tensor RAM. Zstd3 is a whole-container cold derivative:
+it must fully decompress before random sample access. Both are retained for measurement;
+neither changes current production inference, DB, `.r3m` or historical runs.
+
 ## Train-only objective records
 
 R3ER kind19 explicitly extends the owned input snapshot with objective revision1,

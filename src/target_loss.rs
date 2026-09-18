@@ -137,7 +137,7 @@ pub fn annotate(e: &Episode, sample: &Sample, tok: &ByteBpe, focus: bool) -> Res
         supported,
     })
 }
-fn token_roles(
+pub(super) fn token_roles(
     answer: &str,
     sample: &Sample,
     tok: &ByteBpe,
@@ -494,7 +494,7 @@ mod tests {
                 curriculum: false,
             },
             Sample {
-                tokens: vec![BOS, 11, EOS],
+                tokens: vec![BOS, 11, 9, EOS],
                 response_start: 1,
                 curriculum: false,
             },
@@ -508,7 +508,7 @@ mod tests {
             },
             Annotation {
                 spans: vec![],
-                fractions: vec![1., 0.],
+                fractions: vec![1., 0.5, 0.],
                 roles: vec![],
                 supported: true,
             },
@@ -525,7 +525,7 @@ mod tests {
         for weight in [1., 8.] {
             let (_, obj, count) =
                 loss(&logits, &batch, &samples, &[0, 1], &annotations, weight).unwrap();
-            assert_eq!(count, 4);
+            assert_eq!(count, 5);
             let grads = obj
                 .backward()
                 .unwrap()
@@ -537,16 +537,25 @@ mod tests {
                 .unwrap();
             // Independent scalar softmax and the explicitly expanded per-episode formula.
             let z0 = (weight + 1.) / (weight * 1.25 + 1.);
-            let z1 = (weight + 1.) / (weight * 2. + 1.);
-            let weights = [0., 0., z0 * weight * 1.25, z0, z1 * weight * 2., z1, 0., 0.];
+            let z1 = (weight + 2.) / (weight * 2. + 2.5);
+            let weights = [
+                0.,
+                0.,
+                z0 * weight * 1.25,
+                z0,
+                z1 * weight * 2.,
+                z1 * 1.5,
+                z1,
+                0.,
+            ];
             let mut expected = 0.;
             for (row, x) in values.as_chunks::<12>().0.iter().enumerate() {
                 let sum = x.iter().map(|x| f64::from(*x).exp()).sum::<f64>();
-                expected += (sum.ln() - f64::from(x[targets[row] as usize])) * weights[row] / 4.;
+                expected += (sum.ln() - f64::from(x[targets[row] as usize])) * weights[row] / 5.;
                 for (col, x) in x.iter().enumerate() {
                     let g = (f64::from(*x).exp() / sum - f64::from(col == targets[row] as usize))
                         * weights[row]
-                        / 4.;
+                        / 5.;
                     assert!((f64::from(grads[row * 12 + col]) - g).abs() < 1e-6);
                 }
             }
@@ -557,7 +566,7 @@ mod tests {
                         .unwrap()
                         .iter()
                         .sum::<f64>()
-                        - (weight + 1.))
+                        - (weight + a.fractions.len() as f64 - 1.))
                         .abs()
                         < 1e-12
                 );
@@ -572,8 +581,8 @@ mod tests {
                     .narrow(1, 0, mb.input.dims()[1])
                     .unwrap();
                 let (_, o, n) = loss(&ml, &mb, &samples, &[i], &annotations, weight).unwrap();
-                micro_total += f64::from(o.to_scalar::<f32>().unwrap()) * n as f64 / 4.;
-                accumulated = (&accumulated + (&o * (n as f64 / 4.)).unwrap()).unwrap();
+                micro_total += f64::from(o.to_scalar::<f32>().unwrap()) * n as f64 / 5.;
+                accumulated = (&accumulated + (&o * (n as f64 / 5.)).unwrap()).unwrap();
             }
             assert!((micro_total - expected).abs() < 2e-6);
             let micro_gradients = accumulated.backward().unwrap();
@@ -608,7 +617,7 @@ mod tests {
                                 .collect::<Vec<_>>();
                             (x.iter().map(|v| v.exp()).sum::<f64>().ln() - x[targets[row] as usize])
                                 * weights[row]
-                                / 4.
+                                / 5.
                         })
                         .sum::<f64>()
                 };
@@ -616,6 +625,42 @@ mod tests {
                 assert!((fd - f64::from(grads[index])).abs() < 1e-6);
             }
         }
+        // A zero-span episode in a mixed batch keeps the original gradient;
+        // the other episode still receives the normalized adjustment.
+        annotations[0].fractions.fill(0.);
+        let (_, mixed, _) = loss(&logits, &batch, &samples, &[0, 1], &annotations, 8.).unwrap();
+        let mixed = mixed
+            .backward()
+            .unwrap()
+            .get(&logits)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let baseline = response_loss(&logits, &batch, 8.)
+            .unwrap()
+            .1
+            .backward()
+            .unwrap()
+            .get(&logits)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        assert!(
+            mixed[..48]
+                .iter()
+                .zip(&baseline[..48])
+                .all(|(a, b)| (a - b).abs() < 1e-6)
+        );
+        assert!(
+            mixed[48..]
+                .iter()
+                .zip(&baseline[48..])
+                .any(|(a, b)| (a - b).abs() > 1e-6)
+        );
         for a in &mut annotations {
             a.fractions.fill(0.);
         }
