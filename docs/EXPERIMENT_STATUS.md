@@ -1,5 +1,34 @@
 # 진단 및 구현 상태
 
+## D2 완료 — 실제 SMALL 저장·새 process 재개 동일성 PASS
+
+2026-09-18 / EXECUTED_THIS_RUN. Source50a0fb72f552cc130fbd5598019222c7a7bd95fe를
+정상 push하고 원격 full SHA 일치를 확인했다. 동일 동결 실행 파일은
+`artifacts/durability-pair-restart-20260918/d2-train`, SHA256
+b89540d30c89d96e96c0a8302053f259f48a292120856deaae32030d7d760822,
+native evaluator source digest184aa0885dec1d46bd73b247ab9e6cdeb428aef21ca9d089db4952599ba3403d.
+
+실제 F512 baseline raw 재검산: dev242/256(entity251,event251), CROSS459/512
+(501,498), ordinary QA176/336,aux56/64, watch15/32, errors0. 새 생성 없이 기존
+native/자료 binding을 검증했다. attempt303b8375b50e0ee6fd5e29a505568a186a96110f87e307e2ee527ed983529083를
+별도 등록했고, 이전 실패 receipt와 바뀌지 않은 train/case/panel/tape를 연결했다.
+
+SMALL 실제 연속2 + 분할1/새 process1 = 총4 updates, input9,998/target1,096.
+두 분기 모두 실제 step23800. 동일 weights hash
+01f0fd501a78181e0a43ce4bd87ba7341584f08bf3f1fa7aebe53b03d87294f5,
+Adam a5281b1d37e149e19c55f7d1585f1980c34629c47e418a24c182422555e53a73,
+native physical file cfc9beb4886779d6606ef501895a6624f7a174da5d60cb26a1f2f33d1d566ca7.
+누적 input42,064,076/target3,187,646/sampler6741870243436088503과 TrainingState가
+일치했다. 실제 LR1e-4(bits4547007122018943789); 보존한 historical config LR3e-5와
+구분하며 cosine으로 바꾸지 않았다. 정상 greedy parity generation4,teacher0, 차이0.
+
+증거는 같은 root의 `d2-small-continuous.log`, `d2-small-split-first.log`,
+`d2-small-split-resume.log`, `d2-small-verify.log`, `d2-registration.log`와
+`attempt-R/preflight-{A,B}/`, `attempt-R/preflight-proof.r3er`다. 명시 목적은
+SAVE_RESUME_PREFLIGHT/quality_eligible=false이며 정식 부모로 사용하지 않는다.
+SMALL_SAVE_PREFLIGHT=PASS; 다음 C50-R/A75-R는 각각 원래 F512에서 시작한다.
+H3/S4/Goal1 품질 수용은 여전히 미완료이며 이전 C50 실패256을 지우지 않았다.
+
 ## D2 준비 — native 사전검증 경로·학습 전 코드 gate 통과
 
 2026-09-18 / EXECUTED_THIS_RUN. D1 source
