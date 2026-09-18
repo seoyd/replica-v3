@@ -5,9 +5,13 @@
 `data::native` is train-only. Its Episode codec is shared with existing R3ER;
 the product inference library does not import generators, labels or annotations.
 R3CORP contains train/dev originals, not just tokens or an experiment tape.
-Each Episode preserves id/category/family/binding/sequence, request input/limits,
-all evidence and bundle metadata, answer, signed IDs/time, optional observed time,
-source/status/truncation/retrieval reason and relation kind/path/weight. Strings
+Each Episode preserves id/category/family/binding/sequence and answer. Request
+fields are request_id/system/input/evidence/limits(context_tokens,max_tokens,
+timeout_ms). Evidence fields are event_id/original_excerpt/excerpt_truncated/source/
+recorded_at/observed_at/version_status/retrieval_reason/relation_path; each relation
+preserves from/to/relation/origin. Bundle fields are items/truncated/visited/
+candidates_fetched/edges_fetched/eligible. Signed IDs/time and optional observed
+time keep their exact range/presence. Strings
 are exact UTF-8 bytes without trim or normalization, including JSON text payloads.
 
 Fixed prefix160 bytes (all fixed integers LE, typed strings/counts canonical ULEB):
@@ -50,7 +54,33 @@ tokenizing again; bad/missing cache fails rather than falling back to JSON.
 Existing JSON IPC, older explicit recovery readers, training config input and
 human/checker reports remain. This is not whole-project JSON removal.
 
-## R3TOK v1 train derivative
+## R3MODEL wire2 resume descriptor
+
+The fixed model prefix, directory, tensor set/shape checks, F32 tensor body and
+tokenizer mapping remain unchanged. Wire version at offset8 is now2. Existing
+wire1 state decodes with unknown objective; it is never implicitly defaulted.
+After the existing state losses, wire2 stores an option byte (writer requires1
+for RESUME), the following typed descriptor, and its32-byte domain-separated SHA:
+
+1. Four u8: semantic version1, family1 CE/2 span, normalizer1/2, execution0 generic/1 native.
+2. first-target f64 IEEE bits u64LE.
+3. alpha option byte, then optional f64 bits u64LE (supported span coefficient1).
+4. annotation option byte, then optional32-byte annotation digest.
+5. Eight32-byte digests in order: train order, tokenizer, framing, config, corpus,
+   validation, executed policy, provenance.
+
+Descriptor hash domain is `R3-OBJECTIVE-RESUME-v1` plus NUL and encoded descriptor.
+Generic order/corpus/tokenizer references hash their existing identity strings;
+native order instead hashes exact ordered typed Episodes. Config digest encodes
+actual scalar bits and integer training settings, while native policy additionally
+binds the executed tape/LR continuation rather than treating an old config LR as
+the actual rate. Family/version define the unchanged supervised next-token mask,
+EOS and normalization semantics. Existing train-only annotation schema and full
+role digest are transitive in the native policy. INFERENCE needs no optimizer policy.
+The observed default v1→v2 file grew320 bytes through header/alignment; F32 model
+and Adam contents did not shrink or change.
+
+## R3TOK v1 train derivative — original implementation, wire unchanged
 
 This immutable prototype is compiled from the verified R3ER owned train split,
 after the BASE/SPAN study. Existing study preparation is not automatically changed.

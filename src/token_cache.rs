@@ -407,7 +407,10 @@ fn inputs(root: &Path) -> Result<(RunSnapshot, Vec<u8>, Loaded)> {
     let l = resolve_native(root, &s, &s.parent, true)?;
     Ok((*s, raw, l))
 }
-fn framed(s: &RunSnapshot, l: &Loaded) -> Result<(Vec<Sample>, Vec<target_loss::Annotation>)> {
+pub(super) fn framed(
+    s: &RunSnapshot,
+    l: &Loaded,
+) -> Result<(Vec<Sample>, Vec<target_loss::Annotation>)> {
     let episodes = s
         .train
         .iter()

@@ -2965,11 +2965,11 @@ fn conditional_prepare(
     );
     Ok(())
 }
-fn conditional_plan(root: &Path) -> Result<ConditionalRecord> {
+fn conditional_plan(root: &Path, require_execution_source: bool) -> Result<ConditionalRecord> {
     let Record::Conditional(p) = read_record(root, &reference(root, "plan.r3er")?)? else {
         return Err(bad("conditional plan kind"));
     };
-    if p.plan.is_some() || p.source != evaluator_source() {
+    if p.plan.is_some() || require_execution_source && p.source != evaluator_source() {
         return Err(bad("conditional source/plan changed"));
     }
     Ok(*p)
@@ -3081,7 +3081,10 @@ fn conditional_model(n: &CheckpointRef) -> Result<Loaded> {
     Ok(l)
 }
 fn conditional_run(root: &Path, model: u8, control: &mut RunControl) -> Result<()> {
-    let p = conditional_plan(root)?;
+    if model > 1 {
+        return Err(bad("conditional model index"));
+    }
+    let p = conditional_plan(root, true)?;
     let l = conditional_model(&p.models[model as usize])?;
     let dir = root.join(format!("model-{model}"));
     std::fs::create_dir(&dir)?;
@@ -3177,7 +3180,14 @@ fn conditional_run(root: &Path, model: u8, control: &mut RunControl) -> Result<(
     outcome
 }
 fn conditional_report(root: &Path, control: &mut RunControl) -> Result<()> {
-    let p = conditional_plan(root)?;
+    // Read-only recount retains the registered execution source; a newer scorer
+    // cannot authorize generation under that old plan.
+    let p = conditional_plan(root, false)?;
+    println!(
+        "CONDITIONAL_RAW_SOURCE={} RECOUNT_SOURCE={} NEW_GENERATIONS=0 NEW_TEACHERS=0",
+        hex(&p.source),
+        hex(&evaluator_source())
+    );
     for model in 0..2 {
         control.check("conditional_recount")?;
         let dir = root.join(format!("model-{model}"));
@@ -3197,9 +3207,13 @@ fn conditional_report(root: &Path, control: &mut RunControl) -> Result<()> {
         let mut fields_count = BTreeMap::<String, [usize; 2]>::new();
         let mut strata = BTreeMap::<String, [usize; 2]>::new();
         let mut first = BTreeMap::<String, usize>::new();
+        let mut raw_errors = BTreeMap::<String, usize>::new();
         let mut margins = [0usize; 6];
         let mut prompt_lengths = [0u64; 6];
         for (i, row) in r.rows.iter().enumerate() {
+            if let Some(kind) = &row.error_class {
+                *raw_errors.entry(kind.clone()).or_default() += 1;
+            }
             let e = &p.cases[i];
             let raw = l.tokenizer.decode_bytes(
                 &row.tokens
@@ -3240,11 +3254,11 @@ fn conditional_report(root: &Path, control: &mut RunControl) -> Result<()> {
                 .into_iter()
                 .flatten()
             {
-                if let Some(value) = value.as_bool() {
-                    let n = fields_count.entry(name.clone()).or_default();
-                    n[0] += usize::from(value && !error && row.finish == Finish::Eos);
-                    n[1] += 1;
-                }
+                let n = fields_count.entry(name.clone()).or_default();
+                n[0] += usize::from(
+                    value.as_bool().unwrap_or(false) && !error && row.finish == Finish::Eos,
+                );
+                n[1] += 1; // Missing/invalid citation is a failure on the full panel denominator.
             }
             if !exact {
                 let at = e
@@ -3270,6 +3284,19 @@ fn conditional_report(root: &Path, control: &mut RunControl) -> Result<()> {
             r.generations,
             r.teachers,
             good.iter().filter(|x| **x).count()
+        );
+        println!(
+            "CONDITIONAL_TOKEN_COUNTS model={model} prompt={} generated_including_eos={} teacher_targets_including_eos={} completed_rows={} planned=144 raw_error_classes={raw_errors:?}",
+            prompt_lengths.iter().sum::<u64>(),
+            r.rows.iter().map(|row| row.tokens.len()).sum::<usize>(),
+            r.rows
+                .iter()
+                .map(|row| match &row.teacher {
+                    TeacherRecord::Measured(t) => t.target,
+                    _ => 0,
+                })
+                .sum::<u64>(),
+            r.rows.len()
         );
     }
     Ok(())
@@ -7889,9 +7916,44 @@ fn objective_probes(root: &Path, control: &mut RunControl) -> Result<()> {
         let mut mass = [0.; 6];
         let mut nll = [0.; 6];
         let mut weighted = [0.; 6];
+        let l = resolve_native(&dir, &s, &native, false)?;
+        let (_, annotations) = token_cache::framed(&s, &l)?;
+        let mut token_mass = [0.; 6];
         let mut first = [0u64; 7];
         let mut tasks: BTreeMap<usize, [u64; 3]> = BTreeMap::new();
         for (ordinal, r) in &p.rows {
+            let i = s
+                .train
+                .iter()
+                .position(|i| i == ordinal)
+                .ok_or_else(|| bad("probe train ordinal"))?;
+            if annotations[i].roles.len() != r.targets as usize {
+                return Err(bad("probe target denominator"));
+            }
+            let mut expected_mass = [0.; 6];
+            for (j, roles) in annotations[i].roles.iter().enumerate() {
+                for k in 0..6 {
+                    token_mass[k] += roles[k];
+                    expected_mass[k] += roles[k]
+                        * if j == 0 {
+                            l.manifest
+                                .training
+                                .as_ref()
+                                .unwrap()
+                                .config
+                                .first_target_weight
+                        } else {
+                            1.
+                        };
+                }
+            }
+            if expected_mass
+                .iter()
+                .zip(r.mass)
+                .any(|(a, b)| (a - b).abs() > 1e-9)
+            {
+                return Err(bad("probe role mass reconstruction"));
+            }
             targets += u64::from(r.targets);
             correct += u64::from(r.correct);
             exact += u64::from(r.correct == r.targets);
@@ -7917,6 +7979,23 @@ fn objective_probes(root: &Path, control: &mut RunControl) -> Result<()> {
             base / targets as f64,
             span / targets as f64,
             target_loss::ROLE_NAMES
+        );
+        let mean = std::array::from_fn::<_, 6, _>(|i| {
+            if token_mass[i] > 0. {
+                Some(nll[i] / token_mass[i])
+            } else {
+                None
+            }
+        });
+        let weighted_mean = std::array::from_fn::<_, 6, _>(|i| {
+            if mass[i] > 0. {
+                Some(weighted[i] / mass[i])
+            } else {
+                None
+            }
+        });
+        println!(
+            "TRAIN_ROLE_MEANS arm={arm} label={label} fractional_token_counts={token_mass:?} mean_nll_per_token={mean:?} weighted_mean_per_weight_mass={weighted_mean:?} NEW_FORWARDS=0"
         );
     }
     Ok(())

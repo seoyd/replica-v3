@@ -1,5 +1,97 @@
 # 진단 및 구현 상태
 
+## N4 — 조건부 반응 진단 완료, 품질 회복 아님
+
+EXECUTED_THIS_RUN / DEVELOPMENT / 가중치 고정. 생성 source는
+45d41267d7aae408ca3fd88b61937cad368a42ef이며 정상 push/remote 일치 확인.
+diagnostic-runner SHA=e0abb73f191b6460b37aabe45f762d4a5dcce0d096f55a4b7f2870f771268e68.
+seed19317의24 base×6조건을 출력 전에 binary로 동결했다. plan physical SHA
+ece31554726187120095f5efbbf091825583bb50d9262dae2cf1121a0e4517cc.
+동일 base의6조건은 종속 표본이며 독립144개 또는 최종 수용 패널로 해석하지 않는다.
+
+| 측정 | A75-R24310 | B-BASE24822 |
+| --- | ---: | ---: |
+| strict full answer | 0/144 | 0/144 |
+| 여섯 조건 공동 성공 | 0/24 | 0/24 |
+| v0와 v1/v2/v3/v4/v5 동시 정답 | 각각0/24 | 각각0/24 |
+| entity / context / value | 11 / 3 / 13 (각144) | 9 / 0 / 11 (각144) |
+| citation exact / provided / nonempty | 2 / 14 / 116 (각144) | 4 / 20 / 115 (각144) |
+| EOS / 빈 출력 / 길이 종료 | 144 / 0 / 0 | 142 / 0 / 2 |
+| raw strict UTF-8 오류 | 17 | 14 |
+| 재채점 오류 (길이와 겹칠 수 있음) | 17 | 15 |
+| 첫 오류 entity / context / format | 79 / 30 / 35 | 86 / 29 / 29 |
+| 조건부 generation / teacher forward | 144 / 144 | 144 / 144 |
+| prompt tokens / generated tokens(EOS 포함) | 49374 / 3911 | 49374 / 4038 |
+| teacher target tokens(EOS 포함) | 5313 | 5313 |
+| 실제 command 초 | 23.963 | 23.755 |
+
+각 조건 full exact는 모두0/24. v0..v5의 재채점 오류는 부모[0,0,0,1,0,16],
+BASE[0,0,1,1,0,13]이다. ID2/4/6/8자리, 반복/비반복 및 방향/숫자 값 strata도
+모두 full0이다. 평균 prompt 길이는[325.375,333.375,325.375,325.375,348.375,399.375].
+unrelated distractor가 들어간 v5의 길이/오류 증가를 관측했지만 길이와 위치, 문자
+조각화, prefix 전파, 질문/과제 전이의 원인을 이 패널만으로 분리하지 못했다.
+gold/foil 최초 다른 token의 같은 gold prefix forward에서 gold 선호는
+부모[10,15,8,14,8,5]/24, BASE[9,15,11,11,10,5]/24. 제품 응답 정확도가 아니다.
+
+v1/v2 metadata-selected16개의 normal greedy를 각 fresh process에서32회 생성해
+raw token/EOS/error까지16/16 일치했다. SMALL 합계: 품질optimizer0,
+PATH_PARITY optimizer4, generation320/320, teacher288/288. SPAN 새 생성/학습0.
+새 seal 개봉0. 모든 모델 관측은 여기서 종료했으며 추가 호출/자동 연장은 없다.
+
+`conditional/model-0/final.r3er` SHA=f983250de804daaa74955bfec6d6697f23873306bec391fb435f41764a1d06f3,
+`model-1/final.r3er` SHA=44d4b6e2c05ce8721a9d89050c4dacafb5c9bb6897dba8d6b87eb81a4450c6cc.
+원 raw/계획/step별 entry와 first recount를 보존했다. read-only 재채점기는 실행
+source와 자신의 source를 구분한다. 최초 report의 citation_in_provided 분모127/130은
+invalid output의 null을 빠뜨렸고 전체144로 수정했다. 원 raw와 primary full0은
+변경되지 않는다. `n4-final-recount.log`가 전체 분모/오류 종류 재검산이다.
+
+### 과거 train64와 실제 노출 재집계
+
+DERIVED_FROM_EXISTING_TRAIN_PROBES. 새 forward0. 부모/BASE/SPAN은 각각
+2046/2051·2047/2051·2043/2051 teacher token, 전체 teacher59/64·60/64·56/64.
+원문과 bound annotation으로 역할 분모를 다시 계산하고 기존 weighted mass와
+일치하는지 검사했다. 아래는 비가중 NLL 합/분수 token당 평균이다. byte overlap로
+한 token이 역할 사이에 나뉘므로 token 수에 소수가 있다.
+
+| 역할 | token 수 | 부모 합/평균 | BASE 합/평균 | SPAN 합/평균 |
+| --- | ---: | --- | --- | --- |
+| format | 1215.1 | 6.175569 / .005082 | 6.278571 / .005167 | 7.625106 / .006275 |
+| entity | 327 | .072496 / .000222 | .100895 / .000309 | 1.115523 / .003411 |
+| context | 170 | .057849 / .000340 | .075426 / .000444 | .084998 / .000500 |
+| value | 67.9 | 6.296661 / .092734 | 6.302240 / .092816 | 6.591218 / .097072 |
+| citation | 217 | .581407 / .002679 | .538964 / .002484 | 1.313220 / .006052 |
+| status | 54 | .008506 / .000158 | .006427 / .000119 | .006902 / .000128 |
+
+첫 target weight8을 적용한 mass는[1278.1,670,170,67.9,217,96], 총2499이며
+실제2051 target 분모와 다르다. weighted NLL 합과 weight-mass당 평균은
+`n4-existing-probes-means.log`에 별도로 보존했다. format 합이 value보다 압도적이지
+않고 value 평균이 높지만, 이미 실패한 SPAN 반복이나 새로운 loss의 근거가 아니다.
+gold 접두어의 teacher59/64와 새로운 다중 기록 free0/144는 같은 테스트가 아니다.
+
+B-BASE의 같은512-step tape에서2048 ordinary anchor views가3072번,128개 focus base의
+4개 view(512 pool)가1024번 소비됐다. target 노출은 anchor93663/focus38124였다.
+category/family/task별 unique base/draw/token은 `n4-exposure.log`에 있다.
+aux의 entity-cue 과제는 이 pool에0건이며 부모53/64→BASE22/64 하락과 함께
+관측됐다. 평가 사례가 train에 없는 정상 분리와 필요한 과제 자체의 pool 부재는
+구분한다. 이것도 H3 실패 원인 또는 망각의 단독 증명은 아니다.
+
+NEXT_MODEL_EXPERIMENT=PROPOSAL_ONLY: aux task 보존을 검증하는 anchor replay 하나.
+부모는 동일 A75-R24310, model/tokenizer/Adam/LR1e-4/6:2/기본loss는 고정한다.
+대조는 현재 anchor6; 처리군은 그중1slot을 기존 **train** entity-cue pool로 교체한다.
+새 진단/heldout 문장을 학습에 복사하지 않는다. 먼저 그 train pool과 annotation을
+명시 검증해야 하며 없으면 BLOCKED_INPUT이다. 제안 예산은 각128updates 이하,
+각 input350000/target40000 tokens 및 command1800초(정리120초), 자동 연장0.
+취소/수치/자료/저장 오류는 즉시 중단한다. aux가 부모53 이상이면서 대조보다4 이상
+높고 QA178 이상, 같은 endpoint dev/CROSS가 대조보다 낮지 않아야 보존 가설을
+지지한다고 판단한다. 별도 H3/S4 최종 gate를 낮추거나 제품 채택을 허가하지 않는다.
+이번 실행 권한과 실제 신규 품질updates는0이며, 조건부 실패의 근본 원인은 UNRESOLVED.
+
+최종 관련 quick(`n5-quick-final`)는 현재 source의 fmt/check/clippy 및15개 직접
+단위/process 회귀 모두 PASS다. 초기 실패 quick와 별도 기록이며 전체 저장소 테스트를
+실행한 것은 아니다. 이 재검증까지 TINY optimizer108/128, scalar0. release 성공.
+최종 read-only/측정 binary SHA=74cb9c6b932ed0f4055a5c1f3b1951bf526be0c20dff677e3e719716c6bc4766.
+N5 동등 저장 측정은 이 절 시점 NOT_RUN이며 SMALL/model 호출 예산은 모두 종료됐다.
+
 ## N3 — 실제 SMALL 입력 경로 동등성 완료
 
 EXECUTED_THIS_RUN. 구현 source b1565eb26d289086f3d195165a8d1ff5aa1852e6를
