@@ -31,6 +31,109 @@ fn p(p: &Path) -> &str {
     p.to_str().unwrap()
 }
 #[test]
+fn binary_post_terminal_failure_blocks_pair_and_report() {
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = if let Some(p) = std::env::var_os("R3ER_TEST_BOOTSTRAP") {
+        PathBuf::from(p)
+    } else {
+        let p = d.path().join("bootstrap");
+        call(
+            &["fixture", "--output", p.to_str().unwrap()],
+            None,
+            true,
+            &d.path().join("fixture.log"),
+        );
+        call(
+            &["run", "--root", p.to_str().unwrap()],
+            None,
+            true,
+            &d.path().join("bootstrap.log"),
+        );
+        p
+    };
+    for (i, fault) in [
+        "cancel-close",
+        "error-close",
+        "cancel-close-stop-write-fail",
+        "cancel-close-command-write-fail",
+        "cancel-close-stop-write-fail-command-write-fail",
+        "command-write-fail",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let pair = d.path().join(format!("pair-{i}"));
+        call(
+            &[
+                "fixture-pair",
+                "--from",
+                p(&bootstrap),
+                "--output",
+                p(&pair),
+            ],
+            None,
+            true,
+            &d.path().join(format!("prepare-{i}.log")),
+        );
+        let c = pair.join("C50");
+        let a = pair.join("A75");
+        let out = call(
+            &["run", "--root", p(&c)],
+            Some(fault),
+            false,
+            &d.path().join(format!("run-{i}.log")),
+        );
+        assert!(String::from_utf8_lossy(&out.stdout).contains("complete=true"));
+        assert!(String::from_utf8_lossy(&out.stdout).contains("NEW_TINY_UPDATES=2"));
+        let terminal = fs::read(c.join("segment-00/terminal.r3er")).unwrap();
+        if fault.contains("stop-write-fail") {
+            assert!(!c.join("close-stop.r3er").exists());
+        }
+        if fault.contains("command-write-fail") {
+            assert!(!c.join("segment-00/command.r3er").exists());
+        }
+        assert_eq!(
+            c.join("comparison.r3er").exists(),
+            fault == "command-write-fail"
+        );
+        let out = call(
+            &["run", "--root", p(&a)],
+            None,
+            false,
+            &d.path().join(format!("other-{i}.log")),
+        );
+        assert!(!String::from_utf8_lossy(&out.stdout).contains("ACTUAL_TINY_UPDATE"));
+        assert!(!a.join("segment-00").exists());
+        let before = fs::read_dir(&c).unwrap().count();
+        let out = call(
+            &["anchor-report", "--root", p(&pair)],
+            None,
+            false,
+            &d.path().join(format!("report-{i}.log")),
+        );
+        assert!(String::from_utf8_lossy(&out.stdout).contains("MODEL_PAIR=FAILED_OR_INCOMPLETE"));
+        assert!(!String::from_utf8_lossy(&out.stdout).contains("candidate=true"));
+        assert_eq!(fs::read_dir(&c).unwrap().count(), before);
+        call(
+            &[
+                "close",
+                "--root",
+                p(&c),
+                "--terminal",
+                "segment-00/terminal.r3er",
+            ],
+            None,
+            false,
+            &d.path().join(format!("close-{i}.log")),
+        );
+        assert_eq!(
+            terminal,
+            fs::read(c.join("segment-00/terminal.r3er")).unwrap()
+        );
+    }
+    println!("POST_TERMINAL_TINY_UPDATES=12 GENERATIONS=36 TEACHERS=36 OTHER_ARM_UPDATES=0");
+}
+#[test]
 fn binary_stored_cleanup_cancel_fresh_process_close() {
     let temporary = tempfile::tempdir().unwrap();
     let root = std::env::var_os("R3ER_CANCEL_TEST_OUTPUT")

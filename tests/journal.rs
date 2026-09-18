@@ -417,3 +417,57 @@ fn journal_process_sync_before_ack_restart_idempotency() {
     assert!(!invoke().output().unwrap().status.success());
     drop(writer);
 }
+
+#[cfg(feature = "test-support")]
+#[test]
+fn journal_process_retry_requires_successful_sync() {
+    let d = tempfile::tempdir().unwrap();
+    let (snapshot, path) = empty(d.path());
+    let event = d.path().join("event.rpv3");
+    fs::write(&event, body(&observation(1, b"unsynced complete frame"))).unwrap();
+    let invoke = || {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_replica-v3"));
+        c.args([
+            "journal",
+            "--snapshot",
+            snapshot.to_str().unwrap(),
+            "--path",
+            path.to_str().unwrap(),
+            "append",
+            "--request",
+            "01010101010101010101010101010101",
+            "--events",
+            event.to_str().unwrap(),
+        ]);
+        c
+    };
+    let crashed = invoke()
+        .env("R3JRN_TEST_CRASH", "before-sync")
+        .output()
+        .unwrap();
+    assert_eq!(crashed.status.code(), Some(90));
+    assert!(crashed.stdout.is_empty());
+    let bytes = fs::read(&path).unwrap();
+    let j = Journal::open(&snapshot, &path, false).unwrap();
+    let expected = j.last().clone();
+    assert_eq!(j.view().event_count(), 1);
+    drop(j);
+    let failed = invoke().env("R3JRN_TEST_SYNC_FAIL", "1").output().unwrap();
+    assert!(
+        !failed.status.success(),
+        "retry returned ACK without successful sync"
+    );
+    assert!(failed.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("injected journal sync failure"));
+    let retried = invoke().output().unwrap();
+    assert!(retried.status.success());
+    assert!(retried.stdout.starts_with(b"ACK"));
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    let j = Journal::open(&snapshot, &path, false).unwrap();
+    assert_eq!(j.last(), &expected);
+    assert_eq!(j.view().event_count(), 1);
+    assert_eq!(
+        j.view().canonical_body(1).unwrap(),
+        fs::read(event).unwrap()
+    );
+}

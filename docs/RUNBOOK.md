@@ -1,5 +1,20 @@
 # Replica v3 B0 runbook
 
+## Durable retries and native command outcomes
+
+Journal append retries now perform sync_all before returning the existing ACK.
+After any sync failure the writer remains poisoned: explicitly reopen/replay and
+retry; do not truncate a tail or treat successful read-only replay as an ACK.
+Fault seams exist only in tests/test-support, never default product builds.
+
+Native commands preserve terminal.r3er and publish typed command.r3er after close.
+A comparison without successful command finalization is incomplete. A fresh close,
+other arm run, and read-only pair report reject persisted close failure or missing
+finalization. Reports exit nonzero on failed/missing command outcomes and print
+FAILED_OR_INCOMPLETE; ordinary complete low scores remain valid negative comparisons.
+Only a verified TimePause permits same-arm resume. Do not manufacture missing
+positive records, change old stops, or use historical import to reopen a failed arm.
+
 ## Explicit experimental graph journal
 
 Product `ask` still uses SQLite. These commands only use the supplied snapshot and

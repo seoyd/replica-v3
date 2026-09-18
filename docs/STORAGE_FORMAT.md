@@ -427,3 +427,29 @@ close/stop, recording elapsed command time through that boundary. It does not re
 the original terminal. Pair budget counts these records across both arms; an unclosed
 command blocks automatic retry. Pair caps are1024 updates,7500 generations and7200s;
 segment1800s with bounded120s cleanup. A terminal's clean time resume cannot reset them.
+# Command finalization and journal retry acknowledgement
+
+R3ER v1 record kind7 is a typed CommandOutcome: run digest32, binding digest32,
+terminal FileRef, optional comparison FileRef, status byte (0 Complete,1 TimePause,
+2 Failed), bounded unique stop tags, optional UTF-8 error, exact Scalar elapsed.
+Actual work counters come from the referenced immutable terminal, not a second
+counter copy. Command records never replace terminals. Historical kind4 command
+copies are not upgraded to positive finalization. Unknown kinds/statuses fail closed.
+
+The run writes terminal, verifies/publishes provisional comparison, then observes
+the final cooperative cancellation/deadline boundary and publishes command outcome.
+Separate durable writes are not a transaction. Only a verified Complete outcome
+bound to the actual terminal and comparison authorizes normal pair progress.
+Missing/failed finalization, close-stop or stored stop prevents approval; even a
+comparison without command outcome is provisional. TimePause permits only the same
+arm's verified continuation. Read-only report never repairs or finalizes an arm.
+The command decision seals before its finite publication; synchronous sync/tensor
+operations cannot be forcibly preempted. A failed publication returns an error.
+
+R3JRN v1 layout is unchanged. Both new append and identical-content retry call the
+same journal-local sync_all helper before ACK. Retry first poisons the writer;
+success clears only that temporary poison, returns the original Commit and adds no
+frame/view/sequence. Sync failure keeps the instance poisoned until explicit reopen,
+whose retry must sync again. Replay/last() proves observed bytes, not a prior durable
+ACK. This is a sync_all software boundary, not proof of power-loss durability or
+equivalence with SQLite/macOS fullfsync. Previous throughput comparisons remain historical.

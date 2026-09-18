@@ -22,6 +22,61 @@ type Hash = [u8; 32];
 fn bad(s: &str) -> Error {
     Error::Corrupt(format!("journal: {s}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn journal_sync_failure_poison_requires_reopen_for_append_and_retry() {
+        let d = tempfile::tempdir().unwrap();
+        let sql = crate::store::Store::init(d.path().join("empty.db")).unwrap();
+        let snapshot = d.path().join("base.r3a");
+        sql.export_archive(&snapshot, codec::Compression::Raw)
+            .unwrap();
+        let path = d.path().join("journal.r3j");
+        Journal::create(&snapshot, &path, [1; 16]).unwrap();
+        let mut e = crate::event::Event::observation("s", "t", "u", b"original".to_vec());
+        e.id = 1;
+        e.recorded_at = 1;
+        let bodies = vec![codec::encode(&e, codec::Compression::Raw).unwrap()];
+        let mut j = Journal::open(&snapshot, &path, true).unwrap();
+        j.fail_sync = true;
+        assert!(j.append([2; 16], bodies.clone(), None).is_err());
+        assert_eq!(j.sync_calls, 1);
+        assert!(j.poisoned);
+        j.fail_sync = false;
+        assert!(j.append([2; 16], bodies.clone(), None).is_err());
+        assert_eq!(j.sync_calls, 1);
+        drop(j);
+        let before = std::fs::read(&path).unwrap();
+        let mut j = Journal::open(&snapshot, &path, true).unwrap();
+        let expected = j.last().clone();
+        j.fail_sync = true;
+        assert!(j.append([2; 16], bodies.clone(), None).is_err());
+        assert_eq!(j.sync_calls, 1);
+        j.fail_sync = false;
+        assert!(j.append([2; 16], bodies.clone(), None).is_err());
+        assert_eq!(j.sync_calls, 1);
+        drop(j);
+        let mut j = Journal::open(&snapshot, &path, true).unwrap();
+        assert_eq!(j.append([2; 16], bodies.clone(), None).unwrap(), expected);
+        assert_eq!(j.sync_calls, 1);
+        assert!(!j.poisoned);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(j.view().event_count(), 1);
+        let mut different = bodies.clone();
+        different[0][0] ^= 1;
+        assert!(matches!(
+            j.append([2; 16], different, None),
+            Err(Error::Conflict(_))
+        ));
+        assert_eq!(j.sync_calls, 1);
+        drop(j);
+        let mut j = Journal::open(&snapshot, &path, false).unwrap();
+        assert!(j.append([2; 16], bodies, None).is_err());
+        assert_eq!(j.sync_calls, 0);
+    }
+}
 fn hash(b: &[u8]) -> Hash {
     Sha256::digest(b).into()
 }
@@ -73,6 +128,10 @@ pub struct Journal {
     tail: Option<Tail>,
     writer: bool,
     poisoned: bool,
+    #[cfg(test)]
+    sync_calls: usize,
+    #[cfg(test)]
+    fail_sync: bool,
 }
 impl Journal {
     pub fn create(snapshot: &Path, path: &Path, store_id: [u8; 16]) -> Result<()> {
@@ -141,6 +200,10 @@ impl Journal {
             tail: None,
             writer,
             poisoned: false,
+            #[cfg(test)]
+            sync_calls: 0,
+            #[cfg(test)]
+            fail_sync: false,
         };
         while out.last.end < total {
             let offset = out.last.end;
@@ -284,11 +347,15 @@ impl Journal {
         }
         let content = hash(&raw);
         if let Some((old, commit)) = self.commits.get(&request) {
-            return if *old == content {
-                Ok(commit.clone())
-            } else {
-                Err(Error::Conflict("journal request content changed".into()))
-            };
+            if *old != content {
+                return Err(Error::Conflict("journal request content changed".into()));
+            }
+            // Replay proves the frame contents, not that a previous sync succeeded.
+            let commit = commit.clone();
+            self.poisoned = true;
+            self.sync_commit()?;
+            self.poisoned = false;
+            return Ok(commit);
         }
         let events = self.view.prepare_overlay(&bodies)?;
         let compressed = level.map(|l| zstd::bulk::compress(&raw, l)).transpose()?;
@@ -328,7 +395,11 @@ impl Journal {
         self.file.write_all(&h)?;
         self.file.write_all(stored)?;
         self.file.write_all(&t)?;
-        self.file.sync_all()?;
+        #[cfg(feature = "test-support")]
+        if std::env::var("R3JRN_TEST_CRASH").as_deref() == Ok("before-sync") {
+            std::process::exit(90);
+        }
+        self.sync_commit()?;
         #[cfg(feature = "test-support")]
         if std::env::var("R3JRN_TEST_CRASH").as_deref() == Ok("after-sync") {
             std::process::exit(91);
@@ -343,6 +414,21 @@ impl Journal {
         self.last = commit.clone();
         self.poisoned = false;
         Ok(commit)
+    }
+    fn sync_commit(&mut self) -> Result<()> {
+        #[cfg(test)]
+        {
+            self.sync_calls += 1;
+            if self.fail_sync {
+                return Err(std::io::Error::other("injected journal sync failure").into());
+            }
+        }
+        #[cfg(feature = "test-support")]
+        if std::env::var("R3JRN_TEST_SYNC_FAIL").as_deref() == Ok("1") {
+            return Err(std::io::Error::other("injected journal sync failure").into());
+        }
+        self.file.sync_all()?;
+        Ok(())
     }
     pub fn recover_to(&mut self, output: &Path) -> Result<()> {
         let source = file_hash(&mut self.file)?;

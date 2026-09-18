@@ -1,6 +1,43 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: R3-NATIVE-STORAGE-QUALITY-1.0
+## Active: R3-DURABILITY-PAIR-RESTART-1.0
+
+D0 starts at source2e4121035aabd11918d64875285661ad8e3a8f91 and report
+1ea5abe9ae63e12ee8a7e9e8e6731b6b274d07fb. Preserve the failed
+`artifacts/native-storage-quality-20260918/anchor-pair/` (C50 updates256,
+endpoint absent, A75 not run). New evidence belongs only under
+`artifacts/durability-pair-restart-20260918/`; original-pair.sha256 binds the
+read-only files. This replacement attempt is distinct; no old flags/budget are reset.
+
+D0 identities → D1 journal retry sync and command outcome → D2 native TINY and
+SMALL save/resume preflight → D3 C50-R then A75-R → D4 endpoint recount/publication.
+Change existing journal/experiment_record, direct tests/checker and these existing
+documents only. No new framework, dependencies, model equations, tokenizer or DB.
+Runtime verified Apple M4/24GiB, installed Rust/Cargo1.98.1, Accelerate CPU/F32,
+VECLIB_MAXIMUM_THREADS=1/RAYON_NUM_THREADS=1; locked/offline builds.
+
+D1 follows run_native → immutable terminal → close_native → command finalization
+→ shared effective outcome in anchor_budget/anchor_report. A comparison alone is
+provisional. Missing/failed finalization blocks another arm and normal pair approval;
+only a verified time-only pause permits the same arm to resume. Journal retry ACK
+requires a successful sync_all on that call, including after replay.
+
+D2 uses the same F512 parent and first two registered training batches: continuous2
+versus split1/save/new-process/load/1, total SMALL4 and optional generation≤8.
+Compare exact weights/Adam/clock/sampler/tokens/LR; no preflight quality claim or use
+as a training parent. Failure closes the preflight with no automatic retry.
+D3 is a single newly bound attempt with replacement receipt hashes, same F51223798,
+pools2048/512, tape seeds, inherited Adam, actual constantLR1e-4; C50-R4/4 versus
+A75-R6/2. Each512 updates, 2Minput/500Ktarget, eval256/512 on dev256/CROSS512/ordinary400,
+watch32 derived. Save/verify before full evaluation. New SMALL≤1028 including preflight;
+TINY/scalar≤128 including quick. Model commands total≤7200s, each≤1800s plus cleanup120s;
+generation≤7500, teacher0. One heavy process, frozen source/binary while learning.
+Joint gates and existing guards remain unchanged; stop/integrity/save/close failure
+halts the pair, completed low quality permits the other arm. No automatic extension,
+seal opening, model promotion or Goal1 acceptance. Closed stages commit/push explicitly
+with full remote SHA verification; originals/private artifacts never enter Git.
+
+## Closed: R3-NATIVE-STORAGE-QUALITY-1.0
 
 Execution closure: G1 boundaries verified; G2 halted at C50+256 on native save
 validation failure, A75 NOT_RUN, QUALITY_INCONCLUSIVE. Do not restart this pair or

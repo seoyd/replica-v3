@@ -151,7 +151,7 @@ impl Scalar {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct FileRef {
     locator: String,
     digest: Hash,
@@ -1307,6 +1307,78 @@ impl SegmentReceipt {
         })
     }
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+enum CommandStatus {
+    Complete,
+    TimePause,
+    Failed,
+}
+#[derive(Clone, Debug, Serialize)]
+struct CommandOutcome {
+    run: Hash,
+    binding: Hash,
+    terminal: FileRef,
+    comparison: Option<FileRef>,
+    status: CommandStatus,
+    stop: Vec<StopReason>,
+    error: Option<String>,
+    elapsed: Scalar,
+}
+impl CommandOutcome {
+    fn encode(&self, b: &mut Vec<u8>) {
+        b.extend(self.run);
+        b.extend(self.binding);
+        self.terminal.encode(b);
+        optional(b, self.comparison.as_ref(), |b, r| r.encode(b));
+        b.push(match self.status {
+            CommandStatus::Complete => 0,
+            CommandStatus::TimePause => 1,
+            CommandStatus::Failed => 2,
+        });
+        put_varint(b, self.stop.len() as u64);
+        for s in &self.stop {
+            b.push(stop_tag(*s));
+        }
+        optional(b, self.error.as_ref(), |b, e| string(b, e));
+        self.elapsed.encode(b);
+    }
+    fn decode(r: &mut Reader<'_>) -> Result<Self> {
+        let run = digest_read(r)?;
+        let binding = digest_read(r)?;
+        let terminal = FileRef::decode(r)?;
+        let comparison = r.opt(FileRef::decode)?;
+        let status = match r.byte()? {
+            0 => CommandStatus::Complete,
+            1 => CommandStatus::TimePause,
+            2 => CommandStatus::Failed,
+            _ => return Err(bad("unknown command status")),
+        };
+        let n = count(r, 8)?;
+        let stop = (0..n).map(|_| stop_read(r)).collect::<Result<Vec<_>>>()?;
+        let error = r.opt(text)?;
+        let elapsed = Scalar::decode(r)?;
+        if stop
+            .iter()
+            .map(|s| stop_tag(*s))
+            .collect::<BTreeSet<_>>()
+            .len()
+            != stop.len()
+            || elapsed.finite()? < 0.
+        {
+            return Err(bad("command stops/elapsed"));
+        }
+        Ok(Self {
+            run,
+            binding,
+            terminal,
+            comparison,
+            status,
+            stop,
+            error,
+            elapsed,
+        })
+    }
+}
 #[derive(Clone, Debug, Serialize)]
 struct ComparisonReceipt {
     run: Hash,
@@ -1361,6 +1433,7 @@ enum Record {
     Decision(EvalDecision),
     Segment(SegmentReceipt),
     Comparison(ComparisonReceipt),
+    Command(CommandOutcome),
 }
 impl Record {
     fn encode(&self) -> Result<Vec<u8>> {
@@ -1385,6 +1458,10 @@ impl Record {
             Self::Comparison(v) => {
                 v.encode(&mut body);
                 5
+            }
+            Self::Command(v) => {
+                v.encode(&mut body);
+                7
             }
         };
         if body.len() > MAX_FILE - HEADER {
@@ -1431,6 +1508,7 @@ impl Record {
             3 => Self::Decision(EvalDecision::decode(&mut r)?),
             4 => Self::Segment(SegmentReceipt::decode(&mut r)?),
             5 => Self::Comparison(ComparisonReceipt::decode(&mut r)?),
+            7 => Self::Command(CommandOutcome::decode(&mut r)?),
             _ => return Err(bad("record kind")),
         };
         if !r.finished() {
@@ -2067,6 +2145,13 @@ pub enum Action {
         untrained: bool,
     },
     #[cfg(feature = "test-support")]
+    FixturePair {
+        #[arg(long)]
+        from: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    #[cfg(feature = "test-support")]
     FixtureCheck {
         #[arg(long, required = true)]
         roots: Vec<PathBuf>,
@@ -2087,7 +2172,7 @@ pub(super) fn command(action: Action) -> Result<()> {
             let outcome = run_native(&root, resume.as_deref(), &mut control);
             // Account for verification/close as well as training in the cumulative command budget.
             if let Ok(s) = read_inputs(&root)
-                && s.authorization.is_some()
+                && !s.historical
             {
                 let mut segments = std::fs::read_dir(&root)?
                     .filter_map(|v| v.ok())
@@ -2100,23 +2185,23 @@ pub(super) fn command(action: Action) -> Result<()> {
                     && !dir.join("command.r3er").exists()
                 {
                     let prefix = dir.file_name().unwrap().to_string_lossy();
-                    let mut t = segment(
+                    finalize_command(
                         &root,
-                        &reference(&root, &format!("{prefix}/terminal.r3er"))?,
                         &s,
-                    )?;
-                    t.elapsed = Scalar::F64(control.start.elapsed().as_secs_f64());
-                    publish(
-                        &root,
-                        &format!("{prefix}/command.r3er"),
-                        &Record::Segment(t),
+                        &format!("{prefix}/terminal.r3er"),
+                        &outcome,
+                        &mut control,
                     )?;
                 }
             }
             outcome
         }
         Action::Close { root, terminal } => {
-            close_native(&root, &terminal, &mut control).map(|_| ())
+            let s = read_inputs(&root)?;
+            if !s.historical {
+                effective_outcome(&root, &s, &reference(&root, &terminal)?)?;
+            }
+            close_native_inner(&root, &terminal, &mut control, false).map(|_| ())
         }
         Action::Import {
             policy,
@@ -2148,6 +2233,14 @@ pub(super) fn command(action: Action) -> Result<()> {
             output,
             untrained,
         } => fixture_fork(&from, &output, untrained),
+        #[cfg(feature = "test-support")]
+        Action::FixturePair { from, output } => {
+            std::fs::create_dir(&output)?;
+            for arm in ["C50", "A75"] {
+                fixture_fork_inner(&from, &output.join(arm), false, true)?;
+            }
+            Ok(())
+        }
         #[cfg(feature = "test-support")]
         Action::FixtureCheck { roots } => fixture_check(&roots),
     }
@@ -2463,20 +2556,191 @@ fn close_native(
             t.complete = false;
             t.resume = false;
             t.candidate = false;
+            #[cfg(feature = "test-support")]
+            if s.tiny_spec
+                && std::env::var("R3ER_TEST_STOP")
+                    .unwrap_or_default()
+                    .contains("stop-write-fail")
+            {
+                return result;
+            }
             let _ = publish(root, "close-stop.r3er", &Record::Segment(t));
         }
     }
     result
 }
+
+fn command_locator(terminal: &FileRef) -> Result<String> {
+    let parent = Path::new(&terminal.locator)
+        .parent()
+        .ok_or_else(|| bad("terminal path"))?;
+    Ok(parent.join("command.r3er").to_string_lossy().into_owned())
+}
+
+// Closed-command readers share this policy. A terminal or provisional comparison alone
+// cannot authorize another command; the current writer calls finalize_command instead.
+fn effective_outcome(root: &Path, s: &RunSnapshot, terminal: &FileRef) -> Result<CommandOutcome> {
+    let t = segment(root, terminal, s)?;
+    let locator = command_locator(terminal)?;
+    let Record::Command(c) = read_record(root, &reference(root, &locator)?)? else {
+        return Err(bad(
+            "missing typed command finalization (legacy is not upgraded)",
+        ));
+    };
+    if c.run != s.run || c.binding != s.binding() || c.terminal != *terminal {
+        return Err(bad("command terminal/run/policy binding"));
+    }
+    if root.join("close-stop.r3er").exists() {
+        return Err(bad("persisted close failure blocks command/pair"));
+    }
+    if t.save_error.is_some() || c.error.is_some() || c.status == CommandStatus::Failed {
+        return Err(bad(&format!(
+            "failed command: stops={:?} error={:?} save={:?}",
+            c.stop, c.error, t.save_error
+        )));
+    }
+    if t.stop.iter().any(|r| !c.stop.contains(r)) {
+        return Err(bad("command dropped terminal stop"));
+    }
+    match c.status {
+        CommandStatus::Complete => {
+            if !t.complete || t.resume || !t.stop.is_empty() || !c.stop.is_empty() {
+                return Err(bad("normal command contains stopped/incomplete terminal"));
+            }
+            let reference = c
+                .comparison
+                .as_ref()
+                .ok_or_else(|| bad("missing positive close certificate"))?;
+            let Record::Comparison(p) = read_record(root, reference)? else {
+                return Err(bad("command comparison kind"));
+            };
+            if reference.locator != "comparison.r3er"
+                || p.run != s.run
+                || p.binding != s.binding()
+                || p.terminal != *terminal
+                || p.candidate != t.candidate
+                || p.historical != s.historical
+            {
+                return Err(bad("command comparison binding"));
+            }
+        }
+        CommandStatus::TimePause => {
+            if t.complete
+                || !t.resume
+                || t.stop != [StopReason::TimeBudget]
+                || c.stop != [StopReason::TimeBudget]
+                || c.comparison.is_some()
+            {
+                return Err(bad("command is not a clean resumable time pause"));
+            }
+        }
+        CommandStatus::Failed => unreachable!(),
+    }
+    Ok(c)
+}
+
+fn finalize_command(
+    root: &Path,
+    s: &RunSnapshot,
+    terminal: &str,
+    result: &Result<()>,
+    control: &mut RunControl,
+) -> Result<()> {
+    let terminal = reference(root, terminal)?;
+    let t = segment(root, &terminal, s)?;
+    if let Err(e) = result {
+        control.classify_error(e);
+    }
+    // Finite cooperative decision point; signals after this seal are not retroactive.
+    let _ = control.seal_terminal();
+    let mut stop = t.stop.clone();
+    for r in &control.observed {
+        if !stop.contains(r) {
+            stop.push(*r);
+        }
+    }
+    let comparison = if root.join("comparison.r3er").is_file() {
+        Some(reference(root, "comparison.r3er")?)
+    } else {
+        None
+    };
+    let error = result
+        .as_ref()
+        .err()
+        .map(ToString::to_string)
+        .or(t.save_error.clone());
+    let status = if error.is_none() && t.complete && stop.is_empty() && comparison.is_some() {
+        CommandStatus::Complete
+    } else if error.is_none()
+        && t.resume
+        && !t.complete
+        && stop == [StopReason::TimeBudget]
+        && comparison.is_none()
+    {
+        CommandStatus::TimePause
+    } else {
+        CommandStatus::Failed
+    };
+    let c = CommandOutcome {
+        run: s.run,
+        binding: s.binding(),
+        terminal: terminal.clone(),
+        comparison,
+        status,
+        stop,
+        error,
+        elapsed: Scalar::F64(control.start.elapsed().as_secs_f64()),
+    };
+    #[cfg(feature = "test-support")]
+    if s.tiny_spec
+        && std::env::var("R3ER_TEST_STOP")
+            .unwrap_or_default()
+            .contains("command-write-fail")
+    {
+        return Err(std::io::Error::other("injected command outcome publication failure").into());
+    }
+    publish(
+        root,
+        &command_locator(&terminal)?,
+        &Record::Command(c.clone()),
+    )?;
+    println!(
+        "COMMAND_FINALIZATION={:?} terminal={} STOP={:?} error={:?}",
+        c.status, terminal.locator, c.stop, c.error
+    );
+    if status == CommandStatus::Failed {
+        return Err(bad("command finalization failed"));
+    }
+    effective_outcome(root, s, &terminal)?;
+    Ok(())
+}
+
 fn close_native_inner(
     root: &Path,
     terminal: &str,
     control: &mut RunControl,
     publish_result: bool,
 ) -> Result<ComparisonReceipt> {
-    control.check("binary_close_start")?;
     let s = read_inputs(root)?;
+    #[cfg(feature = "test-support")]
+    if s.tiny_spec
+        && std::env::var("R3ER_TEST_STOP")
+            .unwrap_or_default()
+            .starts_with("cancel-close")
+    {
+        control.cancel.store(true, Ordering::Relaxed);
+    }
+    control.check("binary_close_start")?;
     let last = reference(root, terminal)?;
+    if root.join("close-stop.r3er").exists() {
+        return Err(bad("persisted close failure blocks validation"));
+    }
+    if !publish_result && !s.historical {
+        let c = effective_outcome(root, &s, &last)?;
+        if c.status != CommandStatus::Complete {
+            return Err(bad("close requires completed command"));
+        }
+    }
     let chain = lineage(root, &s, &last)?;
     for (i, (_, stored)) in chain.iter().enumerate() {
         let continued_time_stop = i + 1 < chain.len()
@@ -2485,6 +2749,12 @@ fn close_native_inner(
             && stored.stop == [StopReason::TimeBudget];
         if !stored.stop.is_empty() && !continued_time_stop {
             return Err(bad("stored terminal stop forbids normal close"));
+        }
+        if !s.historical
+            && i + 1 < chain.len()
+            && effective_outcome(root, &s, &chain[i].0)?.status != CommandStatus::TimePause
+        {
+            return Err(bad("ancestor command is not a verified time pause"));
         }
     }
     let h = verified_history(root, &s, &chain)?;
@@ -2510,6 +2780,14 @@ fn close_native_inner(
             .get(&(step, kind))
             .ok_or_else(|| bad("missing final panel"))?;
         let (e, l) = payload(root, &s, r)?;
+        #[cfg(feature = "test-support")]
+        if s.tiny_spec
+            && std::env::var("R3ER_TEST_STOP")
+                .unwrap_or_default()
+                .starts_with("error-close")
+        {
+            return Err(bad("injected close validation failure"));
+        }
         if e.model != final_native.model
             || e.tokenizer != final_native.tokenizer
             || e.architecture != final_native.architecture
@@ -2539,6 +2817,17 @@ fn close_native_inner(
     control.check("binary_close_publish")?;
     if publish_result {
         publish(root, "comparison.r3er", &Record::Comparison(result.clone()))?;
+    } else if !s.historical {
+        let c = effective_outcome(root, &s, &result.terminal)?;
+        let stored = read_record(
+            root,
+            c.comparison
+                .as_ref()
+                .ok_or_else(|| bad("close certificate missing"))?,
+        )?;
+        if stored.encode()? != Record::Comparison(result.clone()).encode()? {
+            return Err(bad("comparison disagrees with independent raw recount"));
+        }
     }
     for (kind, score) in &result.panels {
         println!(
@@ -2958,44 +3247,50 @@ fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
         {
             return Err(bad("pair parent/policy mismatch"));
         }
-        for entry in std::fs::read_dir(&arm_root)? {
-            let entry = entry?;
-            if !entry.file_name().to_string_lossy().starts_with("segment-") {
-                continue;
-            }
-            let terminal = entry.path().join("command.r3er");
-            if !terminal.is_file() {
-                return Err(bad("unclosed segment blocks retry/budget reset"));
-            }
-            let relative = terminal
-                .strip_prefix(&arm_root)
-                .map_err(|_| bad("segment path"))?
-                .to_string_lossy()
-                .to_string();
-            let t = segment(&arm_root, &reference(&arm_root, &relative)?, &other)?;
-            if t.save_error.is_some()
-                || t.stop.iter().any(|s| {
-                    matches!(
-                        s,
-                        StopReason::Cancelled
-                            | StopReason::IntegrityFail
-                            | StopReason::AuditIncomplete
-                    )
-                })
-            {
-                return Err(bad(
-                    "pair stopped: durable cancellation/integrity/incomplete/save failure",
-                ));
-            }
+        let closed = arm_commands(&arm_root, &other)?;
+        if arm != a.name()
+            && closed
+                .last()
+                .is_some_and(|(_, c)| c.status != CommandStatus::Complete)
+        {
+            return Err(bad("other arm is not complete"));
+        }
+        if a.name() == "A75" && arm == "C50" && closed.is_empty() {
+            return Err(bad("control arm must complete first"));
+        }
+        for (t, c) in closed {
             updates += t.draws.len() as u64;
             generations += t.generations as usize;
-            seconds += t.elapsed.finite()?;
+            seconds += c.elapsed.finite()?;
         }
     }
     if updates > 1024 || generations > 7500 || seconds >= 7200. {
         return Err(bad("anchor pair budget exhausted"));
     }
     Ok((updates, generations, seconds))
+}
+fn arm_commands(root: &Path, s: &RunSnapshot) -> Result<Vec<(SegmentReceipt, CommandOutcome)>> {
+    let mut paths = std::fs::read_dir(root)?
+        .map(|e| e.map(|e| e.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    paths.retain(|p| {
+        p.file_name()
+            .is_some_and(|v| v.to_string_lossy().starts_with("segment-"))
+    });
+    paths.sort();
+    let mut out = Vec::new();
+    for p in paths {
+        let locator = p
+            .join("terminal.r3er")
+            .strip_prefix(root)
+            .map_err(|_| bad("segment path"))?
+            .to_string_lossy()
+            .into_owned();
+        let reference = reference(root, &locator)?;
+        let c = effective_outcome(root, s, &reference)?;
+        out.push((segment(root, &reference, s)?, c));
+    }
+    Ok(out)
 }
 fn print_anchor_panel(s: &RunSnapshot, e: &EvalPayload, l: &Loaded) -> Result<()> {
     let score = rescore(s, e, l, true)?;
@@ -3072,6 +3367,16 @@ fn print_anchor_panel(s: &RunSnapshot, e: &EvalPayload, l: &Loaded) -> Result<()
     Ok(())
 }
 fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
+    for arm in ["C50", "A75"] {
+        let dir = root.join(arm);
+        let s = read_inputs(&dir)?;
+        if let Err(e) = arm_commands(&dir, &s) {
+            println!(
+                "MODEL_PAIR=FAILED_OR_INCOMPLETE ARM={arm} REASON={e} candidate=false GOAL1_ACCEPTED=false"
+            );
+            return Err(e);
+        }
+    }
     let mut incomplete = false;
     for arm in ["C50", "A75"] {
         let dir = root.join(arm);
@@ -3270,6 +3575,25 @@ fn anchor_report(root: &Path, control: &mut RunControl) -> Result<()> {
 }
 fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Result<()> {
     let s = read_inputs(root)?;
+    #[cfg(feature = "test-support")]
+    if s.tiny_spec && s.origins.iter().any(|o| o.role == "test-pair") {
+        let parent = root.parent().ok_or_else(|| bad("test pair parent"))?;
+        for arm in ["C50", "A75"] {
+            let dir = parent.join(arm);
+            let other = read_inputs(&dir)?;
+            if !other.tiny_spec {
+                return Err(bad("test pair requires TINY"));
+            }
+            let closed = arm_commands(&dir, &other)?;
+            if dir != root
+                && closed
+                    .last()
+                    .is_some_and(|(_, c)| c.status != CommandStatus::Complete)
+            {
+                return Err(bad("test pair other arm incomplete"));
+            }
+        }
+    }
     if s.historical || (!s.tiny_spec && s.authorization.is_none()) {
         return Err(bad(
             "this repair authorizes no SMALL optimizer updates; historical import cannot resume",
@@ -3310,6 +3634,9 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
     let mut index = 0;
     let initial = if let Some(name) = resume {
         let r = reference(root, name)?;
+        if effective_outcome(root, &s, &r)?.status != CommandStatus::TimePause {
+            return Err(bad("resume requires positive time-pause finalization"));
+        }
         let chain = lineage(root, &s, &r)?;
         h = verified_history(root, &s, &chain)?;
         let t = &chain.last().unwrap().1;
@@ -4657,6 +4984,10 @@ fn publish_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 #[cfg(feature = "test-support")]
 fn fixture_fork(from: &Path, output: &Path, untrained: bool) -> Result<()> {
+    fixture_fork_inner(from, output, untrained, false)
+}
+#[cfg(feature = "test-support")]
+fn fixture_fork_inner(from: &Path, output: &Path, untrained: bool, pair: bool) -> Result<()> {
     let mut s = read_inputs(from)?;
     if !s.tiny_spec {
         return Err(bad("fixture fork requires explicit TINY test spec"));
@@ -4683,6 +5014,12 @@ fn fixture_fork(from: &Path, output: &Path, untrained: bool) -> Result<()> {
         d.sampler = s.parent.counters[2] + i as u64 + 1;
     }
     s.baseline = [0; 3];
+    if pair {
+        s.origins.push(Origin {
+            role: "test-pair".into(),
+            original: reference(from, "inputs.r3er")?,
+        });
+    }
     publish(output, "inputs.r3er", &Record::Inputs(Box::new(s)))?;
     Ok(())
 }

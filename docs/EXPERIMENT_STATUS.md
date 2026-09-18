@@ -1,5 +1,45 @@
 # 진단 및 구현 상태
 
+## D1 — retry ACK와 command 종료 경계 수리
+
+2026-09-18 / R3-DURABILITY-PAIR-RESTART-1.0 / EXECUTED_THIS_RUN.
+D0 HEAD1ea5abe9ae63e12ee8a7e9e8e6731b6b274d07fb는 기준 source2e4121035 이후
+보고서만 변경된 상태였으며 tracked dirty는 없었다. 기존 미추적 로그와 원본 실패
+pair를 보존했다. 실제 Apple M4/24GiB/Rust1.98.1/Cargo1.98.1, CPU Accelerate/F32,
+threads1/offline lock을 사용했다. 신규 SMALL0; D2/D3는 아직 NOT_RUN.
+
+격리 기준 source에서 hook-only 두 RED를 실행했다. trailer 작성 후 sync 전 child
+종료→재시도 sync 오류 주입에도 ACK가 반환됐고, 정상 terminal 뒤 close 취소를
+저장한 pair의 report가 exit0으로 실패를 버렸다. 후자는 기존 command 복사 경로를
+TINY에도 열어 주는 test-only hook이며 SMALL 실행이 아니다. 로그를 보존했다.
+
+수정 후 journal integration6 + poison unit1 + post-terminal process1(6경우) +
+기존 time-split process1 + binary unit9 = 고유18 tests PASS(5 test invocations).
+RED2는 의도된 assertion 실패이며, 별도 컴파일 실패1은 RED/PASS에 포함하지 않는다.
+0-test 호출 없음. fmt/diff check와 all-target clippy PASS. TINY24 = RED2 +
+실패경계12 + 연속/재개10, scalar0; 해당 native generation70/teacher70.
+기존 bootstrap은 재사용했으며 이번 optimizer에 합산하지 않았다.
+
+같은 request/content는 writer poison→sync_all 성공→기존 Commit ACK 순서다.
+실패하면 같은 인스턴스가 계속 poisoned이며 새 reopen도 retry sync가 필요하다.
+새 frame/view/sequence 추가 없음. process 종료/호출 오류 경계만 검증했으며 실제
+전원 차단이나 macOS fullfsync 동등성을 주장하지 않는다. 대규모 benchmark 재실행0.
+
+새 typed R3ER kind7 command는 terminal/비교 physical FileRef, run/binding, 추가 stop,
+오류, 상태와 elapsed를 기록한다. terminal은 불변이고 comparison은 최종 command
+전에는 provisional이다. 공유 effective outcome이 fresh close/다른 arm/report에
+적용되며, close-stop와 command 모두 쓰지 못해도 missing positive finalization으로
+차단한다. 취소·검증 오류·각 publication 실패와 정상 시간 재개/f64/model identity
+회귀를 검증했다. failed/incomplete report는 nonzero이고 읽기 전용이다.
+
+근거 root=`artifacts/durability-pair-restart-20260918/`:
+`d1-journal-red.log`, `d1-close-red.log`, `d1-journal-green.log`,
+`d1-journal-poison.log`, `d1-command-green-fixed.log`, `d1-native-positive.log`,
+`d1-binary-unit.log`, `d1-clippy.log`, `original-pair.sha256`.
+JOURNAL_RETRY_ACK=VERIFIED_AT_SYNC_ALL_BOUNDARY, COMMAND_CLOSE_STOP=IMPLEMENTER_VERIFIED.
+실제 SMALL save preflight와 replacement pair는 다음 의존 단계다. H3/S4/S5/S6 및
+Goal1 상태는 바뀌지 않았으며 INDEPENDENT_ACCEPTED=false.
+
 ## G5 최종 — 저장 검증 완료, 모델 비교 중단, RESULT=PARTIAL
 
 2026-09-18 / R3-NATIVE-STORAGE-QUALITY-1.0 / IMPLEMENTER_REPORT.
