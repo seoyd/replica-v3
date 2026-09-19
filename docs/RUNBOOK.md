@@ -2,7 +2,7 @@
 
 ## Paired exposure study
 
-Use the production executable built with `cargo build --locked --offline
+Use the production executable built with `cargo build --locked --offline --release
 --features accelerate --bin replica-train`; retain its SHA256 and source commit.
 Set `VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1` for every model command.
 The existing ignored `training::fresh::tests::stabilization_fixed_parent_parity`
@@ -20,6 +20,9 @@ failures block it. Never alter historical completion or resume records.
 `replica-train fresh paired-report --root NEW_STUDY_ROOT` is a pure read/recount
 and reports the preregistered continuation gate. It cannot create missing evidence
 or start further learning. See the active quality plan for budgets and successors.
+The2026-09-20 study is closed with no admissible learner; its run commands must
+not be invoked to extend it. Its retained executable remains available for pure
+`paired-report` and provenance verification.
 
 ## Existing path stabilization
 

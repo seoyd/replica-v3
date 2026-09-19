@@ -1,6 +1,122 @@
 # 진단 및 구현 상태
 
-## 2026-09-20 Paired exposure — G0/G1 verified, G2 pending
+## 2026-09-20 Paired exposure — G2 executed and closed; joint quality failed
+
+`STUDY_COMPLETE_NO_ADMISSIBLE_LEARNER` / EXECUTED_THIS_RUN.
+Both policies completed256 real SMALL updates from the same retained P6144
+weights/Adam. Both6400 endpoints are durably saved, phase Finished,
+stop BUDGET_REACHED, resume=false. No execution/storage/numeric/time/cancel error
+was observed in these four training commands. No further learning is authorized
+by the conditional gate: neither endpoint retains primary417/512 and transfer75/128,
+and neither produces a both-correct selector pair. No G3 restart was registered.
+
+| Stage | Actual source | Updates | Generation / own-model teacher | Quality | Save / resume | Independent verification | Next condition |
+|---|---|---:|---|---|---|---|---|
+| G0/G1 | Working changes subsequently frozen as `2dfa56f`; exact test logs retained | SMALL0; TINY49 including failed attempts | SMALL16/0; TINY676/675 | P16 parity16/16; fixtures are not quality evidence | Both policies' continuous2 versus split1+1; evaluation-only resume passed | Prior R2/R3 reused; current changes pending review | Passed for G2 |
+| G2 SPACED | `2dfa56faba85698ea386aaf23f387c577aa2c208` | SMALL256 | 1160/1160 | Primary375, transfer65, both0 | First update saved; new process continued255; durable6400 | Implementer executed and recounted; independent review pending | G3 entry failed |
+| G2 ADJACENT | Same frozen source and executable | SMALL256 | 1160/1160 | Primary367, transfer70, both0 | First update saved; new process continued255; durable6400 | Implementer executed and recounted; independent review pending | G3 entry failed |
+| G3–G7 | NOT_RUN | 0 | 0/0 | No qualifying candidate | No continuation registered | NOT_RUN | Joint signal and retention preconditions failed |
+
+### Actual endpoint results
+
+| Metric | P6144, existing verified raw | SPACED6400 | ADJACENT6400 |
+|---|---:|---:|---:|
+| New optimizer updates | 0 | 256 | 256 |
+| Train probe | historical, not regenerated | 51/64 | 50/64 |
+| Primary full | 425/512 | 375/512 | 367/512 |
+| Transfer full | 79/128 | 65/128 | 70/128 |
+| Selector original full | 131/192 | 85/192 | 83/192 |
+| Selector flipped full | 2/192 | 5/192 | 15/192 |
+| Both full | 0/192 | 0/192 | 0/192 |
+| Both C/D/E; independent bases; base4 | 0 | 0/0/0; 0; 0 | 0/0/0; 0; 0 |
+| Same normal output across the pair | 184/192 | 175/192 | 175/192 |
+| New generated rows / errors | P16 parity16 / 0 | 1160 / 0 | 1160 / 0 |
+
+Primary task counts A–H: SPACED `[56,61,40,28,17,55,54,64]`, ADJACENT
+`[52,61,37,31,15,55,52,64]`, each denominator64. Transfer counts:
+`[4,8,7,1,3,15,15,12]` versus `[7,8,2,3,6,13,15,16]`, each denominator16.
+The +32/64/128 screens were47/49/45 and47/50/46 out of64; flip24 counts1/0/0
+and0/1/0. Every screen both count was0; no registered retention stop was triggered.
+
+At the equal256 endpoints, ADJACENT versus SPACED paired gain/loss is29/37
+on primary,14/9 on transfer,14/4 on flipped selector, and0/0 on both. The extra
+flipped answers do not establish joint selection: both remains0, including every
+bucket and independent base. The preregistered practical both difference>=8 was
+not observed. Retention deteriorated in both arms. This observation does not
+identify a particular tokenizer, optimizer or model equation as the root cause.
+
+### Actual usage and preserved state
+
+Each arm consumed437,809 input and31,344 target tokens; combined875,618/62,688.
+Every bucket had256 draws per arm. C/D/E each had128 original and128 flipped
+draws; each side split64 familiar/64 P phrase forms. Other five tasks and their
+wording matched update by update. The actual full-block sample/target multiset
+matched between arms. Padding differed as permitted:175,151 versus175,191 tokens.
+Discarded input/targets0, incomplete/unknown model calls0. The4,096 SMALL ceiling
+was not extended:512 used,3,584 conditionally reserved but gate not satisfied.
+
+New SMALL generation2336 = P16 +2320 study rows; required own-model teacher2320;
+all generation rows normal EOS, strict UTF-8, errors0. G2 raw output tokens32,127,
+plus160 parity tokens. Registered active accounting972.789972375 seconds, within
+21,600; every command stayed under900 seconds. Training sampled peak RSS was
+1,473,904 KiB versus1,448,016 KiB (not a full-system or S6 benchmark).
+TINY totals including failed tests remain optimizer49/generation676/teacher675.
+
+The pure report rechecked fixed cases, native/tokenizer/policy/model identity,
+raw tokens/strict decode/EOS, teacher obligations, actual tape/LR/input/target
+traces, summaries, both and paired metrics before reporting no admissible learner.
+The entire new study inventory before/after report matched byte-for-byte:
+9,406 files,2,106,110,913 bytes, manifest SHA256
+`9f1c2ecf50c27ffcee2ae5f60b052cb82848d0886b70100008ee9712f8962768`.
+The original P checkpoint and three consumed source corpus hashes still match
+their pre-run identities. No operating model pointer or user DB was changed.
+
+### Frozen source, native endpoints and local evidence
+
+Executed source commit, normally pushed and remote-verified before training:
+`2dfa56faba85698ea386aaf23f387c577aa2c208`.
+Code digest `66c087f68914e631200d89878049c3a02a623711a6b72b6d3f06d123b2712811`.
+Retained release/Accelerate/F32/thread1 executable:
+`artifacts/paired-learning-20260920-executable`, SHA256
+`428fdd43c30be8ff7cd9af63ef0ddc4c5b8adbfced4a5fe0daad53b16a142db7`.
+The earlier production-feature P16 used a debug test executable of the identical
+code digest; its wall time is not a release generation benchmark. Source/model
+semantics stayed frozen throughout both arms. This subsequent commit is a report
+update, not the source used to learn.
+
+Study root: `artifacts/paired-learning-20260920/`. Each endpoint is
+`SPACED/segment-0001/final` or `ADJACENT/segment-0001/final` under that root,
+114,180,928 bytes each; fresh native loading with optimizer state verified:
+
+| Binding | SPACED | ADJACENT |
+|---|---|---|
+| Native file SHA256 | `2eac4af4cd8c8ee2a3906007b69766f37ecd6c7f0acedfa2acd4831b6dc996f2` | `9a907f3d965a94d11eed5a4f7b17f914ffa594d9a68b0cae657c23482f9aae41` |
+| Weight hash | `350213571e38b7288040ec06ba83fc99654511f78137cf03485f541ab30650c6` | `c55842369f0777d28e718d346832e9b049d319ed8e233bc09f1f1b2e8eadec72` |
+| Adam hash | `a806d498a3319753321e92d27e042dcc2fed7d0ad19ec53966bde82e8bfb5420` | `20a1eddd1081e7e199797d69ceb55e2d2b60ccbebb76e5ded092b1b764a4b440` |
+| Policy hash | `a82826072e368ca2d4cac8bee925b0830f82686ae1922e4a7e9c78f51f9668a3` | `6c5f3cd7c6919e8f5eb5245c2c669bd7a6c3d84bde9659a128c0d5f2d758299d` |
+
+Authorized evidence paths: each arm's `plan.r3b`, `paired-samples.r3rows`,
+`corpus.r3cor`, `variants.r3cor`, `selectors.r3cor`, `tokenizer.r3b`,
+`segment-*/updates.r3rows`, `segment-*/train-control.r3b`,
+`segment-*-started.r3b`, `segment-*-finished.r3b`,
+`eval-6400-{train64,dev512,transfer128,selector192}.r3rows` and their teacher,
+call-resolution and summary siblings; `paired-6400.r3b`; root `study.r3b`,
+`study-ready.r3b`, `parent-audit.r3b`, `diagnostic.r3b`.
+`artifacts/paired-learning-20260920-evidence/` contains exact command logs,
+`paired-report.log`, before/after inventories, `native-endpoints.txt`,
+`control-usage.txt`, `panel-metrics.txt`, `raw-usage.txt`, `learning-usage.txt`,
+`originals-after.sha256`, `candidate.patch` and the G1 test/P16 evidence below.
+The patch compares the accepted report HEAD `da4d3dc…` with executed source2dfa56f.
+Only code/tests/docs are on GitHub; all models, corpus and raw stay local.
+
+CODE_VERDICT=IMPLEMENTER_TESTED_PASS; ACCEPTED_STABILIZATION_REUSED=true;
+PAIR_EXPOSURE_EFFECT=NO_BOTH_GAIN_OBSERVED; DEVELOPMENT_JOINT_PASS=false;
+FINAL200=NOT_CREATED/NOT_OPENED; S4/S5/S6=NOT_RUN_PRECONDITION_FAILED;
+QUANT_ADOPTION=NOT_RUN; DEPLOYMENT_PROFILE=F32_RESEARCH_ONLY;
+GOAL1_READY=false; GOAL1_ACCEPTED=false; INDEPENDENT_CURRENT_REVIEW=PENDING.
+The authorized bounded comparison is closed. Goal1 quality and acceptance are not.
+
+## 2026-09-20 Paired exposure — preceding G0/G1 verification
 
 R3-PAIRED-LEARNING-TO-GOAL1-1.0 / IMPLEMENT_AND_EXECUTE.
 Accepted stabilization R2 and posthoc R3 are reused from reports

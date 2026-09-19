@@ -1,6 +1,15 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: paired exposure from the preserved P6144 parent
+## Closed: paired exposure from the preserved P6144 parent
+
+G2 closed on2026-09-20 at256 updates per arm,512 total, with no admissible
+learner. SPACED primary375/512, transfer65/128, flip5/192, both0/192;
+ADJACENT primary367/512, transfer70/128, flip15/192, both0/192. All generated
+rows have normal EOS and no error. Both6400 native checkpoints and Adam remain
+preserved with resume=false. Equal actual information/target exposure and raw
+scores passed the read-only recount. This is execution completion, not quality
+recovery. G3's3584 conditional updates are NOT_AUTHORIZED_BY_GATE; G4–G7/S4/S5/S6
+and Goal1 remain unexecuted/unaccepted. Do not reopen these closed arms.
 
 R3-PAIRED-LEARNING-TO-GOAL1-1.0 reuses independently accepted R2/R3 evidence.
 Compare only SPACED128 versus ADJACENT1, each256 updates from the same P6144
@@ -38,8 +47,9 @@ primary487/512, each task58/64, transfer116/128, both173/192, each C/D/E56/64,
 generation errors0. Fix the first passing candidate and check fresh32 parity.
 Independent final200/S4, actual product memory/correction/restart/S5 and grouped
 INT4/M4/S6 are conditional authorized successors. Goal1 independent acceptance
-cannot be self-granted. G0/G1 verification completed on2026-09-20; G2 is next.
-New SMALL updates0, production P16 matched16/16 with160 raw tokens and no teacher.
+cannot be self-granted. G0/G1 verification completed before G2 on2026-09-20.
+At G0/G1, new SMALL updates were0; production P16 matched16/16 with160 raw tokens
+and no teacher. G2 usage and closure are recorded above.
 Direct TINY/process, finite tape, accumulation/mask/causal and evaluation-only
 resume checks passed. Failed test attempts remain in the local evidence ledger.
 
