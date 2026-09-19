@@ -422,6 +422,18 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                     &[
                         "--bin",
                         "replica-train",
+                        "retention_",
+                        "--",
+                        "--test-threads=1",
+                        "--nocapture",
+                    ],
+                    true,
+                )?;
+                r.cargo(
+                    "test",
+                    &[
+                        "--bin",
+                        "replica-train",
                         "bounded_screen_policy_",
                         "--",
                         "--test-threads=1",
@@ -464,6 +476,7 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                     true,
                 )?;
                 for filter in [
+                    "retention_",
                     "bounded_screen_",
                     "bridge_",
                     "conditional_",

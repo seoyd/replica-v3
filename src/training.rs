@@ -77,6 +77,18 @@ impl Adam {
     ) -> Result<(f64, f64)> {
         self.step_with_rate(vars, grads, config, step, rate, |_, _, _, _| Ok(()))
     }
+    #[allow(clippy::too_many_arguments)]
+    pub fn step_constant_observed(
+        &mut self,
+        vars: &BTreeMap<String, Var>,
+        grads: &BTreeMap<String, Tensor>,
+        config: &TrainConfig,
+        step: usize,
+        rate: f64,
+        observe: impl FnMut(&str, &Tensor, &Tensor, &Tensor) -> Result<()>,
+    ) -> Result<(f64, f64)> {
+        self.step_with_rate(vars, grads, config, step, rate, observe)
+    }
     // Only the rate policy differs; moments, clipping, decay and cumulative Adam clock are shared.
     #[allow(clippy::too_many_arguments)]
     fn step_with_rate(

@@ -1,5 +1,30 @@
 # Replica v3 B0 runbook
 
+## Retention-first bounded research
+
+`replica-train recovery native retention-inspect --screen OLD_T_SCREEN` performs
+pure T32/parent recount and native full-copy training provenance/coverage checks.
+`retention-prepare --screen OLD_T_SCREEN --output NEW_STUDY/R-REPLAY` registers one
+Q4/R2/T2 fork before parent parity8. It creates a separate `retention-plan` and
+requires its immutable parent/data/tape bindings; missing/failed children cannot
+be retried under that plan. It never writes to the original T32/C512 study.
+
+Use `run --root NEW_STUDY/R-REPLAY` for the included first1, then a fresh process
+`run --root NEW_STUDY/R-REPLAY --resume segment-00/terminal.r3er` for the registered
+gated remainder. No override of a quality stop or remaining budget is authorized.
+`screen-report --root NEW_STUDY/R-REPLAY --terminal segment-01/terminal.r3er` is a
+pure recount of the stopped or complete research; it requires every ancestor
+command. Failed quality commands remain failed/nonresumable/noncandidate.
+
+Teacher-only train probes at0/1/8 use existing ArtifactAudit/EvalRow typed records,
+with zero generation calls and explicit forward counters. They do not enter
+retrieval or free generation. Parameter-group measurements are read-only Adam
+observer output; global norms/delta/loss/time use existing kind21 metrics. Existing
+native model/corpus formats, optimizer arithmetic and operational DB are unchanged.
+New diagnostic final publication requires a pending blocker and confirmed final
+identity. A readable final after publication sync failure does not authorize work.
+Historical audits can only be recounted explicitly; they gain no new commit proof.
+
 ## Preserved C512 diagnostic
 
 After the audit and direct regression gates pass, register once with

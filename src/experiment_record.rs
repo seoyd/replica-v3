@@ -25,6 +25,7 @@ const NATIVE_CORPUS_CONTRACT: &str = "R3-NATIVE-CORPUS-OBJECTIVE-BINDING-1.0";
 const BRIDGE_CONTRACT: &str = "R3-QUALITY-FIRST-BRIDGE-1.0";
 const BRIDGE_RESTART_CONTRACT: &str = "R3-BRIDGE-EVIDENCE-RESTART-1.0";
 const BOUNDED_BRIDGE_CONTRACT: &str = "R3-QUALITY-RECOVERY-BOUNDED-BRIDGE-1.0";
+const RETENTION_CONTRACT: &str = "R3-RETENTION-FIRST-1.0";
 
 fn bad(s: &str) -> Error {
     Error::Corrupt(format!("R3ER: {s}"))
@@ -472,6 +473,7 @@ impl RunSnapshot {
                 | OBJECTIVE_CONTRACT
                 | NATIVE_CORPUS_CONTRACT
                 | BRIDGE_CONTRACT
+                | RETENTION_CONTRACT
                 | BOUNDED_BRIDGE_CONTRACT
         ) {
             b.push(self.purpose.tag());
@@ -512,6 +514,7 @@ impl RunSnapshot {
                 | OBJECTIVE_CONTRACT
                 | NATIVE_CORPUS_CONTRACT
                 | BRIDGE_CONTRACT
+                | RETENTION_CONTRACT
                 | BOUNDED_BRIDGE_CONTRACT
         ) {
             b.extend(self.source);
@@ -576,6 +579,7 @@ impl RunSnapshot {
                 | OBJECTIVE_CONTRACT
                 | NATIVE_CORPUS_CONTRACT
                 | BRIDGE_CONTRACT
+                | RETENTION_CONTRACT
                 | BOUNDED_BRIDGE_CONTRACT
         ) {
             RunPurpose::read(r)?
@@ -637,7 +641,9 @@ impl RunSnapshot {
             }
         }
         if self.contract
-            != if self.screen() {
+            != if self.retention() {
+                RETENTION_CONTRACT
+            } else if self.screen() {
                 BOUNDED_BRIDGE_CONTRACT
             } else if self.bridge() {
                 BRIDGE_CONTRACT
@@ -703,10 +709,19 @@ impl RunSnapshot {
                 || self.lr_offset != 0
                 || self.objective.is_some()
                 || !self.historical
-                    && (self.tape.len() != if self.tiny_spec { 2 } else { 512 }
+                    && (self.tape.len()
+                        != if self.tiny_spec {
+                            2
+                        } else if self.retention() {
+                            128
+                        } else {
+                            512
+                        }
                         || self.eval_steps
                             != if self.tiny_spec {
                                 vec![1, 2]
+                            } else if self.retention() {
+                                vec![8, 16, 32, 64, 128]
                             } else if self.screen() {
                                 vec![32, 64, 128, 256, 512]
                             } else {
@@ -784,13 +799,26 @@ impl RunSnapshot {
                 || !self.continuation() && (self.lr_policy != 1 || self.lr_offset != 1024)
                 || self.continuation() && a.anchors != 6
                 || self.anchor_floor != 178
-                || self.train.len() != if self.tiny_spec { 2 } else { 2560 }
-                || a.pools[0].len() != if self.tiny_spec { 1 } else { 2048 }
+                || if self.retention() {
+                    !(2816..=3072).contains(&self.train.len())
+                } else {
+                    self.train.len() != if self.tiny_spec { 2 } else { 2560 }
+                }
+                || a.pools[0].len()
+                    != if self.retention() {
+                        self.train.len() - 512
+                    } else if self.tiny_spec {
+                        1
+                    } else {
+                        2048
+                    }
                 || a.pools[1].len() != if self.tiny_spec { 1 } else { 512 }
-                || all != (0..if self.tiny_spec { 2 } else { 2560 }).collect()
+                || all != (0..self.train.len() as u32).collect()
                 || self.tape.len()
                     != if self.preflight() || self.tiny_spec {
                         2
+                    } else if self.retention() {
+                        128
                     } else if self.cooldown() {
                         256
                     } else {
@@ -803,6 +831,8 @@ impl RunSnapshot {
                         vec![]
                     } else if self.cooldown() {
                         vec![128, 256]
+                    } else if self.retention() {
+                        vec![8, 16, 32, 64, 128]
                     } else if self.screen() {
                         vec![32, 64, 128, 256, 512]
                     } else {
@@ -862,10 +892,15 @@ impl RunSnapshot {
         self.contract == BRIDGE_CONTRACT || self.screen()
     }
     fn screen(&self) -> bool {
-        self.contract == BOUNDED_BRIDGE_CONTRACT
+        self.contract == BOUNDED_BRIDGE_CONTRACT || self.retention()
+    }
+    fn retention(&self) -> bool {
+        self.contract == RETENTION_CONTRACT
     }
     fn study_arms(&self) -> &'static [&'static str] {
-        if self.screen() {
+        if self.retention() {
+            &["R-REPLAY"]
+        } else if self.screen() {
             &["T-SCREEN"]
         } else if self.bridge() {
             &["C-COPYMATCH", "T-TEMPORAL"]
@@ -883,11 +918,15 @@ impl RunSnapshot {
                 | OBJECTIVE_CONTRACT
                 | NATIVE_CORPUS_CONTRACT
                 | BRIDGE_CONTRACT
+                | RETENTION_CONTRACT
                 | BOUNDED_BRIDGE_CONTRACT
         ) && !self.historical
             && (self.tiny_spec || self.authorization.is_some())
     }
     fn arm_name(&self) -> &'static str {
+        if self.retention() {
+            return "R-REPLAY";
+        }
         if self.screen() {
             return "T-SCREEN";
         }
@@ -2521,6 +2560,7 @@ impl Record {
                         | OBJECTIVE_CONTRACT
                         | NATIVE_CORPUS_CONTRACT
                         | BRIDGE_CONTRACT
+                        | RETENTION_CONTRACT
                         | BOUNDED_BRIDGE_CONTRACT
                 ) {
                     body.push(u8::from(v.authorization.is_some()));
@@ -5361,6 +5401,31 @@ fn screen_policy(
     }
     (streak, None)
 }
+
+fn retention_policy(
+    parent: &[Score; 4],
+    now: &[Score; 4],
+    mut streak: [u64; 3],
+    updates: u64,
+) -> ([u64; 3], Option<&'static str>) {
+    let loss: [u64; 3] = std::array::from_fn(|i| parent[i].exact.saturating_sub(now[i].exact));
+    streak[2] = if loss[2] >= 4 { streak[2] + 1 } else { 0 };
+    if loss[0] >= 12 || loss[1] >= 12 || streak[2] >= 2 {
+        return (streak, Some("RETENTION_QUALITY_STOP"));
+    }
+    let errors: u64 = now.iter().map(|v| v.errors).sum();
+    if errors >= 5 && errors >= parent.iter().map(|v| v.errors).sum::<u64>() + 4 {
+        return (streak, Some("RETENTION_GENERATION_ERROR_STOP"));
+    }
+    let retained = now[0].exact >= 60 && now[1].exact >= 56 && now[2].exact >= 18 && errors <= 2;
+    if updates == 32 && !retained
+        || updates == 64 && !(retained && now[3].exact >= 4 && now[3].base[0] >= 1)
+        || updates == 128 && !(retained && now[3].exact >= 8 && now[3].base[0] >= 2 && errors == 0)
+    {
+        return (streak, Some("RETENTION_EXTENSION_GATE_STOP"));
+    }
+    (streak, None)
+}
 fn screen_parent(s: &RunSnapshot) -> Result<(PathBuf, EvalPayload, f64)> {
     let a = s
         .origins
@@ -5379,7 +5444,14 @@ fn screen_parent(s: &RunSnapshot) -> Result<(PathBuf, EvalPayload, f64)> {
         preparation,
     } = read_record(
         audit_root,
-        &reference(audit_root, "t-screen-registration.r3er")?,
+        &reference(
+            audit_root,
+            if s.retention() {
+                "r-replay-registration.r3er"
+            } else {
+                "t-screen-registration.r3er"
+            },
+        )?,
     )?
     else {
         return Err(bad("screen registration"));
@@ -5514,7 +5586,7 @@ fn screen_report(root: &Path, terminal: &str, control: &mut RunControl) -> Resul
     {
         return Err(bad("screen execution/storage/cancel error"));
     }
-    if history.quality {
+    let completion = if history.quality {
         if !t.stop.contains(&StopReason::QualityGuard)
             || t.stop
                 .iter()
@@ -5527,27 +5599,148 @@ fn screen_report(root: &Path, terminal: &str, control: &mut RunControl) -> Resul
         {
             return Err(bad("screen stopped research is not a positive command"));
         }
-        println!(
-            "T_SCREEN_COMPLETED=true STOPPED_AT={} COMMAND_STATUS=Failed QUALITY_STOP_PRESERVED=true RESUME=false candidate=false H3_JOINT=false",
+        format!(
+            "{}_COMPLETED=true STOPPED_AT={} COMMAND_STATUS=Failed QUALITY_STOP_PRESERVED=true RESUME=false candidate=false H3_JOINT=false",
+            if s.retention() {
+                "R_REPLAY"
+            } else {
+                "T_SCREEN"
+            },
             t.updates
-        );
+        )
     } else {
-        if t.updates != 512 || !t.complete {
+        if t.updates != s.tape.len() as u64 || !t.complete {
             return Err(bad("screen research incomplete"));
         }
         effective_outcome(root, &s, &reference)?;
         let close = close_native_inner(root, terminal, control, false)?;
         let native = t.native.as_ref().unwrap();
-        print_bridge_teacher(
-            &read_verified_bridge_teacher(root, "final-probe", &s, native)?,
-            native.step,
-        )?;
-        println!(
-            "T_SCREEN_COMPLETED=true COMPLETE_512=true H3_JOINT={} FULL_PANELS={:?}",
-            close.candidate, close.panels
-        );
-    }
+        if !s.retention() {
+            print_bridge_teacher(
+                &read_verified_bridge_teacher(root, "final-probe", &s, native)?,
+                native.step,
+            )?;
+        }
+        format!(
+            "SCREEN_COMPLETED=true COMPLETE_UPDATES={} H3_JOINT={} FULL_PANELS={:?}",
+            t.updates, close.candidate, close.panels
+        )
+    };
     let native = t.native.as_ref().unwrap();
+    if s.retention() {
+        let loaded = resolve_native(root, &s, native, true)?;
+        let episodes = s
+            .train
+            .iter()
+            .map(|i| s.cases[*i as usize].clone())
+            .collect::<Vec<_>>();
+        let framed = samples(
+            &episodes,
+            &loaded.tokenizer,
+            loaded.manifest.training.as_ref().unwrap().config.seq_len,
+        )?;
+        for (pool, start, end) in [("Q", 0, 4), ("R", 4, 6), ("T", 6, 8)] {
+            let indices = s.tape[..t.updates as usize]
+                .iter()
+                .flat_map(|d| d.indices[start..end].iter().copied())
+                .collect::<Vec<_>>();
+            let unique = indices.iter().copied().collect::<BTreeSet<_>>();
+            let bases = unique
+                .iter()
+                .map(|i| scene(&episodes[*i as usize]))
+                .collect::<BTreeSet<_>>();
+            println!(
+                "RETENTION_ACTUAL_POOL pool={pool} draws={} unique_views={} unique_bases={} input_tokens={} target_tokens={}",
+                indices.len(),
+                unique.len(),
+                bases.len(),
+                indices
+                    .iter()
+                    .map(|i| framed[*i as usize].tokens.len() - 1)
+                    .sum::<usize>(),
+                indices
+                    .iter()
+                    .map(|i| framed[*i as usize].tokens.len() - framed[*i as usize].response_start)
+                    .sum::<usize>()
+            );
+        }
+        for update in [0, 1, 8].into_iter().filter(|n| *n <= t.updates) {
+            let dir = root.join(format!("retention-probe-{update:04}"));
+            let file = absolute_reference(&dir.join("audit-final.r3er"))?;
+            verify_audit_publication(&file)?;
+            let Record::ArtifactAudit(a) = read_absolute(&file)? else {
+                return Err(bad("retention probe report kind"));
+            };
+            if !a.complete
+                || a.calls != [0, 0, 8, 8]
+                || a.fresh.len() != 8
+                || a.native.step != s.parent.step + update
+                || a.source != s.source
+            {
+                return Err(bad("retention incomplete probe report"));
+            }
+            let mut nll = 0.;
+            let mut tokens = 0;
+            for (_, row) in &a.fresh {
+                let TeacherRecord::Measured(stats) = &row.teacher else {
+                    return Err(bad("retention measured probe absent"));
+                };
+                nll += stats.mean.finite()? * stats.target as f64;
+                tokens += stats.target;
+            }
+            println!(
+                "RETENTION_PROBE_RECOUNT updates={update} calls=8 target_tokens={tokens} TOKEN_MEAN_NLL={} model={}",
+                nll / tokens as f64,
+                hex(&a.native.model)
+            );
+        }
+        let er = history
+            .evaluations
+            .get(&(native.step, PanelKind::Screen))
+            .ok_or_else(|| bad("retention final screen missing"))?;
+        let (raw, _) = payload(root, &s, er)?;
+        print_anchor_panel(&s, &raw, &loaded)?;
+        if t.updates == 32 {
+            let original = origin_path(&s, "bounded-prior-inputs")?;
+            let old_root = original.parent().unwrap();
+            let old = read_inputs(old_root)?;
+            let er = self::reference(old_root, "segment-01/screen-0032.r3er")?;
+            let Record::Evaluation(prior) = read_record(old_root, &er)? else {
+                return Err(bad("historical32 raw"));
+            };
+            let old_native = segment(
+                old_root,
+                &self::reference(old_root, "segment-01/terminal.r3er")?,
+                &old,
+            )?
+            .native
+            .unwrap();
+            let old_l = resolve_native(old_root, &old, &old_native, true)?;
+            rescore(&old, &prior, &old_l, true)?;
+            let mut gain = 0;
+            let mut loss = 0;
+            for (a, b) in prior.rows.iter().zip(&raw.rows) {
+                if a.case != b.case || a.prompt != b.prompt {
+                    return Err(bad("historical32 paired content"));
+                }
+                let expected = &s.cases[b.ordinal as usize].answer;
+                let (oa, oe) = row_output(a, &old_l)?;
+                let (ra, re) = row_output(b, &loaded)?;
+                let x = !oe && oa.as_deref() == Some(expected);
+                let y = !re && ra.as_deref() == Some(expected);
+                gain += usize::from(!x && y);
+                loss += usize::from(x && !y);
+            }
+            println!(
+                "HISTORICAL_T32_PAIRED gain={gain} loss={loss} NOT_RANDOMIZED_CURRENT_PAIR=true"
+            );
+        } else {
+            println!(
+                "HISTORICAL_T32_EQUAL_UPDATE_COMPARISON=NOT_RUN actual_updates={}",
+                t.updates
+            );
+        }
+    }
     println!(
         "BOUNDED_RESEARCH NEW_SMALL_UPDATES={} INPUT_TOKENS={} TARGET_TOKENS={} NEW_GENERATIONS={} NEW_FORWARDS={} LAST_DURABLE_NATIVE={} file={} model={} step={} COMPARISON=POSTHOC_DIFFERENT_SOURCE_AND_STOPPING HISTORICAL_C_FINALIZATION=FAILED_UNCHANGED GOAL1_ACCEPTED=false",
         t.updates,
@@ -5560,6 +5753,7 @@ fn screen_report(root: &Path, terminal: &str, control: &mut RunControl) -> Resul
         hex(&native.model),
         native.step
     );
+    println!("{completion}");
     Ok(())
 }
 fn screen_prepare(
@@ -5803,6 +5997,738 @@ fn screen_prepare(
         audit.calls
     );
     Ok(())
+}
+
+// Training-only grammar, never used by inference or to select a generated answer.
+fn full_copy_train(e: &Episode) -> bool {
+    let items = &e.request.evidence.items;
+    items.len() == 1
+        && !items[0].excerpt_truncated
+        && items[0].version_status == "current"
+        && e.request.input.contains("원문")
+        && e.request.input.contains("인용")
+        && e.answer
+            == format!(
+                "{} [event:{}]",
+                items[0].original_excerpt, items[0].event_id
+            )
+        && items[0]
+            .original_excerpt
+            .split_once("의 ")
+            .and_then(|(_, r)| r.split_once(" 이동 지시는 "))
+            .is_some_and(|(context, value)| context.starts_with("구역") && value.ends_with("이다."))
+}
+
+fn retention_coverage(label: &str, episodes: &[Episode], l: &Loaded) -> Result<()> {
+    let framed = samples(
+        episodes,
+        &l.tokenizer,
+        l.manifest.training.as_ref().unwrap().config.seq_len,
+    )?;
+    let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut families = BTreeMap::new();
+    let mut lengths = BTreeMap::new();
+    for e in episodes {
+        let kind = if full_copy_train(e) {
+            "single-full-copy"
+        } else if e.request.evidence.items.len() > 1 && e.request.input.contains("원문") {
+            "multi-record-full-selection"
+        } else if e.family.starts_with("copy/") {
+            "auxiliary-short"
+        } else if e.category >= 3 {
+            "causal-or-uncertainty"
+        } else {
+            "short-QA-selection"
+        };
+        *kinds.entry(kind).or_default() += 1;
+        *families
+            .entry(e.family.split('/').take(2).collect::<Vec<_>>().join("/"))
+            .or_insert(0usize) += 1;
+        for r in &e.request.evidence.items {
+            if let Some((entity, _)) = r.original_excerpt.split_once("의 ") {
+                let digits: String = entity.chars().filter(char::is_ascii_digit).collect();
+                let repeated =
+                    !digits.is_empty() && digits.bytes().all(|b| Some(b) == digits.bytes().next());
+                *lengths.entry((digits.len(), repeated)).or_insert(0usize) += 1;
+            }
+        }
+    }
+    println!(
+        "COVERAGE pool={label} unique_views={} unique_bases={} available_input={} available_target={} kinds={kinds:?} families={families:?} id_digits_repeated={lengths:?} bytes_hash={}",
+        episodes.len(),
+        episodes.iter().map(scene).collect::<BTreeSet<_>>().len(),
+        framed.iter().map(|v| v.tokens.len() - 1).sum::<usize>(),
+        framed
+            .iter()
+            .map(|v| v.tokens.len() - v.response_start)
+            .sum::<usize>(),
+        hex(&hash(&data::native::ordered_bytes(episodes)))
+    );
+    exact_training_inputs(episodes, l)
+}
+
+fn retention_replay_pool(
+    old_root: &Path,
+    old: &RunSnapshot,
+    l: &Loaded,
+) -> Result<(Vec<Episode>, FileRef)> {
+    let source = origin_path(old, "bridge-parent-inputs")?;
+    let source_root = source.parent().ok_or_else(|| bad("replay source root"))?;
+    let prior = read_inputs(source_root)?;
+    let commands = arm_commands(source_root, &prior)?;
+    let n = commands
+        .last()
+        .and_then(|(t, _)| t.native.as_ref())
+        .ok_or_else(|| bad("replay parent lineage absent"))?;
+    if n.model != old.parent.model
+        || n.adam != old.parent.adam
+        || n.step != old.parent.step
+        || n.tokenizer != old.parent.tokenizer
+    {
+        return Err(bad("replay training source is not this parent lineage"));
+    }
+    let mut bases: BTreeMap<String, Vec<Episode>> = BTreeMap::new();
+    for &i in &prior.train {
+        let e = &prior.cases[i as usize];
+        if full_copy_train(e) {
+            bases.entry(scene(e).into()).or_default().push(e.clone());
+        }
+    }
+    if bases.len() < 64 || bases.values().any(|v| v.len() != 4) {
+        return Err(bad(
+            "BLOCKED_INPUT: replay requires >=64 existing four-view training bases",
+        ));
+    }
+    let mut bases: Vec<_> = bases.into_iter().collect();
+    bases.sort_by_key(|(name, _)| hash(format!("retention-full-copy-v1/{name}").as_bytes()));
+    let chosen: BTreeSet<_> = bases
+        .iter()
+        .take(128)
+        .map(|(name, _)| name.as_str())
+        .collect();
+    // Selection uses metadata; retain the source's original ordered four views.
+    let replay: Vec<_> = prior
+        .train
+        .iter()
+        .map(|i| &prior.cases[*i as usize])
+        .filter(|e| chosen.contains(scene(e)) && full_copy_train(e))
+        .cloned()
+        .collect();
+    let heldout: Vec<_> = old
+        .panels
+        .iter()
+        .flat_map(|p| &p.cases)
+        .map(|i| old.cases[*i as usize].clone())
+        .collect();
+    data::check_split(&replay, &heldout)?;
+    let ids: BTreeSet<_> = heldout.iter().map(|e| e.id.as_str()).collect();
+    let text: BTreeSet<_> = heldout
+        .iter()
+        .flat_map(|e| {
+            e.request
+                .evidence
+                .items
+                .iter()
+                .map(|r| r.original_excerpt.as_str())
+        })
+        .collect();
+    if replay.iter().any(|e| {
+        ids.contains(e.id.as_str())
+            || e.request
+                .evidence
+                .items
+                .iter()
+                .any(|r| text.contains(r.original_excerpt.as_str()))
+    }) {
+        return Err(bad("replay heldout ID/body collision"));
+    }
+    let members: BTreeSet<_> = replay.iter().map(|e| e.id.as_str()).collect();
+    let exposures = commands
+        .iter()
+        .flat_map(|(t, _)| &t.draws)
+        .flat_map(|d| &d.indices)
+        .filter(|i| members.contains(prior.cases[prior.train[**i as usize] as usize].id.as_str()))
+        .count();
+    println!(
+        "REPLAY_PROVENANCE source={} hash={} parent_model={} Adam={} step={} known_parent_arm_exposures={exposures} earlier_exact_exposure=UNKNOWN SEALED_CASES_READ=0 old_root={}",
+        source.display(),
+        hex(&absolute_reference(&source)?.digest),
+        hex(&n.model),
+        hex(&n.adam.unwrap()),
+        n.step,
+        old_root.display()
+    );
+    retention_coverage("R-existing-full-copy", &replay, l)?;
+    Ok((replay, absolute_reference(&source)?))
+}
+
+fn retention_inspect(root: &Path, control: &mut RunControl) -> Result<()> {
+    let s = read_inputs(root)?;
+    screen_report(root, "segment-01/terminal.r3er", control)?;
+    let l = resolve_native(root, &s, &s.parent, true)?;
+    let (_, parent, _) = screen_parent(&s)?;
+    let baseline = screen_scores(&s, &parent, &l)?;
+    let (r, _) = retention_replay_pool(root, &s, &l)?;
+    for (name, pool) in ["Q", "T"].into_iter().zip(
+        &s.authorization
+            .as_ref()
+            .ok_or_else(|| bad("screen pools"))?
+            .pools,
+    ) {
+        retention_coverage(
+            name,
+            &pool
+                .iter()
+                .map(|i| s.cases[s.train[*i as usize] as usize].clone())
+                .collect::<Vec<_>>(),
+            &l,
+        )?;
+    }
+    let mut all: Vec<_> = s
+        .train
+        .iter()
+        .map(|i| s.cases[*i as usize].clone())
+        .collect();
+    all.extend(r);
+    exact_training_inputs(&all, &l)?;
+    println!(
+        "RETENTION_INPUTS_VERIFIED=true PARENT={:?} TAPE={} FIRST32_INPUT={} FIRST32_TARGET={} NEW_MODEL_CALLS=0",
+        baseline.iter().map(|s| s.exact).collect::<Vec<_>>(),
+        s.tape.len(),
+        s.tape[..32].iter().map(|d| d.input).sum::<u64>(),
+        s.tape[..32].iter().map(|d| d.target).sum::<u64>()
+    );
+    Ok(())
+}
+
+fn retention_prepare(old_root: &Path, output: &Path, control: &mut RunControl) -> Result<()> {
+    let old = read_inputs(old_root)?;
+    if !old.screen() || old.retention() || old.tiny_spec {
+        return Err(bad("retention requires original SMALL T screen"));
+    }
+    screen_report(old_root, "segment-01/terminal.r3er", control)?;
+    let l = resolve_native(old_root, &old, &old.parent, true)?;
+    retention_temporal_source(&old)?;
+    let (_, mut baseline, _) = screen_parent(&old)?;
+    screen_scores(&old, &baseline, &l)?;
+    let (replay, source) = retention_replay_pool(old_root, &old, &l)?;
+    let mut s = old.clone();
+    let replay_indices = add_cases(&mut s.cases, &replay)?;
+    s.train.extend(&replay_indices);
+    let all = s
+        .train
+        .iter()
+        .map(|i| s.cases[*i as usize].clone())
+        .collect::<Vec<_>>();
+    exact_training_inputs(&all, &l)?;
+    let framed = samples(
+        &all,
+        &l.tokenizer,
+        l.manifest.training.as_ref().unwrap().config.seq_len,
+    )?;
+    if old.tape.len() < 128 {
+        return Err(bad("retention historical tape128 missing"));
+    }
+    s.tape.truncate(128);
+    for (n, d) in s.tape.iter_mut().enumerate() {
+        for slot in 4..6 {
+            d.indices[slot] = 2560 + ((2 * n + slot - 4) % replay.len()) as u32;
+        }
+        d.input = d
+            .indices
+            .iter()
+            .map(|i| framed[*i as usize].tokens.len() as u64 - 1)
+            .sum();
+        d.target = d
+            .indices
+            .iter()
+            .map(|i| (framed[*i as usize].tokens.len() - framed[*i as usize].response_start) as u64)
+            .sum();
+    }
+    s.contract = RETENTION_CONTRACT.into();
+    s.eval_steps = vec![8, 16, 32, 64, 128];
+    s.source = evaluator_source();
+    let registered = output
+        .parent()
+        .ok_or_else(|| bad("retention root"))?
+        .canonicalize()?
+        .join("R-REPLAY");
+    if output.file_name().and_then(|v| v.to_str()) != Some("R-REPLAY") || output.exists() {
+        return Err(bad("retention single new root required"));
+    }
+    let plan = registered.parent().unwrap().join("retention-plan");
+    let plan_input = Record::Inputs(Box::new(old.clone()));
+    let plan_ref = FileRef {
+        locator: plan.join("inputs.r3er").display().to_string(),
+        digest: hash(&plan_input.encode()?),
+    };
+    s.origins.retain(|o| {
+        !matches!(
+            o.role.as_str(),
+            "bounded-audit"
+                | "bounded-prior-inputs"
+                | "execution-binary"
+                | "cooldown-registered-root"
+        )
+    });
+    for (role, original) in [
+        ("bounded-audit", plan_ref.clone()),
+        (
+            "bounded-prior-inputs",
+            absolute_reference(&old_root.join("inputs.r3er"))?,
+        ),
+        ("retention-replay-source", source),
+        (
+            "retention-old-terminal",
+            absolute_reference(&old_root.join("segment-01/terminal.r3er"))?,
+        ),
+        (
+            "retention-old-command",
+            absolute_reference(&old_root.join("segment-01/command.r3er"))?,
+        ),
+        (
+            "execution-binary",
+            absolute_reference(&std::env::current_exe()?)?,
+        ),
+    ] {
+        s.origins.push(Origin {
+            role: role.into(),
+            original,
+        });
+    }
+    let mut key = RETENTION_CONTRACT.as_bytes().to_vec();
+    key.extend(old.binding());
+    key.extend(s.source);
+    key.extend(hash(&data::native::ordered_bytes(&replay)));
+    string(&mut key, &registered.display().to_string());
+    s.run = hash(&key);
+    s.policy = s.run;
+    s.parent.run = s.run;
+    let auth = s.authorization.as_mut().unwrap();
+    auth.pair = s.run;
+    auth.pools[0].extend(2560..s.train.len() as u32);
+    s.origins.push(Origin {
+        role: "cooldown-registered-root".into(),
+        original: FileRef {
+            locator: registered.parent().unwrap().display().to_string(),
+            digest: s.run,
+        },
+    });
+    s.validate()?;
+    let mut future = l.manifest.training.clone().unwrap();
+    fork_budget(
+        &mut future,
+        s.parent.step,
+        s.parent.counters[0],
+        128,
+        2_000_000,
+    )?;
+    future.step += 128;
+    future.consumed_tokens += s.tape.iter().map(|d| d.input).sum::<u64>();
+    future.target_tokens += s.tape.iter().map(|d| d.target).sum::<u64>();
+    future.sampler_state = s.tape.last().unwrap().sampler;
+    future.resume_binding = Some(objective_binding(&s, &future, &l.tokenizer)?);
+    let mut manifest = l.manifest.clone();
+    manifest.training = Some(future);
+    checkpoint::validate_metadata(&manifest, &l.tokenizer)?;
+    Record::Segment(SegmentReceipt::capacity_value(s.tape.clone(), true, true)).encode()?;
+    baseline.run = s.run;
+    baseline.binding = s.binding();
+    baseline.source = s.source;
+    screen_scores(&s, &baseline, &l)?;
+    let input = Record::Inputs(Box::new(s.clone()));
+    let parent = Record::Evaluation(baseline.clone());
+    // The unique plan directory is durable before any fresh model call. It is never retried.
+    std::fs::create_dir(&plan)?;
+    publish(&plan, "inputs.r3er", &plan_input)?;
+    publish(
+        &plan,
+        "r-replay-registration.r3er",
+        &Record::ScreenRegistration {
+            root: registered.display().to_string(),
+            input: hash(&input.encode()?),
+            audit: plan_ref,
+            observation: s
+                .origins
+                .iter()
+                .find(|o| o.role == "bridge-observation-final")
+                .unwrap()
+                .original
+                .clone(),
+            parent: FileRef {
+                locator: registered.join("parent-screen.r3er").display().to_string(),
+                digest: hash(&parent.encode()?),
+            },
+            preparation: Scalar::F64(control.start.elapsed().as_secs_f64()),
+        },
+    )?;
+    std::fs::create_dir(&registered)?;
+    std::fs::copy(old_root.join("parent.r3m"), registered.join("parent.r3m"))?;
+    publish(&registered, "inputs.r3er", &input)?;
+    publish(&registered, "parent-screen.r3er", &parent)?;
+    let mut selection = panel(&s, PanelKind::Screen)?.cases.clone();
+    selection.sort_by_key(|i| hash(s.cases[*i as usize].id.as_bytes()));
+    selection.truncate(8);
+    let dir = registered.join("parent-parity");
+    std::fs::create_dir(&dir)?;
+    let mut a = ArtifactAudit {
+        source: s.source,
+        binary: unhex(&file_hash(&std::env::current_exe()?)?)?,
+        input: absolute_reference(&registered.join("inputs.r3er"))?,
+        native: s.parent.clone(),
+        originals: vec![absolute_reference(&old_root.join("parent-screen.r3er"))?],
+        selection: selection.clone(),
+        fresh: vec![],
+        numeric: vec![],
+        panels: vec![],
+        calls: [0; 4],
+        elapsed: Scalar::F64(0.),
+        complete: false,
+        stop: vec![],
+        error: None,
+    };
+    publish(
+        &dir,
+        "audit-start.r3er",
+        &Record::ArtifactAudit(Box::new(a.clone())),
+    )?;
+    control.generation_limit = 8;
+    let result = (|| -> Result<()> {
+        for (j, i) in selection.into_iter().enumerate() {
+            let row =
+                evaluate_row_with_entry(&l, &s.cases[i as usize], i, control, false, true, || {
+                    a.calls[0] += 1;
+                    publish(
+                        &dir,
+                        &format!("entry-{j:02}.r3er"),
+                        &Record::ArtifactAudit(Box::new(a.clone())),
+                    )?;
+                    Ok(())
+                })?;
+            a.calls[1] += 1;
+            a.fresh.push((0, row.clone()));
+            publish(
+                &dir,
+                &format!("row-{j:02}.r3er"),
+                &Record::ArtifactAudit(Box::new(a.clone())),
+            )?;
+            let old = baseline.rows.iter().find(|r| r.ordinal == i).unwrap();
+            if row.tokens != old.tokens
+                || row.eos != old.eos
+                || row.finish != old.finish
+                || row.error != old.error
+            {
+                return Err(bad("parent parity mismatch"));
+            }
+            control.check("retention_parent_parity_returned")?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = &result {
+        control.classify_error(e);
+        a.error = Some(e.to_string());
+    }
+    a.stop = control.observed.clone();
+    a.complete = result.is_ok() && a.stop.is_empty();
+    a.elapsed = Scalar::F64(control.start.elapsed().as_secs_f64());
+    publish_audit_final(&dir, &a)?;
+    result?;
+    retention_budget(&registered, &s)?;
+    println!(
+        "R_REPLAY_REGISTERED horizon=128 Q4_R2_T2=true PARENT_PARITY=8/8 NEW_SMALL_UPDATES=0 INPUT128={} TARGET128={} replay_sequence=source_order_cyclic SAME_Q4_T2_SAMPLER=true",
+        s.tape.iter().map(|d| d.input).sum::<u64>(),
+        s.tape.iter().map(|d| d.target).sum::<u64>()
+    );
+    Ok(())
+}
+
+fn retention_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
+    let (registered, baseline, _) = screen_parent(s)?;
+    if root.canonicalize()? != registered {
+        return Err(bad("retention registered root"));
+    }
+    let file = absolute_reference(&root.join("parent-parity/audit-final.r3er"))?;
+    verify_audit_publication(&file)?;
+    let Record::ArtifactAudit(a) = read_absolute(&file)? else {
+        return Err(bad("retention parent parity kind"));
+    };
+    if !a.complete
+        || !a.stop.is_empty()
+        || a.error.is_some()
+        || a.calls != [8, 8, 0, 0]
+        || a.fresh.len() != 8
+        || a.native != s.parent
+        || a.source != s.source
+        || a.input != absolute_reference(&root.join("inputs.r3er"))?
+    {
+        return Err(bad("retention parent parity incomplete"));
+    }
+    let l = resolve_native(root, s, &s.parent, true)?;
+    screen_scores(s, &baseline, &l)?;
+    let mut selected = panel(s, PanelKind::Screen)?.cases.clone();
+    selected.sort_by_key(|i| hash(s.cases[*i as usize].id.as_bytes()));
+    selected.truncate(8);
+    if a.selection != selected
+        || a.fresh.iter().map(|(_, r)| r.ordinal).collect::<Vec<_>>() != selected
+    {
+        return Err(bad("retention fixed parity cases"));
+    }
+    for (_, r) in &a.fresh {
+        let old = baseline
+            .rows
+            .iter()
+            .find(|v| v.ordinal == r.ordinal)
+            .unwrap();
+        if !r.completed
+            || r.interruption.is_some()
+            || r.tokens != old.tokens
+            || r.eos != old.eos
+            || r.finish != old.finish
+            || r.error != old.error
+            || r.case != old.case
+            || r.prompt != old.prompt
+        {
+            return Err(bad("retention fresh parent parity"));
+        }
+    }
+    for role in [
+        "retention-old-terminal",
+        "retention-old-command",
+        "retention-replay-source",
+        "bounded-prior-inputs",
+    ] {
+        origin_path(s, role)?;
+    }
+    let old_path = origin_path(s, "bounded-prior-inputs")?;
+    let old = read_inputs(old_path.parent().unwrap())?;
+    retention_temporal_source(&old)?;
+    let replay_source = origin_path(s, "retention-replay-source")?;
+    let prior = read_inputs(replay_source.parent().unwrap())?;
+    if s.parent.model != old.parent.model
+        || s.parent.adam != old.parent.adam
+        || s.parent.step != old.parent.step
+        || s.parent.counters != old.parent.counters
+        || s.train[..2560] != old.train
+        || s.cases[..old.cases.len()]
+            .iter()
+            .map(case_hash)
+            .collect::<Vec<_>>()
+            != old.cases.iter().map(case_hash).collect::<Vec<_>>()
+    {
+        return Err(bad("retention original data/parent"));
+    }
+    let rpool = s.train[2560..]
+        .iter()
+        .map(|i| &s.cases[*i as usize])
+        .collect::<Vec<_>>();
+    if rpool.iter().any(|e| {
+        !full_copy_train(e)
+            || !prior
+                .train
+                .iter()
+                .any(|i| case_hash(&prior.cases[*i as usize]) == case_hash(e))
+    }) {
+        return Err(bad("retention replay source membership"));
+    }
+    let framed = samples(
+        &s.train
+            .iter()
+            .map(|i| s.cases[*i as usize].clone())
+            .collect::<Vec<_>>(),
+        &l.tokenizer,
+        l.manifest.training.as_ref().unwrap().config.seq_len,
+    )?;
+    for (n, d) in s.tape.iter().enumerate() {
+        let original = &old.tape[n];
+        if d.indices[..4] != original.indices[..4]
+            || d.indices[6..] != original.indices[6..]
+            || d.sampler != original.sampler
+            || d.indices[4] != 2560 + (2 * n % rpool.len()) as u32
+            || d.indices[5] != 2560 + ((2 * n + 1) % rpool.len()) as u32
+            || d.input
+                != d.indices
+                    .iter()
+                    .map(|i| framed[*i as usize].tokens.len() as u64 - 1)
+                    .sum::<u64>()
+            || d.target
+                != d.indices
+                    .iter()
+                    .map(|i| {
+                        (framed[*i as usize].tokens.len() - framed[*i as usize].response_start)
+                            as u64
+                    })
+                    .sum::<u64>()
+        {
+            return Err(bad("retention exact Q4/R2/T2 tape/token policy"));
+        }
+    }
+    let mut updates = 0;
+    let mut generations = 8;
+    let mut teachers = 0;
+    let mut seconds = a.elapsed.finite()? + 120.;
+    for (t, c) in arm_commands(root, s)? {
+        updates += t.draws.len() as u64;
+        generations += t.generations as usize;
+        teachers += t.teachers;
+        seconds += c.elapsed.finite()? + 120.;
+    }
+    if updates > 128 || generations > 4096 || teachers > 256 || seconds >= 7200. {
+        return Err(bad("retention global budget"));
+    }
+    println!(
+        "RETENTION_BUDGET updates={updates}/128 generations={generations}/4096 teacher={teachers}/256 charged_seconds={seconds}/7200 CLEANUP_RESERVATION=120"
+    );
+    Ok((updates, generations, seconds))
+}
+
+fn retention_temporal_source(s: &RunSnapshot) -> Result<()> {
+    let file = origin_path(s, "bridge-temporal-corpus")?;
+    let corpus = data::native::read(&file)?;
+    let expected = s.train[..2560]
+        .iter()
+        .map(|i| s.cases[*i as usize].clone())
+        .collect::<Vec<_>>();
+    if data::native::ordered_bytes(&corpus.train) != data::native::ordered_bytes(&expected) {
+        return Err(bad("retention native T corpus/content changed"));
+    }
+    println!(
+        "RETENTION_NATIVE_CORPUS file={} physical={} episodes={} JSON_READS=0",
+        file.display(),
+        hex(&corpus.physical),
+        corpus.train.len()
+    );
+    Ok(())
+}
+
+fn retention_probe(
+    root: &Path,
+    s: &RunSnapshot,
+    l: &Loaded,
+    native: &CheckpointRef,
+    control: &mut RunControl,
+) -> Result<()> {
+    let update = native.step - s.parent.step;
+    let dir = root.join(format!("retention-probe-{update:04}"));
+    let mut selection = s.train[2560..].to_vec();
+    selection.sort_by_key(|i| hash(s.cases[*i as usize].id.as_bytes()));
+    selection.truncate(8);
+    if dir.exists() {
+        let file = absolute_reference(&dir.join("audit-final.r3er"))?;
+        verify_audit_publication(&file)?;
+        let Record::ArtifactAudit(a) = read_absolute(&file)? else {
+            return Err(bad("retention probe kind"));
+        };
+        if a.native.model != native.model
+            || a.native.step != native.step
+            || a.selection != selection
+            || !a.complete
+            || a.calls != [0, 0, 8, 8]
+            || a.fresh.len() != 8
+            || a.source != s.source
+        {
+            return Err(bad("retention probe incomplete/identity"));
+        }
+        return Ok(());
+    }
+    std::fs::create_dir(&dir)?;
+    let mut a = ArtifactAudit {
+        source: s.source,
+        binary: unhex(&file_hash(&std::env::current_exe()?)?)?,
+        input: absolute_reference(&root.join("inputs.r3er"))?,
+        native: native.clone(),
+        originals: vec![],
+        selection: selection.clone(),
+        fresh: vec![],
+        numeric: vec![],
+        panels: vec![],
+        calls: [0; 4],
+        elapsed: Scalar::F64(0.),
+        complete: false,
+        stop: vec![],
+        error: None,
+    };
+    publish(
+        &dir,
+        "audit-start.r3er",
+        &Record::ArtifactAudit(Box::new(a.clone())),
+    )?;
+    let result = (|| -> Result<()> {
+        for (j, i) in selection.into_iter().enumerate() {
+            control.check("retention_probe_entry")?;
+            if control.teacher_calls >= control.teacher_limit {
+                return Err(bad("retention probe budget"));
+            }
+            a.calls[2] += 1;
+            publish(
+                &dir,
+                &format!("entry-{j:02}.r3er"),
+                &Record::ArtifactAudit(Box::new(a.clone())),
+            )?;
+            let e = &s.cases[i as usize];
+            let p = l.tokenizer.prepare(
+                &e.request,
+                l.model.config.context as u32,
+                &l.model.config.id()?,
+            )?;
+            let v = teacher_probe(l, e, &p.token_ids, control)?;
+            let teacher = teacher_record(&v)?;
+            a.calls[3] += 1;
+            let row = EvalRow {
+                ordinal: i,
+                case: case_hash(e),
+                prompt: token_hash(&p.token_ids),
+                prompt_len: p.token_ids.len() as u32,
+                native_prompt: unhex(&p.token_digest)?,
+                provided: p.provided,
+                excluded: p.excluded,
+                tokens: vec![],
+                eos: None,
+                started: false,
+                completed: true,
+                finish: Finish::NotStarted,
+                error: None,
+                error_class: None,
+                interruption: None,
+                effective_timeout: None,
+                timing: None,
+                retained: vec![],
+                teacher,
+                diagnostic: None,
+            };
+            a.fresh.push((0, row));
+            publish(
+                &dir,
+                &format!("row-{j:02}.r3er"),
+                &Record::ArtifactAudit(Box::new(a.clone())),
+            )?;
+            println!(
+                "RETENTION_TRAIN_PROBE update={update} ordinal={i} NLL={} TARGET={} FIRST_TEACHER_MISMATCH={} FREE_GENERATIONS=0",
+                v["mean_nll"], v["target_tokens_including_eos"], v["first_difference"]
+            );
+        }
+        Ok(())
+    })();
+    if let Err(e) = &result {
+        control.classify_error(e);
+        a.error = Some(e.to_string());
+    }
+    a.stop = control.observed.clone();
+    a.complete = result.is_ok() && a.stop.is_empty();
+    a.elapsed = Scalar::F64(control.start.elapsed().as_secs_f64());
+    publish_audit_final(&dir, &a)?;
+    result
+}
+
+fn retention_parameter_group(name: &str) -> &'static str {
+    if name == "embedding" {
+        "shared-embedding"
+    } else if name.ends_with("norm") || name.ends_with(".q") || name.ends_with(".k") {
+        "Q-K-norm"
+    } else if name.ends_with(".v") || name.ends_with(".o") {
+        "attention-V-O"
+    } else {
+        "FFN"
+    }
 }
 
 fn absolute_reference(path: &Path) -> Result<FileRef> {
@@ -7394,6 +8320,18 @@ fn resolve_native(root: &Path, s: &RunSnapshot, n: &CheckpointRef, resume: bool)
 
 #[derive(Subcommand)]
 pub enum Action {
+    /// Pure historical recount and train-only replay provenance/coverage, no generation.
+    RetentionInspect {
+        #[arg(long)]
+        screen: PathBuf,
+    },
+    /// Register one retention fork and compare eight fixed parent generations.
+    RetentionPrepare {
+        #[arg(long)]
+        screen: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
     #[cfg(feature = "test-support")]
     FixtureAuditPublication {
         #[arg(long)]
@@ -7771,6 +8709,10 @@ pub(super) fn command(action: Action) -> Result<()> {
     let mut control = RunControl::command(matches!(action, Action::Run { .. }))?;
     control.deadline = control.start + Duration::from_secs(1800);
     match action {
+        Action::RetentionInspect { screen } => retention_inspect(&screen, &mut control),
+        Action::RetentionPrepare { screen, output } => {
+            retention_prepare(&screen, &output, &mut control)
+        }
         #[cfg(feature = "test-support")]
         Action::FixtureAuditPublication {
             from,
@@ -8617,7 +9559,7 @@ fn segment(root: &Path, r: &FileRef, s: &RunSnapshot) -> Result<SegmentReceipt> 
     }
     t.elapsed.finite()?;
     t.cleanup.finite()?;
-    if s.objective.is_some() != t.objective_metrics.is_some()
+    if (s.objective.is_some() || s.retention()) != t.objective_metrics.is_some()
         || t.objective_metrics
             .as_ref()
             .is_some_and(|m| m.len() != t.draws.len())
@@ -8773,7 +9715,11 @@ fn decision_for(
         let parent_model = resolve_native(parent_root.parent().unwrap(), s, &s.parent, true)?;
         let base = screen_scores(s, &parent, &parent_model)?;
         let scores = screen_scores(s, dev, l)?;
-        let (after, stop) = screen_policy(&base, &scores, before, dev.new_updates);
+        let (after, stop) = if s.retention() {
+            retention_policy(&base, &scores, before, dev.new_updates)
+        } else {
+            screen_policy(&base, &scores, before, dev.new_updates)
+        };
         println!(
             "T_SCREEN_RESULT updates={} OLD={}/{} CROSS={}/{} QA={}/{} NEW={}/{} NEW_BASE4={}/{} ERRORS={} parent={:?} STOP={stop:?}",
             dev.new_updates,
@@ -8914,7 +9860,8 @@ fn verified_history(
                 }
                 continue;
             }
-            let screening = s.screen() && d.step < s.parent.step + s.tape.len() as u64;
+            let screening =
+                s.screen() && (s.retention() || d.step < s.parent.step + s.tape.len() as u64);
             let dr = h
                 .evaluations
                 .get(&(
@@ -8995,7 +9942,7 @@ fn eligible(
         || s.tiny_spec
         || quality
         || stops.iter().any(|r| *r != StopReason::TimeBudget)
-        || scores.len() != if s.bridge() { 6 } else { 4 }
+        || scores.len() != if s.bridge() && !s.retention() { 6 } else { 4 }
     {
         return false;
     }
@@ -9008,7 +9955,11 @@ fn eligible(
         }),
         find(PanelKind::Cross),
         find(PanelKind::Ordinary),
-        find(PanelKind::Watch),
+        find(if s.retention() {
+            PanelKind::Dev
+        } else {
+            PanelKind::Watch
+        }),
     ) else {
         return false;
     };
@@ -9275,6 +10226,13 @@ fn close_native_inner(
     let mut scores = Vec::new();
     let kinds: &[PanelKind] = if s.preflight() {
         &[]
+    } else if s.retention() {
+        &[
+            PanelKind::Dev,
+            PanelKind::Cross,
+            PanelKind::Ordinary,
+            PanelKind::LegacyDev,
+        ]
     } else if s.bridge() {
         &[
             PanelKind::Dev,
@@ -10639,6 +11597,9 @@ fn cooldown_verify(root: &Path, confirmation: bool, control: &mut RunControl) ->
 }
 
 fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
+    if s.retention() {
+        return retention_budget(root, s);
+    }
     if s.screen() {
         return screen_budget(root, s);
     }
@@ -10754,6 +11715,7 @@ fn anchor_budget(root: &Path, s: &RunSnapshot) -> Result<(u64, usize, f64)> {
                 | OBJECTIVE_CONTRACT
                 | NATIVE_CORPUS_CONTRACT
                 | BRIDGE_CONTRACT
+                | RETENTION_CONTRACT
                 | BOUNDED_BRIDGE_CONTRACT
         )
     {
@@ -12635,6 +13597,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                 | OBJECTIVE_CONTRACT
                 | NATIVE_CORPUS_CONTRACT
                 | BRIDGE_CONTRACT
+                | RETENTION_CONTRACT
                 | BOUNDED_BRIDGE_CONTRACT
         ) {
             return Err(bad("closed historical study is not restart authorization"));
@@ -12655,7 +13618,9 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
         let (_, generations, seconds) = anchor_budget(root, &s)?;
         if s.objective.is_some() || s.bridge() {
             let parent = root.parent().ok_or_else(|| bad("objective pair root"))?;
-            let mut teachers = if s.screen() {
+            let mut teachers = if s.retention() {
+                0
+            } else if s.screen() {
                 60
             } else if s.bridge() {
                 bridge_probe_indices(&s)?.len()
@@ -12670,9 +13635,13 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                     .map(|(t, _)| t.teachers as usize)
                     .sum::<usize>();
             }
-            control.teacher_limit = (if s.bridge() { 192usize } else { 256usize })
-                .checked_sub(teachers)
-                .ok_or_else(|| bad("pair teacher budget"))?;
+            control.teacher_limit = (if s.bridge() && !s.retention() {
+                192usize
+            } else {
+                256usize
+            })
+            .checked_sub(teachers)
+            .ok_or_else(|| bad("pair teacher budget"))?;
         }
         if s.continuation() {
             let registration = s
@@ -12812,7 +13781,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
     let mut decisions = Vec::new();
     let mut draws = Vec::new();
     let mut lr_bits = (s.continuation() || s.path_parity()).then(Vec::new);
-    let mut objective_metrics = s.objective.as_ref().map(|_| Vec::new());
+    let mut objective_metrics = (s.objective.is_some() || s.retention()).then(Vec::new);
     let mut complete = false;
     let mut heartbeat = Instant::now();
     let mut last_saved = if resume.is_some() {
@@ -12896,6 +13865,31 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
         }
         loop {
             let n = state.step as u64 - s.parent.step;
+            if s.retention() && matches!(n, 0 | 1 | 8) {
+                l.model.refresh_identity()?;
+                let native = if n == 0 {
+                    s.parent.clone()
+                } else if let Some(saved) =
+                    last_saved.as_ref().filter(|r| r.step == state.step as u64)
+                {
+                    saved.clone()
+                } else {
+                    save_native(
+                        root,
+                        &format!("{name}/step-{n:04}.r3m"),
+                        &s,
+                        &mut l,
+                        &state,
+                        &adam,
+                        index,
+                        "RETENTION_PROBE",
+                    )?
+                };
+                if n > 0 {
+                    last_saved = Some(native.clone());
+                }
+                retention_probe(root, &s, &l, &native, control)?;
+            }
             if (s.bridge() || matches!(s.purpose, RunPurpose::SaveSplit | RunPurpose::LrSplit))
                 && !(s.tiny_spec && s.origins.iter().any(|o| o.role == "bridge-continuous-test"))
                 && index == 0
@@ -12938,7 +13932,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                 let mid = s.cooldown() && n == 128
                     || (s.objective.is_some() || s.bridge())
                         && n == if s.tiny_spec { 1 } else { 256 };
-                let screening = s.screen() && n < s.tape.len() as u64;
+                let screening = s.screen() && (s.retention() || n < s.tape.len() as u64);
                 let kinds: &[PanelKind] = if screening {
                     &[PanelKind::Screen]
                 } else if mid {
@@ -13142,6 +14136,42 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                 complete = true;
                 break;
             }
+            if s.retention() && n == s.tape.len() as u64 {
+                // Local128 gate has already passed. One same-native full1424 observation.
+                let native = last_saved
+                    .as_ref()
+                    .ok_or_else(|| bad("retention full panel checkpoint"))?
+                    .clone();
+                for kind in [
+                    PanelKind::Dev,
+                    PanelKind::Cross,
+                    PanelKind::Ordinary,
+                    PanelKind::LegacyDev,
+                ] {
+                    let prefix = h
+                        .evaluations
+                        .get(&(state.step as u64, kind))
+                        .map(|r| payload(root, &s, r).map(|v| v.0.rows))
+                        .transpose()?
+                        .unwrap_or_default();
+                    let e = evaluate(&s, &l, kind, state.step as u64, control, false, prefix)?;
+                    let r = publish(
+                        root,
+                        &format!("{name}/{}-{n:04}.r3er", kind.name()),
+                        &Record::Evaluation(e.clone()),
+                    )?;
+                    let er = EvaluationRef {
+                        payload: r,
+                        native: Some(native.clone()),
+                    };
+                    evaluations.push(er.clone());
+                    h.evaluations.insert((state.step as u64, kind), er);
+                    rescore(&s, &e, &l, true)?;
+                    control.check("retention_full_panel_saved")?;
+                }
+                complete = true;
+                break;
+            }
             if n == s.tape.len() as u64 {
                 for kind in [PanelKind::Cross, PanelKind::Ordinary] {
                     if h.evaluations.contains_key(&(state.step as u64, kind)) {
@@ -13177,7 +14207,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                         control,
                     )?;
                 }
-                if s.bridge() {
+                if s.bridge() && !s.retention() {
                     collect_bridge_teacher(
                         root,
                         "final-probe",
@@ -13219,6 +14249,24 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
             } else {
                 response_loss(&logits, &b, state.config.first_target_weight)?
             };
+            if s.retention() && matches!(n + 1, 1 | 8 | 32) {
+                for (label, offset, count) in [("Q", 0, 4), ("R", 4, 2), ("T", 6, 2)] {
+                    let subset = batch(&framed, &indices[offset..offset + count], &Device::Cpu)?;
+                    let view =
+                        logits
+                            .narrow(0, offset, count)?
+                            .narrow(1, 0, subset.input.dim(1)?)?;
+                    let (ce, obj, targets) =
+                        response_loss(&view, &subset, state.config.first_target_weight)?;
+                    println!(
+                        "RETENTION_BATCH_LOSS update={} pool={label} input={} target={targets} NLL={} objective={} EXTRA_FORWARDS=0",
+                        n + 1,
+                        subset.tokens,
+                        ce.to_scalar::<f32>()?,
+                        obj.to_scalar::<f32>()?
+                    );
+                }
+            }
             let forward_s = forward_time.elapsed().as_secs_f64();
             control.check("binary_after_forward")?;
             let ce = ce.to_scalar::<f32>()?;
@@ -13258,8 +14306,41 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
             control.check("binary_before_optimizer")?;
             let backward_s = backward_time.elapsed().as_secs_f64();
             let optimizer_time = Instant::now();
-            let (norm, delta) =
-                adam.step_constant(&l.model.vars, &grads, &state.config, state.step + 1, rate)?;
+            let (norm, delta) = if s.retention() && matches!(n + 1, 1 | 8 | 32) {
+                let mut groups: BTreeMap<&str, (f64, f64, usize)> = BTreeMap::new();
+                let result = adam.step_constant_observed(
+                    &l.model.vars,
+                    &grads,
+                    &state.config,
+                    state.step + 1,
+                    rate,
+                    |key, _, old, next| {
+                        let g = groups.entry(retention_parameter_group(key)).or_default();
+                        g.0 += old.sqr()?.sum_all()?.to_scalar::<f32>()? as f64;
+                        g.1 += (next - old)?.sqr()?.sum_all()?.to_scalar::<f32>()? as f64;
+                        g.2 += old.elem_count();
+                        Ok(())
+                    },
+                )?;
+                for (group, (norm2, delta2, count)) in groups {
+                    println!(
+                        "RETENTION_PARAMETER_DELTA update={} group={group} unique_parameters={count} theta_norm={} actual_adam_delta_norm={}",
+                        n + 1,
+                        norm2.sqrt(),
+                        delta2.sqrt()
+                    );
+                }
+                println!(
+                    "RETENTION_CLIP update={} global_gradient_norm={} coefficient={} actual_delta={} OPTIONAL_G_OLD_DOT_DELTA=SKIPPED_NOT_REQUIRED",
+                    n + 1,
+                    result.0,
+                    (state.config.clip / (result.0 + 1e-12)).min(1.),
+                    result.1
+                );
+                result
+            } else {
+                adam.step_constant(&l.model.vars, &grads, &state.config, state.step + 1, rate)?
+            };
             let optimizer_s = optimizer_time.elapsed().as_secs_f64();
             state.step += 1;
             state.consumed_tokens += d.input;
@@ -13271,7 +14352,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
             if let Some(rates) = &mut lr_bits {
                 rates.push(rate.to_bits());
             }
-            if s.objective.is_some() {
+            if s.objective.is_some() || s.retention() {
                 objective_metrics.as_mut().unwrap().push([
                     prepare_s,
                     forward_s,
@@ -13297,6 +14378,18 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                 d.target,
                 rate.to_bits()
             );
+            if s.retention() {
+                println!(
+                    "RETENTION_EXPOSURE update={} Q={} R={} T={} replay_indices={:?} cumulative_input={} cumulative_target={}",
+                    n + 1,
+                    (n + 1) * 4,
+                    (n + 1) * 2,
+                    (n + 1) * 2,
+                    &d.indices[4..6],
+                    state.consumed_tokens - s.parent.counters[0],
+                    state.target_tokens - s.parent.counters[1]
+                );
+            }
             if heartbeat.elapsed() >= Duration::from_secs(15) || (n + 1).is_multiple_of(32) {
                 let n = state.step as u64 - s.parent.step;
                 println!(
@@ -13415,7 +14508,10 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
             .evaluations
             .iter()
             .filter_map(|r| match read_record(root, &r.payload) {
-                Ok(Record::Evaluation(e)) if e.step == state.step as u64 => {
+                Ok(Record::Evaluation(e))
+                    if e.step == state.step as u64
+                        && !(s.retention() && e.kind == PanelKind::Screen) =>
+                {
                     Some(rescore(&s, &e, &l, true).map(|v| (e.kind, v)))
                 }
                 _ => None,
@@ -14612,6 +15708,131 @@ mod binary_tests {
         assert_eq!(
             screen_policy(&base, &base, [0; 3], 128).1,
             Some("NO_SUFFICIENT_TRANSFER_SIGNAL_WITHIN_BUDGET")
+        );
+    }
+
+    #[test]
+    fn retention_fixed_gates_do_not_extend_failed_or_zero_new_skill() {
+        let base: [Score; 4] = std::array::from_fn(|i| Score {
+            exact: [64, 60, 20, 0][i],
+            ..Default::default()
+        });
+        let mut now = base.clone();
+        assert!(retention_policy(&base, &now, [0; 3], 32).1.is_none());
+        assert!(retention_policy(&base, &now, [0; 3], 64).1.is_some());
+        now[3].exact = 4;
+        now[3].base = [1, 16];
+        assert!(retention_policy(&base, &now, [0; 3], 64).1.is_none());
+        assert!(retention_policy(&base, &now, [0; 3], 128).1.is_some());
+        now[3].exact = 8;
+        now[3].base[0] = 2;
+        assert!(retention_policy(&base, &now, [0; 3], 128).1.is_none());
+        now[0].exact = 52;
+        assert!(retention_policy(&base, &now, [0; 3], 8).1.is_some());
+        now = base.clone();
+        now[2].exact = 16;
+        let (streak, stop) = retention_policy(&base, &now, [0; 3], 8);
+        assert!(stop.is_none());
+        assert!(retention_policy(&base, &now, streak, 16).1.is_some());
+        now = base.clone();
+        now[3].errors = 5;
+        assert!(retention_policy(&base, &now, [0; 3], 8).1.is_some());
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn retention_readonly_observer_tiny_weights_adam_and_clock_identical() {
+        let root = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
+        let s = read_inputs(&root).unwrap();
+        assert!(s.tiny_spec);
+        let mut results = Vec::new();
+        let mut control = RunControl::command(false).unwrap();
+        for observed in [false, true] {
+            let l = resolve_native(&root, &s, &s.parent, true).unwrap();
+            let state = l.manifest.training.as_ref().unwrap();
+            let episodes = s
+                .train
+                .iter()
+                .map(|i| s.cases[*i as usize].clone())
+                .collect::<Vec<_>>();
+            let framed = samples(&episodes, &l.tokenizer, state.config.seq_len).unwrap();
+            let b = batch(&framed, &[0], &Device::Cpu).unwrap();
+            if observed {
+                let p = l
+                    .tokenizer
+                    .prepare(
+                        &episodes[0].request,
+                        l.model.config.context as u32,
+                        &l.model.config.id().unwrap(),
+                    )
+                    .unwrap();
+                teacher_probe(&l, &episodes[0], &p.token_ids, &mut control).unwrap();
+            }
+            let logits = l.model.forward(&b.input, Some(&b.valid)).unwrap();
+            let (_, loss, _) =
+                response_loss(&logits, &b, state.config.first_target_weight).unwrap();
+            let gs = loss.backward().unwrap();
+            let gradients = l
+                .model
+                .vars
+                .iter()
+                .map(|(k, v)| (k.clone(), gs.get(v).unwrap().detach()))
+                .collect();
+            let mut adam = Adam {
+                moments: l.optimizer.clone(),
+            };
+            let mut seen = BTreeSet::new();
+            let values = if observed {
+                adam.step_constant_observed(
+                    &l.model.vars,
+                    &gradients,
+                    &state.config,
+                    state.step + 1,
+                    1e-4,
+                    |key, _, old, next| {
+                        assert!(seen.insert(key.to_string()));
+                        let _ = (
+                            retention_parameter_group(key),
+                            old.sqr()?.sum_all()?.to_scalar::<f32>()?,
+                            (next - old)?.sqr()?.sum_all()?.to_scalar::<f32>()?,
+                        );
+                        Ok(())
+                    },
+                )
+                .unwrap()
+            } else {
+                adam.step_constant(
+                    &l.model.vars,
+                    &gradients,
+                    &state.config,
+                    state.step + 1,
+                    1e-4,
+                )
+                .unwrap()
+            };
+            if observed {
+                assert_eq!(seen.len(), l.model.vars.len());
+                let p = l
+                    .tokenizer
+                    .prepare(
+                        &episodes[0].request,
+                        l.model.config.context as u32,
+                        &l.model.config.id().unwrap(),
+                    )
+                    .unwrap();
+                teacher_probe(&l, &episodes[0], &p.token_ids, &mut control).unwrap();
+            }
+            results.push((
+                l.model.weight_hash().unwrap(),
+                optimizer_hash(&adam.moments).unwrap(),
+                state.step + 1,
+                state.sampler_state,
+                values,
+            ));
+        }
+        assert_eq!(results[0], results[1]);
+        println!(
+            "RETENTION_OBSERVER_PARITY=TINY_WEIGHTS_ADAM_CLOCK_SAMPLER_EXACT TINY_UPDATES=2 EXTRA_TEACHER_FORWARDS=2 DIAGNOSTIC_BACKWARDS=0"
         );
     }
     #[test]

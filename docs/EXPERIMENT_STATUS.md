@@ -1,5 +1,54 @@
 # 진단 및 구현 상태
 
+## P2/P3 — 기존 copy train 확인, R-REPLAY 준비
+
+P1 source `e221d338639a97f811d631a4b649045d46ecef80` 정상 push 후 remote 전체 SHA
+일치 확인. P2는 기존 T32 terminal의 모든 command와 raw224를 순수 재검산했다.
+OLD16/64, CROSS11/64, QA12/32, NEW0/64, errors28은 과거 보고와 같다.
+첫32 tape input85,211/target8,322도 native/Adam/cursor와 일치했다. 신규 생성0.
+
+검증된 replay 출처는
+`artifacts/durability-pair-restart-20260918/attempt-R/A75-R/inputs.r3er`, SHA256
+`515844a64a04cd2d7a670a065ae33f3cfe27942cf201c4747ebf62b6571902da`다.
+그 arm의 실제 끝점 model/Adam/step이 A75-R24310과 일치한다. 실제 train-only
+단일 current 원문+정확한 citation 문법을 검사했다. metadata hash로 base를 고르고
+선정된 원문의 source 순서를 유지한다. 새 원문이나 평가 정답을 만들지 않았다.
+
+| pool | views / bases | 원문 full-copy | available input / target tokens |
+|---|---:|---:|---:|
+| Q 기존 anchor |2048 /2048|0|641840 /62388|
+| R 과거 train |512 /128|512|146001 /19062|
+| T 기존 두 기록 선택 |512 /128|단일 copy0, 다중 선택512|192824 /19712|
+
+R ordered native bytes SHA256는
+`93d97946fbca87fd6d359b2a3db76189e11c6959a624dfea914da1e8e73000ba`.
+부모 A75-R arm 안의 R 노출1024회는 저장된 draw로 확인했다. 그 이전의 정확한
+개별 노출은 UNKNOWN이다. dev/CROSS/NEW/conditional과 ID·binding·본문·sequence
+교집합을 검사했으며 seal은 읽지 않았다. R+Q+T3072의 정확한 prompt token과
+서로 다른 target 충돌0. 자세한 분모·ID 길이/반복 분포는 로컬 `p2-inspect.log`.
+
+구현은 기존 native input/registration/runner/RunControl/Adam/scorer를 사용한다.
+새 R policy는 첫128 old tape의 Q4/T2와 sampler를 유지하고 두 slot만 R source
+순환으로 교체한다. 데이터 변경은 명시적 새 objective execution binding을 가진
+fork다. loss 수식과 Adam m/v·clock·rate·tokenizer·model은 동일하다.
+부모 parity8과 probe0/1/8는 실제 호출 전에 entry를 저장하고 typed final/pending
+발행을 거친다. 정상 free generation과 train teacher mismatch를 구분한다.
+기존 Adam observer로 Q/K/norm·V/O·FFN·shared embedding delta/norm을 측정하며
+tied embedding은 한 번만 센다. optional old-gradient dot은 SKIPPED_NOT_REQUIRED.
+TINY observer ON/OFF weights/Adam/clock/sampler 정확 동등성 PASS(실제2 updates,
+추가 자체 teacher2, diagnostic backward0). 이 단계에서 SMALL 학습은 아직0이다.
+
+단일 연구의 실제 호출과 품질은 다음 실행 결과 절에 기록한다. 저장/계측 구현
+PASS는 보존·새 선택 능력·H3/S4/Goal1 PASS의 대체물이 아니다.
+
+P3 검증: 관련 quick19명령/24테스트 PASS. 그 후 최종 읽기 전용 native T 내용
+검사와 pool 사용량 집계 추가분은 all-targets clippy 및 고정 gate 직접 회귀 PASS,
+release build PASS. P1 별도 native identity 회귀까지 이번 고유 테스트25개다.
+신규 TINY61/128(quick native48+standalone resume3+observer2, 별도 P1 native6와
+observer2); 실패했던 fixture 인덱스 검사는 optimizer 진입 전이어서0이다.
+초기 fmt/check/fixture 환경 실패 로그도 보존했고 최종 PASS로 덮지 않았다.
+학습 source와 실행 binary를 고정한 뒤, 부모 parity8 및 단일 R 연구를 수행한다.
+
 ## P1 — retention 연구 전 발행·조상 경계 수리
 
 R3-RETENTION-FIRST-1.0. Base source eb66357fbee97de67b637ec0b1986e636ebd372e,

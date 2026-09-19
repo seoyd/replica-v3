@@ -1224,6 +1224,27 @@ fn teacher_with_foil(
     control: &mut RunControl,
     foil: Option<&str>,
 ) -> Result<Value> {
+    teacher_observation(l, e, prompt, raw, control, foil, false)
+}
+
+// Read-only train probe: mismatch is teacher argmax versus gold, never free output.
+fn teacher_probe(
+    l: &Loaded,
+    e: &Episode,
+    prompt: &[u32],
+    control: &mut RunControl,
+) -> Result<Value> {
+    teacher_observation(l, e, prompt, &[], control, None, true)
+}
+fn teacher_observation(
+    l: &Loaded,
+    e: &Episode,
+    prompt: &[u32],
+    raw: &[u32],
+    control: &mut RunControl,
+    foil: Option<&str>,
+    probe: bool,
+) -> Result<Value> {
     control.check("teacher_started")?;
     control.teacher_calls += 1;
     let mut gold = l.tokenizer.encode(e.answer.as_bytes())?;
@@ -1256,6 +1277,7 @@ fn teacher_with_foil(
         return Err(Error::Model("nonfinite diagnostic logits".into()));
     }
     let predicted = logits.argmax(1)?.to_vec1::<u32>()?;
+    let raw = if probe { predicted.as_slice() } else { raw };
     let nll: Vec<_> = gold
         .iter()
         .enumerate()
@@ -1305,7 +1327,7 @@ fn teacher_with_foil(
     }
     let difference=mismatch.filter(|&i|i<gold.len()).map(|i|{
         let rival=raw.get(i).copied().unwrap_or(predicted[i]);
-        json!({"index":i,"gold_id":gold[i],"actual_id":raw.get(i),"teacher_argmax":predicted[i],"gold_log_probability":lp[i][gold[i] as usize],"gold_minus_rival_logit":lp[i][gold[i] as usize]-lp[i][rival as usize],"prefix":"gold; at first divergence identical to generation prefix"})
+        json!({"index":i,"gold_id":gold[i],"actual_id":raw.get(i),"teacher_argmax":predicted[i],"gold_log_probability":lp[i][gold[i] as usize],"gold_minus_rival_logit":lp[i][gold[i] as usize]-lp[i][rival as usize],"prefix":if probe { "gold; teacher-only first argmax mismatch; no free generation" } else { "gold; at first divergence identical to generation prefix" }})
     });
     let foil_difference = foil.map(|foil| -> Result<Value> {
         let mut other=l.tokenizer.encode(foil.as_bytes())?; other.push(EOS);
