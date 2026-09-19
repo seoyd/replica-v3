@@ -1,5 +1,55 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 First-target4 completed; joint quality failed
+
+EXECUTED_THIS_RUN on frozen source `958d78c25848dab4b7ee200aab3bf5b8e9867f14`.
+All3840 registered new updates completed from P6144 at absolute9984. Only the
+first-target coefficient changed1→4 against the retained coefficient1 control;
+native data/tape, weights/Adam at entry, tokenizer, LR3e-5 and model were equal.
+The pure `fresh paired-report` exited0, verifying raw/teacher/native/policy and
+actual update, LR, sample and token traces. No old endpoint was rewritten.
+
+| Absolute step | New updates | Train64 | Primary512 | Transfer128 | Flipped192 | Both192 |
+|---|---:|---:|---:|---:|---:|---:|
+| 6400 | 256 | 50 | 371 | 71 | 7 | 0 |
+| 7424 | 1280 | 42 | 361 | 62 | 24 | 1 |
+| 8448 | 2304 | 50 | 368 | 67 | 41 | 4 |
+| 9984 | 3840 | 42 | 339 | 67 | 67 | 7 |
+
+Final original47/192, both C/D/E=2/5/0,4 bases, base4=0, same output145/192.
+Primary buckets `[57,56,16,19,12,64,51,64]`; transfer `[7,8,1,0,4,16,15,16]`.
+The matched coefficient1 endpoint had primary368, transfer67, flipped56, both4.
+Thus weighting increased a few joint choices while reducing retained QA; it is
+not adopted. All4200 generated rows had EOS and errors0. A valid output can still
+contain a wrong/invented citation; these remain incorrect answers in the score.
+
+Actual learning input6,591,497/target473,391 includes discarded6,936/501;
+committed6,584,561/472,890, padding2,678,055.30,720 draws,3840 per bucket,
+15,360 familiar/15,360 P-variant. Generation4216 including P16, teacher4200,
+registered active4396.389329876s. Four pure time stops saved and resumed in new
+processes. Final phase Finished/BUDGET_REACHED, resume=false. No UNKNOWN,
+cancel, numerical or storage failure observed. Peak sampled RSS1,537,600KiB
+is a training observation, not an S6 benchmark. Direct TINY25/345/345 and
+scalar optimizer0 are separate from these SMALL counts.
+
+Executable `artifacts/first-target4-20260920-executable`, SHA256
+`b35c1f6099e2d1fa7562431846a36a020e588998f34eb917602318a7ce26228f`;
+code digest `c1fe084635de120f52ab5fd4f4b5997bde2a6fdc68be0f5e6f7e9cd8bf883cb1`;
+policy `2592f13212738e608da61a050f774f9516e171c85eb0394cf321ec386e6c417f`.
+Final checkpoint `artifacts/first-target4-20260920/ADJACENT/segment-0005/final`,
+physical SHA256 `8632096c61b386808e822530be117891e0d294ae669a72c2e6162a7aeac003d8`,
+model hash `0e8778ce106bf0a8ad1810095f8cbdc42cf1e774f2d56f3c1aa9f69823f956e6`.
+Raw/teachers/decisions remain in that arm; command logs, candidate.patch, input
+equality proof, pure recount and native/final metrics are under
+`artifacts/first-target4-20260920-evidence/`. None are published.
+
+CODE_VERDICT=IMPLEMENTER_TESTED_PASS; LEARNING_EXECUTION=COMPLETE;
+DEVELOPMENT_JOINT_PASS=false; FINAL200=NOT_CREATED/NOT_OPENED;
+S4/S5/S6=NOT_RUN_PRECONDITION_FAILED; GOAL1_READY=false; GOAL1_ACCEPTED=false.
+Independent current review is pending. The user's one-variable improvement
+authorization remains active. A new bounded LR-only hypothesis will compare
+against the coefficient1 control, not combine changes with this failed weight4.
+
 ## 2026-09-20 First-target4 research — implementation and direct checks
 
 The user authorized further bounded experiments changing one grounded variable

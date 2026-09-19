@@ -1,6 +1,12 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: first-target coefficient, one-variable research
+## Closed: first-target coefficient, one-variable research
+
+Completed3840 updates at9984: primary339/512, transfer67/128, flipped67/192,
+both7/192, errors0. The coefficient1 retained control was368/67/56/4 at the
+same step. Joint quality failed and coefficient4 is not adopted. All artifacts
+and resume=false are preserved. Subsequent one-variable research uses a new
+preregistered root under the user's continuing authorization; no old budget opens.
 
 The user's2026-09-20 authorization permits grounded, bounded experiments changing
 one variable at a time after the fixed-condition follow-through. Register one new
