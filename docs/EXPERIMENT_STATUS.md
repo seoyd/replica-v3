@@ -1,5 +1,34 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 User-requested follow-through — diagnosis and direct verification
+
+The user requested continued improvement after the paired comparison closed.
+The old negative comparison and all parent/native/raw/terminal artifacts remain
+unchanged. New research is bounded to the remaining3584 ADJACENT tape updates,
+with the same data/math/Adam/LR and original quality thresholds. It is not a
+retroactive G3 gate pass or a claim that longer learning will solve selection.
+
+EXECUTED_THIS_RUN: completed ADJACENT6400 on its actually seen first8 pairs per
+C/D/E: full12/48, both0/24, identical normal output23/24, EOS48/errors0,
+teacher CE0.15019075920000516.48 generations/48 teachers/optimizer0, active6.862s;
+this is TRAIN_DIAGNOSTIC_NOT_HELDOUT. Raw and explicit start/finish are local at
+`artifacts/paired-followthrough-20260920-evidence/seen-train48/`. The seen-pair
+failure supports further examination of learning, not a specific mathematical bug.
+
+The existing Plan/Fork/finite tape/evaluator and native resume path now register
+an explicit single-arm follow-through with an immutable parent and scope record.
+Production generation/model/loss math is unchanged. New process regression passes
+continuous2 versus split1+1, exact weights and Adam, parent preservation and pure
+report no-write; existing pair/publication failure checks remain in the same test.
+This test used21 TINY optimizer entries,291 generations and291 teachers including
+its setup observations. One zero-model plateau test passed. The diagnostic used
+production Accelerate/thread1; fixture scores do not constitute quality evidence.
+Evidence logs: `artifacts/paired-followthrough-20260920-evidence/`.
+
+New SMALL training has not started at this verification stage. Goal1 readiness
+and independent acceptance remain false. Subsequent executed counts supersede
+this stage's zero; no historical budget or failure is rewritten.
+
 ## 2026-09-20 Paired exposure — G2 executed and closed; joint quality failed
 
 `STUDY_COMPLETE_NO_ADMISSIBLE_LEARNER` / EXECUTED_THIS_RUN.

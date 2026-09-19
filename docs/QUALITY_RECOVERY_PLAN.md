@@ -1,5 +1,36 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: explicitly requested bounded exposure follow-through
+
+On2026-09-20 the user requested continued improvement toward Goal1 after the
+paired study failed its entry gate. This authorizes a new bounded research fork;
+it does not change the old gate result, terminal records or model acceptance.
+Start from the completed ADJACENT6400 native weights/Adam and consume its exact
+remaining finite tape, cursor256 through3839, at most3584 new updates. The old
+SPACED256+ADJACENT256 and this continuation together remain within4096 updates.
+No new data, reinitialization, ratio, LR, loss, tokenizer, model or storage change.
+This is an exposure-length hypothesis, not evidence of a superior policy.
+
+A fixed train-only diagnostic on the already consumed first8 pairs per C/D/E
+returned12/48 full, both0/24, same output23/24, EOS48/errors0, CE0.1501907592.
+It used48 production generations/48 own-model teachers and zero optimizer calls.
+It demonstrates failure on those seen pairs, not a proven optimizer/core defect.
+
+Reuse the existing continuation evaluation schedule: screen64+flip24 at additional
+512/1536/2560/3072; full train64/primary512/transfer128/selector192 at1024/2048/3584.
+Keep the original P screen retention guards and every numeric/cancel/storage/UNKNOWN
+interlock. Two complete panels without improving any best primary/transfer/both
+score stop the research. First joint development pass stops learning and activates
+the previously specified independent S4 and subsequent S5/S6; no self-acceptance.
+The joint/final/product/quant thresholds below are unchanged.
+
+The new policy has its own source/executable/parent/authorization binding and
+create-new root. It never edits the old resume=false or ranks this unequal-length
+endpoint as the prior comparison winner. Existing closed artifacts remain read-only.
+Fresh SMALL limits are3584 optimizer,12M input/1M target,12k generation/10k teacher,
+21600 active seconds,900-second commands/120-second cleanup. Actual totals across
+both research roots and the train-only diagnostic must also be reported.
+
 ## Closed: paired exposure from the preserved P6144 parent
 
 G2 closed on2026-09-20 at256 updates per arm,512 total, with no admissible

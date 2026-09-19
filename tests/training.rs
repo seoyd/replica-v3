@@ -3037,6 +3037,25 @@ fn fresh_paired_policies_match_continuous_and_split_processes() {
         call(&["fresh","paired-report","--root",root.to_str().unwrap()],None,true);
         assert_eq!(before,hashes(root));
     }
+    let follow=[d.path().join("follow-continuous"),d.path().join("follow-split")];
+    for (i,root) in follow.iter().enumerate() {
+        let old=hashes(&roots[i]);
+        call(&["fresh","paired-continue","--parent",roots[i].join("ADJACENT").to_str().unwrap(),
+            "--output",root.to_str().unwrap(),"--frozen-executable",env!("CARGO_BIN_EXE_replica-train")],None,true);
+        assert_eq!(old,hashes(&roots[i]));
+        let arm=root.join("ADJACENT");
+        if i==0 { call(&["fresh","fixture-full","--root",arm.to_str().unwrap()],None,true); }
+        else { for _ in 0..2 {call(&["fresh","run","--root",arm.to_str().unwrap()],None,true);} }
+        let before=hashes(root);
+        call(&["fresh","paired-report","--root",root.to_str().unwrap()],None,true);
+        assert_eq!(before,hashes(root));
+    }
+    let a=checkpoint::load(&follow[0].join("ADJACENT/segment-0000/final"),Device::Cpu,true).unwrap();
+    let b=checkpoint::load(&follow[1].join("ADJACENT/segment-0001/final"),Device::Cpu,true).unwrap();
+    assert_eq!(a.model.weight_hash().unwrap(),b.model.weight_hash().unwrap());
+    for (k,t) in &a.optimizer {assert_eq!(t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),b.optimizer[k].flatten_all().unwrap().to_vec1::<f32>().unwrap());}
+    assert_eq!(a.manifest.training.unwrap().step,8);
+    assert_eq!(b.manifest.training.unwrap().step,8);
     // A saved quality stop permits the other preauthorized arm; failed publication does not.
     let quality=d.path().join("quality");
     call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),"--output",quality.to_str().unwrap()],None,true);

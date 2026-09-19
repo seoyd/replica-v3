@@ -1,5 +1,23 @@
 # Replica v3 B0 runbook
 
+## Explicit paired follow-through
+
+The follow-up requested on2026-09-20 creates a new research root from the closed
+ADJACENT endpoint; it does not resume or edit the old study. With the current
+production release executable:
+
+```sh
+replica-train fresh paired-continue --parent OLD_STUDY/ADJACENT --output NEW_ROOT --frozen-executable OLD_RETAINED_EXECUTABLE
+replica-train fresh run --root NEW_ROOT/ADJACENT
+replica-train fresh paired-report --root NEW_ROOT
+```
+
+The first run saves one new update. Further runs require the prior confirmed
+terminal to permit continuation; a pure timeout resumes its remaining evaluation
+cursor. Stop on a closed/failed terminal. Registration consumes the remaining
+3584 entries of the unchanged tape, preserves Adam/LR/data and records the explicit
+new scope. `paired-report` only reads and independently recounts existing raw.
+
 ## Paired exposure study
 
 Use the production executable built with `cargo build --locked --offline --release
