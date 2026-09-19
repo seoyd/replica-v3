@@ -1,5 +1,65 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: exposure and question-phrasing comparison
+
+R3-FRESH-EXPOSURE-PHRASE-1.0, source reference d126aff35d85cebd1bf2b40bc6bc0a5943a3084b,
+baseline report a8376ff03ced939710f946609170d2fb6b798452. Preserve the completed
+fresh4096 run, all native source data, Adam/tokenizer and original raw observations.
+No reset, deleted-parent recovery, storage redesign or SQLite migration.
+
+G0 verify the real parent → G1 publication/generation/evaluation-resume boundaries
+→ G2 read-only raw recount, same-weight16 parity and familiar-wording128 diagnostic
+→ G3 immutable C/P registration → G4 two bounded arms → G5 endpoint comparison.
+Only a joint development pass permits G6 independent200, S5 and S6.
+
+New plan/segment schema2 uses existing R3BIN. A durable pending interlock precedes
+finished publication; publisher file/directory syncs and readback precede release.
+Consumers verify the start, finished/control hashes, actual checkpoint and counters.
+Failure needs no additional error file to remain blocked. The last unlink may
+reappear after a crash and conservatively block; multiple files are not one atomic
+transaction. Legacy finished records are read-only parent evidence, never upgraded.
+
+Raw row version2 records a returned Generated result independently from command_stop.
+EOS plus strict text can be correct even when the command deadline is observed
+after return. Length/error/empty output remains wrong. Required teacher observations
+have a separate durable prefix and are resumed without repeating completed generation.
+An outstanding started call without a returned row is UNKNOWN and blocks retry.
+Optimizer completion and EvaluationPending are separate: last-step evaluation-only
+continuation calls no trainer/Adam and preserves the native checkpoint bytes.
+
+Both arms inherit the same4096 parent and moments/absolute clock. C repeats original
+train8192 for sampler epochs4/5. P keeps cases/evidence/labels/order and uses original
+and alternate training question once each, balanced within each bucket/epoch.
+Only the task suffix changes; supported Full/Current/Previous/Restored/Cause intents
+come from the request, never the target. Two project-owned alternate suffixes per
+intent are checked against exact heldout suffixes and an independent resolver.
+No new tokenizer mapping, model equation, output format or loss weighting.
+
+Constant actual LR3e-5; ordinary response+EOS CE, first-target1; no warmup restart.
+Each arm ends at absolute6144, max2048 new updates/input9M/target1M. Shared new
+generation4096/teacher6000/active14400s caps include observation and all segments;
+commands900s plus cleanup120s. TINY updates128/scalar32 are separate numeric limits.
+First actual update of each arm is saved before fresh-process continuation.
+No third arm, automatic extension or source change during learning.
+
+Parent train64/primary512/transfer128 are verified raw reuse. At+256/+512/+1536,
+screen64; at+1024/+2048, train64+primary512+transfer128. Endpoint screen is the exact
+subset of full primary raw, not another generation. Fixed train64 teacher NLL is
+measured at each boundary, reusing the completed train panel when available.
+All teacher rows are required before a panel CE or boundary is complete.
+Severe screen loss>=24 or errors>=8 stops the arm. Two consecutive losses>=12
+from parent47/current best with CE>=1.2x stop it. Quality stops do not alter the
+other arm; cancellation/I/O/integrity failure blocks automatic study continuation.
+
+Only the+2048 endpoint is the primary comparison. Gates remain primary>=487/512,
+each bucket>=58/64, transfer>=116/128 and generation errors0 simultaneously.
+Tie-break: lowest bucket accuracy, primary, transfer, then C before P. Familiar
+wording is diagnostic only. Failure closes the study without further learning.
+Final200 remains unopened until a qualifying candidate is frozen; then>=190/200,
+each of5 categories>=36/40, no generation errors or accepted bad citations.
+Only actual S4 pass permits S5 memory/restart and S6 grouped INT4 comparison,
+with extra training0/generation<=1024. Independent acceptance remains external.
+
 ## Active: fresh joint baseline after the complete data reset
 
 Closed at4096 updates on2026-09-19: primary392/512, transfer40/128, errors0

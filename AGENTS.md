@@ -16,11 +16,12 @@ libraries are permitted. Use R3BIN for former text metadata/IPC/record streams;
 reuse R3MODEL/R3CORP/R3TOK/R3ER for their existing domain schemas.
 The earlier storage freeze does not restrict that explicitly requested removal.
 Permanent acceptance criteria: `docs/GOAL1_CONTRACT.md`.
-The active fresh joint baseline now authorizes new educational synthetic data,
-one train-only tokenizer and random SMALL initialization, with fresh Adam and
-response CE first-target weight1. Old parents/receipts remain unavailable and are
-not prerequisites. Use the fresh section of the active plan for its single4096
-update budget, balanced sampler, development gates and conditional S4/S5/S6.
+The fresh joint4096 baseline is closed and its new artifacts are preserved.
+The active exposure/phrase study authorizes two explicit forks from that same
+parent: C-REPEAT/P-PHRASE, at most2048 additional updates each, constant LR3e-5,
+unchanged Adam/tokenizer/response CE and eight-bucket case order. P changes only
+one of two question exposures per case. Do not reinitialize or resume the old
+closed run. The active plan defines repair gates, budgets and conditional S4/S5/S6.
 Active stages, budgets and stop conditions: `docs/QUALITY_RECOVERY_PLAN.md`.
 Observed results and historical failures: `docs/EXPERIMENT_STATUS.md`.
 Architecture and artifact semantics: `docs/NATIVE_MODEL.md`.

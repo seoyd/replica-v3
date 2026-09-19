@@ -65,6 +65,8 @@ pub(super) struct RunControl {
     interrupted_case_id: Option<String>,
     pub(super) teacher_calls: usize,
     pub(super) teacher_limit: usize,
+    #[cfg(feature = "test-support")]
+    pub(super) fixture_post_generation_deadline: bool,
     #[cfg(test)]
     elapsed_override: Option<Duration>,
     #[cfg(test)]
@@ -74,6 +76,8 @@ pub(super) struct RunControl {
     hook: Option<Box<dyn FnMut(&str, &Arc<AtomicBool>)>>,
 }
 impl RunControl {
+    #[cfg(feature="test-support")]
+    pub(super) fn fixture_deadline(&mut self){self.deadline=Instant::now();}
     pub(super) fn set_call_limits(&mut self, generation: usize, teacher: usize) {
         self.generation_limit = generation;
         self.teacher_limit = teacher;
@@ -113,6 +117,8 @@ impl RunControl {
             interrupted_case_id: None,
             teacher_calls: 0,
             teacher_limit: usize::MAX,
+            #[cfg(feature = "test-support")]
+            fixture_post_generation_deadline: false,
             #[cfg(test)]
             elapsed_override: None,
             #[cfg(test)]
@@ -179,6 +185,10 @@ impl RunControl {
         self.stop_result()
     }
     pub(super) fn check(&mut self, boundary: &str) -> Result<()> {
+        #[cfg(feature = "test-support")]
+        if boundary == "generation_returned" && self.fixture_post_generation_deadline {
+            self.deadline = Instant::now();
+        }
         #[cfg(test)]
         if self.time_boundary == Some(boundary) {
             self.elapsed_override = Some(self.deadline.duration_since(self.start));
@@ -223,7 +233,8 @@ impl RunControl {
     pub(super) fn classify_error(&mut self, e: &Error) {
         if matches!(e, Error::Cancelled) {
             self.observe(StopReason::Cancelled);
-        } else if matches!(e, Error::Corrupt(_)) || self.stop.is_none() {
+        } else if matches!(e, Error::Corrupt(_) | Error::Io(_) | Error::Binary(_) | Error::Tensor(_) | Error::Invalid(_) | Error::Conflict(_))
+            || e.to_string().contains("nonfinite") || self.stop.is_none() {
             self.observe(StopReason::IntegrityFail);
         }
     }
@@ -1082,7 +1093,7 @@ fn components(actual: Option<&str>, expected: &str, provided: &[i64]) -> Value {
         "citation_exact":ids.as_ref().is_some_and(|a|Some(a)==expected_ids.as_ref()),"citation_in_provided":ids.as_ref().map(|a|a.iter().all(|id|provided.contains(id))),"citation_nonempty":ids.as_ref().is_some_and(|a|!a.is_empty())})
 }
 fn strict_answer_match(actual: Option<&str>, expected: &str, eos: bool, error: bool) -> bool {
-    actual.is_some_and(|text| text == expected) && eos && !error
+    actual.is_some_and(|text| !text.is_empty() && text == expected) && eos && !error
 }
 pub(super) fn evaluate_one(
     loaded: &Loaded,
@@ -1090,8 +1101,17 @@ pub(super) fn evaluate_one(
     request: &ModelRequest,
     control: &mut RunControl,
 ) -> Value {
+    evaluate_one_policy(loaded, e, request, control, true)
+}
+pub(super) fn evaluate_one_policy(
+    loaded: &Loaded, e: &Episode, request: &ModelRequest, control: &mut RunControl,
+    automatic_teacher: bool,
+) -> Value {
     let mut row = record!({"id":e.id,"scene":scene(e),"category":e.category,"family":e.family,"question":e.request.input,"generated_question":request.input,
         "evidence":e.request.evidence,"generated_evidence":request.evidence,"expected":e.answer,"exact_match":false,"actual":null,"error":null,"generation_started":false,"generation_completed":false,"interruption":null});
+    row["row_version"] = record!(2);
+    row["command_stop"] = Value::Null;
+    row["teacher_forced_diagnostic_after_generation"] = record!({"status":"NOT_RUN"});
     let result = (|| -> Result<()> {
         control.check("case_started")?;
         control.attempted_case_count += 1;
@@ -1140,6 +1160,7 @@ pub(super) fn evaluate_one(
         {
             control.observe(StopReason::IntegrityFail);
         }
+        let returned = result.is_ok();
         let after_generation = control.check("generation_returned");
         let (text, generated, error) = decode_generated(&loaded.tokenizer, result);
         let bytes_ids: Vec<_> = raw
@@ -1166,6 +1187,8 @@ pub(super) fn evaluate_one(
         row["actual"] = record!(text);
         row["generation"] = record!(generated);
         row["error"] = record!(error);
+        row["generation_error"] = record!(if returned {None}else{error.clone()});
+        row["decode_error"] = record!(if returned {error.clone()}else{None});
         row["error_class"] = record!(error.as_ref().map(|e| if e.contains("UTF-8") {
             "strict_utf8"
         } else if e.contains("control token") {
@@ -1181,14 +1204,16 @@ pub(super) fn evaluate_one(
             .as_ref()
             .map_or_else(|| row["error_class"].clone(), |g| record!(g.finish));
         row["raw_generated_count"] = record!(raw.len());
-        row["generation_completed"] = record!(control.stop.is_none());
-        control.completed_generation_count += usize::from(control.stop.is_none());
+        row["generation_completed"] = record!(returned);
+        row["eos"] = record!(raw.last()==Some(&EOS) && generated.as_ref().is_some_and(|g|g.finish=="stop"));
+        control.completed_generation_count += usize::from(returned);
         row["whitespace_only"] = record!(
             text.as_ref()
                 .is_some_and(|s| !s.is_empty() && s.trim().is_empty())
         );
         // Keep the actual generation receipt before propagating a command stop.
         after_generation?;
+        if !automatic_teacher { return Ok(()); }
         control.check("before_teacher")?;
         // Gold enters only after free generation has completed, including failures.
         row["teacher_forced_diagnostic_after_generation"] =
@@ -1212,10 +1237,18 @@ pub(super) fn evaluate_one(
         }
     }
     if let Some(stop) = control.stop {
+        row["command_stop"] = record!(stop);
         row["interruption"] = record!(stop);
+        if row["teacher_forced_diagnostic_after_generation"]["status"] == "NOT_RUN" {
+            row["teacher_forced_diagnostic_after_generation"] = record!({"status":format!("NOT_RUN_{}",stop.name())});
+        }
         control.interrupted_case_id = Some(e.id.clone());
     }
     row
+}
+pub(super) fn fresh_teacher(l: &Loaded, e: &Episode, control: &mut RunControl) -> Result<Value> {
+    let p = l.tokenizer.prepare(&e.request,l.model.config.context as u32,&l.model.config.id()?)?;
+    teacher_observation(l,e,&p.token_ids,&[],control,None,false,true)
 }
 fn teacher(
     l: &Loaded,
@@ -1234,7 +1267,7 @@ fn teacher_with_foil(
     control: &mut RunControl,
     foil: Option<&str>,
 ) -> Result<Value> {
-    teacher_observation(l, e, prompt, raw, control, foil, false)
+    teacher_observation(l, e, prompt, raw, control, foil, false, false)
 }
 
 // Read-only train probe: mismatch is teacher argmax versus gold, never free output.
@@ -1244,8 +1277,9 @@ fn teacher_probe(
     prompt: &[u32],
     control: &mut RunControl,
 ) -> Result<Value> {
-    teacher_observation(l, e, prompt, &[], control, None, true)
+    teacher_observation(l, e, prompt, &[], control, None, true, false)
 }
+#[allow(clippy::too_many_arguments)] // Existing diagnostic inputs plus durable returned-result semantics.
 fn teacher_observation(
     l: &Loaded,
     e: &Episode,
@@ -1254,6 +1288,7 @@ fn teacher_observation(
     control: &mut RunControl,
     foil: Option<&str>,
     probe: bool,
+    preserve_returned: bool,
 ) -> Result<Value> {
     control.check("teacher_started")?;
     control.begin_teacher()?;
@@ -1281,7 +1316,8 @@ fn teacher_observation(
             "nonfinite injected after conditional teacher forward".into(),
         ));
     }
-    control.check("teacher_returned")?;
+    let returned_stop = control.check("teacher_returned");
+    if !preserve_returned { returned_stop?; }
     let lp = candle_nn::ops::log_softmax(&logits, 1)?.to_vec2::<f32>()?;
     if lp.iter().flatten().any(|x| !x.is_finite()) {
         return Err(Error::Model("nonfinite diagnostic logits".into()));
@@ -1344,7 +1380,8 @@ fn teacher_observation(
         let i=gold.iter().zip(&other).position(|(a,b)|a!=b).ok_or_else(||Error::Invalid("foil must differ from gold".into()))?;
         Ok(record!({"index":i,"gold":gold[i],"foil":other[i],"margin":lp[i][gold[i] as usize]-lp[i][other[i] as usize],"prefix":"identical gold/foil token prefix; one full gold teacher forward"}))
     }).transpose()?;
-    control.check("teacher_completed")?;
+    let complete_stop = control.check("teacher_completed");
+    if !preserve_returned { complete_stop?; }
     Ok(
         record!({"conditional_foil":foil_difference,"target_tokens_including_eos":gold.len(),"mean_nll":nll.iter().sum::<f64>()/gold.len() as f64,"first_target_nll":nll[0],
         "remaining_mean_nll":nll.iter().skip(1).sum::<f64>()/(gold.len()-1).max(1) as f64,"objective":(nll.iter().sum::<f64>()+(w-1.)*nll[0])/gold.len() as f64,"first_target_weight":w,
@@ -10102,6 +10139,27 @@ mod tests {
             RunControl::new(Arc::new(AtomicBool::new(false)), Duration::from_secs(1), 10).unwrap();
         let _ = c.check_at(c.start, Ok(11));
         assert_eq!(c.stop, Some(StopReason::ResourceLimit));
+    }
+    #[test]
+    fn fresh_fx02_returned_generation_survives_command_deadline() {
+        let l = repair_loaded();
+        // A numeric fixture producing EOS through the real logits/greedy path.
+        // No generated answer is substituted and this fixture is never a SMALL parent.
+        for (name,v) in &l.model.vars {
+            let mut data=vec![if name.ends_with("norm")||name=="embedding"{1f32}else{0f32};v.elem_count()];
+            if name=="embedding" {let h=l.model.config.hidden;data[EOS as usize*h..(EOS as usize+1)*h].fill(2.);}
+            v.set(&Tensor::from_vec(data,v.dims(),&Device::Cpu).unwrap()).unwrap();
+        }
+        let mut e = repair_episode("fresh/deadline");
+        e.request.limits.max_tokens = 1;
+        let mut c = repair_control();
+        c.time_boundary = Some("generation_returned");
+        let row = evaluate_one(&l, &e, &e.request, &mut c);
+        assert_eq!(row["generation_started"], true);
+        assert_eq!(row["generation_completed"], true);
+        assert_eq!(row["finish_reason"], "stop");
+        assert_eq!(row["command_stop"], "TIME_BUDGET");
+        assert_eq!(c.teacher_calls, 0);
     }
     #[test]
     fn repair_rf03_actual_token_cancel_preserves_partial_and_skips_followup() {

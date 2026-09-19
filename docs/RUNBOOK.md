@@ -1,5 +1,23 @@
 # Replica v3 B0 runbook
 
+## Exposure and phrasing study
+
+Use a frozen `replica-train` built with locked/offline Accelerate and thread1.
+`fresh study-prepare --parent PARENT_ROOT --output NEW_STUDY` verifies native
+weights/Adam/policy and all historical raw, records preservation hashes, creates
+question-only diagnostic data and registers C-REPEAT/P-PHRASE. It never reopens
+the parent's closed budget. `fresh study-observe --root NEW_STUDY` runs the fixed
+same-weight parity and familiar-wording diagnostic once; failed/unknown observation
+blocks learning. The diagnostic is never a product preprocessing rule.
+
+After related checks, registration and source commit/push, retain that exact binary.
+`fresh run --root NEW_STUDY/C-REPEAT` saves the first actual update; a new invocation
+continues the same registered arm. Repeat the procedure for P-PHRASE. Only confirmed
+pure time segments resume, including evaluation-only continuation at the last step.
+No deletion of pending/start records or source change is a retry mechanism.
+`fresh report --root ARM` and `fresh study-report --root NEW_STUDY` read existing
+evidence and do not manufacture missing records. Large native evidence stays local.
+
 ## Fresh joint baseline
 
 The authorized2026-09-19 run is closed at4096 with failed development gates.

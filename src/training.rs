@@ -766,6 +766,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
     }
     let started = Instant::now();
     let mut loaded = checkpoint::load(run.checkpoint, Device::Cpu, run.resume)?;
+    let fresh_parent=match fresh{Some((p,_))=>p.parent_entry(run.checkpoint,&loaded)?,None=>false};
     control.check("training_loaded")?;
     let mut config = if run.resume {
         loaded
@@ -778,6 +779,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
     } else {
         run.config
     };
+    if fresh_parent {let p=fresh.unwrap().0;config=p.config.clone();loaded.manifest.source_id=p.source_identity().into();}
     if let Some(additional) = run.extend_steps {
         let previous = loaded
             .manifest
@@ -858,7 +860,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
         ));
     }
     println!("tensor_planning_guard_bytes={estimated_bytes} planning_guard_is_measurement=false");
-    let (train, validation, corpus_hash, validation_hash, corpus_manifest) = if run.numeric_probe {
+    let (mut train, validation, corpus_hash, validation_hash, corpus_manifest) = if run.numeric_probe {
         let data = numeric_samples(&loaded.tokenizer)?;
         (
             data.clone(),
@@ -868,10 +870,10 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
             None,
         )
     } else {
-        let (manifest, train, validation) = data::load(
-            run.corpus
-                .ok_or_else(|| Error::Invalid("explicit --corpus required".into()))?,
-        )?;
+        let corpus=run.corpus.ok_or_else(|| Error::Invalid("explicit --corpus required".into()))?;
+        let (manifest, train, validation) = match fresh {
+            Some((p,_))=>p.training_corpus(corpus)?,None=>data::load(corpus)?,
+        };
         let resumed_corpus = run.resume
             && loaded
                 .manifest
@@ -892,6 +894,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
             Some(manifest),
         )
     };
+    if let Some((p,root))=fresh {train.extend(p.additional_samples(root,&loaded.tokenizer)?);}
     if train.iter().any(|s| s.tokens.len() > config.seq_len + 1) {
         return Err(Error::Invalid("training sample context".into()));
     }
@@ -977,7 +980,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
         Some((plan, _)) => {
             if config != plan.config { return Err(Error::Invalid("fresh config mismatch".into())); }
             let binding = plan.binding(&state, &loaded.tokenizer)?;
-            if run.resume && (state.resume_binding.as_ref() != Some(&binding) || state.sampler_state != state.step as u64) {
+            if run.resume && !fresh_parent && (state.resume_binding.as_ref() != Some(&binding) || state.sampler_state != state.step as u64) {
                 return Err(Error::Invalid("fresh sampler/objective/policy mismatch; optimizer_calls=0".into()));
             }
             if !run.resume { state.sampler_state = 0; }
@@ -1024,6 +1027,10 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
     let mut reason = "BUDGET_REACHED";
     let mut last_validated = None;
     let mut executed_input_tokens = 0u64;
+    let mut executed_target_tokens=0u64;
+    let mut executed_padding_tokens=0u64;
+    let target_allowance=match fresh {Some((p,root))=>p.remaining_targets(root)?,None=>None};
+    let mut token_budget_reached = false;
     let mut fresh_stop = None;
     let mut fresh_trace = if fresh.is_some() {
         Some(std::fs::OpenOptions::new().write(true).create_new(true).open(run.output.join("updates.r3rows"))?)
@@ -1059,9 +1066,8 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
         control.check("training_start_checkpoint_saved")?;
         if let Some((plan, root)) = fresh {
             fresh_stop = fresh::evaluate_boundary(plan, root, &run.output.join("start"), state.step, control)?;
-            if state.step == 128 || state.step.is_multiple_of(512) {last_validated=Some(state.step);}
+            if plan.evaluation_due(state.step) {last_validated=Some(state.step);}
         }
-        let mut token_budget_reached = false;
         while state.step < config.max_steps {
             if fresh_stop.is_some() { reason = "TRAINING"; break; }
             control.check("training_step")?;
@@ -1077,7 +1083,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
             let mut step_tokens = 0;
             let mut aborted = false;
             let mut task_stats = Vec::new();
-            let balanced = fresh.map(|(plan, _)| plan.draw(state.step));
+            let balanced = fresh.map(|(plan, _)| plan.training_draw(state.step));
             for micro in 0..config.accumulation {
                 control.check("before_training_microbatch")?;
                 let pool = if state.step < config.curriculum_steps {
@@ -1090,10 +1096,12 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                     None => draw_indices(pool, &config, &mut rng)?,
                 };
                 let b = batch(&train, &indices, &loaded.model.device)?;
+                let batch_targets=indices.iter().map(|&i|(train[i].tokens.len()-train[i].response_start) as u64).sum::<u64>();
                 if state
                     .consumed_tokens
                     .checked_add(b.tokens as u64)
                     .is_none_or(|n| n > config.max_tokens)
+                    || target_allowance.is_some_and(|n|executed_target_tokens+batch_targets>n)
                 {
                     aborted = true;
                     break;
@@ -1125,6 +1133,8 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                 // accumulation is cancelled before the atomic optimizer update.
                 state.consumed_tokens += b.tokens as u64;
                 executed_input_tokens += b.tokens as u64;
+                executed_target_tokens += n as u64;
+                executed_padding_tokens += (b.input.elem_count()-b.tokens) as u64;
                 step_tokens += b.tokens;
                 loss_sum += value * n as f64;
                 objective_sum += objective_value * n as f64;
@@ -1151,8 +1161,9 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                 *gradient = (&*gradient / targets as f64)?;
             }
             control.check("before_training_optimizer")?;
+            let actual_lr=fresh.map_or_else(||config.learning_rate(state.step+1),|(p,_)|p.learning_rate(state.step+1));
             let (grad_norm, delta) =
-                adam.step(&loaded.model.vars, &gradients, &config, state.step + 1)?;
+                adam.step_constant(&loaded.model.vars, &gradients, &config, state.step + 1,actual_lr)?;
             state.step += 1;
             state.target_tokens += targets as u64;
             state.sampler_state = if fresh.is_some() {state.step as u64} else {rng.state};
@@ -1160,9 +1171,9 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
             state.validation_loss = None;
             if let Some(trace)=&mut fresh_trace {
                 use std::io::Write;
-                replica_v3::binary::write_value_record(trace,&replica_v3::binary::record!({"step":state.step,"sampler":state.sampler_state,"epoch":state.step/1024,"draw":balanced,"tasks":task_stats,"input":step_tokens,"target":targets,"ce":state.train_loss,"lr":config.learning_rate(state.step),"grad_norm":grad_norm,"clip":(config.clip/(grad_norm+1e-12)).min(1.),"delta_norm":delta}))?;
+                replica_v3::binary::write_value_record(trace,&replica_v3::binary::record!({"step":state.step,"sampler":state.sampler_state,"epoch":state.step/1024,"draw":fresh.map(|(p,_)|p.draw(state.step-1)),"sample_indices":balanced,"tasks":task_stats,"input":step_tokens,"target":targets,"ce":state.train_loss,"lr":actual_lr,"lr_bits":actual_lr.to_bits(),"grad_norm":grad_norm,"clip":(config.clip/(grad_norm+1e-12)).min(1.),"delta_norm":delta}))?;
                 trace.flush()?;
-                if state.step==1||state.step.is_multiple_of(32){trace.sync_all()?;}
+                if state.step==config.budget_start_step+1||state.step.is_multiple_of(32){trace.sync_all()?;}
             }
             control.check("training_optimizer_returned")?;
             let rss = control.last_rss_kib;
@@ -1173,7 +1184,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                 state.train_loss.expect("observed"),
                 objective_sum / targets as f64,
                 config.first_target_weight,
-                config.learning_rate(state.step),
+                actual_lr,
                 state.consumed_tokens,
                 state.target_tokens,
                 started.elapsed().as_secs_f64()
@@ -1184,7 +1195,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                     loaded.model.weight_hash()?
                 );
             }
-            if state.step.is_multiple_of(config.validate_every) || state.step == config.max_steps || (fresh.is_some() && state.step == 128) {
+            if state.step.is_multiple_of(config.validate_every) || state.step == config.max_steps || fresh.is_some_and(|(p,_)|p.evaluation_due(state.step)) {
                 let value = if fresh.is_some() { state.train_loss.unwrap() } else { validation_loss(&loaded.model, &validation, control)? };
                 last_validated = Some(state.step);
                 if fresh.is_none() {
@@ -1239,6 +1250,8 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
     if let Err(error) = &outcome {
         control.classify_error(error);
     }
+    let trace_saved=fresh_trace.as_ref().map_or(Ok(()),|f|f.sync_all());
+    if let Err(error)=&trace_saved{control.classify_error(&Error::Io(std::io::Error::new(error.kind(),error.to_string())));}
     let _ = control.check("before_training_preservation");
     let work_elapsed = started.elapsed().as_secs_f64();
     let cleanup = Instant::now();
@@ -1274,11 +1287,15 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
     receipt["checkpoint_save_status_reason"] = replica_v3::binary::record!(saved_reason);
     receipt["save_error"] = replica_v3::binary::record!(saved.as_ref().err().map(ToString::to_string));
     receipt["work_error"] = replica_v3::binary::record!(outcome.as_ref().err().map(ToString::to_string));
+    receipt["trace_error"]=replica_v3::binary::record!(trace_saved.as_ref().err().map(ToString::to_string));
     receipt["work_elapsed_seconds"] = replica_v3::binary::record!(work_elapsed);
     receipt["cleanup_elapsed_seconds"] = replica_v3::binary::record!(cleanup.elapsed().as_secs_f64());
     receipt["final_evaluation_complete"] = replica_v3::binary::record!(last_validated == Some(state.step));
     receipt["executed_input_tokens_including_uncommitted"] =
         replica_v3::binary::record!(executed_input_tokens);
+    receipt["executed_target_tokens_including_uncommitted"]=replica_v3::binary::record!(executed_target_tokens);
+    receipt["executed_padding_tokens"]=replica_v3::binary::record!(executed_padding_tokens);
+    receipt["token_budget_reached"]=replica_v3::binary::record!(token_budget_reached);
     receipt["candidate_eligible"] = replica_v3::binary::record!(false);
     if fresh.is_some() {
         receipt["fresh_stop"] = replica_v3::binary::record!(fresh_stop);

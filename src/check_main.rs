@@ -425,11 +425,15 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                     ("native", "native_numeric_references_and_causal_padding_gradients"),
                     ("native", "fresh_kv_window_255_256_257_matches_uncached_prefix"),
                     ("training", "fresh_balanced_two_updates_match_fresh_process_resume_and_reject_unbound"),
+                    ("training", "fresh_fx01_post_publication_failure_blocks_new_process"),
+                    ("training", "fresh_fx03_final_step_resumes_only_remaining_evaluation"),
+                    ("training", "fresh_fx03_middle_last_summary_and_unknown_process_boundaries"),
+                    ("training", "fresh_explicit_fork_matches_continuous_and_split_native_resume"),
                     ("runtime", "rust_child_protocol_failures_timeouts_stderr_and_cancellation"),
                 ] {
                     r.cargo("test", &["--test", target, filter, "--", "--exact", "--nocapture"], true)?;
                 }
-                for filter in ["fresh_data_disjoint_resolver_and_balanced_epoch", "first_target_objective_matches_scalar_ce_and_gradients_without_mask_leakage", "adam_matches_independent_reference_and_teacher_forcing_masks", "fresh_accumulation_and_metadata_boundary"] {
+                for filter in ["fresh_data_disjoint_resolver_and_balanced_epoch", "first_target_objective_matches_scalar_ce_and_gradients_without_mask_leakage", "adam_matches_independent_reference_and_teacher_forcing_masks", "fresh_accumulation_and_metadata_boundary", "fresh_fx02_returned_generation_survives_command_deadline", "fresh_strict_rows_roundtrip_command_stop_and_errors", "repair_rf03_actual_token_cancel_preserves_partial_and_skips_followup"] {
                     r.cargo("test", &["--bin", "replica-train", filter, "--", "--nocapture"], true)?;
                 }
                 return Ok(());

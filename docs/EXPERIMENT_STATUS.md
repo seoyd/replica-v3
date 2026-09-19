@@ -1,5 +1,91 @@
 # 진단 및 구현 상태
 
+## 2026-09-19 Exposure/phrase study — G0–G3 검증, 학습 전 기록
+
+R3-FRESH-EXPOSURE-PHRASE-1.0. 기준 source d126aff35d85cebd1bf2b40bc6bc0a5943a3084b,
+보고서 a8376ff03ced939710f946609170d2fb6b798452 이후 기존4096 run을 그대로 보존했다.
+이 절은 **EXECUTED_THIS_RUN / DERIVED_CURRENT_RAW**이며 아래 baseline 기록을
+소급 수정하지 않는다. 이 시점 새 SMALL updates0, generation144, 자체 teacher144다.
+C/P 학습 및 개발 합격, final200/S4/S5/S6/Goal1은 아직 NOT_RUN이다.
+
+FX01: 기존 publisher의 공개 후 file/directory sync를 거친 뒤에만 pending을 해제한다.
+공개된 finished가 있어도 pending/미확정이면 새 process의 재개를 거부한다.
+FX02: 정상 Generated 반환과 command 중단을 row version2에서 구분하고, 필수 teacher를
+별도 prefix로 보존한다. 정상 length는 완료된 생성이지만 strict 정답은 아니다.
+FX03: 마지막 optimizer 이후 EvaluationPending을 같은 평가 경로로 재개하며,
+평가만 남으면 trainer/Adam 호출0, native bytes 불변, 완료 prefix 재생성0이다.
+단일 동기 tensor/fsync의 강제 선점이나 여러 파일의 원자적 transaction을 주장하지 않는다.
+
+### 직접 검증
+
+`target/debug/replica-check --output artifacts/fresh-phrase-check-20260919 quick --fresh`
+고유16 tests PASS. 추가 EOS deadline+sync 실제 process 회귀1개 PASS: 고유17개다.
+fresh fork 연속2 대1+새 process1을 최종 source에서 다시 실행해 PASS했다.
+수정 전 FX01/03 직접 process 시험은 각각 실패했고 수정 후 통과했다.
+초기 FX02 RED는 fixture가 정상 EOS를 반환하지 않아 증거로 사용하지 않는다.
+수정한 수치 TINY fixture는 실제 logits→greedy EOS, timeout 직후 teacher 미실행,
+binary writer/reader strict 재채점을 검증했다. SMALL 모델 출력 대체에는 사용하지 않는다.
+정답EOS/오답EOS/length/UTF-8 오류/EOS 전 timeout/정상EOS 뒤 command timeout의
+6행 독립 판정도 통과했다. 마지막 평가 첫/중간/끝/summary 경계와 UNKNOWN 호출,
+pending 실패/잘림/공개 후 sync 실패에서 새 process 차단을 확인했다.
+
+이 작업에서 실행한 fixture의 누적 optimizer는 TINY60/scalar1이다(실패·재실행 포함).
+TINY generation704/teacher698은 process fixture와 단위 시험 호출에서 별도 집계했다.
+이전 baseline의 시험 수를 합산하지 않았다. quick16 이후 추가 회귀 및 최종 fork 재실행을
+포함한 수치이며, 품질 모델의 학습 횟수로 표시하지 않는다.
+
+Rust/Cargo1.98.1, locked/offline, CPU F32/Accelerate/thread1. 릴리스 빌드 PASS.
+변경 fresh.rs의 rustfmt 및 diff whitespace 검사 PASS. 전체 fmt는 기존 다른 파일의
+형식 차이 때문에 FAIL이며 무관한 재포맷은 하지 않았다. Clippy는 기존 미수정
+for_kv_map 경고만 허용하여 `-D warnings -A clippy::for_kv_map`으로 PASS했다.
+실제 새 CLI의 study-prepare/study-observe와 --help를 실행했다.
+
+### 부모와 표현 진단
+
+read-only 검증이 기존2496 raw의 native corpus·prompt·model·EOS·strict text·분모와
+저장 요약을 재계산하여 일치를 확인했다. final/step-004096의 weights/Adam/state가
+동일하고 기존 부모 파일 inventory도 변경되지 않았다. 새 binary의 bucket별2개,
+총16개 정상 greedy가 과거 raw tokens/actual/error/finish/EOS와 전부 일치했다.
+16개 정답률12/16은 표본 확인일 뿐 전체 품질 추정이 아니다.
+
+질문 suffix만 익숙한 train 표현으로 바꾼128개의 정상 생성은80/128, errors0,
+EOS128이었다. 원 transfer40/128에 대해 gain42/loss2, 본문97/128·인용86/128,
+base4=16/32, buckets=[4,8,6,8,8,16,14,16]이다. CE .5012038153372135.
+이는 FAMILIAR_WORDING_DIAGNOSTIC이며 정상 transfer 점수나 제품 전처리가 아니다.
+evidence/ID/time/status/order/answer를 유지하고 request-only resolver로 의도를 확인했다.
+prompt의 불완전 UTF-8 piece 출현은 train0, primary0, 원 transfer2016, 진단0;
+transfer prompt tokens28412→25916이다. 표현·길이·토큰 조합이 함께 달라지므로
+byte fragment 단독 원인으로 단정하지 않는다. 관측 command13.808689584초,
+prepare25.041766875초이며 컴파일 시간은 모델 평가 시간에 합산하지 않았다.
+
+### 등록 및 실행 identity
+
+두 arm은 같은 부모 weights/Adam/clock, 원래 case/target 순서로 등록됐다.
+C 예정 committed input3384520, P3511224; target는 각각252312다.
+이는 계획값이며 실행값이 아니다. 각 case 추가2노출, P는 original/variant 각1회,
+각 bucket/epoch에서 두 질문형식512/512를 전수 확인했다. 정확한 heldout suffix는
+train에 넣지 않았다. LR3e-5 constant, absolute4096→6144, 각2048 상한이다.
+
+| identity | SHA256 |
+| --- | --- |
+| frozen executable | `ede5e6fe6fa431b1f9fd38923681b4ad3bd89291fc0b7bd5b9a72185436b9d02` |
+| execution source digest | `5d4119ac19a1c367ea37804bca74f72b1fd6e6a409e4c5ac7b7b5d4a65dd1cb7` |
+| study.r3b | `4079a5d567898004f733520f1a9e5f1aa45c20fc1f1484537c5642bc4e426c44` |
+| C plan | `98269ef94c501a8a1a3eb5f9d9094aa311e642519addfbf450bc6711feafc5e0` |
+| P plan | `699018f296714b257ed4cf881b8b67967d38a21d941cc421b06d7259ab5f629e` |
+| inherited Adam | `15fb9f84241409c9cb940eda562fb6ba61dfa5dea6eaeda2946cbd1583041132` |
+
+허용된 읽기 전용 증거 root는 `artifacts/fresh-exposure-phrase-20260919/`다.
+`parent-audit.r3b`, `study.r3b`, `study-ready.r3b`, `observation-*.r3b`,
+`eval-4096-parity*`, `eval-4096-familiar-wording*`, 각 arm의 plan/registration,
+native corpus/tokenizer/initial 및 P question-variants가 해당한다.
+원본 부모는 `artifacts/fresh-joint-20260919/`이며 아래 기존 hash를 유지한다.
+고정 실행파일은 `artifacts/fresh-exposure-phrase-20260919-executable`이다.
+콘솔 근거 `/tmp/r3-phrase-prepare.log`, `/tmp/r3-phrase-observe.log`,
+직접 회귀 `/tmp/r3-phrase-process-red.log`, `process-green.log`, `eos-sync.log`,
+`fork-final.log`(마지막 세 파일도 동일 r3-phrase- 접두어)을 보존한다.
+원자료·corpus·모델·임시 도구는 commit 대상이 아니다.
+
 ## 2026-09-19 Fresh joint baseline — F4/F5 예산 종료
 
 **EXECUTED_THIS_RUN:** 새 random-init SMALL을 4,096회 학습하고 정상 예산 종료했다.

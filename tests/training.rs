@@ -2686,3 +2686,121 @@ fn fresh_balanced_two_updates_match_fresh_process_resume_and_reject_unbound() {
     call(&["fresh","run","--root",split.to_str().unwrap()],false);
     println!("FRESH_TINY_OPTIMIZER_CALLS=4 fresh_process_resume=EXACT missing_policy=REJECTED");
 }
+
+#[test]
+fn fresh_fx01_post_publication_failure_blocks_new_process() {
+    for fault in ["finished-file-sync","finished-dir-sync","pending-write","finished-pending-only"] {
+    let d=tempfile::tempdir().unwrap();let root=d.path().join("run");
+    let call=|args:&[&str],fault:Option<&str>| {let mut c=Command::new(env!("CARGO_BIN_EXE_replica-train"));c.args(args).env("VECLIB_MAXIMUM_THREADS","1").env("RAYON_NUM_THREADS","1");if let Some(f)=fault{c.env("R3_FRESH_TEST_STOP",f);}c.output().unwrap()};
+    assert!(call(&["fresh","fixture","--output",root.to_str().unwrap()],None).status.success());
+    let r=call(&["fresh","run","--root",root.to_str().unwrap()],Some(fault));
+    assert!(!r.status.success(),"post-publication fault must fail");
+    let final_path=root.join("segment-0000-finished.r3b");
+    assert_eq!(final_path.exists(),fault.ends_with("sync"));
+    let r=call(&["fresh","run","--root",root.to_str().unwrap()],None);
+    assert!(!r.status.success());assert!(!root.join("segment-0001").exists());
+    assert!(!String::from_utf8_lossy(&r.stdout).contains("TRAIN_START"));
+    if final_path.exists(){
+        let bytes=std::fs::read(&final_path).unwrap();std::fs::write(&final_path,&bytes[..12]).unwrap();
+        std::fs::remove_file(root.join("segment-0000-finished.pending.r3b")).unwrap();
+        assert!(!call(&["fresh","run","--root",root.to_str().unwrap()],None).status.success());
+        assert!(!root.join("segment-0001").exists());
+    }
+    }
+    println!("TINY_OPTIMIZER_CALLS=4 final_sync_pending_truncation_new_process=BLOCKED failed_retry_optimizer_generation=0");
+}
+
+#[test]
+fn fresh_fx03_final_step_resumes_only_remaining_evaluation() {
+    let d=tempfile::tempdir().unwrap();let root=d.path().join("run");
+    let call=|args:&[&str],fault:Option<&str>| {let mut c=Command::new(env!("CARGO_BIN_EXE_replica-train"));c.args(args).env("VECLIB_MAXIMUM_THREADS","1").env("RAYON_NUM_THREADS","1");if let Some(f)=fault{c.env("R3_FRESH_TEST_STOP",f);}let o=c.output().unwrap();assert!(o.status.success(),"{}\n{}",String::from_utf8_lossy(&o.stdout),String::from_utf8_lossy(&o.stderr));};
+    call(&["fresh","fixture","--output",root.to_str().unwrap()],None);
+    call(&["fresh","fixture-full","--root",root.to_str().unwrap()],Some("final-row-1"));
+    assert!(root.join("eval-0002-train64.r3rows").exists(),"TINY must execute shared evaluation");
+    let before=replica_v3::neural::checkpoint::load(&root.join("segment-0000/final"),candle_core::Device::Cpu,true).unwrap();
+    call(&["fresh","run","--root",root.to_str().unwrap()],None);
+    let after=replica_v3::neural::checkpoint::load(&root.join("segment-0001/final"),candle_core::Device::Cpu,true).unwrap();
+    assert_eq!(before.model.weight_hash().unwrap(),after.model.weight_hash().unwrap());
+    assert_eq!(before.manifest.training,after.manifest.training);
+    for (k,t) in &before.optimizer{assert_eq!(t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),after.optimizer[k].flatten_all().unwrap().to_vec1::<f32>().unwrap());}
+}
+
+#[test]
+fn fresh_fx03_middle_last_summary_and_unknown_process_boundaries() {
+    use replica_v3::{binary,neural::checkpoint};use candle_core::Device;
+    for fault in ["final-train64-row-4","final-transfer128-row-8","final-transfer128-summary"] {
+        let d=tempfile::tempdir().unwrap();let root=d.path().join("run");
+        let call=|args:&[&str],fault:Option<&str>,ok:bool|{let mut c=Command::new(env!("CARGO_BIN_EXE_replica-train"));c.args(args).env("VECLIB_MAXIMUM_THREADS","1").env("RAYON_NUM_THREADS","1");if let Some(f)=fault{c.env("R3_FRESH_TEST_STOP",f);}let o=c.output().unwrap();assert_eq!(o.status.success(),ok,"{}\n{}",String::from_utf8_lossy(&o.stdout),String::from_utf8_lossy(&o.stderr));o};
+        call(&["fresh","fixture","--output",root.to_str().unwrap()],None,true);
+        call(&["fresh","fixture-full","--root",root.to_str().unwrap()],Some(fault),true);
+        let before=checkpoint::load(&root.join("segment-0000/final"),Device::Cpu,true).unwrap();
+        let paths:Vec<_>=std::fs::read_dir(&root).unwrap().map(|e|e.unwrap().path()).filter(|p|p.extension().is_some_and(|x|x=="r3rows")).collect();
+        let prefixes:Vec<_>=paths.iter().map(|p|(p.clone(),std::fs::read(p).unwrap())).collect();
+        call(&["fresh","run","--root",root.to_str().unwrap()],None,true);
+        let after=checkpoint::load(&root.join("segment-0001/final"),Device::Cpu,true).unwrap();
+        assert_eq!(before.manifest.training,after.manifest.training);assert_eq!(before.model.weight_hash().unwrap(),after.model.weight_hash().unwrap());
+        for(k,t)in &before.optimizer{assert_eq!(t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),after.optimizer[k].flatten_all().unwrap().to_vec1::<f32>().unwrap());}
+        for(p,old)in prefixes{assert!(std::fs::read(p).unwrap().starts_with(&old));}
+        let receipt=|n|->binary::Value{binary::from_slice(&std::fs::read(root.join(format!("segment-{n:04}/train-control.r3b"))).unwrap()).unwrap()};
+        let a=receipt(0);let b=receipt(1);assert_eq!(b["optimizer_calls"],0);assert_eq!(b["final_evaluation_complete"],true);
+        assert_eq!(a["generation_calls"].as_u64().unwrap()+b["generation_calls"].as_u64().unwrap(),24);
+        assert_eq!(a["teacher_calls"].as_u64().unwrap()+b["teacher_calls"].as_u64().unwrap(),24);
+        call(&["fresh","run","--root",root.to_str().unwrap()],None,false);
+    }
+    println!("TINY_OPTIMIZER_CALLS=6 distinct_process_boundaries=3 completed_prefix_unchanged=true");
+}
+
+#[test]
+fn fresh_explicit_fork_matches_continuous_and_split_native_resume() {
+    use candle_core::Device;use replica_v3::{binary,neural::checkpoint};
+    let d=tempfile::tempdir().unwrap();let parent=d.path().join("parent");let study=d.path().join("study");
+    let call=|args:&[&str]|{let out=Command::new(env!("CARGO_BIN_EXE_replica-train")).args(args).env("VECLIB_MAXIMUM_THREADS","1").env("RAYON_NUM_THREADS","1").output().unwrap();assert!(out.status.success(),"{}\n{}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));};
+    call(&["fresh","fixture","--output",parent.to_str().unwrap()]);
+    call(&["fresh","fixture-full","--root",parent.to_str().unwrap()]);
+    call(&["fresh","study-prepare","--parent",parent.to_str().unwrap(),"--output",study.to_str().unwrap()]);
+    call(&["fresh","study-observe","--root",study.to_str().unwrap()]);
+    let c=study.join("C-REPEAT");let p=study.join("P-PHRASE");
+    // C's first/second command exercises the explicit parent binding then normal bound resume.
+    call(&["fresh","run","--root",c.to_str().unwrap()]);
+    call(&["fresh","run","--root",c.to_str().unwrap()]);
+    call(&["fresh","fixture-full","--root",p.to_str().unwrap()]);
+    let initial=checkpoint::load(&c.join("initial.r3m"),Device::Cpu,true).unwrap();
+    let other=checkpoint::load(&p.join("initial.r3m"),Device::Cpu,true).unwrap();
+    assert_eq!(initial.model.weight_hash().unwrap(),other.model.weight_hash().unwrap());assert_eq!(initial.manifest.training,other.manifest.training);
+    for(k,t)in &initial.optimizer{assert_eq!(t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),other.optimizer[k].flatten_all().unwrap().to_vec1::<f32>().unwrap());}
+    for root in [&c,&p]{let plan:binary::Value=binary::from_slice(&std::fs::read(root.join("plan.r3b")).unwrap()).unwrap();assert_eq!(plan["config"]["max_steps"],4);
+        for n in 0..2{let path=root.join(format!("segment-{n:04}/updates.r3rows"));if !path.exists(){continue;}for row in binary::read_value_records(&path).unwrap(){assert_eq!(row["lr_bits"],3e-5f64.to_bits());}}
+    }
+    // Same policy C in a second disposable study provides continuous versus1+1 equality.
+    let other_study=d.path().join("continuous");
+    call(&["fresh","study-prepare","--parent",parent.to_str().unwrap(),"--output",other_study.to_str().unwrap()]);
+    call(&["fresh","study-observe","--root",other_study.to_str().unwrap()]);
+    let full=other_study.join("C-REPEAT");call(&["fresh","fixture-full","--root",full.to_str().unwrap()]);
+    let a=checkpoint::load(&full.join("segment-0000/final"),Device::Cpu,true).unwrap();let b=checkpoint::load(&c.join("segment-0001/final"),Device::Cpu,true).unwrap();
+    assert_eq!(a.model.weight_hash().unwrap(),b.model.weight_hash().unwrap());
+    for(k,t)in &a.optimizer{assert_eq!(t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),b.optimizer[k].flatten_all().unwrap().to_vec1::<f32>().unwrap());}
+    let a=a.manifest.training.unwrap();let b=b.manifest.training.unwrap();assert_eq!((a.step,a.sampler_state,a.consumed_tokens,a.target_tokens),(b.step,b.sampler_state,b.consumed_tokens,b.target_tokens));
+    println!("TINY_OPTIMIZER_CALLS=8 actual_parent_fork=VERIFIED constant_LR_bits=VERIFIED continuous_vs_fresh_resume=EXACT");
+}
+
+#[test]
+fn fresh_eos_deadline_process_and_sync_failure_stay_distinct() {
+    use replica_v3::{binary,neural::{EOS,checkpoint}};use candle_core::Device;
+    for sync_failure in [false,true]{
+        let d=tempfile::tempdir().unwrap();let root=d.path().join("run");
+        let call=|args:&[&str],deadline:bool,ok:bool|{let mut c=Command::new(env!("CARGO_BIN_EXE_replica-train"));c.args(args).env("VECLIB_MAXIMUM_THREADS","1").env("RAYON_NUM_THREADS","1").env("R3_FRESH_FIXTURE_EOS","1");
+            if deadline{c.env("R3_FRESH_TEST_STOP","final-row-1");if sync_failure{c.env("R3_FRESH_PUBLISH_FAULT","finished-dir-sync");}}
+            let o=c.output().unwrap();assert_eq!(o.status.success(),ok,"{}\n{}",String::from_utf8_lossy(&o.stdout),String::from_utf8_lossy(&o.stderr));o};
+        call(&["fresh","fixture","--output",root.to_str().unwrap()],false,true);
+        call(&["fresh","fixture-full","--root",root.to_str().unwrap()],true,!sync_failure);
+        let raw=root.join("eval-0002-train64.r3rows");let before=std::fs::read(&raw).unwrap();
+        let rows=binary::read_value_records(&raw).unwrap();assert_eq!(rows.len(),2);assert_eq!(rows[1]["generation_completed"],true);
+        assert_eq!(rows[1]["raw_tokens"],binary::record!([EOS]));assert_eq!(rows[1]["command_stop"],"TIME_BUDGET");assert_eq!(rows[1]["exact_match"],false);
+        let native=checkpoint::load(&root.join("segment-0000/final"),Device::Cpu,true).unwrap();
+        let out=call(&["fresh","run","--root",root.to_str().unwrap()],false,!sync_failure);
+        if sync_failure{assert!(!root.join("segment-0001").exists());assert!(!String::from_utf8_lossy(&out.stdout).contains("TRAIN_START"));}
+        else{let end=checkpoint::load(&root.join("segment-0001/final"),Device::Cpu,true).unwrap();assert_eq!(native.manifest.training,end.manifest.training);assert_eq!(native.model.weight_hash().unwrap(),end.model.weight_hash().unwrap());assert!(std::fs::read(raw).unwrap().starts_with(&before));
+            let a:binary::Value=binary::from_slice(&std::fs::read(root.join("segment-0000/train-control.r3b")).unwrap()).unwrap();let b:binary::Value=binary::from_slice(&std::fs::read(root.join("segment-0001/train-control.r3b")).unwrap()).unwrap();assert_eq!(a["generation_calls"],1);assert_eq!(a["teacher_calls"],0);assert_eq!(b["generation_calls"],23);assert_eq!(b["optimizer_calls"],0);}
+    }
+    println!("TINY_OPTIMIZER_CALLS=4 actual_EOS_deadline_resume=PASS TIME_PLUS_SYNC_FAILURE=BLOCKED GENERATIONS=25 TEACHERS=24");
+}
