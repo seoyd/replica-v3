@@ -1,5 +1,68 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Fixed exposure follow-through completed; joint quality failed
+
+EXECUTED_THIS_RUN on frozen source `cd52b21a9af5276ff53ab2f63b946d1266578bb8`.
+All3584 registered new updates completed, ADJACENT6400→9984, with unchanged
+weights lineage, Adam, LR3e-5, first-target1 CE, tokenizer and finite tape.
+The old failed comparison was not promoted. The pure `fresh paired-report`
+completed with exit0 after recounting bound raw, teachers, native state and actual
+sample/LR/token traces. Source code digest:
+`fae89422296da477e2a4f3e6ea0fb0ff252666fd616f8d577b01810494c6186c`.
+
+| Absolute step | New updates | Train64 | Primary512 | Transfer128 | Flipped192 | Both192 |
+|---|---:|---:|---:|---:|---:|---:|
+| 6400, preserved parent | 0 | 50 | 367 | 70 | 15 | 0 |
+| 7424 | 1024 | 44 | 366 | 73 | 33 | 2 |
+| 8448 | 2048 | 53 | 360 | 68 | 40 | 3 |
+| 9984 | 3584 | 41 | 368 | 67 | 56 | 4 |
+
+Final both C/D/E=1/3/0,3 independent bases, base4=0; original68/192,
+same normal output165/192. Primary buckets `[57,62,28,22,18,63,54,64]`;
+transfer `[7,8,3,0,1,16,16,16]`. All3040 new generation rows have normal EOS
+and errors0. Extra exposure improved some flipped answers but did not restore
+retention or joint selection. The underlying cause remains unresolved.
+
+Actual new input6,153,639/target442,017 includes discarded input6,887/target471.
+Committed input6,146,752/target441,546; padding2,503,169;28,672 draws,3584 per
+bucket,14,336 each familiar/P-variant wording.3040 generations/3040 teachers,
+registered active accounting3918.07347796s. Four pure900s time stops saved native
+state and continued in fresh processes; final phase Finished/BUDGET_REACHED,
+resume=false. No UNKNOWN/cancel/numeric/storage failure was observed.
+Training sampled peak RSS1,509,760KiB; this is not an S6 benchmark.
+The preceding SPACED256+ADJACENT256 plus this3584 totals4096 updates,
+7,029,257 attempted input/504,705 target. Including the fixed P16 and train48
+diagnostics, SMALL generation5424/teacher5408. No further update belongs to these
+closed budgets. This follow-through's direct TINY verification used21 updates,
+291 generations/291 teachers; fixture scores are not SMALL quality evidence.
+
+Retained executable `artifacts/paired-followthrough-20260920-executable`, SHA256
+`2741f7cbd7df663427a3cf7b2ae2d838bcfaf1e12d0f8fe31850338356661292`.
+Final checkpoint `artifacts/paired-followthrough-20260920/ADJACENT/segment-0005/final`,
+native file SHA256 `4408580b7e7aeb96c04684ea201a9f5205d4f4739b2d4310cbba3c811e3bc328`,
+model weight hash `f92bfc4da46d03acc74734a6b8b2e1ce8b67771c051474f08534717304cc98d0`.
+Policy hash `c1373ad64ed13ba5df1bb6dcc8e872ccd1bee75e2e5addc71e3eed45c870db9c`.
+Raw/teachers/decisions remain under that arm; execution logs, pure recount,
+native inspection, final metrics and candidate.patch are under
+`artifacts/paired-followthrough-20260920-evidence/`. None are published in Git.
+
+Read-only own-model teacher recount supports testing first-target weighting:
+the seen-train48 diagnostic had22 incorrect first-target argmax choices;
+at7424 selector192 had121. Mean first/remaining token NLL was0.7813/0.1034
+and1.7146/0.1696 respectively. This is a hypothesis, not proof of a loss defect.
+`teacher-nll-recount.txt` contains the corrected analysis. The earlier local
+`teacher-error-recount.txt` divergence fields are INVALID_FOR_GENERATION: the
+existing teacher adapter passed an empty raw sequence, so its difference index
+does not measure actual generation divergence. No historical file was overwritten.
+
+CODE_VERDICT=IMPLEMENTER_TESTED_PASS; LEARNING_EXECUTION=COMPLETE;
+DEVELOPMENT_JOINT_PASS=false; FINAL200=NOT_CREATED/NOT_OPENED;
+S4/S5/S6=NOT_RUN_PRECONDITION_FAILED; GOAL1_READY=false; GOAL1_ACCEPTED=false.
+The user explicitly authorized subsequent one-variable improvement. Next proposed
+variable is the existing first-target coefficient1→4, same P6144/Adam/data/tape/LR,
+with bounded registration and direct checks before execution. At this closure it
+has not yet been implemented or trained. Independent current review is pending.
+
 ## 2026-09-20 User-requested follow-through — diagnosis and direct verification
 
 The user requested continued improvement after the paired comparison closed.

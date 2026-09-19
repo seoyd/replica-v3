@@ -1,6 +1,15 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: explicitly requested bounded exposure follow-through
+## Closed: explicitly requested bounded exposure follow-through
+
+The follow-through completed3584 updates at absolute9984, with primary368/512,
+transfer67/128, flipped56/192 and both4/192 (C1/D3/E0), generation errors0.
+The final native weights/Adam and all raw are preserved, resume=false. This is
+not joint quality recovery. The user subsequently explicitly authorized further
+grounded, one-variable experiments while retaining the quality thresholds,
+Rust-only implementation and external-model prohibition. A subsequent experiment
+must register its own bounded policy and exact parent before any learning; no old
+budget, failed gate or terminal is reopened.
 
 On2026-09-20 the user requested continued improvement toward Goal1 after the
 paired study failed its entry gate. This authorizes a new bounded research fork;
