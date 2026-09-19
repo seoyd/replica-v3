@@ -1,5 +1,16 @@
 # Replica v3 B0 runbook
 
+## Bounded learning-rate research
+
+`replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT
+--parity NEW_PARITY_ROOT --output NEW_ROOT --learning-rate-threefold` registers
+one ADJACENT arm: same P6144/Adam/data/tape, coefficient1, constant LR9e-5,
+max1280 new updates. It conflicts with `--first-target-four`; the default paired
+comparison remains unchanged. Run `fresh run --root NEW_ROOT/ADJACENT` with the
+frozen executable, then `fresh paired-report --root NEW_ROOT`. The latter only
+recounts existing evidence. Pure time resumes use the same command and budget.
+An unsafe failure never authorizes a retry or a replacement root.
+
 ## First-target coefficient research
 
 The explicitly authorized one-variable trial uses the existing paired preparation:

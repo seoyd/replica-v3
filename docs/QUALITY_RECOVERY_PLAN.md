@@ -1,5 +1,37 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: bounded learning-rate intervention from P6144
+
+The user's continuing one-variable authorization permits this new experiment;
+the old paired/follow-through/first-target4 failures remain closed and read-only.
+Register `fresh paired-prepare --learning-rate-threefold` in a new root. Change
+only constant LR3e-5→9e-5 relative to the retained coefficient1 control, using the
+same P6144 weights/Adam, tokenizer, native corpus, ADJACENT tape, batch8, eight
+tasks, clipping/decay and first-target1 response CE. Do not combine weight4, reset
+Adam, reinitialize, search other rates, change wording/data or alter generation.
+
+Hypothesis: adaptation may be limited by the continuation update size. Retained
+selector teachers at9984 still miss the first target on99/192 cases at coefficient1;
+weight4 reduces that to78 yet reduces primary368→339. Increasing its loss weight
+did not recover joint quality. This motivates a separate LR test, not proof of
+a low-LR defect. Compare only matched cursors6400 and7424 with retained control
+sources `2dfa56f` and `cd52b21`; an earlier or unequal-budget stop is reported as
+such. The control is existing evidence, not a freshly executed second arm.
+
+New cap1280 SMALL updates (6144→7424),12M actual input/1M target including
+discarded work,12000 generation/10000 own-model teacher,21600 active seconds,
+900s commands/120s cleanup. TINY cap64 updates/512 generation/512 teacher,
+scalar optimizer0. Validate native LR/objective and exact continuous2 versus
+fresh-process1+1, full finite tape and schedule, and production P16 parity before
+SMALL. Save the first actual update and resume in a fresh process within the cap.
+Screens at additional32/64/128/768; full train64/primary512/transfer128/selector192
+at256/1280. Same parent retention, numerical/storage/cancel/UNKNOWN guards and
+two-full-panel stagnation rule. A joint pass freezes the first candidate and
+activates independent S4 and conditional S5/S6. Otherwise close without extending
+this budget. There is no third LR value or automatic longer continuation in this
+registration; any later hypothesis needs its own evidence and bounded registration.
+All original joint, final200 and Goal1 thresholds remain unchanged.
+
 ## Closed: first-target coefficient, one-variable research
 
 Completed3840 updates at9984: primary339/512, transfer67/128, flipped67/192,

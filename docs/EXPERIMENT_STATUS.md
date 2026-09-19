@@ -1,5 +1,29 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 LR-only research — direct verification before SMALL
+
+The next bounded intervention uses the same P6144 parent/Adam/native data/tape
+and default coefficient1, changing fixed LR3e-5→9e-5 only against the retained
+coefficient1 control. Max1280 new updates; no first-target4 combination or LR
+sweep. Source changes reuse `src/fresh.rs` and `tests/training.rs`; no new
+production file, framework, model/storage schema or inference math.
+
+EXECUTED_THIS_RUN, Rust1.98.1/Cargo locked/offline/Accelerate/thread1:
+actual process regression1 PASS (48.43s), TINY29 updates/399 generations/399
+teachers including27 setup observations; continuous2 versus1+1 exact native
+weights/Adam, fixed LR/objective, pure report unchanged and conflicting
+interventions rejected before registration. Existing failure interlocks passed
+in the same test. Full3840-row tape/binary/bounds/schedule test1 PASS,
+optimizer/generation/teacher0. After those tests, the equivalent `5|6|7` pattern
+was changed to `5..=7` to remove a new lint; clippy exit0 with only the existing
+map-key warning. This lint-only change does not alter accepted schema values.
+
+Final production-source P6144 parity1 test PASS:16/16 raw outputs,160 tokens,
+errors0, optimizer0/teacher0, original inventory unchanged (13.54s). New SMALL
+updates are0 at this stage. Invocation logs and executable hashes are preserved
+under `artifacts/lr9e5-20260920-evidence/`. Execution counts will be added after
+registration and learning. No quality or independent acceptance is claimed.
+
 ## 2026-09-20 First-target4 completed; joint quality failed
 
 EXECUTED_THIS_RUN on frozen source `958d78c25848dab4b7ee200aab3bf5b8e9867f14`.
