@@ -101,7 +101,7 @@ impl Config {
         Ok(())
     }
     pub fn id(&self) -> Result<String> {
-        Ok(hash(&serde_json::to_vec(self)?))
+        Ok(hash(&crate::binary::to_vec(self)?))
     }
     /// Formula identity, independent of the legacy JSON wire representation and profile label.
     pub fn semantic_id(&self) -> Result<String> {

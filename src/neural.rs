@@ -151,20 +151,20 @@ impl ByteBpe {
             .map_err(token_error)?;
         let mut model = BPE::default();
         trainer.train(&mut model).map_err(token_error)?;
-        let value = serde_json::to_value(&model)?;
+        let value = crate::binary::to_value(&model)?;
         let file = TokenizerFile {
             version: 1,
             train_hash: train_hash.into(),
             vocab: model.get_vocab().into_iter().collect(),
-            merges: serde_json::from_value(value["merges"].clone())?,
+            merges: crate::binary::from_value(value["merges"].clone())?,
         };
-        Self::from_bytes(&serde_json::to_vec(&file)?)
+        Self::from_bytes(&crate::binary::to_vec(&file)?)
     }
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() > MAX_TOKENIZER_BYTES {
             return Err(token_error("oversized metadata"));
         }
-        let file: TokenizerFile = serde_json::from_slice(bytes)?;
+        let file: TokenizerFile = crate::binary::from_slice(bytes)?;
         Self::from_file(file, bytes.to_vec(), hash(bytes))
     }
     fn from_file(file: TokenizerFile, bytes: Vec<u8>, wire_id: String) -> Result<Self> {
@@ -249,7 +249,7 @@ impl ByteBpe {
     }
     pub fn save(&self, path: &Path) -> Result<()> {
         if self.bytes.is_empty() {
-            return Err(token_error("native tokenizer has no legacy JSON export"));
+            return Err(token_error("embedded tokenizer has no standalone record bytes"));
         }
         write_new(path, &self.bytes)
     }

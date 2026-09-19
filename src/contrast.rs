@@ -119,10 +119,10 @@ fn validate_cases(cases: &[Episode], expected: usize) -> Result<()> {
             || group[0].answer != group[3].answer
             || group[1].answer != group[2].answer
             || group[0].answer == group[1].answer
-            || serde_json::to_vec(&group[0].request.evidence)?
-                != serde_json::to_vec(&group[1].request.evidence)?
-            || serde_json::to_vec(&group[2].request.evidence)?
-                != serde_json::to_vec(&group[3].request.evidence)?
+            || replica_v3::binary::to_vec(&group[0].request.evidence)?
+                != replica_v3::binary::to_vec(&group[1].request.evidence)?
+            || replica_v3::binary::to_vec(&group[2].request.evidence)?
+                != replica_v3::binary::to_vec(&group[3].request.evidence)?
         {
             return Err(ambiguity());
         }
@@ -184,8 +184,8 @@ fn prepare_heldout(train: &[Episode], max_id: i64) -> Result<Vec<Episode>> {
                 e.request.evidence.items.reverse();
             }
             e.answer = data::replace_training_literals(&e.answer, &replacements)?;
-            e.binding = hash(&serde_json::to_vec(&(group, &replacements))?);
-            e.sequence = hash(&serde_json::to_vec(&e.request)?);
+            e.binding = hash(&replica_v3::binary::to_vec(&(group, &replacements))?);
+            e.sequence = hash(&replica_v3::binary::to_vec(&e.request)?);
             out.push(e);
         }
     }
@@ -221,11 +221,7 @@ pub fn freeze(corpus: &Path, log: &Path, tokenizer: &Path, output: &Path) -> Res
         .collect();
     validate_cases(&cases, 16)?;
     let log_bytes = read_bounded(log, 16 * 1024 * 1024)?;
-    let log_text = std::str::from_utf8(&log_bytes).map_err(|_| ambiguity())?;
-    let rows: Vec<serde_json::Value> = log_text
-        .lines()
-        .map(serde_json::from_str)
-        .collect::<std::result::Result<_, _>>()?;
+    let rows: Vec<replica_v3::binary::Value> = replica_v3::binary::records_from_slice(&log_bytes)?;
     let header = rows.first().ok_or_else(ambiguity)?;
     if header["split"] != "train"
         || header["split_sha256"] != m.train.sha256
@@ -241,7 +237,7 @@ pub fn freeze(corpus: &Path, log: &Path, tokenizer: &Path, output: &Path) -> Res
         if matching.len() != 1
             || matching[0]["expected"] != e.answer
             || matching[0]["question"] != e.request.input
-            || matching[0]["evidence"] != serde_json::to_value(&e.request.evidence)?
+            || matching[0]["evidence"] != replica_v3::binary::to_value(&e.request.evidence)?
         {
             return Err(Error::Corrupt(
                 "original failure log/corpus mismatch".into(),
@@ -255,8 +251,8 @@ pub fn freeze(corpus: &Path, log: &Path, tokenizer: &Path, output: &Path) -> Res
         corpus_hash: m.train.sha256,
         original_log_hash: hash(&log_bytes),
         tokenizer_hash: tok.id(),
-        train_hash: hash(&serde_json::to_vec(&cases)?),
-        heldout_hash: hash(&serde_json::to_vec(&heldout)?),
+        train_hash: hash(&replica_v3::binary::to_vec(&cases)?),
+        heldout_hash: hash(&replica_v3::binary::to_vec(&heldout)?),
         heldout_seed: HELDOUT_SEED,
         train: cases,
         heldout,
@@ -267,8 +263,8 @@ pub fn freeze(corpus: &Path, log: &Path, tokenizer: &Path, output: &Path) -> Res
         verify_framing(e, &s, &tok)?;
     }
     samples(&frozen.heldout, &tok, 512)?;
-    write_new(output, &serde_json::to_vec(&frozen)?)?;
-    println!(
+    write_new(output, &replica_v3::binary::to_vec(&frozen)?)?;
+    eprintln!(
         "freeze_train={} freeze_heldout={} original_log={} tokenizer={} train=16 groups=4 heldout=64 groups=16 heldout_seed={} original_bytes_preserved=true citation_target=NOT_REQUESTED",
         frozen.train_hash,
         frozen.heldout_hash,
@@ -279,11 +275,11 @@ pub fn freeze(corpus: &Path, log: &Path, tokenizer: &Path, output: &Path) -> Res
     Ok(())
 }
 fn load_fixture(path: &Path, tok: &ByteBpe) -> Result<Frozen> {
-    let f: Frozen = serde_json::from_slice(&read_bounded(path, 2 * 1024 * 1024)?)?;
+    let f: Frozen = replica_v3::binary::from_slice(&read_bounded(path, 2 * 1024 * 1024)?)?;
     if f.version != 1
         || f.tokenizer_hash != tok.id()
-        || f.train_hash != hash(&serde_json::to_vec(&f.train)?)
-        || f.heldout_hash != hash(&serde_json::to_vec(&f.heldout)?)
+        || f.train_hash != hash(&replica_v3::binary::to_vec(&f.train)?)
+        || f.heldout_hash != hash(&replica_v3::binary::to_vec(&f.heldout)?)
         || f.heldout_seed != HELDOUT_SEED
     {
         return Err(Error::Corrupt("contrast frozen identity".into()));
@@ -323,13 +319,10 @@ fn verify_framing(e: &Episode, s: &Sample, tok: &ByteBpe) -> Result<()> {
     if ids != p.token_ids {
         return Err(Error::Corrupt("independent role framing".into()));
     }
-    println!(
-        "{}",
-        serde_json::json!({"framing":true,"id":e.id,"prompt_ids":ids,"role_spans":spans,
+    replica_v3::binary::print_record(&replica_v3::binary::record!({"framing":true,"id":e.id,"prompt_ids":ids,"role_spans":spans,
         "prompt_tokens":s.response_start,"target_tokens_with_eos":s.tokens.len()-s.response_start,
         "target_ids":&s.tokens[s.response_start..],"supported_record":supported(&e.request)?.0,
-        "citation_target":"NOT_REQUESTED","input_tokens":s.tokens.len()-1})
-    );
+        "citation_target":"NOT_REQUESTED","input_tokens":s.tokens.len()-1}))?;
     Ok(())
 }
 fn max_error(a: &Tensor, b: &Tensor) -> Result<f32> {
@@ -376,7 +369,7 @@ pub fn check(fixture: &Path, path: &Path) -> Result<()> {
     let f = load_fixture(fixture, &loaded.tokenizer)?;
     let model = &loaded.model;
     let framed = samples(&f.train, &loaded.tokenizer, 512)?;
-    println!(
+    eprintln!(
         "check_weight={} tolerance={LOGIT_TOLERANCE} backend={}",
         loaded.manifest.weights_sha256,
         neural::cpu_backend()
@@ -442,10 +435,7 @@ pub fn check(fixture: &Path, path: &Path) -> Result<()> {
                     "contrast cached/uncached greedy mismatch".into(),
                 ));
             }
-            println!(
-                "{}",
-                serde_json::json!({"parity_case":i,"batch_error":error,"chunk_errors":chunk_errors,"greedy_parity":equal,"uncached_ids":u.0,"finish":u.1})
-            );
+            replica_v3::binary::print_record(&replica_v3::binary::record!({"parity_case":i,"batch_error":error,"chunk_errors":chunk_errors,"greedy_parity":equal,"uncached_ids":u.0,"finish":u.1}))?;
         }
         let (loss, _, count) = response_loss(&logits, &b, 1.)?;
         if count != expected_count {
@@ -462,7 +452,7 @@ pub fn check(fixture: &Path, path: &Path) -> Result<()> {
                     "contrast gradient needs diagnosis: {name} norm2={norm}"
                 )));
             }
-            println!(
+            eprintln!(
                 "gradient_group={group} tensor={name} norm2={norm} finite_nonzero=true output=tied_embedding"
             );
         }
@@ -497,18 +487,18 @@ pub fn check(fixture: &Path, path: &Path) -> Result<()> {
                 "boundary",
             )?);
         }
-        println!(
+        eprintln!(
             "boundary={len} max_error={}",
             max_error(&reference, &Tensor::cat(&chunks, 1)?)?
         );
     }
-    println!("contrast_preflight=PASS quality=NOT_EVALUATED");
+    eprintln!("contrast_preflight=PASS quality=NOT_EVALUATED");
     Ok(())
 }
-fn branch(row: &[f32], expected: u32, alternate: u32) -> serde_json::Value {
+fn branch(row: &[f32], expected: u32, alternate: u32) -> replica_v3::binary::Value {
     let max = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let denom: f64 = row.iter().map(|&v| f64::from(v - max).exp()).sum();
-    serde_json::json!({"expected_id":expected,"alternate_id":alternate,
+    replica_v3::binary::record!({"expected_id":expected,"alternate_id":alternate,
         "probability":f64::from(row[expected as usize]-max).exp()/denom,
         "expected_minus_alternate_logit":row[expected as usize]-row[alternate as usize]})
 }
@@ -583,13 +573,10 @@ fn score(
         } else {
             None
         };
-        println!(
-            "{}",
-            serde_json::json!({"evaluation":true,"step":step,"id":e.id,"group":i/4,"expected":e.answer,"actual":text,"generated_ids":tokens,"finish":finish,"error":error,
+        replica_v3::binary::print_record(&replica_v3::binary::record!({"evaluation":true,"step":step,"id":e.id,"group":i/4,"expected":e.answer,"actual":text,"generated_ids":tokens,"finish":finish,"error":error,
             "full_exact":value&&stopped,"value_match":value,"eos":stopped,"record_id_target":support,"record_id_output":"NOT_REQUESTED",
             "value_inferred_record_ids":inferred,"value_inferred_record_match":record,"first_answer_divergence":divergence,
-            "teacher_forced_branch":teacher_branch,"greedy_prefix_branch":greedy_branch,"prompt_tokens":s.response_start,"target_tokens":answer.len(),"output_tokens":tokens.len()+usize::from(stopped)})
-        );
+            "teacher_forced_branch":teacher_branch,"greedy_prefix_branch":greedy_branch,"prompt_tokens":s.response_start,"target_tokens":answer.len(),"output_tokens":tokens.len()+usize::from(stopped)}))?;
     }
     let groups = exact
         .as_chunks::<4>()
@@ -598,17 +585,14 @@ fn score(
         .filter(|g| g.iter().all(|&v| v))
         .count();
     let total = exact.iter().filter(|&&x| x).count();
-    println!(
-        "{}",
-        serde_json::json!({"contrast_summary":true,"step":step,"exact":total,"cases":cases.len(),"groups_all_correct":groups,"groups":cases.len()/4,"value":values,"value_inferred_record":record_inferred,"eos":eos,"citation_grade":"NOT_REQUESTED","goal1_ready":false})
-    );
+    replica_v3::binary::print_record(&replica_v3::binary::record!({"contrast_summary":true,"step":step,"exact":total,"cases":cases.len(),"groups_all_correct":groups,"groups":cases.len()/4,"value":values,"value_inferred_record":record_inferred,"eos":eos,"citation_grade":"NOT_REQUESTED","goal1_ready":false}))?;
     Ok((total, groups))
 }
 pub fn evaluate(fixture: &Path, path: &Path, heldout: bool) -> Result<()> {
     let loaded = checkpoint::load(path, Device::Cpu, false)?;
     let f = load_fixture(fixture, &loaded.tokenizer)?;
     let step = loaded.manifest.training.as_ref().map_or(0, |s| s.step);
-    println!(
+    eprintln!(
         "checkpoint={} model_hash={} frozen_train={} frozen_heldout={} heldout={heldout}",
         loaded.manifest.weights_sha256,
         loaded.model.weight_hash()?,
@@ -621,7 +605,7 @@ pub fn evaluate(fixture: &Path, path: &Path, heldout: bool) -> Result<()> {
         if heldout { &f.heldout } else { &f.train },
         step,
     )?;
-    println!(
+    eprintln!(
         "diagnostic_match={n} groups_correct={g} source_quality=UNQUALIFIED goal1_ready=false"
     );
     Ok(())
@@ -700,7 +684,7 @@ pub fn transfer(fixture: &Path, path: &Path) -> Result<()> {
         trained_targets.extend(loaded.tokenizer.encode(e.answer.as_bytes())?);
     }
     let step = loaded.manifest.trained_steps;
-    println!(
+    eprintln!(
         "transfer_development=true source_train={} weights_content={} backend={} heldout=NOT_RUN training=NOT_RUN",
         frozen.train_hash,
         loaded.model.weights_content_id()?,
@@ -727,12 +711,12 @@ pub fn transfer(fixture: &Path, path: &Path) -> Result<()> {
                     .filter(|id| !trained_targets.contains(id)),
             );
         }
-        println!(
+        eprintln!(
             "factor={factor} inputs_sha256={} target_ids_absent_from_frozen16_answers={new_tokens:?}",
-            hash(&serde_json::to_vec(&cases)?)
+            hash(&replica_v3::binary::to_vec(&cases)?)
         );
         let (exact, groups) = score(&loaded.model, &loaded.tokenizer, &cases, step)?;
-        println!(
+        eprintln!(
             "transfer_summary factor={factor} exact={exact}/16 groups={groups}/4 final_heldout=false"
         );
     }
@@ -803,7 +787,7 @@ pub fn train(
         train.extend(reversed);
     }
     validate_cases(&train, if both_orders { 32 } else { 16 })?;
-    let train_hash = hash(&serde_json::to_vec(&train)?);
+    let train_hash = hash(&replica_v3::binary::to_vec(&train)?);
     let framed = samples(&train, &loaded.tokenizer, 512)?;
     let config = TrainConfig {
         warmup: 20,
@@ -855,12 +839,9 @@ pub fn train(
     let started = Instant::now();
     let mut reason = "BUDGET_EXHAUSTED";
     let mut streak = 0;
-    println!(
-        "{}",
-        serde_json::json!({"run_start":true,"kind":start_kind,"parent_checkpoint_hash":parent,"parent_model_hash":parent_model,
+    replica_v3::binary::print_record(&replica_v3::binary::record!({"run_start":true,"kind":start_kind,"parent_checkpoint_hash":parent,"parent_model_hash":parent_model,
         "config":config,"fresh_adam":true,"sampler_state":rng.state,"per_update_input":step_input,"train_hash":train_hash,"original_train_hash":f.train_hash,"heldout_hash":f.heldout_hash,
-        "both_evidence_orders":both_orders,"cases":train.len(),"max_seconds":MAX_SECONDS,"backend":neural::cpu_backend(),"source_id":source,"sampling":"quartets shuffled within each view, each declared case exactly once per update","quality":"DIAGNOSTIC_ONLY"})
-    );
+        "both_evidence_orders":both_orders,"cases":train.len(),"max_seconds":MAX_SECONDS,"backend":neural::cpu_backend(),"source_id":source,"sampling":"quartets shuffled within each view, each declared case exactly once per update","quality":"DIAGNOSTIC_ONLY"}))?;
     loop {
         if cancel.load(Ordering::Relaxed) {
             reason = "CANCELLED";
@@ -871,7 +852,7 @@ pub fn train(
         }
         if state.step.is_multiple_of(25) {
             let rss = super::rss_kib()?;
-            println!("resource_step={} current_rss_KiB={rss}", state.step);
+            eprintln!("resource_step={} current_rss_KiB={rss}", state.step);
             if rss > 16 * 1024 * 1024 {
                 reason = "RESOURCE_LIMIT";
                 break;
@@ -888,7 +869,7 @@ pub fn train(
                 loaded.manifest.clone(),
                 &adam.moments,
             )?;
-            println!(
+            eprintln!(
                 "snapshot={} sha256={}",
                 frozen.display(),
                 saved.weights_sha256
@@ -956,7 +937,7 @@ pub fn train(
         state.target_tokens += targets as u64;
         state.sampler_state = rng.state;
         state.train_loss = Some(total_loss / targets as f64);
-        println!(
+        eprintln!(
             "step={} loss={:.9} input_tokens={} target_tokens={} each_case_exposure={} grad_norm={norm} weight_delta={delta} elapsed_s={:.3}",
             state.step,
             state.train_loss.expect("observed"),
@@ -982,7 +963,7 @@ pub fn train(
         loaded.manifest,
         &adam.moments,
     )?;
-    println!(
+    eprintln!(
         "CONTRAST_END reason={reason} updates={} input_tokens={} target_tokens={} sampler_state={} each_case_exposure={} checkpoint={} sha256={} elapsed_s={:.3} heldout=NOT_RUN goal1_ready=false",
         state.step,
         state.consumed_tokens,
@@ -1051,9 +1032,9 @@ mod tests {
             }
         }
         validate_cases(&train, 16).unwrap();
-        let before = serde_json::to_vec(&train).unwrap();
+        let before = replica_v3::binary::to_vec(&train).unwrap();
         assert_eq!(
-            serde_json::to_vec(&transfer_cases(&train, "identity").unwrap()).unwrap(),
+            replica_v3::binary::to_vec(&transfer_cases(&train, "identity").unwrap()).unwrap(),
             before
         );
         for factor in [
@@ -1086,8 +1067,8 @@ mod tests {
                         let mut expected = a.clone();
                         expected.event_id += 1_000_000;
                         assert_eq!(
-                            serde_json::to_vec(b).unwrap(),
-                            serde_json::to_vec(&expected).unwrap()
+                            replica_v3::binary::to_vec(b).unwrap(),
+                            replica_v3::binary::to_vec(&expected).unwrap()
                         );
                     }
                 } else if factor == "order" {
@@ -1103,7 +1084,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(serde_json::to_vec(&train).unwrap(), before);
+        assert_eq!(replica_v3::binary::to_vec(&train).unwrap(), before);
         assert!(transfer_cases(&train, "unknown").is_err());
     }
     #[test]

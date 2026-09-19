@@ -1,5 +1,65 @@
 # 진단 및 구현 상태
 
+## 2026-09-19 프로젝트 JSON 사용 제거 — native serialization
+
+기준 HEAD `ed357919355d170c9130b889acaaefa03809bc3a`의 Rust 소스를 이어서
+수정했다. 이전 데이터 초기화는 유지하며 새 품질 실험이나 원자료 복구는 없다.
+최신 사용자 범위에 따라 SQLite는 유지한다. 아래 초기화 직후의 SQLite 제거
+대기 설명은 그 시점의 기록이며 현재 작업 범위가 아니다.
+
+**IMPLEMENTED:** 제품 IPC/request hash, standalone tokenizer/config, 학습 best/
+terminal metadata, 평가 row stream, 진단 frozen/policy/result/checker 기록을
+자체 R3BIN으로 연결했다. 숫자·문자열·배열·map을 typed binary로 기록하며 JSON
+문자열을 넣지 않는다. 기존 R3MODEL weights/Adam/objective, R3CORP, R3TOK, R3ER,
+RPV3/R3ARCH 및 SQLite의 domain 포맷은 유지한다. 구형 text checkpoint 읽기/저장
+구현과 직접 serde_json/safetensors 의존은 제거했다. 명시 legacy 모델 import도
+지원 중단 오류를 반환한다. 기존 binary corpus importer의 R3BIN staging 경로는
+남아 있으나 JSON 입력/fallback은 없다. 의존성과 wire 범위는 STORAGE_FORMAT.md,
+DEPENDENCY_STORAGE_AUDIT.md, 실제 CLI 입력은 RUNBOOK.md에 반영했다.
+
+**EXECUTED_THIS_RUN:** Rust/Cargo1.98.1, locked/offline, accelerate/test-support.
+관련 회귀17개 PASS. 전체 품질/전체 테스트 suite는 실행하지 않았다.
+다음은 `cargo test --locked --offline --features accelerate,test-support`의
+실행 대상/필터다. 모든 테스트 로그는 이번 실행의 로컬 `/tmp/r3-*.log`에 있으며
+Git에 포함하지 않는다. 원래 raw/model/corpus 파일이 복구됐다는 뜻은 아니다.
+
+| 대상 | 필터 | PASS |
+| --- | --- | ---: |
+| lib | `binary::tests` | 2 |
+| test native | `own_byte_bpe_roundtrip_no_control_promotion_or_truncation` | 1 |
+| test native | `native_checkpoint_` | 2 |
+| test runtime | `rust_child_protocol_failures_timeouts_stderr_and_cancellation` | 1 |
+| test training | `corpus_and_tokenizer_use_train_only_and_reject_split_leakage` | 1 |
+| test training | `native_training_resume_is_identical_in_fresh_processes` | 1 |
+| test training | `harness_m04_cli_close_reports_stopped_arm_before_any_replay` | 1 |
+| test training | `ordinary_qa_ablation_cli_keeps_gold_and_distinguishes_question_from_record` | 1 |
+| test training | `curriculum_resume_crosses_sampling_boundary_in_fresh_process` | 1 |
+| test training | `native_training_cancel_keeps_optimizer_boundary_checkpoint` | 1 |
+| bin replica-check | `harness_model_rows_require_actual_eos_and_keep_failures` | 1 |
+| bin replica-train | `state_data_complete_close_and_raw_negative_fixtures` | 1 |
+| bin replica-train | `progress_lr_native_split_adam_clock_and_cursor_parity` | 1 |
+| bin replica-train | `legacy_owned_digest_is_from_the_consumed_bytes` | 1 |
+| bin replica-train | `repair_rf01_changed_validation_rejected_before_model_or_output` | 1 |
+
+TINY 실제 optimizer47회: fresh resume16 + LR/Adam parity10 + curriculum/group/
+corpus-switch resume20 + cancel1. SMALL0. 완전 panel close/변조 회귀의 step512는
+명시한 합성 상태 라벨이며 optimizer/generation0이다. 별도의 실제 평가 생성
+회귀는 random TINY를 사용해 저장/읽기 경계만 검증했고 품질 점수로 채택하지 않았다.
+native tensor/Adam/RNG/forward 동일성, f64 bit/negative-zero/큰 정수 및 잘림·변조·
+누락/EOS/strict UTF-8 처리, 실제 child 통신·취소 및 binary-only 학습 저장을 확인했다.
+
+수정 중 close fixture의 objective binding 누락, CLI fixture의 명시 archive 옵션
+누락이 각각 실패했다. fixture를 현재 실제 계약으로 갱신한 뒤 둘 다 통과했다.
+학습 허용 검사를 완화하지 않았다. 노출 보고의 text 중첩도 typed record로 고쳤다.
+단일 close 회귀는 정상1/negative10을 검사하며 약66초였다. 관련 all-targets
+컴파일 검사와 dependency tree/금지 직렬화 source 확인도 수행했다.
+
+**JSON_MIGRATION=PASS; SQLITE=RETAINED; NEW_SMALL_UPDATES=0;
+MODEL_QUALITY=NOT_EVALUATED; GOAL1_READY=false; INDEPENDENT_REVIEW=NOT_RUN.**
+하위 generic library 내부 JSON은 사용자 허용대로 남아 있다. 포맷 변경만으로
+크기/속도 향상이나 모델 품질 회복을 주장하지 않는다. 새 Rust 파일은
+`src/binary.rs` 하나이며 회귀는 기존 테스트 파일에 추가/수정했다.
+
 ## 2026-09-19 사용자 승인 데이터 초기화 완료 — Rust 소스 유지
 
 사용자가 학습자료·모델·원문·장기기억까지 모두 삭제하고 Rust 소스는 유지하도록

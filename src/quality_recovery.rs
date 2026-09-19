@@ -3,7 +3,7 @@ use super::*;
 use clap::Subcommand;
 use replica_v3::{model::ModelRequest, neural::checkpoint::Loaded};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use replica_v3::binary::{Value, record};
 use std::{collections::BTreeSet, io::Write, path::PathBuf, sync::Arc, time::Duration};
 #[path = "experiment_record.rs"]
 mod experiment_record;
@@ -228,7 +228,7 @@ impl RunControl {
         self.stop.map(StopReason::name)
     }
     pub(super) fn receipt(&self) -> Value {
-        json!({"terminal_reason":self.stop.map(StopReason::name).or_else(||self.terminal.then_some("COMPLETED")),"observed_conditions":self.observed,"generation_calls":self.generation_calls,"teacher_calls":self.teacher_calls,"completed_generation_count":self.completed_generation_count,"attempted_case_count":self.attempted_case_count,"interrupted_case_id":self.interrupted_case_id,
+        record!({"terminal_reason":self.stop.map(StopReason::name).or_else(||self.terminal.then_some("COMPLETED")),"observed_conditions":self.observed,"generation_calls":self.generation_calls,"teacher_calls":self.teacher_calls,"completed_generation_count":self.completed_generation_count,"attempted_case_count":self.attempted_case_count,"interrupted_case_id":self.interrupted_case_id,
             "elapsed_seconds":self.now().duration_since(self.start).as_secs_f64(),"work_budget_seconds":self.deadline.duration_since(self.start).as_secs_f64(),
             "work_deadline_overrun_seconds":self.now().saturating_duration_since(self.deadline).as_secs_f64(),"rss_observation_enabled":self.measure_rss,"cooperative_only":true})
     }
@@ -492,7 +492,7 @@ struct Frozen {
     previous_failed: Vec<Value>,
 }
 fn digest<T: Serialize + ?Sized>(value: &T) -> Result<String> {
-    Ok(neural::hash(&serde_json::to_vec(value)?))
+    Ok(neural::hash(&replica_v3::binary::to_vec(value)?))
 }
 fn file_hash(path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
@@ -524,10 +524,10 @@ fn source_commit() -> Result<String> {
         .to_string())
 }
 fn save(path: &Path, value: &impl Serialize) -> Result<()> {
-    neural::write_new(path, &serde_json::to_vec_pretty(value)?)
+    neural::write_new(path, &replica_v3::binary::to_vec(value)?)
 }
 fn load(path: &Path) -> Result<Frozen> {
-    let f: Frozen = serde_json::from_slice(&neural::read_bounded(path, 16 * 1024 * 1024)?)?;
+    let f: Frozen = replica_v3::binary::from_slice(&neural::read_bounded(path, 16 * 1024 * 1024)?)?;
     if f.version != 1 || f.watch.len() != 32 || f.failures.len() > 16 {
         return Err(Error::Corrupt("recovery frozen panel".into()));
     }
@@ -542,11 +542,7 @@ fn scene(e: &Episode) -> &str {
 }
 fn rows(path: &Path) -> Result<(Value, Vec<Value>)> {
     let bytes = neural::read_bounded(path, 16 * 1024 * 1024)?;
-    let values: Vec<Value> = bytes
-        .split(|&b| b == b'\n')
-        .filter(|b| !b.is_empty())
-        .map(serde_json::from_slice)
-        .collect::<std::result::Result<_, _>>()?;
+    let values: Vec<Value> = replica_v3::binary::records_from_slice(&bytes)?;
     let header = values
         .first()
         .filter(|v| v["header"] == true)
@@ -643,7 +639,7 @@ pub(super) fn summarize(rows: &[Value]) -> Result<Value> {
         .filter(|(k, _)| *k != "copy")
         .fold([0, 0], |a, (_, v)| [a[0] + v[0], a[1] + v[1]]);
     Ok(
-        json!({"summary":true,"denominator":rows.len(),"exact_matches":qa[0]+aux[0],"qa":qa,"auxiliary":aux,
+        record!({"summary":true,"denominator":rows.len(),"exact_matches":qa[0]+aux[0],"qa":qa,"auxiliary":aux,
         "groups_correct_total":groups,"generation_failures":errors,"invalid_utf8":utf8,"empty":empty,"first_eos":first_eos,"control":control,"timeout":timeout,
         "teacher_forced_micro_ce":(tokens>0).then(||nll/tokens as f64),"teacher_forced_macro_ce":(scored>0).then(||macro_ce/scored as f64),
         "teacher_forced_token_accuracy":(tokens>0).then(||correct as f64/tokens as f64),"teacher_forced_cases":scored,"target_tokens_including_eos":tokens,
@@ -657,9 +653,9 @@ fn registry(path: &Path) -> Result<Value> {
         .training
         .as_ref()
         .ok_or_else(|| Error::Invalid("resume state required".into()))?;
-    let schedule: Vec<_> = [0,1,5,20,50,100].iter().map(|&n| json!({"segment_step":n,"model_step":s.config.budget_start_step+n,"lr":s.config.learning_rate(s.config.budget_start_step+n)})).collect();
+    let schedule: Vec<_> = [0,1,5,20,50,100].iter().map(|&n| record!({"segment_step":n,"model_step":s.config.budget_start_step+n,"lr":s.config.learning_rate(s.config.budget_start_step+n)})).collect();
     Ok(
-        json!({"path":path,"physical_hash":file_hash(path)?,"model_content_hash":l.model.weight_hash()?,"manifest":l.manifest,
+        record!({"path":path,"physical_hash":file_hash(path)?,"model_content_hash":l.model.weight_hash()?,"manifest":l.manifest,
         "tokenizer_wire":l.tokenizer.id(),"tokenizer_semantic":l.tokenizer.semantic_id(),"architecture_id":l.model.config.id()?,
         "dtype":"F32","backend":neural::cpu_backend(),"adam_shapes":l.optimizer.iter().map(|(k,v)|(k,v.dims())).collect::<BTreeMap<_,_>>(),
         "cumulative_model_step":s.step,"optimizer_step":s.step,"schedule_step":s.step-s.config.budget_start_step,
@@ -717,7 +713,7 @@ pub fn run(command: Command) -> Result<()> {
                 progress_observe(&experiment, &output, &observe, &mut budget)
             } else {
                 std::fs::create_dir(&output)?;
-                progress_close_to(&experiment, &output.join("reaudit.json"), true, &mut budget)
+                progress_close_to(&experiment, &output.join("reaudit.r3b"), true, &mut budget)
             }
         }
         Command::ProgressBaseline {
@@ -735,7 +731,7 @@ pub fn run(command: Command) -> Result<()> {
             &mut budget,
         ),
         Command::SkillRecount { evaluation, output } => {
-            let recorded = read_json(&evaluation)?;
+            let recorded = read_metadata(&evaluation)?;
             let dev = recorded["dev_rows"]
                 .as_array()
                 .ok_or_else(|| Error::Corrupt("skill dev rows".into()))?;
@@ -745,7 +741,7 @@ pub fn run(command: Command) -> Result<()> {
             budget.check("skill_recount")?;
             save(
                 &output,
-                &json!({"evidence_level":"DERIVED_FROM_EXISTING_LOGS","evaluation_sha256":file_hash(&evaluation)?,
+                &record!({"evidence_level":"DERIVED_FROM_EXISTING_LOGS","evaluation_sha256":file_hash(&evaluation)?,
                 "recorded_model_content_hash":recorded["model_content_hash"],"new_updates":recorded["new_updates"],
                 "dev":skill_score(dev)?,"watch":summarize(watch)?,"actual_optimizer_updates":0,"model_calls":0,"candidate_eligible":false}),
             )
@@ -779,8 +775,8 @@ pub fn run(command: Command) -> Result<()> {
             output,
             seed,
         } => {
-            let report = read_json(&baseline.join("summary.json"))?;
-            let f = load(&baseline.join("frozen.json"))?;
+            let report = read_metadata(&baseline.join("summary.r3b"))?;
+            let f = load(&baseline.join("frozen.r3b"))?;
             if report["baseline_verified"] != true
                 || report["data_audit_status"] != "CHECKED_BOUNDARIES_PASS"
                 || report["parent"]["physical_hash"] != file_hash(&f.start)?
@@ -791,7 +787,7 @@ pub fn run(command: Command) -> Result<()> {
             data::copy_curriculum(&f.parent_corpus, &output, seed)?;
             let (manifest, train, dev) = data::load_legacy(&output)?;
             let seal_descriptor: data::Split =
-                serde_json::from_value(read_json(&output.join("seal-manifest.json"))?)?;
+                replica_v3::binary::from_value(read_metadata(&output.join("seal-manifest.r3b"))?)?;
             let seal = data::load_split_legacy(&output, &seal_descriptor)?;
             let l = checkpoint::load(&f.start, Device::Cpu, false)?;
             let checked = verify_copy_curriculum(&train, &dev, &seal, &l)?;
@@ -800,9 +796,9 @@ pub fn run(command: Command) -> Result<()> {
                 return Err(Error::Invalid("unverified QA anchors".into()));
             }
             save(
-                &output.join("prepared.json"),
-                &json!({"stage":"H3","status":"PRETRAIN_STRUCTURE_VERIFIED","baseline_summary_hash":file_hash(&baseline.join("summary.json"))?,
-                "manifest_hash":file_hash(&output.join("manifest.json"))?,"train_hash":manifest.train.sha256,"dev_hash":manifest.validation.sha256,"seal":seal_descriptor,
+                &output.join("prepared.r3b"),
+                &record!({"stage":"H3","status":"PRETRAIN_STRUCTURE_VERIFIED","baseline_summary_hash":file_hash(&baseline.join("summary.r3b"))?,
+                "manifest_hash":file_hash(&output.join("manifest.r3b"))?,"train_hash":manifest.train.sha256,"dev_hash":manifest.validation.sha256,"seal":seal_descriptor,
                 "checks":checked,"anchors":anchors,"seed":seed,"seal_exposure":"structural validation only; no model evaluation or selection","optimizer_updates":0}),
             )?;
             Ok(())
@@ -881,14 +877,14 @@ pub fn run(command: Command) -> Result<()> {
                 if !output_existed && output.is_dir() {
                     let planned = load(&fixture).ok().map(|f| f.watch.len() * 2 + 6);
                     let mut partial = budget.receipt();
-                    partial["planned_case_count"] = json!(planned);
+                    partial["planned_case_count"] = record!(planned);
                     partial["not_run_count"] =
-                        json!(planned.map(|n| n.saturating_sub(budget.attempted_case_count)));
-                    partial["final_evaluation_complete"] = json!(false);
-                    partial["comparison_eligible"] = json!(false);
-                    partial["candidate_eligible"] = json!(false);
-                    partial["worker_calls_are_separate"] = json!(true);
-                    save(&output.join("interrupted.json"), &partial)?;
+                        record!(planned.map(|n| n.saturating_sub(budget.attempted_case_count)));
+                    partial["final_evaluation_complete"] = record!(false);
+                    partial["comparison_eligible"] = record!(false);
+                    partial["candidate_eligible"] = record!(false);
+                    partial["worker_calls_are_separate"] = record!(true);
+                    save(&output.join("interrupted.r3b"), &partial)?;
                 }
             }
             outcome
@@ -941,7 +937,7 @@ pub fn run(command: Command) -> Result<()> {
             }
             let (ph, pr) = rows(&parent_log)?;
             let (fh, fr) = rows(&failed_log)?;
-            let registry = json!({"GENERAL_QA_PARENT":registry(&parent)?,"U2_POLICY_START":registry(&start)?,"U2_AFTER_20":registry(&probe)?,"U2_AFTER_250":registry(&failed)?,
+            let registry = record!({"GENERAL_QA_PARENT":registry(&parent)?,"U2_POLICY_START":registry(&start)?,"U2_AFTER_20":registry(&probe)?,"U2_AFTER_250":registry(&failed)?,
                 "source_id":source_id,"binary_hash":file_hash(&std::env::current_exe()?)?,"old_parent_ledger":ph,"old_failed_ledger":fh,"parent_raw_hash":file_hash(&parent_log)?,"failed_raw_hash":file_hash(&failed_log)?,
                 "parent_observed_log_summary":summarize(&pr)?,"failed_observed_log_summary":summarize(&fr)?});
             if ph["split_sha256"] != m.validation.sha256
@@ -963,7 +959,7 @@ pub fn run(command: Command) -> Result<()> {
                     .ok_or_else(|| Error::Corrupt("log case absent".into()))?;
                 if row["question"] != e.request.input
                     || row["expected"] != e.answer
-                    || row["evidence"] != serde_json::to_value(&e.request.evidence)?
+                    || row["evidence"] != replica_v3::binary::to_value(&e.request.evidence)?
                 {
                     return Err(Error::Corrupt("old log request/target mismatch".into()));
                 }
@@ -1008,10 +1004,7 @@ pub fn run(command: Command) -> Result<()> {
                 previous_failed: fr,
             };
             save(&output, &f)?;
-            println!(
-                "{}",
-                json!({"frozen":output,"hash":file_hash(&output)?,"watch":f.watch.len(),"failures":f.failures.len(),"parent":f.registry["parent_observed_log_summary"],"failed":f.registry["failed_observed_log_summary"],"optimizer_updates":0})
-            );
+            replica_v3::binary::print_record(&record!({"frozen":output,"hash":file_hash(&output)?,"watch":f.watch.len(),"failures":f.failures.len(),"parent":f.registry["parent_observed_log_summary"],"failed":f.registry["failed_observed_log_summary"],"optimizer_updates":0}))?;
             Ok(())
         }
         Command::Replay {
@@ -1048,10 +1041,10 @@ pub fn run(command: Command) -> Result<()> {
 
 fn bytes_receipt(tok: &ByteBpe, ids: &[u32]) -> Value {
     match tok.decode_bytes(ids) {
-        Err(e) => json!({"byte_mapping_error":e.to_string()}),
+        Err(e) => record!({"byte_mapping_error":e.to_string()}),
         Ok(bytes) => {
             let utf8 = std::str::from_utf8(&bytes);
-            json!({"length":bytes.len(),"sha256":neural::hash(&bytes),"hex":bytes.iter().take(2048).map(|b|format!("{b:02x}")).collect::<String>(),"hex_truncated":bytes.len()>2048,
+            record!({"length":bytes.len(),"sha256":neural::hash(&bytes),"hex":bytes.iter().take(2048).map(|b|format!("{b:02x}")).collect::<String>(),"hex_truncated":bytes.len()>2048,
                 "utf8_valid":utf8.is_ok(),"valid_up_to":utf8.as_ref().err().map(|e|e.valid_up_to()),"error_len":utf8.as_ref().err().and_then(|e|e.error_len()),
                 "utf8_error_class":utf8.err().map(|e|if e.error_len().is_none(){"incomplete_tail"}else{"invalid_sequence"})})
         }
@@ -1068,7 +1061,7 @@ fn components(actual: Option<&str>, expected: &str, provided: &[i64]) -> Value {
     let e = fields(expected);
     let ids = actual.and_then(|a| citations(a).ok());
     let expected_ids = citations(expected).ok();
-    json!({"entity":e.map(|e|a.is_some_and(|a|a.0==e.0)),"context":e.map(|e|a.is_some_and(|a|a.1==e.1)),"value":e.map(|e|a.is_some_and(|a|a.2==e.2)),
+    record!({"entity":e.map(|e|a.is_some_and(|a|a.0==e.0)),"context":e.map(|e|a.is_some_and(|a|a.1==e.1)),"value":e.map(|e|a.is_some_and(|a|a.2==e.2)),
         "citation_exact":ids.as_ref().is_some_and(|a|Some(a)==expected_ids.as_ref()),"citation_in_provided":ids.as_ref().map(|a|a.iter().all(|id|provided.contains(id))),"citation_nonempty":ids.as_ref().is_some_and(|a|!a.is_empty())})
 }
 fn strict_answer_match(actual: Option<&str>, expected: &str, eos: bool, error: bool) -> bool {
@@ -1080,7 +1073,7 @@ pub(super) fn evaluate_one(
     request: &ModelRequest,
     control: &mut RunControl,
 ) -> Value {
-    let mut row = json!({"id":e.id,"scene":scene(e),"category":e.category,"family":e.family,"question":e.request.input,"generated_question":request.input,
+    let mut row = record!({"id":e.id,"scene":scene(e),"category":e.category,"family":e.family,"question":e.request.input,"generated_question":request.input,
         "evidence":e.request.evidence,"generated_evidence":request.evidence,"expected":e.answer,"exact_match":false,"actual":null,"error":null,"generation_started":false,"generation_completed":false,"interruption":null});
     let result = (|| -> Result<()> {
         control.check("case_started")?;
@@ -1092,9 +1085,9 @@ pub(super) fn evaluate_one(
         )?;
         control.check("prompt_prepared")?;
         let effective_timeout = control.effective_timeout(request.limits.timeout_ms)?;
-        row["effective_timeout_ms"] = json!(effective_timeout);
-        row["original_timeout_ms"] = json!(request.limits.timeout_ms);
-        row["generation_started"] = json!(true);
+        row["effective_timeout_ms"] = record!(effective_timeout);
+        row["original_timeout_ms"] = record!(request.limits.timeout_ms);
+        row["generation_started"] = record!(true);
         control.generation_calls += 1;
         let cancel = control.cancel.clone();
         let mut raw = Vec::new();
@@ -1137,26 +1130,26 @@ pub(super) fn evaluate_one(
             .copied()
             .take_while(|&id| id >= neural::SPECIALS as u32)
             .collect();
-        row["raw_tokens"] = json!(raw);
+        row["raw_tokens"] = record!(raw);
         row["raw_bytes"] = bytes_receipt(&loaded.tokenizer, &bytes_ids);
-        row["eos_index"] = json!(raw.iter().position(|&id| id == EOS));
-        row["provided"] = json!(prompt.provided);
-        row["excluded"] = json!(prompt.excluded);
-        row["request_digest"] = json!(digest(request)?);
-        row["prompt_digest"] = json!(digest(&prompt.token_ids)?);
-        row["native_prompt_digest"] = json!(prompt.token_digest);
-        row["prompt_length"] = json!(prompt.token_ids.len());
-        row["exact_match"] = json!(strict_answer_match(
+        row["eos_index"] = record!(raw.iter().position(|&id| id == EOS));
+        row["provided"] = record!(prompt.provided);
+        row["excluded"] = record!(prompt.excluded);
+        row["request_digest"] = record!(digest(request)?);
+        row["prompt_digest"] = record!(digest(&prompt.token_ids)?);
+        row["native_prompt_digest"] = record!(prompt.token_digest);
+        row["prompt_length"] = record!(prompt.token_ids.len());
+        row["exact_match"] = record!(strict_answer_match(
             text.as_deref(),
             &e.answer,
             generated.as_ref().is_some_and(|g| g.finish == "stop"),
             error.is_some()
         ));
         row["components"] = components(text.as_deref(), &e.answer, &prompt.provided);
-        row["actual"] = json!(text);
-        row["generation"] = json!(generated);
-        row["error"] = json!(error);
-        row["error_class"] = json!(error.as_ref().map(|e| if e.contains("UTF-8") {
+        row["actual"] = record!(text);
+        row["generation"] = record!(generated);
+        row["error"] = record!(error);
+        row["error_class"] = record!(error.as_ref().map(|e| if e.contains("UTF-8") {
             "strict_utf8"
         } else if e.contains("control token") {
             "control_token"
@@ -1169,11 +1162,11 @@ pub(super) fn evaluate_one(
         }));
         row["finish_reason"] = generated
             .as_ref()
-            .map_or_else(|| row["error_class"].clone(), |g| json!(g.finish));
-        row["raw_generated_count"] = json!(raw.len());
-        row["generation_completed"] = json!(control.stop.is_none());
+            .map_or_else(|| row["error_class"].clone(), |g| record!(g.finish));
+        row["raw_generated_count"] = record!(raw.len());
+        row["generation_completed"] = record!(control.stop.is_none());
         control.completed_generation_count += usize::from(control.stop.is_none());
-        row["whitespace_only"] = json!(
+        row["whitespace_only"] = record!(
             text.as_ref()
                 .is_some_and(|s| !s.is_empty() && s.trim().is_empty())
         );
@@ -1188,21 +1181,21 @@ pub(super) fn evaluate_one(
                     if e.to_string().contains("nonfinite") {
                         control.classify_error(&e);
                     }
-                    json!({"error":e.to_string()})
+                    record!({"error":e.to_string()})
                 }
             };
         Ok(())
     })();
     if let Err(error) = result {
         if control.stop.is_none() {
-            row["error"] = json!(error.to_string());
-            row["error_class"] = json!("preparation_or_receipt");
+            row["error"] = record!(error.to_string());
+            row["error_class"] = record!("preparation_or_receipt");
         } else {
-            row["diagnostic_stop_error"] = json!(error.to_string());
+            row["diagnostic_stop_error"] = record!(error.to_string());
         }
     }
     if let Some(stop) = control.stop {
-        row["interruption"] = json!(stop);
+        row["interruption"] = record!(stop);
         control.interrupted_case_id = Some(e.id.clone());
     }
     row
@@ -1327,16 +1320,16 @@ fn teacher_observation(
     }
     let difference=mismatch.filter(|&i|i<gold.len()).map(|i|{
         let rival=raw.get(i).copied().unwrap_or(predicted[i]);
-        json!({"index":i,"gold_id":gold[i],"actual_id":raw.get(i),"teacher_argmax":predicted[i],"gold_log_probability":lp[i][gold[i] as usize],"gold_minus_rival_logit":lp[i][gold[i] as usize]-lp[i][rival as usize],"prefix":if probe { "gold; teacher-only first argmax mismatch; no free generation" } else { "gold; at first divergence identical to generation prefix" }})
+        record!({"index":i,"gold_id":gold[i],"actual_id":raw.get(i),"teacher_argmax":predicted[i],"gold_log_probability":lp[i][gold[i] as usize],"gold_minus_rival_logit":lp[i][gold[i] as usize]-lp[i][rival as usize],"prefix":if probe { "gold; teacher-only first argmax mismatch; no free generation" } else { "gold; at first divergence identical to generation prefix" }})
     });
     let foil_difference = foil.map(|foil| -> Result<Value> {
         let mut other=l.tokenizer.encode(foil.as_bytes())?; other.push(EOS);
         let i=gold.iter().zip(&other).position(|(a,b)|a!=b).ok_or_else(||Error::Invalid("foil must differ from gold".into()))?;
-        Ok(json!({"index":i,"gold":gold[i],"foil":other[i],"margin":lp[i][gold[i] as usize]-lp[i][other[i] as usize],"prefix":"identical gold/foil token prefix; one full gold teacher forward"}))
+        Ok(record!({"index":i,"gold":gold[i],"foil":other[i],"margin":lp[i][gold[i] as usize]-lp[i][other[i] as usize],"prefix":"identical gold/foil token prefix; one full gold teacher forward"}))
     }).transpose()?;
     control.check("teacher_completed")?;
     Ok(
-        json!({"conditional_foil":foil_difference,"target_tokens_including_eos":gold.len(),"mean_nll":nll.iter().sum::<f64>()/gold.len() as f64,"first_target_nll":nll[0],
+        record!({"conditional_foil":foil_difference,"target_tokens_including_eos":gold.len(),"mean_nll":nll.iter().sum::<f64>()/gold.len() as f64,"first_target_nll":nll[0],
         "remaining_mean_nll":nll.iter().skip(1).sum::<f64>()/(gold.len()-1).max(1) as f64,"objective":(nll.iter().sum::<f64>()+(w-1.)*nll[0])/gold.len() as f64,"first_target_weight":w,
         "teacher_forced_correct_tokens":gold.iter().zip(&predicted).filter(|(a,b)|a==b).count(),"first_target_correct":gold[0]==predicted[0],"last_content_correct":gold.len()>1 && gold[gold.len()-2]==predicted[gold.len()-2],"eos_correct":predicted.last()==Some(&EOS),
         "first_argmax":predicted[0],"first_eos_probability":lp[0][EOS as usize].exp(),"first_gold_probability":lp[0][gold[0] as usize].exp(),"first_argmax_probability":lp[0][predicted[0] as usize].exp(),"first_gold_id":gold[0],
@@ -1394,7 +1387,7 @@ fn replay(
                 || *source_split != f.validation_hash
                 || header["ordered_ids_hash"] != binding["ordered_ids_hash"]
                 || header["decoding"]
-                    != json!(cases.iter().map(|e| &e.request.limits).collect::<Vec<_>>())
+                    != record!(cases.iter().map(|e| &e.request.limits).collect::<Vec<_>>())
             {
                 return Err(Error::Corrupt("reference replay binding".into()));
             }
@@ -1430,24 +1423,24 @@ fn replay(
         .create_new(true)
         .write(true)
         .open(output)?;
-    let ledger = json!({"header":true,"fixture_hash":file_hash(fixture)?,"binary_hash":file_hash(&std::env::current_exe()?)?,"checkpoint_physical_hash":file_hash(path)?,"model_content_hash":model_content_hash,"tokenizer_semantic_hash":l.tokenizer.semantic_id(),"prompt_format":neural::PROMPT_FORMAT,"decoding":cases.iter().map(|e|&e.request.limits).collect::<Vec<_>>(),"metric":"strict-full-answer-eos-v1","panel":panel,"final_heldout":false});
+    let ledger = record!({"header":true,"fixture_hash":file_hash(fixture)?,"binary_hash":file_hash(&std::env::current_exe()?)?,"checkpoint_physical_hash":file_hash(path)?,"model_content_hash":model_content_hash,"tokenizer_semantic_hash":l.tokenizer.semantic_id(),"prompt_format":neural::PROMPT_FORMAT,"decoding":cases.iter().map(|e|&e.request.limits).collect::<Vec<_>>(),"metric":"strict-full-answer-eos-v1","panel":panel,"final_heldout":false});
     let mut ledger = ledger;
     ledger
         .as_object_mut()
         .unwrap()
         .extend(binding.as_object().unwrap().clone());
-    ledger["source_commit"] = json!(source_commit()?);
-    ledger["working_source_manifest_hash"] = json!(source_id);
-    ledger["model_tensor_content_digest"] = json!(l.model.weights_content_id()?);
-    ledger["reference_raw_hash"] = json!(reference.map(file_hash).transpose()?);
-    writeln!(out, "{ledger}")?;
+    ledger["source_commit"] = record!(source_commit()?);
+    ledger["working_source_manifest_hash"] = record!(source_id);
+    ledger["model_tensor_content_digest"] = record!(l.model.weights_content_id()?);
+    ledger["reference_raw_hash"] = record!(reference.map(file_hash).transpose()?);
+    replica_v3::binary::write_record(&mut out, &ledger)?;
     let mut rows = Vec::new();
     for e in &cases {
         if control.check("panel_next_case").is_err() {
             break;
         }
         let row = evaluate_one(&l, e, &e.request, control);
-        writeln!(out, "{row}")?;
+        replica_v3::binary::write_record(&mut out, &row)?;
         out.flush()?;
         rows.push(row);
         if control.check("case_recorded").is_err() {
@@ -1505,7 +1498,7 @@ fn replay(
                 "excluded",
             ] {
                 if row[key] != before[key] {
-                    reference_differences.push(json!({"id":row["id"],"field":key}));
+                    reference_differences.push(record!({"id":row["id"],"field":key}));
                 }
             }
         }
@@ -1513,9 +1506,9 @@ fn replay(
     if !reference_differences.is_empty() && control.stop.is_none() {
         control.observe(StopReason::IntegrityFail);
     }
-    summary["reference_differences"] = json!(reference_differences);
+    summary["reference_differences"] = record!(reference_differences);
     summary["reference_parity"] =
-        json!(reference_rows.as_ref().map(|_| if control.stop.is_some() {
+        record!(reference_rows.as_ref().map(|_| if control.stop.is_some() {
             "PARTIAL_OR_FAILED"
         } else {
             "PASS"
@@ -1523,20 +1516,20 @@ fn replay(
     if differences > 0 {
         control.observe(StopReason::IntegrityFail);
     }
-    summary["old_output_differences"] = json!(old.map(|_| differences));
-    summary["aba_equal"] = json!(aba_equal);
+    summary["old_output_differences"] = record!(old.map(|_| differences));
+    summary["aba_equal"] = record!(aba_equal);
     let _ = control.check("before_evaluation_record");
     add_partial_counts(&mut summary, &rows, cases.len(), control);
-    writeln!(out, "{summary}")?;
+    replica_v3::binary::write_record(&mut out, &summary)?;
     out.sync_all()?;
     let _ = control.check("evaluation_recorded");
     if command_terminal {
         control.terminal = true;
     }
-    let mut terminal = json!({"terminal":true,"control":control.receipt()});
-    terminal["command_terminal"] = json!(command_terminal);
+    let mut terminal = record!({"terminal":true,"control":control.receipt()});
+    terminal["command_terminal"] = record!(command_terminal);
     add_partial_counts(&mut terminal, &rows, cases.len(), control);
-    writeln!(out, "{terminal}")?;
+    replica_v3::binary::write_record(&mut out, &terminal)?;
     out.sync_all()?;
     println!("{summary}");
     if differences > 0 {
@@ -1554,23 +1547,23 @@ pub(super) fn add_partial_counts(
     control: &RunControl,
 ) {
     let complete = rows.len() == planned && control.stop.is_none();
-    value["planned_case_count"] = json!(planned);
-    value["attempted_case_count"] = json!(rows.len());
-    value["completed_generation_count"] = json!(
+    value["planned_case_count"] = record!(planned);
+    value["attempted_case_count"] = record!(rows.len());
+    value["completed_generation_count"] = record!(
         rows.iter()
             .filter(|r| r["generation_completed"] == true)
             .count()
     );
-    value["not_run_count"] = json!(planned.saturating_sub(rows.len()));
+    value["not_run_count"] = record!(planned.saturating_sub(rows.len()));
     value["interrupted_case_id"] = rows
         .iter()
         .find(|r| !r["interruption"].is_null())
         .map_or(Value::Null, |r| r["id"].clone());
     value["terminal_reason"] = control.receipt()["terminal_reason"].clone();
-    value["final_evaluation_complete"] = json!(complete);
-    value["comparison_eligible"] = json!(complete);
-    value["candidate_eligible"] = json!(false); // This receipt alone never selects a model.
-    value["score_scope"] = json!(if complete {
+    value["final_evaluation_complete"] = record!(complete);
+    value["comparison_eligible"] = record!(complete);
+    value["candidate_eligible"] = record!(false); // This receipt alone never selects a model.
+    value["score_scope"] = record!(if complete {
         "complete_panel"
     } else {
         "partial_attempted_cases_only"
@@ -1602,12 +1595,12 @@ fn replay_cases(f: &Frozen, panel: &str) -> Result<(Vec<Episode>, Value)> {
         }
         _ => return Err(Error::Invalid("unknown recovery replay panel".into())),
     };
-    let binding = json!({
+    let binding = record!({
         "source_validation_hash":f.validation_hash,
         "frozen_expected_validation_hash":f.validation_hash,
         "actual_split_hash":actual_split_hash,
         "evaluated_cases_hash":digest(&cases)?,
-        "evaluated_cases_encoding":"sha256(serde_json::to_vec(ordered Vec<Episode>)); complete fields, no whitespace",
+        "evaluated_cases_encoding":"sha256(replica_v3::binary::to_vec(ordered Vec<Episode>)); complete fields, no whitespace",
         "ordered_ids_hash":digest(&cases.iter().map(|e|&e.id).collect::<Vec<_>>())?,
         "planned_case_count":cases.len(),
         "input_source":if panel=="all" {"validated_current_snapshot"} else {"frozen_panel"}
@@ -1628,14 +1621,14 @@ fn verified_ordinary(
     baseline: &Path,
     expected: Option<&Value>,
 ) -> Result<(Frozen, Vec<Episode>, Vec<Episode>, String)> {
-    let bytes = neural::read_bounded(&baseline.join("frozen.json"), 16 * 1024 * 1024)?;
+    let bytes = neural::read_bounded(&baseline.join("frozen.r3b"), 16 * 1024 * 1024)?;
     let hash = neural::hash(&bytes);
     if expected.is_some_and(|h| h != &hash) {
         return Err(Error::Corrupt(
             "FROZEN_INPUT_MISMATCH: A0/frozen digest".into(),
         ));
     }
-    let f: Frozen = serde_json::from_slice(&bytes)?;
+    let f: Frozen = replica_v3::binary::from_slice(&bytes)?;
     let (_, train, cases) = load_frozen_corpus(&f)?;
     let qa = cases
         .iter()
@@ -1672,8 +1665,8 @@ struct VerifiedProgressInputs {
     hashes: Value,
 }
 fn load_verified_inputs(a0: &Path, policy: Option<&Value>) -> Result<VerifiedProgressInputs> {
-    let bytes = neural::read_bounded(&a0.join("summary.json"), 16 * 1024 * 1024)?;
-    let a: Value = serde_json::from_slice(&bytes)?;
+    let bytes = neural::read_bounded(&a0.join("summary.r3b"), 16 * 1024 * 1024)?;
+    let a: Value = replica_v3::binary::from_slice(&bytes)?;
     if policy.is_some_and(|p| p["a0_hash"] != neural::hash(&bytes)) {
         return Err(Error::Corrupt("FROZEN_INPUT_MISMATCH: policy/A0".into()));
     }
@@ -1681,9 +1674,9 @@ fn load_verified_inputs(a0: &Path, policy: Option<&Value>) -> Result<VerifiedPro
         verified_ordinary(&progress_path(&a, "baseline")?, Some(&a["baseline_hash"]))?;
     let p = policy.unwrap_or(&a);
     let (manifest, train, dev) = data::load_legacy(&progress_path(p, "corpus")?)?;
-    let cross_bytes = neural::read_bounded(&a0.join("cross-development.json"), 16 * 1024 * 1024)?;
+    let cross_bytes = neural::read_bounded(&a0.join("cross-development.r3b"), 16 * 1024 * 1024)?;
     let cross_hash = neural::hash(&cross_bytes);
-    let cross: Vec<Episode> = serde_json::from_slice(&cross_bytes)?;
+    let cross: Vec<Episode> = replica_v3::binary::from_slice(&cross_bytes)?;
     if manifest.train.sha256 != p["train_hash"]
         || manifest.validation.sha256 != p["dev_hash"]
         || a["cross"]["file_sha256"] != cross_hash
@@ -1703,9 +1696,9 @@ fn load_verified_inputs(a0: &Path, policy: Option<&Value>) -> Result<VerifiedPro
             .parent()
             .and_then(Path::parent)
             .ok_or_else(|| Error::Corrupt("parent policy path".into()))?
-            .join("policy.json");
-        let r = read_json(&receipt)?;
-        let parent = read_json(&parent_policy)?;
+            .join("policy.r3b");
+        let r = read_metadata(&receipt)?;
+        let parent = read_metadata(&parent_policy)?;
         let prior = parent_policy
             .parent()
             .and_then(Path::parent)
@@ -1713,7 +1706,7 @@ fn load_verified_inputs(a0: &Path, policy: Option<&Value>) -> Result<VerifiedPro
         if parent["node"] != "A1"
             || r["policy_sha256"] != file_hash(&parent_policy)?
             || p["parent_receipt_sha256"] != file_hash(&receipt)?
-            || p["parent_comparison_hash"] != file_hash(&prior.join("comparison.json"))?
+            || p["parent_comparison_hash"] != file_hash(&prior.join("comparison.r3b"))?
         {
             return Err(Error::Corrupt(
                 "FROZEN_INPUT_MISMATCH: A2 parent/policy/comparison".into(),
@@ -1729,11 +1722,11 @@ fn load_verified_inputs(a0: &Path, policy: Option<&Value>) -> Result<VerifiedPro
                 "FROZEN_INPUT_MISMATCH: parent native/receipt".into(),
             ));
         }
-        json!({"native":native_hash,"receipt":receipt_hash})
+        record!({"native":native_hash,"receipt":receipt_hash})
     } else {
         Value::Null
     };
-    let hashes = json!({"a0":neural::hash(&bytes),"frozen":frozen_hash,"ordinary":f.validation_hash,"parent":parent_binding,
+    let hashes = record!({"a0":neural::hash(&bytes),"frozen":frozen_hash,"ordinary":f.validation_hash,"parent":parent_binding,
         "train":manifest.train.sha256,"dev":manifest.validation.sha256,"cross":cross_hash,
         "ordinary_cases":digest(&ordinary)?,"watch_cases":digest(&f.watch)?,"dev_cases":digest(&dev)?,"cross_cases":digest(&cross)?});
     Ok(VerifiedProgressInputs {
@@ -2232,7 +2225,7 @@ fn scan_controlled(
         if e.request.input.contains("원인") || e.request.input.contains("인과관계") {
             for r in &e.request.evidence.items {
                 let (state, entity) = causal_record_state(&e.request.input, r);
-                causal_records.push(json!({"id":e.id,"event_id":r.event_id,"classification":state,"parsed_entity":entity}));
+                causal_records.push(record!({"id":e.id,"event_id":r.event_id,"classification":state,"parsed_entity":entity}));
             }
         }
         let (semantic, reason) = if e.family.starts_with("copy/") {
@@ -2251,7 +2244,7 @@ fn scan_controlled(
             semantic,
             SemanticState::Validated | SemanticState::OutOfScope
         ) {
-            invalid.push(json!({"id":e.id,"status":semantic,"reason":reason}));
+            invalid.push(record!({"id":e.id,"status":semantic,"reason":reason}));
         }
         let s = samples(std::slice::from_ref(e), &l.tokenizer, 512)?.remove(0);
         let p = l.tokenizer.prepare(
@@ -2267,7 +2260,7 @@ fn scan_controlled(
         let key = digest(&p.token_ids)?;
         if let Some((old_answer, old_id)) = prompts.get(&key) {
             if old_answer != &e.answer {
-                collisions.push(json!({"a":old_id,"b":e.id,"a_answer":old_answer,"b_answer":e.answer,"prompt":key}));
+                collisions.push(record!({"a":old_id,"b":e.id,"a_answer":old_answer,"b_answer":e.answer,"prompt":key}));
             }
         } else {
             prompts.insert(key, (e.answer.clone(), e.id.clone()));
@@ -2339,10 +2332,10 @@ fn scan_controlled(
             *positions.entry(position).or_default() += 1;
         }
     }
-    let mut report = json!({"scanned":episodes.len().min(limit),"total":episodes.len(),"independent_full_qa_checked":checked,"auxiliary_semantics_not_checked":auxiliary,"prompt_target_contradictions":collisions,"data_ambiguities":invalid,"train_generation_prefix_mismatches":prefix_mismatch,"category_counts":categories,"first_target_counts":starts,"target_length_histogram":lengths,"supervised_tokens_including_eos":target_count,"eos_targets":episodes.len().min(limit),"record_position":positions,"citation_digit_lengths":digits,"no_evidence":no_evidence,"unique_base_ids":scenes.len(),"unique_questions":questions.len(),"unique_values":values.len(),"unique_evidence_id_orders":orders.len(),"unique_token_prompts":prompts.len(),"max_prompt_length":max_prompt,"prompts_over_window256":over_window});
-    report["unique_question_forms_ascii_digit_runs_collapsed"] = json!(question_forms.len());
-    report["unique_evidence_value_multisets_including_empty"] = json!(value_combinations.len());
-    report["entity_digit_lengths_per_structured_evidence"] = json!(entity_digit_lengths);
+    let mut report = record!({"scanned":episodes.len().min(limit),"total":episodes.len(),"independent_full_qa_checked":checked,"auxiliary_semantics_not_checked":auxiliary,"prompt_target_contradictions":collisions,"data_ambiguities":invalid,"train_generation_prefix_mismatches":prefix_mismatch,"category_counts":categories,"first_target_counts":starts,"target_length_histogram":lengths,"supervised_tokens_including_eos":target_count,"eos_targets":episodes.len().min(limit),"record_position":positions,"citation_digit_lengths":digits,"no_evidence":no_evidence,"unique_base_ids":scenes.len(),"unique_questions":questions.len(),"unique_values":values.len(),"unique_evidence_id_orders":orders.len(),"unique_token_prompts":prompts.len(),"max_prompt_length":max_prompt,"prompts_over_window256":over_window});
+    report["unique_question_forms_ascii_digit_runs_collapsed"] = record!(question_forms.len());
+    report["unique_evidence_value_multisets_including_empty"] = record!(value_combinations.len());
+    report["entity_digit_lengths_per_structured_evidence"] = record!(entity_digit_lengths);
     for (name, n) in [
         "validated",
         "contradicted",
@@ -2353,12 +2346,12 @@ fn scan_controlled(
     .into_iter()
     .zip(semantic_counts)
     {
-        report[name] = json!(n);
+        report[name] = record!(n);
     }
-    report["ordinary_in_scope"] = json!(checked);
+    report["ordinary_in_scope"] = record!(checked);
     report["semantic_findings"] = report["data_ambiguities"].clone();
-    report["causal_record_classifications"] = json!(causal_records);
-    report["status"] = json!(audit_status(&[&report], &[]));
+    report["causal_record_classifications"] = record!(causal_records);
+    report["status"] = record!(audit_status(&[&report], &[]));
     Ok(report)
 }
 fn chronology_citations(request: &ModelRequest) -> Option<Vec<i64>> {
@@ -2423,7 +2416,7 @@ fn audit(fixture: &Path, output: &Path, control: &mut RunControl) -> Result<()> 
         .collect::<Vec<_>>();
     overlap.extend(entities(&parent).intersection(&entities(&pv)).cloned());
     let status = audit_status(&[&u2, &original, &development], &overlap);
-    let result = json!({"u2_all":u2,"parent_bounded_first2048":original,"validation400":development,"cross_split_entity_overlap":overlap,"optimizer_updates":0,"status":status,"fixture_hash":file_hash(fixture)?,"actual_train_hash":m.train.sha256,"actual_validation_hash":m.validation.sha256,"frozen_expected_validation_hash":f.validation_hash,"evaluated_validation_cases_hash":digest(&validation)?,"parent_train_hash":pm.train.sha256,"scope":"U2 all ordinary; parent first2048 and validation400; copy/* auxiliary OUT_OF_SCOPE"});
+    let result = record!({"u2_all":u2,"parent_bounded_first2048":original,"validation400":development,"cross_split_entity_overlap":overlap,"optimizer_updates":0,"status":status,"fixture_hash":file_hash(fixture)?,"actual_train_hash":m.train.sha256,"actual_validation_hash":m.validation.sha256,"frozen_expected_validation_hash":f.validation_hash,"evaluated_validation_cases_hash":digest(&validation)?,"parent_train_hash":pm.train.sha256,"scope":"U2 all ordinary; parent first2048 and validation400; copy/* auxiliary OUT_OF_SCOPE"});
     save(output, &result)?;
     println!(
         "audit status={} output={}",
@@ -2514,25 +2507,25 @@ fn baseline(
             .filter(|e| !e.family.starts_with("copy/"))
             .count()
     };
-    let mut report = json!({"stage":"H2","source_commit":source_commit()?,"source_digest":source_id,"binary_hash":file_hash(&std::env::current_exe()?)?,
+    let mut report = record!({"stage":"H2","source_commit":source_commit()?,"source_digest":source_id,"binary_hash":file_hash(&std::env::current_exe()?)?,
         "parent":parent,"inference":{"path":inference,"physical_hash":inference_hash,"model_content_hash":weight_hash,"same_content":true},
         "train_manifest":manifest,"original_manifest":original_manifest,"train_ordinary":ordinary(&train),"original_train_ordinary":ordinary(&original_train),
         "validation_ordinary":ordinary(&validation),"validation_auxiliary":validation.len()-ordinary(&validation),"previous_log_sha256":file_hash(previous_log)?,
         "recount":summarize(&historical)?,"next_parent_lr":next_lr,"proposed_constant_lr":next_lr.min(3e-5),"new_small_updates":0,"new_input_tokens":0,"new_target_tokens":0,"goal1_ready":false});
-    save(&output.join("identity-recount.json"), &report)?;
+    save(&output.join("identity-recount.r3b"), &report)?;
     let training_audit = scan_controlled(&train, &loaded, train.len(), Some(control))?;
-    save(&output.join("binding-train-audit.json"), &training_audit)?;
+    save(&output.join("binding-train-audit.r3b"), &training_audit)?;
     let original_audit = scan_controlled(
         &original_train,
         &loaded,
         original_train.len(),
         Some(control),
     )?;
-    save(&output.join("original-train-audit.json"), &original_audit)?;
+    save(&output.join("original-train-audit.r3b"), &original_audit)?;
     let validation_audit = scan_controlled(&validation, &loaded, validation.len(), Some(control))?;
-    save(&output.join("validation-audit.json"), &validation_audit)?;
+    save(&output.join("validation-audit.r3b"), &validation_audit)?;
     let status = audit_status(&[&training_audit, &original_audit, &validation_audit], &[]);
-    report["data_audit_status"] = json!(status);
+    report["data_audit_status"] = record!(status);
     let mut watch = Vec::new();
     let mut used = BTreeSet::new();
     for (category, count) in [7, 7, 6, 6, 6].into_iter().enumerate() {
@@ -2553,7 +2546,7 @@ fn baseline(
     }
     let frozen = Frozen {
         version: 1,
-        registry: json!({"V1000":parent,"source_id":source_id,"binary_hash":file_hash(&std::env::current_exe()?)?}),
+        registry: record!({"V1000":parent,"source_id":source_id,"binary_hash":file_hash(&std::env::current_exe()?)?}),
         corpus: corpus.into(),
         parent_corpus: original.into(),
         start: resume.into(),
@@ -2566,20 +2559,20 @@ fn baseline(
         previous_parent: historical.clone(),
         previous_failed: vec![],
     };
-    let fixture = output.join("frozen.json");
+    let fixture = output.join("frozen.r3b");
     save(&fixture, &frozen)?;
     // Only the frozen ordinary32 are regenerated; the known400 denominator is re-counted above.
     replay(
         &fixture,
         inference,
-        &output.join("watch32.jsonl"),
+        &output.join("watch32.r3rows"),
         "watch",
         Some(source_id),
         control,
         false,
         None,
     )?;
-    let (_, actual) = rows(&output.join("watch32.jsonl"))?;
+    let (_, actual) = rows(&output.join("watch32.r3rows"))?;
     let mut differences = Vec::new();
     for row in &actual {
         let prior = historical
@@ -2596,14 +2589,14 @@ fn baseline(
             "excluded",
         ] {
             if row[key] != prior[key] {
-                differences.push(json!({"id":row["id"],"field":key}));
+                differences.push(record!({"id":row["id"],"field":key}));
             }
         }
     }
     report["watch"] = summarize(&actual)?;
-    report["watch_differences"] = json!(differences);
-    report["generation_calls"] = json!(control.generation_calls);
-    report["artifacts_unchanged"] = json!(
+    report["watch_differences"] = record!(differences);
+    report["generation_calls"] = record!(control.generation_calls);
+    report["artifacts_unchanged"] = record!(
         file_hash(resume)? == parent["physical_hash"] && file_hash(inference)? == inference_hash
     );
     if status != "CHECKED_BOUNDARIES_PASS" {
@@ -2618,9 +2611,9 @@ fn baseline(
     }
     let sealed = control.seal_terminal();
     report["control"] = control.receipt();
-    report["baseline_verified"] = json!(sealed.is_ok());
-    report["h2_split_materialization"] = json!("NEXT_IF_BASELINE_VERIFIED");
-    save(&output.join("summary.json"), &report)?;
+    report["baseline_verified"] = record!(sealed.is_ok());
+    report["h2_split_materialization"] = record!("NEXT_IF_BASELINE_VERIFIED");
+    save(&output.join("summary.r3b"), &report)?;
     println!(
         "H2 audit={status} watch={}/32 new_updates=0 generation_calls={}",
         report["watch"]["exact_matches"], control.generation_calls
@@ -2723,7 +2716,7 @@ fn verify_copy_curriculum(
                 || facts[0].0 != facts[2].0
                 || facts[0].1 != facts[2].1
                 || facts[0].2 == facts[2].2
-                || serde_json::to_value(records[0])? != serde_json::to_value(records[3])?
+                || replica_v3::binary::to_value(records[0])? != replica_v3::binary::to_value(records[3])?
                 || records.iter().any(|r| {
                     r.event_id != records[0].event_id || r.recorded_at != records[0].recorded_at
                 })
@@ -2753,7 +2746,7 @@ fn verify_copy_curriculum(
         ));
     }
     Ok(
-        json!({"train":4096,"anchors":2048,"focus":2048,"dev":256,"seal":256,"strata":strata,"identifier_sets":identifiers.iter().map(BTreeSet::len).collect::<Vec<_>>(),
+        record!({"train":4096,"anchors":2048,"focus":2048,"dev":256,"seal":256,"strata":strata,"identifier_sets":identifiers.iter().map(BTreeSet::len).collect::<Vec<_>>(),
         "base_scene_counts":scene_sets.iter().map(BTreeSet::len).collect::<Vec<_>>(),"max_train_tokens_including_eos":framed.iter().map(|s|s.tokens.len()).max(),
         "input_target_training_tokens_planned_one_epoch":[framed.iter().map(|s|s.tokens.len()-1).sum::<usize>(),framed.iter().map(|s|s.tokens.len()-s.response_start).sum::<usize>()],"model_calls":0,"eos_is_supervised":true}),
     )
@@ -2910,19 +2903,19 @@ fn skill_score(rows: &[Value]) -> Result<Value> {
                 || !r["interruption"].is_null()
         })
         .count();
-    score["entity_correct"] = json!(entity);
-    score["event_id_correct"] = json!(event);
-    score["context_correct"] = json!(context);
-    score["value_correct"] = json!(value_correct);
-    score["first_difference_fields"] = json!(first_fields);
-    score["digit_accuracy_counts"] = json!([digit_correct, digit_total]);
-    score["whole_base_correct_total"] = json!([
+    score["entity_correct"] = record!(entity);
+    score["event_id_correct"] = record!(event);
+    score["context_correct"] = record!(context);
+    score["value_correct"] = record!(value_correct);
+    score["first_difference_fields"] = record!(first_fields);
+    score["digit_accuracy_counts"] = record!([digit_correct, digit_total]);
+    score["whole_base_correct_total"] = record!([
         groups.values().filter(|g| g[0] == 4 && g[1] == 4).count(),
         groups.len()
     ]);
-    score["strata"] = json!(strata);
-    score["generation_error_cases"] = json!(errors);
-    score["skill_pass"] = json!(
+    score["strata"] = record!(strata);
+    score["generation_error_cases"] = record!(errors);
+    score["skill_pass"] = record!(
         rows.len() == 256
             && score["exact_matches"].as_u64().unwrap_or(0) >= 244
             && entity >= 254
@@ -2944,7 +2937,7 @@ fn skill_evaluation(
         vec![]
     };
     let all: Vec<_> = dev_rows.iter().chain(&watch_rows).cloned().collect();
-    let mut value = json!({"dev":skill_score(&dev_rows)?,"watch":summarize(&watch_rows)?,"dev_rows":dev_rows,"watch_rows":watch_rows,
+    let mut value = record!({"dev":skill_score(&dev_rows)?,"watch":summarize(&watch_rows)?,"dev_rows":dev_rows,"watch_rows":watch_rows,
         "previous_skill":"NOT_APPLICABLE_H3","oracle":false});
     add_partial_counts(&mut value, &all, dev.len() + watch.len(), control);
     Ok(value)
@@ -2964,7 +2957,7 @@ fn skill_error_ids(evaluation: &Value) -> BTreeSet<String> {
         .collect()
 }
 fn verified_harness(path: &Path) -> Result<Value> {
-    let h = read_json(path)?;
+    let h = read_metadata(path)?;
     if h["result"] != "CHECKED_SCOPE_PASS" || h["source_unchanged"] != true {
         return Err(Error::Invalid("passing quick harness required".into()));
     }
@@ -2994,7 +2987,7 @@ fn verified_harness(path: &Path) -> Result<Value> {
 fn quality_renewal_eligible(previous: &Value, policy: &Value, finish_copy_budget: bool) -> bool {
     previous["reason"] == "QUALITY_GUARD"
         && previous["control"]["terminal_reason"] == "QUALITY_GUARD"
-        && previous["control"]["observed_conditions"] == json!(["QUALITY_GUARD"])
+        && previous["control"]["observed_conditions"] == record!(["QUALITY_GUARD"])
         && previous["checkpoint_saved"] == true
         && previous["comparison_eligible"] == false
         && previous["candidate_eligible"] == false
@@ -3067,14 +3060,14 @@ fn skill_run(
     let source = checked["source_digest"]
         .as_str()
         .ok_or_else(|| Error::Invalid("harness source identity".into()))?;
-    let base_report = read_json(&baseline.join("summary.json"))?;
-    let frozen = load(&baseline.join("frozen.json"))?;
-    let prepared = read_json(&corpus.join("prepared.json"))?;
+    let base_report = read_metadata(&baseline.join("summary.r3b"))?;
+    let frozen = load(&baseline.join("frozen.r3b"))?;
+    let prepared = read_metadata(&corpus.join("prepared.r3b"))?;
     let (manifest, episodes, dev) = data::load_legacy(corpus)?;
     if base_report["baseline_verified"] != true
         || prepared["status"] != "PRETRAIN_STRUCTURE_VERIFIED"
-        || prepared["baseline_summary_hash"] != file_hash(&baseline.join("summary.json"))?
-        || prepared["manifest_hash"] != file_hash(&corpus.join("manifest.json"))?
+        || prepared["baseline_summary_hash"] != file_hash(&baseline.join("summary.r3b"))?
+        || prepared["manifest_hash"] != file_hash(&corpus.join("manifest.r3b"))?
         || base_report["parent"]["physical_hash"] != file_hash(&frozen.start)?
         || manifest.train.documents != 4096
         || dev.len() != 256
@@ -3138,16 +3131,16 @@ fn skill_run(
             .and_then(Path::parent)
             .ok_or_else(|| Error::Invalid("continuation root".into()))?;
         let policy_path = if renew_from_quality_stop.is_some() {
-            previous_root.join("policy.json")
+            previous_root.join("policy.r3b")
         } else {
-            output.join("policy.json")
+            output.join("policy.r3b")
         };
-        policy = read_json(&policy_path)?;
-        previous = read_json(
+        policy = read_metadata(&policy_path)?;
+        previous = read_metadata(
             &resume
                 .parent()
                 .ok_or_else(|| Error::Invalid("resume segment".into()))?
-                .join("result.json"),
+                .join("result.r3b"),
         )?;
         let terminal_allowed = if renew_from_quality_stop.is_some() {
             quality_renewal_eligible(&previous, &policy, finish_copy_budget)
@@ -3168,8 +3161,8 @@ fn skill_run(
             || policy["train_hash"] != manifest.train.sha256
             || policy["dev_hash"] != manifest.validation.sha256
             || policy["constant_lr"] != rate
-            || policy["prepared_hash"] != file_hash(&corpus.join("prepared.json"))?
-            || policy["baseline_hash"] != file_hash(&baseline.join("summary.json"))?
+            || policy["prepared_hash"] != file_hash(&corpus.join("prepared.r3b"))?
+            || policy["baseline_hash"] != file_hash(&baseline.join("summary.r3b"))?
             || previous["policy_sha256"] != file_hash(&policy_path)?
             || previous["additional_input_tokens"]
                 .as_u64()
@@ -3195,7 +3188,7 @@ fn skill_run(
                     .and_then(|n| n.to_str())
                     .is_some_and(|n| n.starts_with("segment-"))
             {
-                let receipt = read_json(&path.join("result.json"))?;
+                let receipt = read_metadata(&path.join("result.r3b"))?;
                 if std::fs::canonicalize(&path)? != previous_directory
                     && receipt["stage_elapsed_seconds"].as_f64().is_none_or(|s| {
                         s >= previous["stage_elapsed_seconds"].as_f64().unwrap_or(0.)
@@ -3209,28 +3202,28 @@ fn skill_run(
         }
         if renew_from_quality_stop.is_some() {
             let mut acknowledged: BTreeSet<String> =
-                serde_json::from_value(previous["baseline_error_ids"].clone())?;
+                replica_v3::binary::from_value(previous["baseline_error_ids"].clone())?;
             acknowledged.extend(skill_error_ids(&previous["last_evaluation"]));
-            policy["renewal"] = json!({"authorization":"explicit renewed user request after reported quality stop; one new attempt, not automatic resume",
-                "original_checkpoint":resume,"original_checkpoint_sha256":file_hash(resume)?,"original_result_sha256":file_hash(&resume.parent().unwrap().join("result.json"))?,
+            policy["renewal"] = record!({"authorization":"explicit renewed user request after reported quality stop; one new attempt, not automatic resume",
+                "original_checkpoint":resume,"original_checkpoint_sha256":file_hash(resume)?,"original_result_sha256":file_hash(&resume.parent().unwrap().join("result.r3b"))?,
                 "original_policy_sha256":file_hash(&policy_path)?,"original_reason":previous["reason"],"original_source_id":policy["source_id"],
                 "original_binary_hash":policy["binary_hash"],"starting_new_updates":previous["new_updates"],
                 "acknowledged_error_ids":acknowledged,"guard":"same watch baseline/streak; additional new UTF-8/control/empty still stop; acceptance requires zero errors"});
             if finish_copy_budget {
-                policy["finish_copy_budget"] = json!(true);
-                policy["renewal"]["guard"] = json!(
+                policy["finish_copy_budget"] = record!(true);
+                policy["renewal"]["guard"] = record!(
                     "explicitly approved completion to1024 total updates: intermediate UTF-8 count must not increase at two consecutive evaluations; control/empty and original QA/resource/cancel guards retained; unchanged final acceptance"
                 );
-                previous["extension_allowed"] = json!(true);
+                previous["extension_allowed"] = record!(true);
             }
-            policy["source_id"] = json!(source);
-            policy["binary_hash"] = json!(binary_hash);
-            policy["harness_hash"] = json!(file_hash(harness)?);
-            previous["baseline_error_ids"] = json!(acknowledged);
+            policy["source_id"] = record!(source);
+            policy["binary_hash"] = record!(binary_hash);
+            policy["harness_hash"] = record!(file_hash(harness)?);
+            previous["baseline_error_ids"] = record!(acknowledged);
             previous["previous_dev_correct"] =
                 previous["last_evaluation"]["dev"]["exact_matches"].clone();
             std::fs::create_dir(output)?;
-            save(&output.join("policy.json"), &policy)?;
+            save(&output.join("policy.r3b"), &policy)?;
         }
     } else {
         if state.step != start_step
@@ -3256,21 +3249,21 @@ fn skill_run(
         state.train_loss = None;
         state.validation_loss = None;
         state.parent_checkpoint_hash = Some(l.manifest.weights_sha256.clone());
-        policy = json!({"stage":"H3","source_id":source,"binary_hash":binary_hash,"harness_hash":file_hash(harness)?,"baseline_hash":file_hash(&baseline.join("summary.json"))?,
-            "prepared_hash":file_hash(&corpus.join("prepared.json"))?,"train_hash":manifest.train.sha256,"dev_hash":manifest.validation.sha256,"parent":base_report["parent"],
+        policy = record!({"stage":"H3","source_id":source,"binary_hash":binary_hash,"harness_hash":file_hash(harness)?,"baseline_hash":file_hash(&baseline.join("summary.r3b"))?,
+            "prepared_hash":file_hash(&corpus.join("prepared.r3b"))?,"train_hash":manifest.train.sha256,"dev_hash":manifest.validation.sha256,"parent":base_report["parent"],
             "tape":tape,"tape_hash":digest(&tape)?,"config":state.config,"constant_lr":rate,"lr_policy":"explicit constant; native config schedule is not used by this stage",
             "default_updates":512,"maximum_updates":1024,"max_input_tokens":6_000_000,"max_target_tokens":1_500_000,"max_stage_seconds":3600,"command_seconds":900,"cleanup_seconds":120,
             "sampler":"4 distinct anchor bases +4 distinct focus bases; each frozen pool without replacement per512 updates; inherited RNG"});
         std::fs::create_dir(output)?;
-        save(&output.join("policy.json"), &policy)?;
+        save(&output.join("policy.r3b"), &policy)?;
         previous = Value::Null;
     }
-    if serde_json::to_value(&state.config)? != policy["config"]
+    if replica_v3::binary::to_value(&state.config)? != policy["config"]
         || policy["tape_hash"] != digest(&policy["tape"])?
     {
         return Err(Error::Corrupt("skill config/tape".into()));
     }
-    let tape: Vec<(Vec<usize>, u64)> = serde_json::from_value(policy["tape"].clone())?;
+    let tape: Vec<(Vec<usize>, u64)> = replica_v3::binary::from_value(policy["tape"].clone())?;
     if tape.len() != 1024 || state.step < start_step || state.step > start_step + 1024 {
         return Err(Error::Corrupt("skill remaining budget".into()));
     }
@@ -3306,12 +3299,12 @@ fn skill_run(
     let mut log = std::fs::OpenOptions::new()
         .create_new(true)
         .write(true)
-        .open(segment.join("trace.jsonl"))?;
+        .open(segment.join("trace.r3rows"))?;
     let mut last = previous["last_evaluation"].clone();
     let mut base_errors: BTreeSet<String> = if previous.is_null() {
         BTreeSet::new()
     } else {
-        serde_json::from_value(previous["baseline_error_ids"].clone())?
+        replica_v3::binary::from_value(previous["baseline_error_ids"].clone())?
     };
     let mut base_watch = previous["baseline_watch"].as_u64().unwrap_or(0);
     let mut streak = previous["bad_streak"].as_u64().unwrap_or(0);
@@ -3348,8 +3341,8 @@ fn skill_run(
             if due {
                 l.model.refresh_identity()?;
                 let mut evaluation = skill_evaluation(&l, &dev, &frozen.watch, control)?;
-                evaluation["new_updates"] = json!(n);
-                evaluation["model_content_hash"] = json!(l.model.weight_hash()?);
+                evaluation["new_updates"] = record!(n);
+                evaluation["model_content_hash"] = record!(l.model.weight_hash()?);
                 let score = evaluation["dev"]["exact_matches"].as_u64().unwrap_or(0);
                 let watch = evaluation["watch"]["exact_matches"].as_u64().unwrap_or(0);
                 let errors = skill_error_ids(&evaluation);
@@ -3370,12 +3363,12 @@ fn skill_run(
                 } else {
                     0
                 };
-                evaluation["new_error_ids"] = json!(new_errors);
-                evaluation["utf8_errors"] = json!(previous_utf8);
-                evaluation["utf8_growth_streak"] = json!(utf8_growth_streak);
-                evaluation["finish_copy_budget_policy"] = json!(finish_copy_budget);
-                evaluation["bad_streak"] = json!(streak);
-                save(&segment.join(format!("eval-{n:04}.json")), &evaluation)?;
+                evaluation["new_error_ids"] = record!(new_errors);
+                evaluation["utf8_errors"] = record!(previous_utf8);
+                evaluation["utf8_growth_streak"] = record!(utf8_growth_streak);
+                evaluation["finish_copy_budget_policy"] = record!(finish_copy_budget);
+                evaluation["bad_streak"] = record!(streak);
+                save(&segment.join(format!("eval-{n:04}.r3b")), &evaluation)?;
                 last = evaluation;
                 println!(
                     "NODE=H3 eval updates={n} dev={score}/256 entity={} event={} watch={watch}/32 new_errors={} input={} target={} elapsed_s={:.2}",
@@ -3417,8 +3410,8 @@ fn skill_run(
                     let rows = evaluate_panel(&l, &ordinary, control);
                     full_qa = summarize(&rows)?;
                     save(
-                        &segment.join("original400.json"),
-                        &json!({"score":full_qa,"rows":rows}),
+                        &segment.join("original400.r3b"),
+                        &record!({"score":full_qa,"rows":rows}),
                     )?;
                     control.check("skill_original_qa_recorded")?;
                     if full_qa["qa"][0].as_u64().unwrap_or(0)
@@ -3428,16 +3421,16 @@ fn skill_run(
                         return control.stop_result();
                     }
                     save(
-                        &output.join("seal-attempt.json"),
-                        &json!({"model_content_hash":l.model.weight_hash()?,"dev":last["dev"],"new_updates":n}),
+                        &output.join("seal-attempt.r3b"),
+                        &record!({"model_content_hash":l.model.weight_hash()?,"dev":last["dev"],"new_updates":n}),
                     )?;
-                    let descriptor: data::Split = serde_json::from_value(prepared["seal"].clone())?;
+                    let descriptor: data::Split = replica_v3::binary::from_value(prepared["seal"].clone())?;
                     let seal = data::load_split_legacy(corpus, &descriptor)?;
                     let rows = evaluate_panel(&l, &seal, control);
                     seal_score = skill_score(&rows)?;
                     save(
-                        &segment.join("seal.json"),
-                        &json!({"score":seal_score,"rows":rows}),
+                        &segment.join("seal.r3b"),
+                        &record!({"score":seal_score,"rows":rows}),
                     )?;
                     control.check("skill_seal_recorded")?;
                     quality_pass = seal_score["skill_pass"] == true;
@@ -3494,11 +3487,11 @@ fn skill_run(
             state.train_loss = Some(ce as f64);
             state.validation_loss = None;
             let _ = control.check("skill_optimizer_committed");
-            let row = json!({"new_update":n+1,"cumulative_model_step":state.step,"optimizer_step":state.step,"lr":rate,"lr_policy":"constant","sampler_state":sampler,"indices":indices,
+            let row = record!({"new_update":n+1,"cumulative_model_step":state.step,"optimizer_step":state.step,"lr":rate,"lr_policy":"constant","sampler_state":sampler,"indices":indices,
                 "ids":indices.iter().map(|i|&episodes[*i].id).collect::<Vec<_>>(),"pools":["anchor","anchor","anchor","anchor","focus","focus","focus","focus"],
                 "input_tokens":batch.tokens,"target_tokens":targets,"consumed_input_tokens":state.consumed_tokens-start_input,"consumed_target_tokens":state.target_tokens-start_target,
                 "ce":ce,"objective":objective,"first_target_weight":c.first_target_weight,"gradient_norm":norm,"update_norm":delta,"rss_kib":control.last_rss_kib,"elapsed_seconds":elapsed_before+control.start.elapsed().as_secs_f64()});
-            writeln!(log, "{row}")?;
+            replica_v3::binary::write_record(&mut log, &row)?;
             log.flush()?;
             if (n + 1).is_multiple_of(32) {
                 println!(
@@ -3524,23 +3517,23 @@ fn skill_run(
         .as_f64()
         .is_none_or(|seconds| seconds > 120.);
     if cleanup_overrun {
-        result["comparison_eligible"] = json!(false);
+        result["comparison_eligible"] = record!(false);
     }
-    let details = json!({"stage":"H3","source_id":source,"policy_sha256":file_hash(&output.join("policy.json"))?,"new_updates":state.step-start_step,"cumulative_model_step":state.step,"sampler_state":state.sampler_state,
+    let details = record!({"stage":"H3","source_id":source,"policy_sha256":file_hash(&output.join("policy.r3b"))?,"new_updates":state.step-start_step,"cumulative_model_step":state.step,"sampler_state":state.sampler_state,
         "additional_input_tokens":state.consumed_tokens-start_input,"additional_target_tokens":state.target_tokens-start_target,"stage_elapsed_seconds":elapsed,
         "baseline_error_ids":base_errors,"baseline_watch":base_watch,"bad_streak":streak,"previous_dev_correct":previous_dev,"extension_allowed":extension,"last_evaluation":last,
         "previous_utf8_errors":previous_utf8,"utf8_growth_streak":utf8_growth_streak,"finish_copy_budget_policy":finish_copy_budget,
         "model_content_hash":l.model.weight_hash()?,"full_qa":full_qa,"seal":seal_score,"skill_quality_pass":quality_pass&&control.stop.is_none()&&!cleanup_overrun,
         "candidate_eligible":quality_pass&&control.stop.is_none()&&!cleanup_overrun,"cleanup_limit_exceeded":cleanup_overrun,"error":outcome.as_ref().err().map(ToString::to_string),"goal1_ready":false,"h4":"NOT_RUN_UNTIL_H3_PASS",
-        "resume_allowed":control.reason()==Some("TIME_BUDGET") && elapsed<3600. && !cleanup_overrun && !output.join("seal-attempt.json").exists() && result["checkpoint_saved"]==true});
+        "resume_allowed":control.reason()==Some("TIME_BUDGET") && elapsed<3600. && !cleanup_overrun && !output.join("seal-attempt.r3b").exists() && result["checkpoint_saved"]==true});
     result
         .as_object_mut()
         .unwrap()
         .extend(details.as_object().unwrap().clone());
     if result["checkpoint_saved"] == true {
-        result["checkpoint_file_sha256"] = json!(file_hash(&segment.join("final"))?);
+        result["checkpoint_file_sha256"] = record!(file_hash(&segment.join("final"))?);
     }
-    save(&segment.join("result.json"), &result)?;
+    save(&segment.join("result.r3b"), &result)?;
     log.sync_all()?;
     println!(
         "NODE=H3 terminal reason={} updates={} input={} target={} skill_pass={} resume_allowed={}",
@@ -3581,10 +3574,10 @@ fn progress_u64(v: &Value, key: &str) -> Result<u64> {
         .as_u64()
         .ok_or_else(|| Error::Corrupt(format!("missing count {key}")))
 }
-// Compare a persisted diagnostic snapshot using its actual JSON reader. Native
+// Compare a persisted diagnostic snapshot using its actual R3BIN reader. Native
 // state/weights/moments remain authoritative and are independently byte/content hashed.
 fn progress_snapshot(v: &impl Serialize) -> Result<Value> {
-    Ok(serde_json::from_slice(&serde_json::to_vec(v)?)?)
+    Ok(replica_v3::binary::from_slice(&replica_v3::binary::to_vec(v)?)?)
 }
 fn progress_policy_valid(p: &Value) -> bool {
     p["contract"] == PROGRESS_CONTRACT
@@ -3622,8 +3615,8 @@ fn progress_prepare(
     let inputs = load_verified_inputs(a0, None)?;
     let a = inputs.a0;
     let parent = progress_path(&a, "parent")?;
-    let receipt_path = parent.parent().unwrap().join("result.json");
-    let receipt = read_json(&receipt_path)?;
+    let receipt_path = parent.parent().unwrap().join("result.r3b");
+    let receipt = read_metadata(&receipt_path)?;
     let l = checkpoint::load(&parent, Device::Cpu, true)?;
     let state = l
         .manifest
@@ -3644,7 +3637,7 @@ fn progress_prepare(
         || a["train_hash"] != manifest.train.sha256
         || a["dev_hash"] != manifest.validation.sha256
         || a["cross"]["validation"]["status"] != "SERIALIZED_INPUT_VERIFIED"
-        || a["cross"]["file_sha256"] != file_hash(&a0.join("cross-development.json"))?
+        || a["cross"]["file_sha256"] != file_hash(&a0.join("cross-development.r3b"))?
         || state.config.microbatch != 8
         || state.config.accumulation != 1
         || state.config.sample_group_size != 1
@@ -3668,8 +3661,8 @@ fn progress_prepare(
             (input, target)
         })
         .collect();
-    let mut common = json!({"contract":PROGRESS_CONTRACT,"node":"A1","entry":"EXPERIMENT_FORK","run_id":output,
-        "a0":a0,"a0_hash":file_hash(&a0.join("summary.json"))?,"parent":parent,"parent_sha256":file_hash(&parent)?,
+    let mut common = record!({"contract":PROGRESS_CONTRACT,"node":"A1","entry":"EXPERIMENT_FORK","run_id":output,
+        "a0":a0,"a0_hash":file_hash(&a0.join("summary.r3b"))?,"parent":parent,"parent_sha256":file_hash(&parent)?,
         "parent_receipt":receipt_path,"parent_receipt_sha256":file_hash(&receipt_path)?,"initial_model_hash":a["model_hash"],
         "initial_adam_hash":a["optimizer_hash"],"initial_state":state,"initial_state_native_hash":digest(state)?,"tokenizer_hash":l.tokenizer.semantic_id(),
         "source_commit":source_commit()?,"source_digest":checked["source_digest"],"binary_hash":file_hash(&std::env::current_exe()?)?,
@@ -3677,13 +3670,13 @@ fn progress_prepare(
         "corpus":corpus,"train_hash":manifest.train.sha256,"dev_hash":manifest.validation.sha256,
         "cross_hash":a["cross"]["file_sha256"],"tape":tape,"tape_hash":digest(&tape)?,"denominators":denominators,
         "denominators_hash":digest(&denominators)?});
-    let watch = read_json(&a0.join("watch32.json"))?;
+    let watch = read_metadata(&a0.join("watch32.r3b"))?;
     let watch_score = skill_score(
         watch["rows"]
             .as_array()
             .ok_or_else(|| Error::Corrupt("A0 watch rows".into()))?,
     )?;
-    let limits = json!({"maximum_updates":512,"max_input_tokens":2_000_000,"max_target_tokens":500_000,
+    let limits = record!({"maximum_updates":512,"max_input_tokens":2_000_000,"max_target_tokens":500_000,
         "h3_max_updates":2048,"h3_seconds":7200,"command_seconds":1800,"cleanup_seconds":120,"normal_policy":"normal_greedy_v1",
         "baseline_dev":a["old_dev"]["exact_matches"],"baseline_watch":a["watch"]["exact_matches"],
         "baseline_errors":progress_u64(&a["old_dev"],"generation_error_cases")?+progress_u64(&watch_score,"generation_error_cases")?,
@@ -3696,22 +3689,22 @@ fn progress_prepare(
         .extend(limits.as_object().unwrap().clone());
     std::fs::create_dir(output)?;
     for arm in ["C", "L"] {
-        common["arm"] = json!(arm);
-        common["lr_policy"] = json!(arm);
-        common["lr_function"] = json!(if arm == "C" {
+        common["arm"] = record!(arm);
+        common["lr_policy"] = record!(arm);
+        common["lr_function"] = record!(if arm == "C" {
             "3e-5"
         } else {
             "3e-5+(1e-4-3e-5)*min(j,64)/64; j=1..512, cumulative Adam retained"
         });
         let dir = output.join(arm);
         std::fs::create_dir(&dir)?;
-        save(&dir.join("policy.json"), &common)?;
+        save(&dir.join("policy.r3b"), &common)?;
     }
     control.check("progress_pair_registered")?;
     save(
-        &output.join("pair.json"),
-        &json!({"node":"A1","contract":PROGRESS_CONTRACT,"arms":["C","L"],
-        "policy_hashes":[file_hash(&output.join("C/policy.json"))?,file_hash(&output.join("L/policy.json"))?],
+        &output.join("pair.r3b"),
+        &record!({"node":"A1","contract":PROGRESS_CONTRACT,"arms":["C","L"],
+        "policy_hashes":[file_hash(&output.join("C/policy.r3b"))?,file_hash(&output.join("L/policy.r3b"))?],
         "a0_elapsed_seconds":a["control"]["elapsed_seconds"],"prior_experiment":null,"maximum_pair_updates":1024}),
     )?;
     Ok(())
@@ -3726,7 +3719,7 @@ fn progress_endpoint_safe(r: &Value) -> bool {
         && r.get("save_error") == Some(&Value::Null)
         && r["final_evaluation_complete"] == true
         && r["control"]["terminal_reason"] == "COMPLETED"
-        && r["control"]["observed_conditions"] == json!([])
+        && r["control"]["observed_conditions"] == record!([])
         && r["resume_allowed"] == false
 }
 #[allow(clippy::type_complexity)] // Reuse the existing persisted skill-tape tuple representation.
@@ -3773,7 +3766,7 @@ fn progress_renewal(
 ) -> Result<()> {
     control.check("progress_renewal_prepare")?;
     let checked = verified_harness(harness)?;
-    let comparison = read_json(&root.join("comparison.json"))?;
+    let comparison = read_metadata(&root.join("comparison.r3b"))?;
     let selected = progress_u64(&comparison, "selected_index")? as usize;
     if comparison["node"] != "A1"
         || comparison["contract"] != PROGRESS_CONTRACT
@@ -3788,13 +3781,13 @@ fn progress_renewal(
     }
     let end = &comparison["endpoints"][selected];
     let segment = progress_path(end, "segment")?;
-    let mut p = read_json(&segment.parent().unwrap().join("policy.json"))?;
+    let mut p = read_metadata(&segment.parent().unwrap().join("policy.r3b"))?;
     let inputs = load_verified_inputs(&progress_path(&p, "a0")?, Some(&p))?;
     let ledger = progress_ledger(root)?;
     if ledger.0 > 1024 {
         return Err(Error::Invalid("A1 update ledger".into()));
     }
-    if end["policy_sha256"] != file_hash(&segment.parent().unwrap().join("policy.json"))?
+    if end["policy_sha256"] != file_hash(&segment.parent().unwrap().join("policy.r3b"))?
         || end["checkpoint_file_sha256"] != file_hash(&segment.join("final"))?
     {
         return Err(Error::Corrupt("selected endpoint changed".into()));
@@ -3820,35 +3813,35 @@ fn progress_renewal(
     std::fs::create_dir(output)?;
     let mut generated = data::renewed_copy_curricula(&original_data, &heldout, output, seed)?;
     let tapes = progress_renewal_tapes(&original_data.1, state.sampler_state)?;
-    p["node"] = json!("A2");
-    p["run_id"] = json!(output);
-    p["parent"] = json!(segment.join("final"));
+    p["node"] = record!("A2");
+    p["run_id"] = record!(output);
+    p["parent"] = record!(segment.join("final"));
     p["parent_sha256"] = end["checkpoint_file_sha256"].clone();
-    p["parent_receipt"] = json!(segment.join("result.json"));
-    p["parent_receipt_sha256"] = json!(file_hash(&segment.join("result.json"))?);
+    p["parent_receipt"] = record!(segment.join("result.r3b"));
+    p["parent_receipt_sha256"] = record!(file_hash(&segment.join("result.r3b"))?);
     p["initial_model_hash"] = end["model_content_hash"].clone();
     p["initial_adam_hash"] = end["adam_hash"].clone();
-    p["initial_state"] = serde_json::to_value(state)?;
-    p["initial_state_native_hash"] = json!(digest(state)?);
-    p["source_commit"] = json!(source_commit()?);
+    p["initial_state"] = replica_v3::binary::to_value(state)?;
+    p["initial_state_native_hash"] = record!(digest(state)?);
+    p["source_commit"] = record!(source_commit()?);
     p["source_digest"] = checked["source_digest"].clone();
-    p["binary_hash"] = json!(file_hash(&std::env::current_exe()?)?);
-    p["harness"] = json!(harness);
-    p["harness_hash"] = json!(file_hash(harness)?);
+    p["binary_hash"] = record!(file_hash(&std::env::current_exe()?)?);
+    p["harness"] = record!(harness);
+    p["harness_hash"] = record!(file_hash(harness)?);
     p["baseline_dev"] = end["last_evaluation"]["dev"]["exact_matches"].clone();
     p["baseline_watch"] = end["last_evaluation"]["watch"]["exact_matches"].clone();
-    p["baseline_errors"] = json!(
+    p["baseline_errors"] = record!(
         progress_u64(&end["last_evaluation"]["dev"], "generation_error_cases")?
             + progress_u64(&end["last_evaluation"]["watch"], "generation_error_cases")?
     );
-    p["lr_offset"] = json!(progress_u64(&p, "lr_offset")? + progress_u64(end, "new_updates")?);
-    p["lr_function"] = json!(
+    p["lr_offset"] = record!(progress_u64(&p, "lr_offset")? + progress_u64(end, "new_updates")?);
+    p["lr_function"] = record!(
         "continue selected A1 policy clock; no restart of ramp; same F/N LR and inherited cumulative Adam"
     );
-    p["zero_evaluation"] = json!("DERIVED_FROM_A1_IDENTICAL_SELECTED_MODEL");
-    p["zero_evaluation_file"] = json!(segment.join("eval-0512.json"));
-    p["zero_evaluation_hash"] = json!(file_hash(&segment.join("eval-0512.json"))?);
-    p["parent_comparison_hash"] = json!(file_hash(&root.join("comparison.json"))?);
+    p["zero_evaluation"] = record!("DERIVED_FROM_A1_IDENTICAL_SELECTED_MODEL");
+    p["zero_evaluation_file"] = record!(segment.join("eval-0512.r3b"));
+    p["zero_evaluation_hash"] = record!(file_hash(&segment.join("eval-0512.r3b"))?);
+    p["parent_comparison_hash"] = record!(file_hash(&root.join("comparison.r3b"))?);
     p["generator"] = generated["generator"].clone();
     for (index, arm) in ["F", "N"].iter().enumerate() {
         let corpus = output.join(format!("corpus-{arm}"));
@@ -3882,29 +3875,29 @@ fn progress_renewal(
                 return Err(Error::Corrupt("renewal batch repeats base".into()));
             }
             for (slot, i) in ids[4..].iter().enumerate() {
-                coordinates.push(json!({"generator_revision":"controlled-renewal-H3-v1","namespace":"train-renewal","seed":seed,"update":n+1,"slot":slot,"base":(i-2048)/4,"view":(i-2048)%4,"id":episodes[*i].id,"sequence":episodes[*i].sequence}));
+                coordinates.push(record!({"generator_revision":"controlled-renewal-H3-v1","namespace":"train-renewal","seed":seed,"update":n+1,"slot":slot,"base":(i-2048)/4,"view":(i-2048)%4,"id":episodes[*i].id,"sequence":episodes[*i].sequence}));
             }
         }
-        p["arm"] = json!(arm);
-        p["corpus"] = json!(corpus);
-        p["train_hash"] = json!(manifest.train.sha256);
-        p["dev_hash"] = json!(manifest.validation.sha256);
-        p["tape"] = json!(tapes[index]);
-        p["tape_hash"] = json!(digest(&tapes[index])?);
-        p["denominators"] = json!(denominators);
-        p["denominators_hash"] = json!(digest(&denominators)?);
+        p["arm"] = record!(arm);
+        p["corpus"] = record!(corpus);
+        p["train_hash"] = record!(manifest.train.sha256);
+        p["dev_hash"] = record!(manifest.validation.sha256);
+        p["tape"] = record!(tapes[index]);
+        p["tape_hash"] = record!(digest(&tapes[index])?);
+        p["denominators"] = record!(denominators);
+        p["denominators_hash"] = record!(digest(&denominators)?);
         let dir = output.join(arm);
         std::fs::create_dir(&dir)?;
-        save(&dir.join("coordinates.json"), &json!(coordinates))?;
-        p["coordinates_hash"] = json!(file_hash(&dir.join("coordinates.json"))?);
-        save(&dir.join("policy.json"), &p)?;
+        save(&dir.join("coordinates.r3b"), &record!(coordinates))?;
+        p["coordinates_hash"] = record!(file_hash(&dir.join("coordinates.r3b"))?);
+        save(&dir.join("policy.r3b"), &p)?;
     }
-    save(&output.join("generated.json"), &generated)?;
+    save(&output.join("generated.r3b"), &generated)?;
     control.check("progress_renewal_registered")?;
     save(
-        &output.join("pair.json"),
-        &json!({"node":"A2","contract":PROGRESS_CONTRACT,"arms":["F","N"],"policy_hashes":[file_hash(&output.join("F/policy.json"))?,file_hash(&output.join("N/policy.json"))?],
-        "prior_experiment":root,"prior_comparison_hash":file_hash(&root.join("comparison.json"))?,"maximum_pair_updates":1024,"same_strata_schedule":true,
+        &output.join("pair.r3b"),
+        &record!({"node":"A2","contract":PROGRESS_CONTRACT,"arms":["F","N"],"policy_hashes":[file_hash(&output.join("F/policy.r3b"))?,file_hash(&output.join("N/policy.r3b"))?],
+        "prior_experiment":root,"prior_comparison_hash":file_hash(&root.join("comparison.r3b"))?,"maximum_pair_updates":1024,"same_strata_schedule":true,
         "same_anchor_tape":true,"renewal_only":"F512views repeated4; N2048views once, four views on distinct batches; F is balanced first128base quarter of N",
         "learning_before_registration":0,"actual_prior_updates":ledger.0}),
     )?;
@@ -3912,13 +3905,13 @@ fn progress_renewal(
 }
 /// Counts every closed segment, including failed segments; an unclosed segment blocks reruns.
 fn progress_ledger(root: &Path) -> Result<(u64, u64, u64, f64)> {
-    let pair = read_json(&root.join("pair.json"))?;
+    let pair = read_metadata(&root.join("pair.r3b"))?;
     let mut total = (0, 0, 0, 0.);
     if let Some(prior) = pair["prior_experiment"].as_str() {
         if pair["node"] != "A2"
-            || read_json(&Path::new(prior).join("pair.json"))?["node"] != "A1"
+            || read_metadata(&Path::new(prior).join("pair.r3b"))?["node"] != "A1"
             || pair["prior_comparison_hash"]
-                != file_hash(&Path::new(prior).join("comparison.json"))?
+                != file_hash(&Path::new(prior).join("comparison.r3b"))?
         {
             return Err(Error::Corrupt("bounded A1 to A2 ledger lineage".into()));
         }
@@ -3945,7 +3938,7 @@ fn progress_ledger(root: &Path) -> Result<(u64, u64, u64, f64)> {
             if !path.is_dir() {
                 continue;
             }
-            let r = read_json(&path.join("result.json"))?;
+            let r = read_metadata(&path.join("result.r3b"))?;
             total.0 += progress_u64(&r, "segment_updates")?;
             total.1 += progress_u64(&r, "segment_input_tokens")?;
             total.2 += progress_u64(&r, "segment_target_tokens")?;
@@ -4011,7 +4004,7 @@ fn progress_time_resume(r: &Value) -> bool {
     r["reason"] == "TIME_BUDGET"
         && r["resume_allowed"] == true
         && r["checkpoint_saved"] == true
-        && r["control"]["observed_conditions"] == json!(["TIME_BUDGET"])
+        && r["control"]["observed_conditions"] == record!(["TIME_BUDGET"])
         && r.get("save_error") == Some(&Value::Null)
         && r["cleanup_limit_exceeded"] == false
         && r["new_updates"].as_u64().is_some_and(|n| n <= 512)
@@ -4020,7 +4013,7 @@ fn verify_resume_evaluation_files(p: &Value, previous: &Value, segments: &[PathB
     let expected = evaluation_identity(p, &previous["last_evaluation"])?;
     let mut found = false;
     for segment in segments {
-        let result = read_json(&segment.join("result.json"))?;
+        let result = read_metadata(&segment.join("result.r3b"))?;
         let receipts = result["panel_receipts"]
             .as_object()
             .ok_or_else(|| Error::Corrupt("AMBIGUOUS_GUARD_STATE: missing raw receipts".into()))?;
@@ -4070,8 +4063,8 @@ fn evaluation_identity(p: &Value, e: &Value) -> Result<(String, String, String)>
         .ok_or_else(|| Error::Corrupt("evaluation object".into()))?
         .remove("decision");
     let content = digest(&raw)?;
-    let panel = digest(&json!([e["dev_rows"], e["watch_rows"]]))?;
-    let key = digest(&json!([
+    let panel = digest(&record!([e["dev_rows"], e["watch_rows"]]))?;
+    let key = digest(&record!([
         p["run_id"],
         digest(p)?,
         e["model_content_hash"],
@@ -4101,7 +4094,7 @@ fn reconcile_evaluation_decision(
             "INTEGRITY_FAIL: incomplete/step/model evaluation".into(),
         ));
     }
-    let mut decision: EvaluationDecision = serde_json::from_value(last["decision"].clone())
+    let mut decision: EvaluationDecision = replica_v3::binary::from_value(last["decision"].clone())
         .map_err(|_| Error::Corrupt("AMBIGUOUS_GUARD_STATE".into()))?;
     let (key, content, panel) = evaluation_identity(p, last)?;
     if (
@@ -4136,7 +4129,7 @@ fn reconcile_evaluation_decision(
         decision.quality_stop = Some(stop);
         decision.applied = Some(key);
         *streak = after;
-        last["decision"] = serde_json::to_value(decision)?;
+        last["decision"] = replica_v3::binary::to_value(decision)?;
     }
     if stop {
         control.observe(StopReason::QualityGuard);
@@ -4159,7 +4152,7 @@ fn progress_evaluation_boundary(
         *last = e;
         if last["final_evaluation_complete"] == true {
             let (key, evaluation_digest, panel_digest) = evaluation_identity(p, last)?;
-            last["decision"] = serde_json::to_value(EvaluationDecision {
+            last["decision"] = replica_v3::binary::to_value(EvaluationDecision {
                 key,
                 evaluation_digest,
                 panel_digest,
@@ -4169,7 +4162,7 @@ fn progress_evaluation_boundary(
                 applied: None,
             })?;
         }
-        save(&segment.join(format!("eval-{n:04}.json")), last)?;
+        save(&segment.join(format!("eval-{n:04}.r3b")), last)?;
         control.check("progress_eval_recorded")?;
     }
     let pending =
@@ -4177,7 +4170,7 @@ fn progress_evaluation_boundary(
     reconcile_evaluation_decision(p, n, model, last, streak, control)?;
     if pending {
         save(
-            &segment.join(format!("decision-{n:04}.json")),
+            &segment.join(format!("decision-{n:04}.r3b")),
             &last["decision"],
         )?;
         checkpoint()?;
@@ -4193,7 +4186,7 @@ fn progress_arm(
     control: &mut RunControl,
 ) -> Result<()> {
     control.check("progress_arm_start")?;
-    let pair = read_json(&root.join("pair.json"))?;
+    let pair = read_metadata(&root.join("pair.r3b"))?;
     let arms = pair["arms"]
         .as_array()
         .ok_or_else(|| Error::Corrupt("pair arms".into()))?;
@@ -4202,12 +4195,12 @@ fn progress_arm(
         .position(|a| a == arm)
         .ok_or_else(|| Error::Invalid("unregistered arm".into()))?;
     let output = root.join(arm);
-    let policy_path = output.join("policy.json");
-    let p = read_json(&policy_path)?;
+    let policy_path = output.join("policy.r3b");
+    let p = read_metadata(&policy_path)?;
     let inputs = load_verified_inputs(&progress_path(&p, "a0")?, Some(&p))?;
     for (i, a) in arms.iter().enumerate() {
         if pair["policy_hashes"][i]
-            != file_hash(&root.join(a.as_str().unwrap()).join("policy.json"))?
+            != file_hash(&root.join(a.as_str().unwrap()).join("policy.r3b"))?
         {
             return Err(Error::Corrupt("registered pair policy changed".into()));
         }
@@ -4229,12 +4222,12 @@ fn progress_arm(
     control.deadline = control.start + Duration::from_secs_f64((7200. - ledger.3).min(1800.));
     let parent = progress_path(&p, "parent")?;
     let a0 = progress_path(&p, "a0")?;
-    if p["a0_hash"] != file_hash(&a0.join("summary.json"))?
-        || p["cross_hash"] != file_hash(&a0.join("cross-development.json"))?
+    if p["a0_hash"] != file_hash(&a0.join("summary.r3b"))?
+        || p["cross_hash"] != file_hash(&a0.join("cross-development.r3b"))?
     {
         return Err(Error::Corrupt("frozen development baseline changed".into()));
     }
-    if p["node"] == "A2" && p["coordinates_hash"] != file_hash(&output.join("coordinates.json"))? {
+    if p["node"] == "A2" && p["coordinates_hash"] != file_hash(&output.join("coordinates.r3b"))? {
         return Err(Error::Corrupt("renewal replay coordinates changed".into()));
     }
     let frozen = &inputs.frozen;
@@ -4258,7 +4251,7 @@ fn progress_arm(
                 "resume must use latest owned segment".into(),
             ));
         }
-        previous = read_json(&path.join("result.json"))?;
+        previous = read_metadata(&path.join("result.r3b"))?;
         if !progress_time_resume(&previous)
             || previous["policy_sha256"] != pair["policy_hashes"][arm_index]
             || previous["checkpoint_file_sha256"] != file_hash(&path.join("final"))?
@@ -4301,8 +4294,8 @@ fn progress_arm(
     let start = initial.step;
     let start_input = initial.consumed_tokens;
     let start_target = initial.target_tokens;
-    let tape: Vec<(Vec<usize>, u64)> = serde_json::from_value(p["tape"].clone())?;
-    let denominators: Vec<(usize, usize)> = serde_json::from_value(p["denominators"].clone())?;
+    let tape: Vec<(Vec<usize>, u64)> = replica_v3::binary::from_value(p["tape"].clone())?;
+    let denominators: Vec<(usize, usize)> = replica_v3::binary::from_value(p["denominators"].clone())?;
     if tape.len() != 512
         || denominators.len() != 512
         || p["tape_hash"] != digest(&tape)?
@@ -4336,7 +4329,7 @@ fn progress_arm(
     let framed = samples(episodes, &l.tokenizer, 512)?;
     let c = progress_config(&initial);
     c.validate(l.model.config.context)?;
-    if resume.is_some() && serde_json::to_value(&state.config)? != serde_json::to_value(&c)? {
+    if resume.is_some() && replica_v3::binary::to_value(&state.config)? != replica_v3::binary::to_value(&c)? {
         return Err(Error::Corrupt("resumed fork config changed".into()));
     }
     state.config = c.clone();
@@ -4375,18 +4368,18 @@ fn progress_arm(
     let mut log = std::fs::OpenOptions::new()
         .create_new(true)
         .write(true)
-        .open(segment.join("trace.jsonl"))?;
+        .open(segment.join("trace.r3rows"))?;
     let mut streak: [u64; 3] = if previous.is_null() {
         [0; 3]
     } else {
-        serde_json::from_value(previous["guard_streaks"].clone())?
+        replica_v3::binary::from_value(previous["guard_streaks"].clone())?
     };
     let mut last = previous["last_evaluation"].clone();
     let mut cross = Value::Null;
     let mut ordinary = Value::Null;
     let mut ordinary_generation_ok = false;
     let mut complete = false;
-    let mut panel_receipts = json!({});
+    let mut panel_receipts = record!({});
     let outcome = (|| -> Result<()> {
         if last.is_null() {
             if p["node"] == "A2" {
@@ -4394,7 +4387,7 @@ fn progress_arm(
                 if p["zero_evaluation_hash"] != file_hash(&path)? {
                     return Err(Error::Corrupt("selected parent raw changed".into()));
                 }
-                last = read_json(&path)?;
+                last = read_metadata(&path)?;
                 if last["model_content_hash"] != p["initial_model_hash"]
                     || last["final_evaluation_complete"] != true
                 {
@@ -4404,8 +4397,8 @@ fn progress_arm(
                     .parent()
                     .and_then(Path::parent)
                     .ok_or_else(|| Error::Corrupt("zero parent policy".into()))?
-                    .join("policy.json");
-                let parent_policy = read_json(&parent_policy_path)?;
+                    .join("policy.r3b");
+                let parent_policy = read_metadata(&parent_policy_path)?;
                 let parent_inputs = load_verified_inputs(
                     &progress_path(&parent_policy, "a0")?,
                     Some(&parent_policy),
@@ -4414,23 +4407,23 @@ fn progress_arm(
                 last.as_object_mut().unwrap().remove("bindings");
                 last.as_object_mut().unwrap().remove("decision");
                 last["derived_parent_new_updates"] = last["new_updates"].clone();
-                last["new_updates"] = json!(0);
+                last["new_updates"] = record!(0);
                 last["evidence_level"] = p["zero_evaluation"].clone();
             } else {
-                let d = read_json(&a0.join("normal-dev.json"))?;
-                let w = read_json(&a0.join("watch32.json"))?;
+                let d = read_metadata(&a0.join("normal-dev.r3b"))?;
+                let w = read_metadata(&a0.join("watch32.r3b"))?;
                 let watch_score = skill_score(
                     w["rows"]
                         .as_array()
                         .ok_or_else(|| Error::Corrupt("A0 watch rows".into()))?,
                 )?;
-                last = json!({"new_updates":0,"dev":d["score"],"watch":watch_score,"dev_rows":d["rows"],"watch_rows":w["rows"],
+                last = record!({"new_updates":0,"dev":d["score"],"watch":watch_score,"dev_rows":d["rows"],"watch_rows":w["rows"],
                 "final_evaluation_complete":true,"model_content_hash":p["initial_model_hash"],"evidence_level":"DERIVED_FROM_A0_IDENTICAL_MODEL",
-                "dev_file_hash":file_hash(&a0.join("normal-dev.json"))?,"watch_file_hash":file_hash(&a0.join("watch32.json"))?});
+                "dev_file_hash":file_hash(&a0.join("normal-dev.r3b"))?,"watch_file_hash":file_hash(&a0.join("watch32.r3b"))?});
             }
             verify_progress_evaluation(&p, &last, &inputs, &l, true)?;
             bind_progress_evaluation(&p, &mut last, &inputs, &l)?;
-            record_bound_panel(&segment.join("eval-0000.json"), &last, &mut panel_receipts)?;
+            record_bound_panel(&segment.join("eval-0000.r3b"), &last, &mut panel_receipts)?;
         }
         loop {
             let n = state.step - start;
@@ -4467,8 +4460,8 @@ fn progress_arm(
                         .as_array()
                         .ok_or_else(|| Error::Corrupt("watch rows".into()))?,
                 )?;
-                evaluation["new_updates"] = json!(n);
-                evaluation["model_content_hash"] = json!(l.model.weight_hash()?);
+                evaluation["new_updates"] = record!(n);
+                evaluation["model_content_hash"] = record!(l.model.weight_hash()?);
                 bind_progress_evaluation(&p, &mut evaluation, &inputs, &l)?;
                 progress_evaluation_boundary(
                     &p,
@@ -4513,8 +4506,8 @@ fn progress_arm(
                     &l,
                 )?;
                 record_bound_panel(
-                    &segment.join("cross.json"),
-                    &json!({"policy":"normal_greedy_v1","score":cross,"rows":rows,"bindings":{"cross":binding}}),
+                    &segment.join("cross.r3b"),
+                    &record!({"policy":"normal_greedy_v1","score":cross,"rows":rows,"bindings":{"cross":binding}}),
                     &mut panel_receipts,
                 )?;
                 control.check("progress_cross_recorded")?;
@@ -4531,8 +4524,8 @@ fn progress_arm(
                     &l,
                 )?;
                 record_bound_panel(
-                    &segment.join("ordinary400.json"),
-                    &json!({"policy":"normal_greedy_v1","score":ordinary,"rows":rows,"bindings":{"ordinary":binding}}),
+                    &segment.join("ordinary400.r3b"),
+                    &record!({"policy":"normal_greedy_v1","score":ordinary,"rows":rows,"bindings":{"ordinary":binding}}),
                     &mut panel_receipts,
                 )?;
                 control.check("progress_ordinary_recorded")?;
@@ -4600,11 +4593,11 @@ fn progress_arm(
             state.train_loss = Some(ce as f64);
             state.validation_loss = None;
             let _ = control.check("progress_optimizer_committed");
-            let row = json!({"new_update":n+1,"cumulative_model_step":state.step,"optimizer_step":state.step,"lr_clock":n+1+progress_u64(&p,"lr_offset")? as usize,"lr":rate,"lr_bits":rate.to_bits(),
+            let row = record!({"new_update":n+1,"cumulative_model_step":state.step,"optimizer_step":state.step,"lr_clock":n+1+progress_u64(&p,"lr_offset")? as usize,"lr":rate,"lr_bits":rate.to_bits(),
                 "sampler_state":sampler,"indices":indices,"ids":indices.iter().map(|i|&episodes[*i].id).collect::<Vec<_>>(),
                 "input_tokens":b.tokens,"target_tokens":targets,"consumed_input_tokens":state.consumed_tokens-start_input,"consumed_target_tokens":state.target_tokens-start_target,
                 "ce":ce,"objective":objective,"gradient_norm":norm,"update_norm":delta,"rss_kib":control.last_rss_kib,"elapsed_seconds":control.start.elapsed().as_secs_f64()});
-            writeln!(log, "{row}")?;
+            replica_v3::binary::write_record(&mut log, &row)?;
             log.flush()?;
             if (n + 1).is_multiple_of(32) {
                 println!(
@@ -4626,19 +4619,19 @@ fn progress_arm(
     let model_hash = l.model.weight_hash()?;
     let adam_hash = optimizer_hash(&adam.moments)?;
     log.sync_all()?;
-    let trace_hash = file_hash(&segment.join("trace.jsonl"))?;
+    let trace_hash = file_hash(&segment.join("trace.r3rows"))?;
     for n in [0, 128, 256, 512] {
-        let name = format!("eval-{n:04}.json");
+        let name = format!("eval-{n:04}.r3b");
         let path = segment.join(&name);
         if path.exists() {
-            let raw = read_json(&path)?;
-            panel_receipts[&name] = json!({"sha256":file_hash(&path)?,"bindings":raw["bindings"]});
+            let raw = read_metadata(&path)?;
+            panel_receipts[&name] = record!({"sha256":file_hash(&path)?,"bindings":raw["bindings"]});
         }
     }
     let mut checkpoint_hash = Value::Null;
     let mut result = finish_arm(control, complete, |reason| {
         save_arm(&mut l, &state, &adam, &segment.join("final"), reason)?;
-        checkpoint_hash = json!(file_hash(&segment.join("final"))?);
+        checkpoint_hash = record!(file_hash(&segment.join("final"))?);
         if p["parent_sha256"] != file_hash(&parent)?
             || p["parent_receipt_sha256"] != file_hash(&progress_path(&p, "parent_receipt")?)?
         {
@@ -4657,7 +4650,7 @@ fn progress_arm(
         && ordinary["qa"][0]
             .as_u64()
             .is_some_and(|n| n >= p["anchor_floor"].as_u64().unwrap_or(u64::MAX));
-    let details = json!({"contract":PROGRESS_CONTRACT,"node":p["node"],"arm":arm,"policy_sha256":file_hash(&policy_path)?,"new_updates":state.step-start,
+    let details = record!({"contract":PROGRESS_CONTRACT,"node":p["node"],"arm":arm,"policy_sha256":file_hash(&policy_path)?,"new_updates":state.step-start,
         "segment_updates":state.step-segment_start.0,"segment_input_tokens":state.consumed_tokens-segment_start.1,"segment_target_tokens":state.target_tokens-segment_start.2,
         "segment_elapsed_seconds":control.start.elapsed().as_secs_f64(),"additional_input_tokens":state.consumed_tokens-start_input,"additional_target_tokens":state.target_tokens-start_target,
         "cumulative_model_step":state.step,"sampler_state":state.sampler_state,"model_content_hash":model_hash,"adam_hash":adam_hash,
@@ -4674,17 +4667,17 @@ fn progress_arm(
         .iter()
         .flat_map(|(indices, _)| indices.iter().copied())
         .collect();
-    result["exposure"] = json!({"draws":exposed.len(),"unique_views":exposed.iter().copied().collect::<BTreeSet<_>>().len(),
+    result["exposure"] = record!({"draws":exposed.len(),"unique_views":exposed.iter().copied().collect::<BTreeSet<_>>().len(),
         "unique_bases":exposed.iter().map(|i|scene(&episodes[*i])).collect::<BTreeSet<_>>().len(),
         "anchor_draws":exposed.iter().filter(|i|**i<2048).count(),"focus_draws":exposed.iter().filter(|i|**i>=2048).count(),"trace_sha256":trace_hash});
     if cleanup {
-        result["comparison_eligible"] = json!(false);
+        result["comparison_eligible"] = record!(false);
     }
     if result["checkpoint_saved"] == true {
         result["checkpoint_file_sha256"] = checkpoint_hash;
     }
     log.sync_all()?;
-    save(&segment.join("result.json"), &result)?;
+    save(&segment.join("result.r3b"), &result)?;
     println!(
         "NODE={} ARM={arm} reason={} updates={} dev={} cross={} ordinary={} raw_gate={} resume={}",
         p["node"],
@@ -4729,7 +4722,7 @@ fn progress_pair_delta(a: &[Value], b: &[Value]) -> Result<Value> {
         groups[*x as usize * 2 + *y as usize] += 1;
     }
     Ok(
-        json!({"case_order":["both_wrong","treatment_gain","treatment_loss","both_correct"],"cases":cells,"base_all_views":groups,"base_count":bases.len(),"statistical_superiority":"NOT_CLAIMED"}),
+        record!({"case_order":["both_wrong","treatment_gain","treatment_loss","both_correct"],"cases":cells,"base_all_views":groups,"base_count":bases.len(),"statistical_superiority":"NOT_CLAIMED"}),
     )
 }
 struct PanelSpec<'a> {
@@ -4747,7 +4740,7 @@ fn panel_binding(spec: &PanelSpec<'_>, rows: &[Value], l: &Loaded) -> Result<Val
         .filter(|r| r["generation_completed"] == true && r["interruption"].is_null())
         .count();
     Ok(
-        json!({"version":"native-panel-v1","panel_id":spec.id,"expected_count":spec.cases.len(),
+        record!({"version":"native-panel-v1","panel_id":spec.id,"expected_count":spec.cases.len(),
         "completed_count":completed,"ordered_id_digest":digest(&spec.cases.iter().map(|e|&e.id).collect::<Vec<_>>())?,
         "case_content_digest":digest(spec.cases)?,"dataset_digest":spec.split_hash,
         "model_hash":spec.model,"tokenizer_hash":l.tokenizer.semantic_id(),"model_step":spec.step,
@@ -4808,7 +4801,7 @@ fn verify_panel_and_rescore(
             l.model.config.context as u32,
             &l.model.config.id()?,
         )?;
-        let raw: Vec<u32> = serde_json::from_value(row["raw_tokens"].clone())?;
+        let raw: Vec<u32> = replica_v3::binary::from_value(row["raw_tokens"].clone())?;
         let eos = raw.iter().position(|id| *id == EOS);
         let bytes_ids: Vec<_> = raw
             .iter()
@@ -4818,10 +4811,10 @@ fn verify_panel_and_rescore(
         if row["request_digest"] != digest(&e.request)?
             || row["prompt_digest"] != digest(&prompt.token_ids)?
             || row["native_prompt_digest"] != prompt.token_digest
-            || row["provided"] != json!(prompt.provided)
-            || row["excluded"] != json!(prompt.excluded)
+            || row["provided"] != record!(prompt.provided)
+            || row["excluded"] != record!(prompt.excluded)
             || row["prompt_length"] != prompt.token_ids.len()
-            || row["eos_index"] != json!(eos)
+            || row["eos_index"] != record!(eos)
             || row["raw_generated_count"] != raw.len()
             || row["raw_bytes"] != bytes_receipt(&l.tokenizer, &bytes_ids)
         {
@@ -4851,8 +4844,8 @@ fn verify_panel_and_rescore(
                 .or_else(|| {
                     (e.answer.len() != bytes.len()).then_some(e.answer.len().min(bytes.len()))
                 });
-            if t["first_byte_difference"] != json!(position)
-                || t["first_difference_field"] != json!(position.map(|n| field_at(&e.answer, n)))
+            if t["first_byte_difference"] != record!(position)
+                || t["first_difference_field"] != record!(position.map(|n| field_at(&e.answer, n)))
             {
                 return Err(Error::Corrupt(
                     "INTEGRITY_FAIL: first raw difference field".into(),
@@ -4863,12 +4856,12 @@ fn verify_panel_and_rescore(
             let finish = if eos.is_some() { "stop" } else { "length" };
             let text = decoded.as_ref().ok();
             let error = decoded.as_ref().err().map(ToString::to_string);
-            if row["actual"] != json!(text)
-                || row["error"] != json!(error)
-                || row["error_class"] != json!(error.as_ref().map(|_| "strict_utf8"))
+            if row["actual"] != record!(text)
+                || row["error"] != record!(error)
+                || row["error_class"] != record!(error.as_ref().map(|_| "strict_utf8"))
                 || row["generation"]["finish"] != finish
                 || row["finish_reason"] != finish
-                || row["generation"]["tokens"] != json!(bytes_ids)
+                || row["generation"]["tokens"] != record!(bytes_ids)
                 || row["generation"]["generated"] != raw.len()
             {
                 return Err(Error::Corrupt(
@@ -4901,7 +4894,7 @@ fn verify_panel_and_rescore(
                 "INTEGRITY_FAIL: raw score/components mismatch".into(),
             ));
         }
-        row["exact_match"] = json!(exact);
+        row["exact_match"] = record!(exact);
         row["components"] = c;
     }
     match spec.id {
@@ -4911,7 +4904,7 @@ fn verify_panel_and_rescore(
     }
 }
 fn verify_score(recorded: &Value, derived: &Value) -> Result<()> {
-    // Floating teacher aggregates are JSON round trips; strict integer scores/gates must match exactly.
+    // Floating teacher aggregates use typed binary values; strict integer scores/gates must match exactly.
     for (key, value) in derived
         .as_object()
         .ok_or_else(|| Error::Corrupt("score object".into()))?
@@ -4931,10 +4924,10 @@ fn verify_score(recorded: &Value, derived: &Value) -> Result<()> {
     Ok(())
 }
 fn record_bound_panel(path: &Path, value: &Value, receipts: &mut Value) -> Result<()> {
-    let bytes = serde_json::to_vec_pretty(value)?;
+    let bytes = replica_v3::binary::to_vec(value)?;
     neural::write_new(path, &bytes)?;
     receipts[path.file_name().unwrap().to_str().unwrap()] =
-        json!({"sha256":neural::hash(&bytes),"bindings":value["bindings"]});
+        record!({"sha256":neural::hash(&bytes),"bindings":value["bindings"]});
     Ok(())
 }
 fn verify_progress_evaluation(
@@ -5034,7 +5027,7 @@ fn bind_progress_evaluation(
 }
 fn read_panel(path: &Path) -> Result<(Value, String)> {
     let bytes = neural::read_bounded(path, 16 * 1024 * 1024)?;
-    Ok((serde_json::from_slice(&bytes)?, neural::hash(&bytes)))
+    Ok((replica_v3::binary::from_slice(&bytes)?, neural::hash(&bytes)))
 }
 fn verify_panel_file(
     result: &Value,
@@ -5102,7 +5095,7 @@ fn verify_endpoint_panels(
             ));
         }
         let mut copy = evaluation.clone();
-        let mut streak: [u64; 3] = serde_json::from_value(result["guard_streaks"].clone())?;
+        let mut streak: [u64; 3] = replica_v3::binary::from_value(result["guard_streaks"].clone())?;
         let mut decision_control = RunControl::new(
             Arc::new(AtomicBool::new(false)),
             Duration::from_secs(1),
@@ -5119,7 +5112,7 @@ fn verify_endpoint_panels(
         if stop
             && !result["control"]["observed_conditions"]
                 .as_array()
-                .is_some_and(|v| v.contains(&json!("QUALITY_GUARD")))
+                .is_some_and(|v| v.contains(&record!("QUALITY_GUARD")))
         {
             return Err(Error::Corrupt(
                 "INTEGRITY_FAIL: missing sticky quality stop".into(),
@@ -5128,18 +5121,18 @@ fn verify_endpoint_panels(
     }
     let policy_hash = digest(p)?;
     let model = l.model.weight_hash()?;
-    let mut bindings = json!({});
+    let mut bindings = record!({});
     let mut ordinary_generation_ok = false;
     for (id, file, cases, hash) in [
         (
             "cross",
-            "cross.json",
+            "cross.r3b",
             inputs.cross.as_slice(),
             &inputs.hashes["cross"],
         ),
         (
             "ordinary",
-            "ordinary400.json",
+            "ordinary400.r3b",
             inputs.ordinary.as_slice(),
             &inputs.hashes["ordinary"],
         ),
@@ -5166,7 +5159,7 @@ fn verify_endpoint_panels(
         verify_score(&raw["score"], &score)?;
         verify_score(&result[id], &score)?;
         result[id] = score;
-        bindings[id] = json!({"current_file_hash":raw_hash,"current_binding":panel_binding(&spec,rows,&l)?,"verified_rows":rows,
+        bindings[id] = record!({"current_file_hash":raw_hash,"current_binding":panel_binding(&spec,rows,&l)?,"verified_rows":rows,
             "historical_receipt_binding":if result["panel_receipts"].get(file).is_some(){"PRESENT"}else{"ABSENT"}});
     }
     if result["candidate_eligible"] == true
@@ -5188,16 +5181,16 @@ fn verify_endpoint_panels(
             "INTEGRITY_FAIL: derived endpoint gate".into(),
         ));
     }
-    result["current_reaudit"] = json!({"verified_inputs":inputs.hashes,"panels":bindings,
+    result["current_reaudit"] = record!({"verified_inputs":inputs.hashes,"panels":bindings,
         "source_provenance":p["source_digest"],"historical_candidate_promotion":"NOT_AUTHORIZED"});
     Ok(())
 }
 fn progress_close(root: &Path, control: &mut RunControl) -> Result<()> {
-    let result = progress_close_to(root, &root.join("comparison.json"), false, control);
+    let result = progress_close_to(root, &root.join("comparison.r3b"), false, control);
     if let Err(e) = &result {
         let _ = save(
-            &root.join("close-integrity-failure.json"),
-            &json!({"status":if e.to_string().contains("INCOMPLETE"){"INCOMPLETE"}else{"INTEGRITY_FAIL"},
+            &root.join("close-integrity-failure.r3b"),
+            &record!({"status":if e.to_string().contains("INCOMPLETE"){"INCOMPLETE"}else{"INTEGRITY_FAIL"},
             "error":e.to_string(),"comparison_eligible":false,"candidate_eligible":false,"new_small_updates":0}),
         );
     }
@@ -5210,7 +5203,7 @@ fn progress_close_to(
     control: &mut RunControl,
 ) -> Result<()> {
     control.check("progress_close")?;
-    let pair = read_json(&root.join("pair.json"))?;
+    let pair = read_metadata(&root.join("pair.r3b"))?;
     let mut ends = Vec::new();
     let mut evals = Vec::new();
     let mut policies = Vec::new();
@@ -5223,8 +5216,8 @@ fn progress_close_to(
     {
         let name = arm.as_str().ok_or_else(|| Error::Corrupt("arm".into()))?;
         let dir = root.join(name);
-        let p = read_json(&dir.join("policy.json"))?;
-        if pair["policy_hashes"][arm_index] != file_hash(&dir.join("policy.json"))? {
+        let p = read_metadata(&dir.join("policy.r3b"))?;
+        if pair["policy_hashes"][arm_index] != file_hash(&dir.join("policy.r3b"))? {
             return Err(Error::Corrupt(
                 "INTEGRITY_FAIL: registered close policy".into(),
             ));
@@ -5240,26 +5233,25 @@ fn progress_close_to(
         let inputs = load_verified_inputs(&progress_path(&p, "a0")?, Some(&p))?;
         let episodes = &inputs.train;
         for segment in entries {
-            last = read_json(&segment.join("result.json"))?;
-            if last["policy_sha256"] != file_hash(&dir.join("policy.json"))?
+            last = read_metadata(&segment.join("result.r3b"))?;
+            if last["policy_sha256"] != file_hash(&dir.join("policy.r3b"))?
                 || last["checkpoint_file_sha256"] != file_hash(&segment.join("final"))?
             {
                 return Err(Error::Corrupt("close identity".into()));
             }
-            if last["exposure"]["trace_sha256"] != file_hash(&segment.join("trace.jsonl"))? {
+            if last["exposure"]["trace_sha256"] != file_hash(&segment.join("trace.r3rows"))? {
                 return Err(Error::Corrupt("actual draw trace changed".into()));
             }
             let before = trace.len();
-            for line in std::fs::read_to_string(segment.join("trace.jsonl"))?.lines() {
-                let row: Value = serde_json::from_str(line)?;
+            for row in replica_v3::binary::read_records::<Value>(&segment.join("trace.r3rows"))? {
                 let n = trace.len();
-                let ids: Vec<usize> = serde_json::from_value(p["tape"][n][0].clone())?;
+                let ids: Vec<usize> = replica_v3::binary::from_value(p["tape"][n][0].clone())?;
                 if row["new_update"] != n + 1
                     || row["indices"] != p["tape"][n][0]
                     || row["sampler_state"] != p["tape"][n][1]
                     || row["input_tokens"] != p["denominators"][n][0]
                     || row["target_tokens"] != p["denominators"][n][1]
-                    || row["ids"] != json!(ids.iter().map(|i| &episodes[*i].id).collect::<Vec<_>>())
+                    || row["ids"] != record!(ids.iter().map(|i| &episodes[*i].id).collect::<Vec<_>>())
                     || row["optimizer_step"]
                         != progress_u64(&p["initial_state"], "step")? + n as u64 + 1
                     || row["lr_bits"]
@@ -5283,7 +5275,7 @@ fn progress_close_to(
                 return Err(Error::Corrupt("actual optimizer call ledger".into()));
             }
             for n in [0, 128, 256, 512] {
-                let path = segment.join(format!("eval-{n:04}.json"));
+                let path = segment.join(format!("eval-{n:04}.r3b"));
                 if path.exists() {
                     let (e, raw_hash) = read_panel(&path)?;
                     let native = if n == 0 {
@@ -5314,7 +5306,7 @@ fn progress_close_to(
                     }
                 }
             }
-            last["segment"] = json!(segment);
+            last["segment"] = record!(segment);
         }
         if last.is_null() || last["reason"] == "TIME_BUDGET" {
             return Err(Error::Invalid(
@@ -5352,7 +5344,7 @@ fn progress_close_to(
             && e["final_evaluation_complete"] == true
             && other["final_evaluation_complete"] == true
         {
-            paired.push(json!({"new_updates":n,"dev":progress_pair_delta(e["dev_rows"].as_array().unwrap(),other["dev_rows"].as_array().unwrap())?,"watch":progress_pair_delta(e["watch_rows"].as_array().unwrap(),other["watch_rows"].as_array().unwrap())?}));
+            paired.push(record!({"new_updates":n,"dev":progress_pair_delta(e["dev_rows"].as_array().unwrap(),other["dev_rows"].as_array().unwrap())?,"watch":progress_pair_delta(e["watch_rows"].as_array().unwrap(),other["watch_rows"].as_array().unwrap())?}));
         }
     }
     let safe = progress_endpoint_safe;
@@ -5434,7 +5426,7 @@ fn progress_close_to(
     }
     let mut final_pairs = Value::Null;
     if safe(&ends[0]) && safe(&ends[1]) {
-        final_pairs = json!({});
+        final_pairs = record!({});
         for name in ["cross", "ordinary"] {
             let a = &ends[0]["current_reaudit"]["panels"][name];
             let b = &ends[1]["current_reaudit"]["panels"][name];
@@ -5460,7 +5452,7 @@ fn progress_close_to(
     control.seal_terminal()?;
     save(
         output,
-        &json!({"contract":PROGRESS_CONTRACT,"node":pair["node"],"paired":paired,"policies_same_exposure":exposure_equal,
+        &record!({"contract":PROGRESS_CONTRACT,"node":pair["node"],"paired":paired,"policies_same_exposure":exposure_equal,
         "endpoints":ends,"selected_index":selected,"selected_arm":selected.map(|i|&pair["arms"][i]),"raw_development_gate":accepted.is_some(),"actual_common_prefix_updates":common_prefix,"final_paired":final_pairs,
         "mode":if legacy{"READ_ONLY_REAUDIT"}else{"BOUND_PANEL_CLOSE"},"evidence_level":"DERIVED_FROM_EXISTING_LOGS",
         "historical_receipt_binding":if ends.iter().any(|r|r["panel_receipts"].is_null()){"ABSENT"}else{"PRESENT"},"current_raw_recount":"VERIFIED",
@@ -5484,7 +5476,7 @@ fn progress_observe(
     kind: &str,
     control: &mut RunControl,
 ) -> Result<()> {
-    let recount = read_json(&output.join("reaudit.json"))?;
+    let recount = read_metadata(&output.join("reaudit.r3b"))?;
     if recount["current_raw_recount"] != "VERIFIED" || recount["mode"] != "READ_ONLY_REAUDIT" {
         return Err(Error::Invalid(
             "verified read-only B4 recount required before observations".into(),
@@ -5496,20 +5488,20 @@ fn progress_observe(
         "N256" => ("N", 256),
         _ => return Err(Error::Invalid("bounded observation only".into())),
     };
-    let p = read_json(&root.join(arm).join("policy.json"))?;
+    let p = read_metadata(&root.join(arm).join("policy.r3b"))?;
     let inputs = load_verified_inputs(&progress_path(&p, "a0")?, Some(&p))?;
     let endpoint = recount["endpoints"]
         .as_array()
         .and_then(|rows| rows.iter().find(|r| r["arm"] == arm))
         .ok_or_else(|| Error::Corrupt("recount endpoint".into()))?;
-    if endpoint["policy_sha256"] != file_hash(&root.join(arm).join("policy.json"))? {
+    if endpoint["policy_sha256"] != file_hash(&root.join(arm).join("policy.r3b"))? {
         return Err(Error::Corrupt(
             "FROZEN_INPUT_MISMATCH: observation policy".into(),
         ));
     }
     for previous in ["F16", "N16", "N256"] {
-        let path = output.join(previous).join("result.json");
-        if path.exists() && read_json(&path)?["status"] != "VERIFIED" {
+        let path = output.join(previous).join("result.r3b");
+        if path.exists() && read_metadata(&path)?["status"] != "VERIFIED" {
             return Err(Error::Invalid(
                 "prior observation failed; no further generation".into(),
             ));
@@ -5535,7 +5527,7 @@ fn progress_observe(
     {
         return Err(Error::Corrupt("observation checkpoint lineage".into()));
     }
-    let old = read_json(&segment.join(format!("eval-{n:04}.json")))?;
+    let old = read_metadata(&segment.join(format!("eval-{n:04}.r3b")))?;
     if old["model_content_hash"] != l.model.weight_hash()? {
         return Err(Error::Corrupt("observation raw/model".into()));
     }
@@ -5559,18 +5551,18 @@ fn progress_observe(
     };
     let observation_source = source_commit()?;
     save(
-        &dir.join("registration.json"),
-        &json!({"kind":kind,"mode":if n==256{"POST_HOC_DIAGNOSTIC"}else{"FRESH_PROCESS_RAW_PARITY"},
+        &dir.join("registration.r3b"),
+        &record!({"kind":kind,"mode":if n==256{"POST_HOC_DIAGNOSTIC"}else{"FRESH_PROCESS_RAW_PARITY"},
         "checkpoint":native,"native_sha256":file_hash(&native)?,"model_hash":l.model.weight_hash()?,"tokenizer":l.tokenizer.semantic_id(),"step":state.step,
-        "policy_sha256":file_hash(&root.join(arm).join("policy.json"))?,"verified_inputs":inputs.hashes,
+        "policy_sha256":file_hash(&root.join(arm).join("policy.r3b"))?,"verified_inputs":inputs.hashes,
         "source_sha":observation_source,"binary_sha256":file_hash(&std::env::current_exe()?)?,
         "selection":if n==256{"reuse verified dev256; generate full frozen CROSS512 and ordinary400 once; post-hoc DEVELOPMENT"}else{"first8 exact and first8 incorrect in frozen dev order; fixed before generation; not quality estimate"},
         "indices":indices,"maximum_new_generations":if n==256{912}else{16},"new_small_updates":0,
         "post_hoc_notice":"이 checkpoint는 기존 dev 결과를 본 뒤 선정한 사후 진단 대상이다. 과거 F/N 실험의 사전등록 승자가 아니며, 이번에는 seal·제품 승격·학습 재개를 하지 않는다."}),
     )?;
-    let mut report = json!({"kind":kind,"dev":old["dev"],"new_small_updates":0,"seal":"NOT_OPENED","candidate_eligible":false,"resume_allowed":false,
-        "registration_sha256":file_hash(&dir.join("registration.json"))?,"source_sha":observation_source,
-        "reused_dev_sha256":file_hash(&segment.join(format!("eval-{n:04}.json")))?,"panel_receipts":{},
+    let mut report = record!({"kind":kind,"dev":old["dev"],"new_small_updates":0,"seal":"NOT_OPENED","candidate_eligible":false,"resume_allowed":false,
+        "registration_sha256":file_hash(&dir.join("registration.r3b"))?,"source_sha":observation_source,
+        "reused_dev_sha256":file_hash(&segment.join(format!("eval-{n:04}.r3b")))?,"panel_receipts":{},
         "evidence_level":"EXECUTED_THIS_RUN","dev_evidence":"DERIVED_FROM_EXISTING_LOGS","generation_budget":if n==256{912}else{16}});
     let outcome = (|| -> Result<()> {
         if n == 512 {
@@ -5587,8 +5579,8 @@ fn progress_observe(
             };
             let binding = panel_binding(&spec, &rows, &l)?;
             record_bound_panel(
-                &dir.join("raw.json"),
-                &json!({"rows":rows,"bindings":{"dev":binding},"new_small_updates":0}),
+                &dir.join("raw.r3b"),
+                &record!({"rows":rows,"bindings":{"dev":binding},"new_small_updates":0}),
                 &mut report["panel_receipts"],
             )?;
             control.check("fresh_parity_recorded")?;
@@ -5606,11 +5598,11 @@ fn progress_observe(
                     "prompt_digest",
                 ] {
                     if row[key] != old["dev_rows"][*i][key] {
-                        differences.push(json!({"index":i,"field":key}));
+                        differences.push(record!({"index":i,"field":key}));
                     }
                 }
             }
-            report["raw_differences"] = json!(differences);
+            report["raw_differences"] = record!(differences);
             if !differences.is_empty() {
                 return Err(Error::Corrupt("fresh-process raw parity".into()));
             }
@@ -5636,8 +5628,8 @@ fn progress_observe(
                 };
                 let binding = panel_binding(&spec, &rows, &l)?;
                 record_bound_panel(
-                    &dir.join(format!("{id}.json")),
-                    &json!({"rows":rows,"bindings":{id:binding},"new_small_updates":0}),
+                    &dir.join(format!("{id}.r3b")),
+                    &record!({"rows":rows,"bindings":{id:binding},"new_small_updates":0}),
                     &mut report["panel_receipts"],
                 )?;
                 control.check("posthoc_panel_recorded")?;
@@ -5651,13 +5643,13 @@ fn progress_observe(
     }
     let _ = control.seal_terminal();
     report["control"] = control.receipt();
-    report["status"] = json!(if outcome.is_ok() && control.stop.is_none() {
+    report["status"] = record!(if outcome.is_ok() && control.stop.is_none() {
         "VERIFIED"
     } else {
         "FAILED_OR_INCOMPLETE"
     });
-    report["error"] = json!(outcome.as_ref().err().map(ToString::to_string));
-    save(&dir.join("result.json"), &report)?;
+    report["error"] = record!(outcome.as_ref().err().map(ToString::to_string));
+    save(&dir.join("result.r3b"), &report)?;
     println!("{report}");
     outcome.and(control.stop_result())
 }
@@ -5679,7 +5671,7 @@ fn optimizer_hash(tensors: &BTreeMap<String, Tensor>) -> Result<String> {
 }
 fn progress_copy_score(rows: &[Value], expected: usize) -> Result<Value> {
     let mut score = skill_score(rows)?;
-    score["skill_pass"] = json!(
+    score["skill_pass"] = record!(
         expected > 0
             && rows.len() == expected
             && score["exact_matches"].as_u64().unwrap_or(0) >= (expected * 95).div_ceil(100) as u64
@@ -5702,8 +5694,8 @@ fn progress_copy_score(rows: &[Value], expected: usize) -> Result<Value> {
             count[1] += 1;
         }
     }
-    score["cross_strata"] = json!(strata);
-    score["generation_policy"] = json!("normal_greedy_v1");
+    score["cross_strata"] = record!(strata);
+    score["generation_policy"] = record!("normal_greedy_v1");
     Ok(score)
 }
 fn verify_cross_development(cases: &[Episode], prior: &[Episode], l: &Loaded) -> Result<Value> {
@@ -5819,7 +5811,7 @@ fn verify_cross_panel(
     }
     let framed = samples(cases, &l.tokenizer, 512)?;
     Ok(
-        json!({"status":"SERIALIZED_INPUT_VERIFIED","bases":bases.len(),"views":cases.len(),
+        record!({"status":"SERIALIZED_INPUT_VERIFIED","bases":bases.len(),"views":cases.len(),
         "unique_entities":identities.len(),"unique_bindings":bindings.len(),"strata":strata,
         "max_tokens":framed.iter().map(|s|s.tokens.len()).max(),"gold_source":"serialized single current record; no chosen_index"}),
     )
@@ -5840,7 +5832,7 @@ fn progress_teacher_relation(rows: &[Value]) -> Value {
             missing += 1;
         }
     }
-    json!({"derived_from":"recorded per-case argmax counts, not p^mean_length","teacher_all_correct_by_free_exact_false_true":table,
+    record!({"derived_from":"recorded per-case argmax counts, not p^mean_length","teacher_all_correct_by_free_exact_false_true":table,
         "target_length_histogram":lengths,"missing_teacher_cases":missing,"denominator":rows.len()})
 }
 fn progress_tokenizer(
@@ -5877,7 +5869,7 @@ fn progress_tokenizer(
             .or_default() += 1;
         kinds.push(kind);
         if id >= 8 && kind != "standalone_valid" {
-            fragments.insert(id,json!({"classification":kind,"bytes":l.tokenizer.decode_bytes(&[id])?,"train":[0,0],"dev":[0,0],"neighbors_train":{},"neighbors_dev":{}}));
+            fragments.insert(id,record!({"classification":kind,"bytes":l.tokenizer.decode_bytes(&[id])?,"train":[0,0],"dev":[0,0],"neighbors_train":{},"neighbors_dev":{}}));
         }
     }
     for (split, cases) in [("train", train), ("dev", dev)] {
@@ -5892,7 +5884,7 @@ fn progress_tokenizer(
             for (i, &id) in s.tokens.iter().enumerate() {
                 if let Some(f) = fragments.get_mut(&id) {
                     let region = usize::from(i >= s.response_start);
-                    f[split][region] = json!(f[split][region].as_u64().unwrap() + 1);
+                    f[split][region] = record!(f[split][region].as_u64().unwrap() + 1);
                     let key = format!(
                         "{}:{}",
                         i.checked_sub(1)
@@ -5905,13 +5897,13 @@ fn progress_tokenizer(
                     );
                     let field = format!("neighbors_{split}");
                     let count = f[&field][&key].as_u64().unwrap_or(0) + 1;
-                    f[&field][&key] = json!(count);
+                    f[&field][&key] = record!(count);
                 }
             }
         }
     }
     Ok(
-        json!({"vocab":l.tokenizer.vocab_size(),"groups":groups,"fragments":fragments,
+        record!({"vocab":l.tokenizer.vocab_size(),"groups":groups,"fragments":fragments,
         "occurrence_regions":["prompt","response_including_eos"],"roundtrip_cases":train.len()+dev.len(),
         "interpretation":"standalone invalid/incomplete bytes are not a codec defect; arbitrary concatenations may fail UTF-8"}),
     )
@@ -5922,23 +5914,22 @@ fn progress_exposure(
     l: &Loaded,
     control: &mut RunControl,
 ) -> Result<Value> {
-    let policy = read_json(&run.parent().unwrap().join("policy.json"))?;
-    let tape: Vec<(Vec<usize>, u64)> = serde_json::from_value(policy["tape"].clone())?;
+    let policy = read_metadata(&run.parent().unwrap().join("policy.r3b"))?;
+    let tape: Vec<(Vec<usize>, u64)> = replica_v3::binary::from_value(policy["tape"].clone())?;
     let framed = samples(train, &l.tokenizer, 512)?;
     let mut rows = BTreeMap::<usize, Value>::new();
     let mut path = run.to_owned();
     for depth in 0..4 {
         control.check("progress_exposure_segment")?;
-        let receipt = read_json(&path.join("result.json"))?;
-        let p = read_json(&path.parent().unwrap().join("policy.json"))?;
-        if receipt["policy_sha256"] != file_hash(&path.parent().unwrap().join("policy.json"))?
+        let receipt = read_metadata(&path.join("result.r3b"))?;
+        let p = read_metadata(&path.parent().unwrap().join("policy.r3b"))?;
+        if receipt["policy_sha256"] != file_hash(&path.parent().unwrap().join("policy.r3b"))?
             || receipt["checkpoint_file_sha256"] != file_hash(&path.join("final"))?
             || p["tape"] != policy["tape"]
         {
             return Err(Error::Corrupt("progress trace provenance".into()));
         }
-        for line in std::fs::read_to_string(path.join("trace.jsonl"))?.lines() {
-            let row: Value = serde_json::from_str(line)?;
+        for row in replica_v3::binary::read_records::<Value>(&path.join("trace.r3rows"))? {
             let n = row["new_update"]
                 .as_u64()
                 .filter(|n| *n > 0 && *n <= 1024)
@@ -5982,8 +5973,8 @@ fn progress_exposure(
             .iter()
             .map(|&i| framed[i].tokens.len() - framed[i].response_start)
             .sum::<usize>();
-        if row["indices"] != json!(indices)
-            || row["ids"] != json!(indices.iter().map(|&i| &train[i].id).collect::<Vec<_>>())
+        if row["indices"] != record!(indices)
+            || row["ids"] != record!(indices.iter().map(|&i| &train[i].id).collect::<Vec<_>>())
             || row["sampler_state"] != *rng
             || row["input_tokens"] != input
             || row["target_tokens"] != target
@@ -6005,7 +5996,7 @@ fn progress_exposure(
         decay_product *= 1. - lr * l.manifest.training.as_ref().unwrap().config.weight_decay;
     }
     let pool = |range: std::ops::Range<usize>| {
-        json!({"available_views":range.len(),
+        record!({"available_views":range.len(),
         "available_bases":range.clone().map(|i|scene(&train[i])).collect::<BTreeSet<_>>().len(),
         "available_input_tokens":range.clone().map(|i|framed[i].tokens.len()-1).sum::<usize>(),
         "available_target_tokens":range.clone().map(|i|framed[i].tokens.len()-framed[i].response_start).sum::<usize>(),
@@ -6014,7 +6005,7 @@ fn progress_exposure(
         "min_exposure":range.clone().map(|i|exposure[i]).min(),"max_exposure":range.map(|i|exposure[i]).max()})
     };
     Ok(
-        json!({"evidence_level":"DERIVED_FROM_LOGS","updates":rows.len(),"input_tokens":inputs,"target_tokens":targets,
+        record!({"evidence_level":"DERIVED_FROM_LOGS","updates":rows.len(),"input_tokens":inputs,"target_tokens":targets,
         "anchor":pool(0..2048),"focus":pool(2048..4096),"actual_lr_sum":sum_lr,
         "decay_only_product":decay_product,"scope":"this H3 branch only; prior history and gradient updates excluded"}),
     )
@@ -6048,7 +6039,7 @@ fn progress_qk(
             l.model.config.context as u32,
             &l.model.config.id()?,
         )?;
-        let raw: Vec<u32> = serde_json::from_value(row["raw_tokens"].clone())?;
+        let raw: Vec<u32> = replica_v3::binary::from_value(row["raw_tokens"].clone())?;
         let pos = row["teacher_forced_diagnostic_after_generation"]["first_difference"]["index"]
             .as_u64()
             .map_or(0, |n| n as usize);
@@ -6059,7 +6050,7 @@ fn progress_qk(
         prefix.extend(&raw[..pos]);
         let mut heads = Vec::new();
         let scalar_stats = |xs: &[f32]| {
-            json!({"min":xs.iter().copied().fold(f32::INFINITY,f32::min),
+            record!({"min":xs.iter().copied().fold(f32::INFINITY,f32::min),
             "max":xs.iter().copied().fold(f32::NEG_INFINITY,f32::max),
             "rms":(xs.iter().map(|&x|f64::from(x).powi(2)).sum::<f64>()/xs.len() as f64).sqrt()})
         };
@@ -6116,14 +6107,14 @@ fn progress_qk(
                     .map(|(i, _)| kv[kh][*i].iter().map(|x| x * x).sum::<f32>().sqrt())
                     .collect();
                 let inf = |v: &[f32]| v.iter().map(|x| f64::from(x.abs())).fold(0., f64::max);
-                heads.push(json!({"layer":layer,"head":head,"kv_head":kh,"query_position":prefix.len()-1,
+                heads.push(record!({"layer":layer,"head":head,"kv_head":kh,"query_position":prefix.len()-1,
                     "q_gain":scalar_stats(&qg[head]),"k_gain":scalar_stats(&kg[kh]),
                     "q_post_rope_l2":qv[head].iter().map(|x|f64::from(*x).powi(2)).sum::<f64>().sqrt(),
                     "k_post_rope_l2":scalar_stats(&kn),"allowed_keys":entries.len(),
                     "finite_unmasked_min":entries.last().unwrap().1,"finite_unmasked_max":entries[0].1,
                     "top1_top2_gap":entries[0].1-entries[1].1,"entropy":entropy,
                     "conservative_abs_bound":(d as f64).sqrt()*inf(&qg[head])*inf(&kg[kh]),
-                    "top_keys":entries.iter().take(5).map(|(i,x)|json!({"position":i,"token_id":prefix[*i],"logit":x})).collect::<Vec<_>>() }));
+                    "top_keys":entries.iter().take(5).map(|(i,x)|record!({"position":i,"token_id":prefix[*i],"logit":x})).collect::<Vec<_>>() }));
             }
             Ok(())
         };
@@ -6132,10 +6123,10 @@ fn progress_qk(
         control.check("progress_qk_returned")?;
         let reference = l.model.forward(&input, None)?;
         let parity = compare(&observed, &reference)?;
-        observations.push(json!({"id":e.id,"raw_prefix_position":pos,"observed_forward_parity":parity,"heads":heads}));
+        observations.push(record!({"id":e.id,"raw_prefix_position":pos,"observed_forward_parity":parity,"heads":heads}));
     }
     Ok(
-        json!({"scope":"last query of one successful and one invalid recorded free-running prefix; observational, not causal",
+        record!({"scope":"last query of one successful and one invalid recorded free-running prefix; observational, not causal",
         "cases":observations,"mask_bias_excluded":true,"parameter_changes":false,"temperature_changes":false}),
     )
 }
@@ -6149,12 +6140,12 @@ fn progress_baseline(
     control.check("progress_a0_start")?;
     let (frozen, ordinary_train, ordinary, baseline_hash) = verified_ordinary(baseline, None)?;
     let checked = verified_harness(harness)?;
-    let receipt = read_json(&run.join("result.json"))?;
+    let receipt = read_metadata(&run.join("result.r3b"))?;
     let policy_path = run
         .parent()
         .ok_or_else(|| Error::Invalid("parent run".into()))?
-        .join("policy.json");
-    let policy = read_json(&policy_path)?;
+        .join("policy.r3b");
+    let policy = read_metadata(&policy_path)?;
     let parent = run.join("final");
     let l = checkpoint::load(&parent, Device::Cpu, true)?;
     let inference_model = checkpoint::load(inference, Device::Cpu, false)?;
@@ -6193,7 +6184,7 @@ fn progress_baseline(
     }
     drop(inference_model);
     std::fs::create_dir(output)?;
-    let mut report = json!({"contract":PROGRESS_CONTRACT,"node":"A0","source_commit":source_commit()?,"source_digest":checked["source_digest"],
+    let mut report = record!({"contract":PROGRESS_CONTRACT,"node":"A0","source_commit":source_commit()?,"source_digest":checked["source_digest"],
         "binary_hash":file_hash(&std::env::current_exe()?)?,"parent":parent,"parent_file_sha256":file_hash(&parent)?,
         "inference_path":inference,"inference_sha256":file_hash(inference)?,"model_hash":l.model.weight_hash()?,
         "optimizer_hash":optimizer_hash(&l.optimizer)?,"tokenizer_hash":l.tokenizer.semantic_id(),"state":state,
@@ -6209,11 +6200,11 @@ fn progress_baseline(
         report["teacher_relation"] = progress_teacher_relation(prior);
         report["exposure"] = progress_exposure(run, &train, &l, control)?;
         report["tokenizer"] = progress_tokenizer(&l, &train, &dev, control)?;
-        save(&output.join("identity-tokenizer-exposure.json"), &report)?;
+        save(&output.join("identity-tokenizer-exposure.r3b"), &report)?;
         let actual = evaluate_panel(&l, &dev, control);
         save(
-            &output.join("normal-dev.json"),
-            &json!({"policy":"normal_greedy_v1","model_hash":report["model_hash"],"score":progress_copy_score(&actual,256)?,"rows":actual}),
+            &output.join("normal-dev.r3b"),
+            &record!({"policy":"normal_greedy_v1","model_hash":report["model_hash"],"score":progress_copy_score(&actual,256)?,"rows":actual}),
         )?;
         control.check("progress_dev_saved")?;
         if actual.len() != prior.len() {
@@ -6237,11 +6228,11 @@ fn progress_baseline(
                 "exact_match",
             ] {
                 if a[field] != b[field] {
-                    differences.push(json!({"id":a["id"],"field":field}));
+                    differences.push(record!({"id":a["id"],"field":field}));
                 }
             }
         }
-        report["replay_differences"] = json!(differences);
+        report["replay_differences"] = record!(differences);
         report["old_dev"] = progress_copy_score(&actual, 256)?;
         if !differences.is_empty() {
             return Err(Error::Corrupt("A0 normal replay changed".into()));
@@ -6249,8 +6240,8 @@ fn progress_baseline(
         let original = evaluate_panel(&l, &ordinary, control);
         report["ordinary_parent"] = summarize(&original)?;
         save(
-            &output.join("ordinary400.json"),
-            &json!({"policy":"normal_greedy_v1","model_hash":report["model_hash"],"score":report["ordinary_parent"],"rows":original}),
+            &output.join("ordinary400.r3b"),
+            &record!({"policy":"normal_greedy_v1","model_hash":report["model_hash"],"score":report["ordinary_parent"],"rows":original}),
         )?;
         control.check("progress_ordinary_saved")?;
         if original.len() != 400 {
@@ -6269,8 +6260,8 @@ fn progress_baseline(
             .collect::<Result<_>>()?;
         report["watch"] = summarize(&watch)?;
         save(
-            &output.join("watch32.json"),
-            &json!({"rows":watch,"score":report["watch"],"derived_from":"same-process ordinary400 subset"}),
+            &output.join("watch32.r3b"),
+            &record!({"rows":watch,"score":report["watch"],"derived_from":"same-process ordinary400 subset"}),
         )?;
         let mut parity = Vec::new();
         for (e, row) in dev
@@ -6284,19 +6275,19 @@ fn progress_baseline(
             }
             parity.push(p);
         }
-        report["final_utf8_prefix_parity"] = json!(parity);
+        report["final_utf8_prefix_parity"] = record!(parity);
         save(
-            &output.join("final-prefix-parity.json"),
+            &output.join("final-prefix-parity.r3b"),
             &report["final_utf8_prefix_parity"],
         )?;
         report["qk"] = progress_qk(&l, &dev, &actual, control)?;
-        save(&output.join("qk-observations.json"), &report["qk"])?;
+        save(&output.join("qk-observations.r3b"), &report["qk"])?;
         let mut reservations = train.clone();
         reservations.extend(dev.clone());
         reservations.extend(ordinary_train);
         reservations.extend(ordinary);
         let (cross, mut cross_meta) = data::crossed_copy_development(&reservations, seed)?;
-        save(&output.join("cross-development.json"), &cross)?;
+        save(&output.join("cross-development.r3b"), &cross)?;
         if cross_meta["status"] == "CAPACITY" {
             report["cross"] = cross_meta;
             control.observe(StopReason::AuditIncomplete);
@@ -6305,14 +6296,14 @@ fn progress_baseline(
             ));
         }
         cross_meta["validation"] = verify_cross_development(&cross, &reservations, &l)?;
-        cross_meta["file_sha256"] = json!(file_hash(&output.join("cross-development.json"))?);
-        save(&output.join("cross-manifest.json"), &cross_meta)?;
+        cross_meta["file_sha256"] = record!(file_hash(&output.join("cross-development.r3b"))?);
+        save(&output.join("cross-manifest.r3b"), &cross_meta)?;
         let cross_rows = evaluate_panel(&l, &cross, control);
         report["cross"] = cross_meta;
         report["cross_parent"] = progress_copy_score(&cross_rows, 512)?;
         save(
-            &output.join("cross-parent.json"),
-            &json!({"policy":"normal_greedy_v1","score":report["cross_parent"],"rows":cross_rows}),
+            &output.join("cross-parent.r3b"),
+            &record!({"policy":"normal_greedy_v1","score":report["cross_parent"],"rows":cross_rows}),
         )?;
         control.check("progress_cross_saved")?;
         if cross_rows.len() != 512 {
@@ -6332,9 +6323,9 @@ fn progress_baseline(
     }
     let sealed = control.seal_terminal();
     report["control"] = control.receipt();
-    report["a0_pass"] = json!(outcome.is_ok() && sealed.is_ok());
-    report["error"] = json!(outcome.as_ref().err().map(ToString::to_string));
-    save(&output.join("summary.json"), &report)?;
+    report["a0_pass"] = record!(outcome.is_ok() && sealed.is_ok());
+    report["error"] = record!(outcome.as_ref().err().map(ToString::to_string));
+    save(&output.join("summary.r3b"), &report)?;
     println!(
         "NODE=A0 pass={} old_dev={} ordinary={} cross={} updates=0 reason={}",
         report["a0_pass"],
@@ -6387,9 +6378,9 @@ fn skill_diagnose(
     let policy_path = run
         .parent()
         .ok_or_else(|| Error::Invalid("run directory".into()))?
-        .join("policy.json");
-    let policy = read_json(&policy_path)?;
-    let receipt = read_json(&run.join("result.json"))?;
+        .join("policy.r3b");
+    let policy = read_metadata(&policy_path)?;
+    let receipt = read_metadata(&run.join("result.r3b"))?;
     let last = &receipt["last_evaluation"];
     let (manifest, train, dev) = data::load_legacy(corpus)?;
     let checkpoint = run.join("final");
@@ -6415,11 +6406,8 @@ fn skill_diagnose(
             "skill diagnostic artifact/data binding".into(),
         ));
     }
-    let tape: Vec<(Vec<usize>, u64)> = serde_json::from_value(policy["tape"].clone())?;
-    let trace: Vec<Value> = std::fs::read_to_string(run.join("trace.jsonl"))?
-        .lines()
-        .map(serde_json::from_str)
-        .collect::<std::result::Result<_, _>>()?;
+    let tape: Vec<(Vec<usize>, u64)> = replica_v3::binary::from_value(policy["tape"].clone())?;
+    let trace: Vec<Value> = replica_v3::binary::read_records(&run.join("trace.r3rows"))?;
     let framed = samples(&train, &l.tokenizer, 512)?;
     let mut seen = BTreeSet::new();
     let (mut inputs, mut targets) = (0u64, 0u64);
@@ -6429,10 +6417,10 @@ fn skill_diagnose(
             .get(position)
             .ok_or_else(|| Error::Corrupt("trace outside tape".into()))?;
         if row["new_update"] != position + 1
-            || row["indices"] != json!(indices)
+            || row["indices"] != record!(indices)
             || row["sampler_state"] != *rng
             || row["ids"]
-                != json!(
+                != record!(
                     indices
                         .iter()
                         .map(|i| train.get(*i).map(|e| &e.id))
@@ -6477,9 +6465,9 @@ fn skill_diagnose(
     ] {
         let episodes: Vec<_> = indices.iter().map(|i| train[*i].clone()).collect();
         let rows = evaluate_panel(&l, &episodes, control);
-        let panel = json!({"name":name,"indices":indices,"score":skill_score(&rows)?,"rows":rows,
+        let panel = record!({"name":name,"indices":indices,"score":skill_score(&rows)?,"rows":rows,
             "heldout":false,"scope":"training views; unexposed views may share a base with an exposed view"});
-        save(&output.join(format!("{name}.json")), &panel)?;
+        save(&output.join(format!("{name}.r3b")), &panel)?;
         control.check("skill_diagnostic_panel_saved")?;
         println!(
             "H3_DIAGNOSTIC {name} exact={}/32 entity={} event={} utf8={}",
@@ -6488,7 +6476,7 @@ fn skill_diagnose(
             panel["score"]["event_id_correct"],
             panel["score"]["invalid_utf8"]
         );
-        panels.push(json!({"name":name,"score":panel["score"]}));
+        panels.push(record!({"name":name,"score":panel["score"]}));
     }
     let new_errors = last["new_error_ids"]
         .as_array()
@@ -6521,9 +6509,9 @@ fn skill_diagnose(
     }
     control.check("skill_diagnostic_done")?;
     save(
-        &output.join("summary.json"),
-        &json!({"scope":"H3 no-update diagnostic; not a skill gate","actual_optimizer_updates":0,
-        "checkpoint_file_sha256":file_hash(&checkpoint)?,"model_content_hash":before,"trace_sha256":file_hash(&run.join("trace.jsonl"))?,
+        &output.join("summary.r3b"),
+        &record!({"scope":"H3 no-update diagnostic; not a skill gate","actual_optimizer_updates":0,
+        "checkpoint_file_sha256":file_hash(&checkpoint)?,"model_content_hash":before,"trace_sha256":file_hash(&run.join("trace.r3rows"))?,
         "input_tokens_verified":inputs,"target_tokens_verified":targets,"completed_updates_verified":trace.len(),
         "unique_exposed_views":seen.len(),"panels":panels,"dev_first_difference_fields":fields,"cache_parity":parity,
         "terminal":control.receipt(),"candidate_eligible":false,"seal":"NOT_OPENED","data_hash":manifest.train.sha256}),
@@ -6537,12 +6525,12 @@ fn recorded_prefix_parity(
     control: &mut RunControl,
 ) -> Result<Value> {
     if row["question"] != e.request.input
-        || row["evidence"] != serde_json::to_value(&e.request.evidence)?
+        || row["evidence"] != replica_v3::binary::to_value(&e.request.evidence)?
         || row["expected"] != e.answer
     {
         return Err(Error::Corrupt("error row content".into()));
     }
-    let raw: Vec<u32> = serde_json::from_value(row["raw_tokens"].clone())?;
+    let raw: Vec<u32> = replica_v3::binary::from_value(row["raw_tokens"].clone())?;
     let prompt = l.tokenizer.prepare(
         &e.request,
         l.model.config.context as u32,
@@ -6573,7 +6561,7 @@ fn recorded_prefix_parity(
         let numeric = compare(&full, &cached_last)?;
         let full_token = full.argmax(2)?.flatten_all()?.to_vec1::<u32>()?[0];
         let cached_token = cached_last.argmax(2)?.flatten_all()?.to_vec1::<u32>()?[0];
-        positions.push(json!({"position":position,"prefix_tokens":prefix.len(),"recorded":token,"cached":cached_token,"full":full_token,"numeric":numeric}));
+        positions.push(record!({"position":position,"prefix_tokens":prefix.len(),"recorded":token,"cached":cached_token,"full":full_token,"numeric":numeric}));
         if position + 1 < raw.len() {
             prefix.push(token);
             cached = l.model.forward_cached(
@@ -6589,7 +6577,7 @@ fn recorded_prefix_parity(
             .take_while(|t| *t >= neural::SPECIALS as u32)
             .collect::<Vec<_>>(),
     )?;
-    Ok(json!({"id":e.id,"positions":positions,
+    Ok(record!({"id":e.id,"positions":positions,
         "recorded_prefix_reproduced":positions.iter().all(|p|p["recorded"]==p["cached"]&&p["recorded"]==p["full"]),
         "raw_bytes":row["raw_bytes"],"strict_utf8_error":std::str::from_utf8(&bytes).err().map(|e|e.to_string()),
         "raw_bytes_hash_matches":row["raw_bytes"]["sha256"]==neural::hash(&bytes),
@@ -6617,7 +6605,7 @@ fn compare(a: &Tensor, b: &Tensor) -> Result<Value> {
             "numeric parity violations={violations} max_abs={max_abs}"
         )));
     }
-    Ok(json!({"max_abs":max_abs,"abs_tolerance":1e-4,"rel_tolerance":1e-3,"violations":0}))
+    Ok(record!({"max_abs":max_abs,"abs_tolerance":1e-4,"rel_tolerance":1e-3,"violations":0}))
 }
 fn numeric(fixture: &Path, path: &Path, output: &Path) -> Result<()> {
     let started = Instant::now();
@@ -6631,7 +6619,7 @@ fn numeric(fixture: &Path, path: &Path, output: &Path) -> Result<()> {
     let mut checks = Vec::new();
     for (row, s) in framed.iter().enumerate() {
         let single = batch(&framed, &[row], &Device::Cpu)?;
-        checks.push(json!({"case":cases[row].id,"alone_batch":compare(&l.model.forward(&single.input,Some(&single.valid))?,&batched.narrow(0,row,1)?.narrow(1,0,s.tokens.len()-1)?)?}));
+        checks.push(record!({"case":cases[row].id,"alone_batch":compare(&l.model.forward(&single.input,Some(&single.valid))?,&batched.narrow(0,row,1)?.narrow(1,0,s.tokens.len()-1)?)?}));
         let prompt = &s.tokens[..s.response_start];
         for len in [prompt.len(), 255, 256, 257] {
             let ids: Vec<_> = prompt.iter().copied().cycle().take(len).collect();
@@ -6665,7 +6653,7 @@ fn numeric(fixture: &Path, path: &Path, output: &Path) -> Result<()> {
                     &mut cache,
                     "recovery-parity",
                 )?;
-                checks.push(json!({"case":row,"length":len,"chunk":chunk,"prefill":parity,"same_prefix_next":compare(&full,&cached)?,"next_argmax_equal":full.argmax(2)?.to_vec2::<u32>()?==cached.argmax(2)?.to_vec2::<u32>()?}));
+                checks.push(record!({"case":row,"length":len,"chunk":chunk,"prefill":parity,"same_prefix_next":compare(&full,&cached)?,"next_argmax_equal":full.argmax(2)?.to_vec2::<u32>()?==cached.argmax(2)?.to_vec2::<u32>()?}));
             }
             let mut changed = ids.clone();
             let at = len / 2;
@@ -6676,7 +6664,7 @@ fn numeric(fixture: &Path, path: &Path, output: &Path) -> Result<()> {
                 &Tensor::new(changed.as_slice(), &Device::Cpu)?.unsqueeze(0)?,
                 None,
             )?;
-            checks.push(json!({"case":row,"length":len,"causal_future":compare(&direct.narrow(1,0,at)?,&modified.narrow(1,0,at)?)?}));
+            checks.push(record!({"case":row,"length":len,"causal_future":compare(&direct.narrow(1,0,at)?,&modified.narrow(1,0,at)?)?}));
         }
     }
     // One real batch: labels/masks/EOS are independently derived from literal sample IDs.
@@ -6749,7 +6737,7 @@ fn numeric(fixture: &Path, path: &Path, output: &Path) -> Result<()> {
             }
             let reference = (observed[1] - observed[0]) / (2. * h as f64);
             let error = (reference - g[at] as f64).abs();
-            finite_difference.push(json!({"parameter":name,"coordinate":at,"autograd":g[at],"central_difference":reference,"step":h,"absolute_error":error,"tolerance":"0.002 + 0.05 * max(abs(reference),abs(autograd))"}));
+            finite_difference.push(record!({"parameter":name,"coordinate":at,"autograd":g[at],"central_difference":reference,"step":h,"absolute_error":error,"tolerance":"0.002 + 0.05 * max(abs(reference),abs(autograd))"}));
             if error > 0.002 + 0.05 * reference.abs().max(g[at].abs() as f64) {
                 return Err(Error::Model("actual objective finite difference".into()));
             }
@@ -6758,7 +6746,7 @@ fn numeric(fixture: &Path, path: &Path, output: &Path) -> Result<()> {
     if before != l.model.weight_hash()? {
         return Err(Error::Corrupt("numeric diagnosis mutated model".into()));
     }
-    let result = json!({"model_content_hash":before,"checks":checks,"actual_batch_targets":n,"plain_ce":ce.to_scalar::<f32>()?,"weighted_objective":obj.to_scalar::<f32>()?,"gradient_norms":norms,"finite_difference":finite_difference,"optimizer_updates":0,"elapsed_seconds":started.elapsed().as_secs_f64(),"status":"CHECKED_BOUNDARIES_PASS"});
+    let result = record!({"model_content_hash":before,"checks":checks,"actual_batch_targets":n,"plain_ce":ce.to_scalar::<f32>()?,"weighted_objective":obj.to_scalar::<f32>()?,"gradient_norms":norms,"finite_difference":finite_difference,"optimizer_updates":0,"elapsed_seconds":started.elapsed().as_secs_f64(),"status":"CHECKED_BOUNDARIES_PASS"});
     save(output, &result)?;
     println!("numeric PASS output={}", output.display());
     Ok(())
@@ -6795,8 +6783,8 @@ fn schedule_config(
     c.warmup = 0;
     Ok(c)
 }
-fn read_json(path: &Path) -> Result<Value> {
-    Ok(serde_json::from_slice(&neural::read_bounded(
+fn read_metadata(path: &Path) -> Result<Value> {
+    Ok(replica_v3::binary::from_slice(&neural::read_bounded(
         path,
         16 * 1024 * 1024,
     )?)?)
@@ -6810,20 +6798,20 @@ fn schedule_report(
 ) -> Result<()> {
     let f = load(fixture)?;
     let policies = paths
-        .map(|p| read_json(&p.join("policy.json")))
+        .map(|p| read_metadata(&p.join("policy.r3b")))
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
     let traces = paths
-        .map(|p| trace(&p.join("trace.jsonl")))
+        .map(|p| trace(&p.join("trace.r3rows")))
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
     let results = paths
-        .map(|p| read_json(&p.join("result.json")))
+        .map(|p| read_metadata(&p.join("result.r3b")))
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
-    let base: TrainConfig = serde_json::from_value(policies[0]["config"].clone())?;
+    let base: TrainConfig = replica_v3::binary::from_value(policies[0]["config"].clone())?;
     let parent: TrainingState =
-        serde_json::from_value(f.registry["GENERAL_QA_PARENT"]["manifest"]["training"].clone())?;
+        replica_v3::binary::from_value(f.registry["GENERAL_QA_PARENT"]["manifest"]["training"].clone())?;
     let group = match factor {
         "group" => true,
         "schedule" => false,
@@ -6831,7 +6819,7 @@ fn schedule_report(
     };
     let treatment = if group {
         let initial: TrainingState =
-            serde_json::from_value(f.registry["U2_POLICY_START"]["manifest"]["training"].clone())?;
+            replica_v3::binary::from_value(f.registry["U2_POLICY_START"]["manifest"]["training"].clone())?;
         if base != schedule_config(&initial.config, &parent.config, parent.step)? {
             return Err(Error::Corrupt(
                 "group comparison requires the recorded L policy".into(),
@@ -6847,7 +6835,7 @@ fn schedule_report(
     let fixture_hash = file_hash(fixture)?;
     if policies[0]["arm"] != if group { "L" } else { "C" }
         || policies[1]["arm"] != if group { "B" } else { "L" }
-        || json!(treatment) != policies[1]["config"]
+        || record!(treatment) != policies[1]["config"]
     {
         return Err(Error::Corrupt("C/L schedule-only configuration".into()));
     }
@@ -6877,8 +6865,8 @@ fn schedule_report(
     let pool: Vec<_> = (0..episodes.len()).collect();
     for ((policy, rows), result) in policies.iter().zip(&traces).zip(&results) {
         budget.check("schedule_trace")?;
-        let config: TrainConfig = serde_json::from_value(policy["config"].clone())?;
-        let tape: Vec<(Vec<usize>, u64)> = serde_json::from_value(policy["tape"].clone())?;
+        let config: TrainConfig = replica_v3::binary::from_value(policy["config"].clone())?;
+        let tape: Vec<(Vec<usize>, u64)> = replica_v3::binary::from_value(policy["tape"].clone())?;
         let mut rng = Rng::new(parent.sampler_state);
         for (indices, state) in &tape {
             if draw_indices(&pool, &config, &mut rng)? != *indices || rng.state != *state {
@@ -6906,9 +6894,9 @@ fn schedule_report(
                         .ok_or_else(|| Error::Corrupt("comparison sample index".into()))
                 })
                 .collect::<Result<Vec<_>>>()?;
-            if row["indices"] != json!(indices)
-                || row["ids"] != json!(ids)
-                || row["sampler_state"] != json!(rng)
+            if row["indices"] != record!(indices)
+                || row["ids"] != record!(ids)
+                || row["sampler_state"] != record!(rng)
                 || row["new_update"] != i + 1
                 || row["cumulative_model_step"] != step
                 || row["optimizer_step"] != step
@@ -6956,7 +6944,7 @@ fn schedule_report(
                     counts[1] += 1;
                 }
             }
-            score["components"][key] = json!(counts);
+            score["components"][key] = record!(counts);
         }
         Ok(score)
     };
@@ -6969,16 +6957,16 @@ fn schedule_report(
         let mut panels: Vec<Vec<Value>> = Vec::new();
         let mut train_ids = None;
         for path in paths {
-            let evaluation = read_json(&path.join(format!("eval-{n:03}.json")))?;
+            let evaluation = read_metadata(&path.join(format!("eval-{n:03}.r3b")))?;
             if evaluation["final_evaluation_complete"] != true {
                 return Err(Error::Invalid("incomplete comparison evaluation".into()));
             }
-            let rows: Vec<Value> = serde_json::from_value(evaluation["watch_rows"].clone())?;
+            let rows: Vec<Value> = replica_v3::binary::from_value(evaluation["watch_rows"].clone())?;
             verify_historical_rows(&f.watch, &rows)?;
             scores.push(details(&rows)?);
             panels.push(rows);
             let train_rows: Vec<Value> =
-                serde_json::from_value(evaluation["train_exposure_panel"].clone())?;
+                replica_v3::binary::from_value(evaluation["train_exposure_panel"].clone())?;
             let ids = train_rows
                 .iter()
                 .map(|r| r["id"].clone())
@@ -7008,7 +6996,7 @@ fn schedule_report(
                 }
             }
         }
-        let comparison = json!({"new_updates":n,"control":scores[0],"treatment":scores[1],"control_train16":train_scores[0],"treatment_train16":train_scores[1]});
+        let comparison = record!({"new_updates":n,"control":scores[0],"treatment":scores[1],"control_train16":train_scores[0],"treatment_train16":train_scores[1]});
         println!(
             "step={n} control_watch={} treatment_watch={} control_train={} treatment_train={} control_components={} treatment_components={}",
             scores[0]["exact_matches"],
@@ -7023,17 +7011,13 @@ fn schedule_report(
     budget.check("schedule_report_complete")?;
     save(
         output,
-        &json!({"status":"VERIFIED_COMPARISON","factor":factor,"fixture_hash":fixture_hash,"source_ids":policies.iter().map(|p|&p["source_id"]).collect::<Vec<_>>(),"binary_hashes":policies.iter().map(|p|&p["binary_hash"]).collect::<Vec<_>>(),"same_tape":!group,"same_optimizer_clocks":true,"control_reused":group,"comparisons":comparisons,"runs":results,"recorded_small_optimizer_updates":traces.iter().map(Vec::len).sum::<usize>(),"new_small_optimizer_updates":0,"model_calls":0,"final_heldout":false,"goal1_ready":false}),
+        &record!({"status":"VERIFIED_COMPARISON","factor":factor,"fixture_hash":fixture_hash,"source_ids":policies.iter().map(|p|&p["source_id"]).collect::<Vec<_>>(),"binary_hashes":policies.iter().map(|p|&p["binary_hash"]).collect::<Vec<_>>(),"same_tape":!group,"same_optimizer_clocks":true,"control_reused":group,"comparisons":comparisons,"runs":results,"recorded_small_optimizer_updates":traces.iter().map(Vec::len).sum::<usize>(),"new_small_optimizer_updates":0,"model_calls":0,"final_heldout":false,"goal1_ready":false}),
     )?;
     println!("schedule comparison saved: {}", output.display());
     Ok(())
 }
 fn trace(path: &Path) -> Result<Vec<Value>> {
-    neural::read_bounded(path, 16 * 1024 * 1024)?
-        .split(|&b| b == b'\n')
-        .filter(|b| !b.is_empty())
-        .map(|b| Ok(serde_json::from_slice(b)?))
-        .collect()
+    Ok(replica_v3::binary::records_from_slice(&neural::read_bounded(path, 16 * 1024 * 1024)?)?)
 }
 fn worker_receipt(
     binary: &Path,
@@ -7152,9 +7136,9 @@ fn verify_arm_receipt(
         || trace.len() != 50
         || policy["fixture_hash"] != fixture_hash
         || result["new_updates"] != trace.len()
-        || result["policy_sha256"] != file_hash(&directory.join("policy.json"))?
+        || result["policy_sha256"] != file_hash(&directory.join("policy.r3b"))?
         || result["checkpoint_file_sha256"] != file_hash(&directory.join("final"))?
-        || result["final_evaluation_sha256"] != file_hash(&directory.join("eval-050.json"))?
+        || result["final_evaluation_sha256"] != file_hash(&directory.join("eval-050.r3b"))?
         || result["cumulative_model_step"]
             != trace.last().ok_or_else(invalid)?["cumulative_model_step"]
         || policy["tape_hash"] != digest(&policy["tape"])?
@@ -7163,7 +7147,7 @@ fn verify_arm_receipt(
     {
         return Err(invalid());
     }
-    let evaluation = read_json(&directory.join("eval-050.json"))?;
+    let evaluation = read_metadata(&directory.join("eval-050.r3b"))?;
     let watch = evaluation["watch_rows"].as_array().ok_or_else(invalid)?;
     let train = evaluation["train_exposure_panel"]
         .as_array()
@@ -7193,8 +7177,8 @@ fn verify_arm_receipt(
     let state = loaded.manifest.training.as_ref().ok_or_else(invalid)?;
     if loaded.model.weight_hash()? != result["model_content_hash"]
         || loaded.manifest.source_id != policy["source_id"]
-        || json!(state.step) != result["cumulative_model_step"]
-        || serde_json::to_value(&state.config)? != policy["config"]
+        || record!(state.step) != result["cumulative_model_step"]
+        || replica_v3::binary::to_value(&state.config)? != policy["config"]
     {
         return Err(invalid());
     }
@@ -7227,7 +7211,7 @@ fn verify_arm_receipt(
         }
     }
     Ok(
-        json!({"verified":true,"checkpoint_file_sha256":result["checkpoint_file_sha256"],"policy_sha256":result["policy_sha256"],"final_evaluation_sha256":result["final_evaluation_sha256"]}),
+        record!({"verified":true,"checkpoint_file_sha256":result["checkpoint_file_sha256"],"policy_sha256":result["policy_sha256"],"final_evaluation_sha256":result["final_evaluation_sha256"]}),
     )
 }
 fn finish_close(
@@ -7242,13 +7226,13 @@ fn finish_close(
         && provenance_verified
         && arms.len() == 2
         && arms.iter().all(arm_terminal_eligible);
-    summary["arm_terminals"] = json!(arms);
-    summary["provenance_verified"] = json!(provenance_verified);
-    summary["final_evaluation_complete"] = json!(eligible);
-    summary["comparison_eligible"] = json!(eligible);
-    summary["candidate_eligible"] = json!(eligible && summary["candidate_eligible"] == true);
+    summary["arm_terminals"] = record!(arms);
+    summary["provenance_verified"] = record!(provenance_verified);
+    summary["final_evaluation_complete"] = record!(eligible);
+    summary["comparison_eligible"] = record!(eligible);
+    summary["candidate_eligible"] = record!(eligible && summary["candidate_eligible"] == true);
     summary["control"] = budget.receipt();
-    save(&output.join("summary.json"), &summary)?;
+    save(&output.join("summary.r3b"), &summary)?;
     sealed?;
     if !eligible {
         return Err(Error::Invalid(
@@ -7272,8 +7256,8 @@ fn close(
     let arms: Vec<_> = [control, treatment]
         .iter()
         .map(|dir| {
-            read_json(&dir.join("result.json")).unwrap_or_else(
-                |e| json!({"reason":"UNKNOWN_UNVERIFIED","read_error":e.to_string()}),
+            read_metadata(&dir.join("result.r3b")).unwrap_or_else(
+                |e| record!({"reason":"UNKNOWN_UNVERIFIED","read_error":e.to_string()}),
             )
         })
         .collect();
@@ -7281,19 +7265,19 @@ fn close(
         std::fs::create_dir(output)?;
         return finish_close(
             output,
-            json!({"stage":"close_preflight","candidate_eligible":false,"model_calls":0,"status":"INELIGIBLE_OR_UNVERIFIED_ARM"}),
+            record!({"stage":"close_preflight","candidate_eligible":false,"model_calls":0,"status":"INELIGIBLE_OR_UNVERIFIED_ARM"}),
             &arms,
             false,
             budget,
         );
     }
     let f = load(fixture)?;
-    let cp = read_json(&control.join("policy.json"))?;
-    let wp = read_json(&treatment.join("policy.json"))?;
-    let c = trace(&control.join("trace.jsonl"))?;
-    let w = trace(&treatment.join("trace.jsonl"))?;
+    let cp = read_metadata(&control.join("policy.r3b"))?;
+    let wp = read_metadata(&treatment.join("policy.r3b"))?;
+    let c = trace(&control.join("trace.r3rows"))?;
+    let w = trace(&treatment.join("trace.r3rows"))?;
     let mut config = cp["config"].clone();
-    config["first_target_weight"] = json!(1.);
+    config["first_target_weight"] = record!(1.);
     if config != wp["config"]
         || cp["parent"] != wp["parent"]
         || cp["parent"] != f.registry["U2_POLICY_START"]
@@ -7339,7 +7323,7 @@ fn close(
     if let Err(error) = &provenance {
         return finish_close(
             output,
-            json!({"stage":"close_provenance","candidate_eligible":false,"model_calls":0,"error":error.to_string()}),
+            record!({"stage":"close_provenance","candidate_eligible":false,"model_calls":0,"error":error.to_string()}),
             &arms,
             false,
             budget,
@@ -7357,7 +7341,7 @@ fn close(
         if loaded.tokenizer.semantic_id() != tok.semantic_id() {
             return Err(Error::Corrupt("legacy/native tokenizer mapping".into()));
         }
-        let replay_path = output.join(format!("{name}-fresh.jsonl"));
+        let replay_path = output.join(format!("{name}-fresh.r3rows"));
         replay(
             fixture,
             &checkpoint,
@@ -7369,7 +7353,7 @@ fn close(
             None,
         )?;
         let (_, actual) = rows(&replay_path)?;
-        let scored = read_json(&directory.join("eval-050.json"))?;
+        let scored = read_metadata(&directory.join("eval-050.r3b"))?;
         for row in &actual {
             let before = scored["watch_rows"]
                 .as_array()
@@ -7389,7 +7373,7 @@ fn close(
             {
                 return Err(Error::Corrupt("fresh-process generation mismatch".into()));
             }
-            let ids: Vec<u32> = serde_json::from_value(row["raw_tokens"].clone())?;
+            let ids: Vec<u32> = replica_v3::binary::from_value(row["raw_tokens"].clone())?;
             let ids: Vec<_> = ids
                 .into_iter()
                 .take_while(|&id| id >= neural::SPECIALS as u32)
@@ -7400,7 +7384,7 @@ fn close(
         }
         let case = &f.watch[0];
         let direct = evaluate_one(&loaded, case, &case.request, budget);
-        save(&output.join(format!("{name}-direct.json")), &direct)?;
+        save(&output.join(format!("{name}-direct.r3b")), &direct)?;
         budget.check("close_direct_returned")?;
         worker_checks.push(check_worker(worker, &checkpoint, case, &direct, budget)?);
         let mut stats = summarize(&actual)?;
@@ -7420,8 +7404,8 @@ fn close(
                 }
             }
         }
-        stats["components"] = json!(fields);
-        reports.push(json!({"arm":name,"result":read_json(&directory.join("result.json"))?,"fresh_watch":stats,"physical_hash":file_hash(&checkpoint)?,"model_tensor_content_digest":loaded.model.weights_content_id()?,"legacy_architecture_weight_hash":loaded.model.weight_hash()?,"clock":loaded.manifest.training,"fresh_outputs_identical":true}));
+        stats["components"] = record!(fields);
+        reports.push(record!({"arm":name,"result":read_metadata(&directory.join("result.r3b"))?,"fresh_watch":stats,"physical_hash":file_hash(&checkpoint)?,"model_tensor_content_digest":loaded.model.weights_content_id()?,"legacy_architecture_weight_hash":loaded.model.weight_hash()?,"clock":loaded.manifest.training,"fresh_outputs_identical":true}));
     }
     let failed_path = PathBuf::from(
         f.registry["U2_AFTER_250"]["path"]
@@ -7447,9 +7431,9 @@ fn close(
             })
             .ok_or_else(|| Error::Corrupt("frozen failure coverage".into()))?;
         let direct = evaluate_one(&failed, e, &e.request, budget);
-        save(&output.join(format!("failed-{kind}-direct.json")), &direct)?;
+        save(&output.join(format!("failed-{kind}-direct.r3b")), &direct)?;
         budget.check("close_failure_returned")?;
-        let ids: Vec<u32> = serde_json::from_value(direct["raw_tokens"].clone())?;
+        let ids: Vec<u32> = replica_v3::binary::from_value(direct["raw_tokens"].clone())?;
         let ids: Vec<_> = ids
             .into_iter()
             .take_while(|&id| id >= neural::SPECIALS as u32)
@@ -7461,13 +7445,13 @@ fn close(
         }
         worker_checks.push(check_worker(worker, &failed_path, e, &direct, budget)?);
     }
-    let base = read_json(&control.join("eval-000.json"))?["watch"]["exact_matches"]
+    let base = read_metadata(&control.join("eval-000.r3b"))?["watch"]["exact_matches"]
         .as_u64()
         .ok_or_else(|| Error::Corrupt("baseline score".into()))?;
     let mut streak = 0;
     let mut regression = false;
     for n in [10, 25, 50] {
-        let evaluation = read_json(&control.join(format!("eval-{n:03}.json")))?;
+        let evaluation = read_metadata(&control.join(format!("eval-{n:03}.r3b")))?;
         let count = evaluation["watch"]["exact_matches"]
             .as_u64()
             .ok_or_else(|| Error::Corrupt("watch count".into()))?;
@@ -7483,10 +7467,10 @@ fn close(
         .is_some_and(|n| n >= base && n > cs["exact_matches"].as_u64().unwrap_or(0))
         && ws["generation_failures"].as_u64().unwrap_or(u64::MAX) == 0
         && ws["empty"].as_u64().unwrap_or(u64::MAX) == 0;
-    let mut summary = json!({"one_factor_actual_trace_verified":true,"optimizer_updates_small":c.len()+w.len(),"same_sample_multiset_and_order":true,"same_clocks_and_lr":true,"reports":reports,"product_worker":worker_checks,"tokenizer_native_legacy_mapping":"PASS","candidate_eligible":eligible,"confirmation":if eligible{"REQUIRED_NOT_RUN"}else{"NOT_RUN_NO_SCREENING_EFFECT"},"regression_within_50":if regression{"REPRODUCED_ON_WATCH"}else{"NOT_REPRODUCED_WITHIN_BUDGET"},"s4_quality":"NOT_EVALUATED_HERE","goal1_ready":false});
+    let mut summary = record!({"one_factor_actual_trace_verified":true,"optimizer_updates_small":c.len()+w.len(),"same_sample_multiset_and_order":true,"same_clocks_and_lr":true,"reports":reports,"product_worker":worker_checks,"tokenizer_native_legacy_mapping":"PASS","candidate_eligible":eligible,"confirmation":if eligible{"REQUIRED_NOT_RUN"}else{"NOT_RUN_NO_SCREENING_EFFECT"},"regression_within_50":if regression{"REPRODUCED_ON_WATCH"}else{"NOT_REPRODUCED_WITHIN_BUDGET"},"s4_quality":"NOT_EVALUATED_HERE","goal1_ready":false});
     budget.check("close_before_terminal")?;
-    save(&output.join("evaluations.json"), &summary)?;
-    summary["arm_provenance"] = json!(provenance?);
+    save(&output.join("evaluations.r3b"), &summary)?;
+    summary["arm_provenance"] = record!(provenance?);
     let sealed = finish_close(output, summary, &arms, true, budget);
     println!(
         "closure report={} SMALL_updates={}",
@@ -7512,9 +7496,9 @@ fn verify_historical_rows(cases: &[Episode], rows: &[Value]) -> Result<()> {
         if !seen.insert(id)
             || row["question"] != e.request.input
             || row["expected"] != e.answer
-            || row["evidence"] != serde_json::to_value(&e.request.evidence)?
+            || row["evidence"] != replica_v3::binary::to_value(&e.request.evidence)?
             || row["generated_question"] != e.request.input
-            || row["generated_evidence"] != serde_json::to_value(&e.request.evidence)?
+            || row["generated_evidence"] != replica_v3::binary::to_value(&e.request.evidence)?
         {
             return Err(Error::Corrupt(
                 "historical duplicate/content binding".into(),
@@ -7538,7 +7522,7 @@ fn recount(
     if manifest.train.sha256 != f.train_hash {
         return Err(Error::Corrupt("recount train binding".into()));
     }
-    let audit = read_json(audit_path)?;
+    let audit = read_metadata(audit_path)?;
     let fixture_hash = file_hash(fixture)?;
     if audit["fixture_hash"] != fixture_hash || audit["actual_validation_hash"] != f.validation_hash
     {
@@ -7561,18 +7545,18 @@ fn recount(
             ));
         }
         verify_historical_rows(&validation, &cases)?;
-        historical.push(json!({"artifact":label,"raw_hash":file_hash(path)?,"score":summarize(&cases)?,"score_interpretation":"SCORE_AGAINST_FROZEN_LABELS","missing_error_generation_receipts":cases.iter().filter(|r|!r["error"].is_null()&&r["generation"].is_null()).count(),"missing_receipt_finish":"UNKNOWN"}));
+        historical.push(record!({"artifact":label,"raw_hash":file_hash(path)?,"score":summarize(&cases)?,"score_interpretation":"SCORE_AGAINST_FROZEN_LABELS","missing_error_generation_receipts":cases.iter().filter(|r|!r["error"].is_null()&&r["generation"].is_null()).count(),"missing_receipt_finish":"UNKNOWN"}));
     }
     let policies = arms
-        .map(|p| read_json(&p.join("policy.json")))
+        .map(|p| read_metadata(&p.join("policy.r3b")))
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
     let traces = arms
-        .map(|p| trace(&p.join("trace.jsonl")))
+        .map(|p| trace(&p.join("trace.r3rows")))
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
     let mut expected_w = policies[0]["config"].clone();
-    expected_w["first_target_weight"] = json!(1.);
+    expected_w["first_target_weight"] = record!(1.);
     if expected_w != policies[1]["config"]
         || policies[0]["config"]["first_target_weight"] != 8.
         || ["parent", "tape", "tape_hash", "source_id", "binary_hash"]
@@ -7584,8 +7568,8 @@ fn recount(
     let mut arm_reports = Vec::new();
     for ((directory, policy), trace) in arms.iter().zip(&policies).zip(&traces) {
         control.check("recount_next_arm")?;
-        let config: TrainConfig = serde_json::from_value(policy["config"].clone())?;
-        let tape: Vec<(Vec<usize>, u64)> = serde_json::from_value(policy["tape"].clone())?;
+        let config: TrainConfig = replica_v3::binary::from_value(policy["config"].clone())?;
+        let tape: Vec<(Vec<usize>, u64)> = replica_v3::binary::from_value(policy["tape"].clone())?;
         let parent_step = policy["parent"]["cumulative_model_step"]
             .as_u64()
             .ok_or_else(|| Error::Corrupt("policy parent step".into()))?
@@ -7609,9 +7593,9 @@ fn recount(
                         .ok_or_else(|| Error::Corrupt("trace sample index".into()))
                 })
                 .collect::<Result<Vec<_>>>()?;
-            if row["indices"] != json!(indices)
-                || row["ids"] != json!(ids)
-                || row["sampler_state"] != json!(rng)
+            if row["indices"] != record!(indices)
+                || row["ids"] != record!(ids)
+                || row["sampler_state"] != record!(rng)
                 || row["new_update"] != i + 1
                 || row["cumulative_model_step"] != parent_step + i + 1
                 || row["optimizer_step"] != parent_step + i + 1
@@ -7623,8 +7607,8 @@ fn recount(
                 return Err(Error::Corrupt("historical actual trace contract".into()));
             }
         }
-        let evaluation = read_json(&directory.join("eval-050.json"))?;
-        let scored: Vec<Value> = serde_json::from_value(evaluation["watch_rows"].clone())?;
+        let evaluation = read_metadata(&directory.join("eval-050.r3b"))?;
+        let scored: Vec<Value> = replica_v3::binary::from_value(evaluation["watch_rows"].clone())?;
         verify_historical_rows(&f.watch, &scored)?;
         let score = summarize(&scored)?;
         for k in ["denominator", "exact_matches", "generation_failures"] {
@@ -7632,7 +7616,7 @@ fn recount(
                 return Err(Error::Corrupt("historical watch recount".into()));
             }
         }
-        arm_reports.push(json!({"arm":policy["arm"],"trace_hash":file_hash(&directory.join("trace.jsonl"))?,"historical_updates":trace.len(),"watch":score,"fixture_bound":true,"policy_bound":true}));
+        arm_reports.push(record!({"arm":policy["arm"],"trace_hash":file_hash(&directory.join("trace.r3rows"))?,"historical_updates":trace.len(),"watch":score,"fixture_bound":true,"policy_bound":true}));
     }
     for (a, b) in traces[0].iter().zip(&traces[1]) {
         for k in [
@@ -7652,7 +7636,7 @@ fn recount(
     control.check("recount_terminal")?;
     save(
         output,
-        &json!({"status":"PASS","binding":binding,"fixture_hash":fixture_hash,"historical":historical,"arms":arm_reports,"data_audit":audit["status"],"label_findings":audit["validation400"]["semantic_findings"],"new_small_optimizer_updates":0,"model_calls":control.generation_calls,"final_heldout":false}),
+        &record!({"status":"PASS","binding":binding,"fixture_hash":fixture_hash,"historical":historical,"arms":arm_reports,"data_audit":audit["status"],"label_findings":audit["validation400"]["semantic_findings"],"new_small_optimizer_updates":0,"model_calls":control.generation_calls,"final_heldout":false}),
     )?;
     println!("recount PASS: {}", output.display());
     Ok(())
@@ -7694,7 +7678,7 @@ fn check_worker(
         }
     }
     Ok(
-        json!({"id":e.id,"success":success,"direct_worker_parity":true,"worker_error":error.trim(),"raw_bytes":direct["raw_bytes"],"raw_tokens":direct["raw_tokens"],"finish_reason":direct["finish_reason"]}),
+        record!({"id":e.id,"success":success,"direct_worker_parity":true,"worker_error":error.trim(),"raw_bytes":direct["raw_bytes"],"raw_tokens":direct["raw_tokens"],"finish_reason":direct["finish_reason"]}),
     )
 }
 fn save_arm(
@@ -7708,7 +7692,7 @@ fn save_arm(
     let mut m = l.manifest.clone();
     m.training = Some(state.clone());
     // Native format/status vocabulary is frozen; the detailed diagnostic reason
-    // belongs to result.json, not a new artifact schema or an invented success state.
+    // belongs to result.r3b, not a new artifact schema or an invented success state.
     m.status = match reason {
         "RECOVERY_SCREENING" => "TRAINING",
         "CANCELLED" => "CANCELLED",
@@ -7738,7 +7722,7 @@ fn arm_evaluation(
     } else {
         vec![]
     };
-    let mut evaluation = json!({"watch":score,"watch_rows":rows,"train_exposure_panel":train_rows});
+    let mut evaluation = record!({"watch":score,"watch_rows":rows,"train_exposure_panel":train_rows});
     let all: Vec<_> = rows.iter().chain(&train_rows).cloned().collect();
     add_partial_counts(&mut evaluation, &all, watch.len() + train.len(), control);
     Ok(evaluation)
@@ -7763,7 +7747,7 @@ fn finish_arm(
     }
     let _ = control.check("checkpoint_preserved");
     let reason = control.terminal_reason(complete && saved.is_ok());
-    json!({"reason":reason,"observed_conditions":control.observed,"checkpoint_saved":saved.is_ok(),"checkpoint_save_status_reason":saved_reason,"save_error":saved.err().map(|e|e.to_string()),
+    record!({"reason":reason,"observed_conditions":control.observed,"checkpoint_saved":saved.is_ok(),"checkpoint_save_status_reason":saved_reason,"save_error":saved.err().map(|e|e.to_string()),
         "work_elapsed_seconds":work_elapsed,"cleanup_elapsed_seconds":cleanup_start.elapsed().as_secs_f64(),"work_deadline_overrun_seconds":control.now().saturating_duration_since(control.deadline).as_secs_f64(),
         "final_evaluation_complete":complete,"comparison_eligible":complete&&control.stop.is_none(),"candidate_eligible":false,"cooperative_only":true,"control":control.receipt()})
 }
@@ -7812,7 +7796,7 @@ fn arm_run(
         .ok_or_else(|| Error::Invalid("arm optimizer required".into()))?;
     let starting_config = state.config.clone();
     let c = if matches!(arm, "L" | "B") {
-        let parent: TrainingState = serde_json::from_value(
+        let parent: TrainingState = replica_v3::binary::from_value(
             f.registry["GENERAL_QA_PARENT"]["manifest"]["training"].clone(),
         )?;
         if parent.step != state.step {
@@ -7875,13 +7859,13 @@ fn arm_run(
     };
     std::fs::create_dir(output)?;
     save(
-        &output.join("policy.json"),
-        &json!({"arm":arm,"parent":f.registry["U2_POLICY_START"],"fixture_hash":file_hash(fixture)?,"source_id":source_id,"binary_hash":file_hash(&std::env::current_exe()?)?,"tape":tape,"tape_hash":digest(&tape)?,"config":c,"max_new_updates":max_updates,"max_input_tokens":max_input_tokens,"max_target_tokens":max_target_tokens,"max_seconds":900,"max_rss_bytes":17179869184u64,"clock_policy":if matches!(arm,"L"|"B"){"moments + cumulative optimizer clock retained; parent endpoint LR, no warmup, same cosine horizon"}else{"moments + cumulative optimizer clock retained; saved U2 schedule unchanged"}}),
+        &output.join("policy.r3b"),
+        &record!({"arm":arm,"parent":f.registry["U2_POLICY_START"],"fixture_hash":file_hash(fixture)?,"source_id":source_id,"binary_hash":file_hash(&std::env::current_exe()?)?,"tape":tape,"tape_hash":digest(&tape)?,"config":c,"max_new_updates":max_updates,"max_input_tokens":max_input_tokens,"max_target_tokens":max_target_tokens,"max_seconds":900,"max_rss_bytes":17179869184u64,"clock_policy":if matches!(arm,"L"|"B"){"moments + cumulative optimizer clock retained; parent endpoint LR, no warmup, same cosine horizon"}else{"moments + cumulative optimizer clock retained; saved U2 schedule unchanged"}}),
     )?;
     let mut log = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(output.join("trace.jsonl"))?;
+        .open(output.join("trace.r3rows"))?;
     let mut base_score = 0;
     let mut base_errors = BTreeSet::new();
     let mut bad_streak = 0;
@@ -7918,12 +7902,12 @@ fn arm_run(
                 let new_errors = errors.difference(&base_errors).count();
                 let bad = base_score.saturating_sub(count) >= 4 || new_errors >= 2;
                 bad_streak = if bad { bad_streak + 1 } else { 0 };
-                evaluation["new_updates"] = json!(n);
-                evaluation["model_step"] = json!(state.step);
-                evaluation["model_content_hash"] = json!(l.model.weight_hash()?);
-                evaluation["new_error_cases"] = json!(new_errors);
-                evaluation["bad_streak"] = json!(bad_streak);
-                evaluation["exposure_counts"] = json!(
+                evaluation["new_updates"] = record!(n);
+                evaluation["model_step"] = record!(state.step);
+                evaluation["model_content_hash"] = record!(l.model.weight_hash()?);
+                evaluation["new_error_cases"] = record!(new_errors);
+                evaluation["bad_streak"] = record!(bad_streak);
+                evaluation["exposure_counts"] = record!(
                     selected
                         .iter()
                         .map(|i| (
@@ -7934,11 +7918,11 @@ fn arm_run(
                 );
                 let _ = control.check("before_evaluation_record");
                 if control.stop.is_some() {
-                    evaluation["final_evaluation_complete"] = json!(false);
-                    evaluation["comparison_eligible"] = json!(false);
-                    evaluation["terminal_reason"] = json!(control.stop);
+                    evaluation["final_evaluation_complete"] = record!(false);
+                    evaluation["comparison_eligible"] = record!(false);
+                    evaluation["terminal_reason"] = record!(control.stop);
                 }
-                save(&output.join(format!("eval-{n:03}.json")), &evaluation)?;
+                save(&output.join(format!("eval-{n:03}.r3b")), &evaluation)?;
                 last_evaluation = evaluation;
                 control.check("evaluation_recorded")?;
                 println!(
@@ -8047,17 +8031,17 @@ fn arm_run(
             for &i in indices {
                 *exposure.entry(i).or_default() += 1;
             }
-            let stats: BTreeMap<_,_>=groups.into_iter().map(|(k,v)|(k,json!({"gradient_norm":v[0].sqrt(),"update_norm":v[1].sqrt(),"weight_norm":v[2].sqrt(),"update_to_weight":v[1].sqrt()/v[2].sqrt().max(1e-30)}))).collect();
-            let row = json!({"arm":arm,"new_update":n+1,"cumulative_model_step":state.step,"optimizer_step":state.step,"schedule_step":state.step-c.budget_start_step,"lr":c.learning_rate(state.step),"indices":indices,"ids":indices.iter().map(|&i|&episodes[i].id).collect::<Vec<_>>(),"sampler_state":sampler,"input_tokens":b.tokens,"target_tokens":targets,"ce":ce,"objective":objective,"first_target_weight":c.first_target_weight,"grad_norm":norm,"update_norm":delta,"parameter_groups":stats,"elapsed_seconds":control.start.elapsed().as_secs_f64(),"rss_kib":control.last_rss_kib});
-            writeln!(log, "{row}")?;
+            let stats: BTreeMap<_,_>=groups.into_iter().map(|(k,v)|(k,record!({"gradient_norm":v[0].sqrt(),"update_norm":v[1].sqrt(),"weight_norm":v[2].sqrt(),"update_to_weight":v[1].sqrt()/v[2].sqrt().max(1e-30)}))).collect();
+            let row = record!({"arm":arm,"new_update":n+1,"cumulative_model_step":state.step,"optimizer_step":state.step,"schedule_step":state.step-c.budget_start_step,"lr":c.learning_rate(state.step),"indices":indices,"ids":indices.iter().map(|&i|&episodes[i].id).collect::<Vec<_>>(),"sampler_state":sampler,"input_tokens":b.tokens,"target_tokens":targets,"ce":ce,"objective":objective,"first_target_weight":c.first_target_weight,"grad_norm":norm,"update_norm":delta,"parameter_groups":stats,"elapsed_seconds":control.start.elapsed().as_secs_f64(),"rss_kib":control.last_rss_kib});
+            replica_v3::binary::write_record(&mut log, &row)?;
             log.flush()?;
             control.stop_result()?;
             if n + 1 == 20 && arm == "C" {
                 let hash = l.model.weight_hash()?;
                 let expected = &f.registry["U2_AFTER_20"]["model_content_hash"];
                 save(
-                    &output.join("control-step20-parity.json"),
-                    &json!({"actual":hash,"recorded_u2_after20":expected,"equal":hash==*expected}),
+                    &output.join("control-step20-parity.r3b"),
+                    &record!({"actual":hash,"recorded_u2_after20":expected,"equal":hash==*expected}),
                 )?;
                 if hash != *expected {
                     return Err(Error::Model(
@@ -8074,20 +8058,20 @@ fn arm_run(
     let mut result = finish_arm(control, final_evaluation_complete, |reason| {
         save_arm(&mut l, &state, &adam, &output.join("final"), reason)
     });
-    let info = json!({"arm":arm,"new_updates":state.step-start_step,"cumulative_model_step":state.step,"additional_input_tokens":state.consumed_tokens-start_input,"additional_target_tokens":state.target_tokens-start_targets,"model_content_hash":l.model.weight_hash()?,"elapsed_seconds":control.start.elapsed().as_secs_f64(),"error":outcome.as_ref().err().map(ToString::to_string),"goal1_ready":false,"last_evaluation":last_evaluation});
+    let info = record!({"arm":arm,"new_updates":state.step-start_step,"cumulative_model_step":state.step,"additional_input_tokens":state.consumed_tokens-start_input,"additional_target_tokens":state.target_tokens-start_targets,"model_content_hash":l.model.weight_hash()?,"elapsed_seconds":control.start.elapsed().as_secs_f64(),"error":outcome.as_ref().err().map(ToString::to_string),"goal1_ready":false,"last_evaluation":last_evaluation});
     result
         .as_object_mut()
         .unwrap()
         .extend(info.as_object().unwrap().clone());
-    result["policy_sha256"] = json!(file_hash(&output.join("policy.json"))?);
+    result["policy_sha256"] = record!(file_hash(&output.join("policy.r3b"))?);
     if result["checkpoint_saved"] == true {
-        result["checkpoint_file_sha256"] = json!(file_hash(&output.join("final"))?);
+        result["checkpoint_file_sha256"] = record!(file_hash(&output.join("final"))?);
     }
-    let final_eval = output.join(format!("eval-{:03}.json", state.step - start_step));
+    let final_eval = output.join(format!("eval-{:03}.r3b", state.step - start_step));
     if final_eval.is_file() {
-        result["final_evaluation_sha256"] = json!(file_hash(&final_eval)?);
+        result["final_evaluation_sha256"] = record!(file_hash(&final_eval)?);
     }
-    save(&output.join("result.json"), &result)?;
+    save(&output.join("result.r3b"), &result)?;
     log.sync_all()?;
     println!("{result}");
     outcome.and(control.stop_result())
@@ -8112,7 +8096,7 @@ mod tests {
         f.watch = ordinary[..32].to_vec();
         let baseline = root.join("baseline");
         std::fs::create_dir(&baseline).unwrap();
-        save(&baseline.join("frozen.json"), &f).unwrap();
+        save(&baseline.join("frozen.r3b"), &f).unwrap();
         let dev: Vec<_> = (0..256)
             .map(|i| {
                 let mut e = repair_episode(&format!("dev/{i}"));
@@ -8131,9 +8115,9 @@ mod tests {
             .collect();
         let a0 = root.join("a0");
         std::fs::create_dir(&a0).unwrap();
-        save(&a0.join("cross-development.json"), &cross).unwrap();
-        save(&a0.join("summary.json"),&json!({"baseline":baseline,"baseline_hash":file_hash(&baseline.join("frozen.json")).unwrap(),
-            "corpus":corpus,"train_hash":m.train.sha256,"dev_hash":m.validation.sha256,"cross":{"file_sha256":file_hash(&a0.join("cross-development.json")).unwrap()}})).unwrap();
+        save(&a0.join("cross-development.r3b"), &cross).unwrap();
+        save(&a0.join("summary.r3b"),&record!({"baseline":baseline,"baseline_hash":file_hash(&baseline.join("frozen.r3b")).unwrap(),
+            "corpus":corpus,"train_hash":m.train.sha256,"dev_hash":m.validation.sha256,"cross":{"file_sha256":file_hash(&a0.join("cross-development.r3b")).unwrap()}})).unwrap();
         let mut state = TrainingState {
             resume_binding: None,
             contrast16: false,
@@ -8157,39 +8141,40 @@ mod tests {
         };
         let adam = Adam::new(&l.model.vars).unwrap();
         let parent = root.join("parent");
+        state.resume_binding = Some(checkpoint::ResumeBinding::default_for(&state, &l.tokenizer));
         save_arm(&mut l, &state, &adam, &parent, "RECOVERY_SCREENING").unwrap();
         let pair = root.join("pair");
-        let parent_receipt = root.join("parent-result.json");
-        save(&parent_receipt, &json!({"fixture":true})).unwrap();
+        let parent_receipt = root.join("parent-result.r3b");
+        save(&parent_receipt, &record!({"fixture":true})).unwrap();
         std::fs::create_dir(&pair).unwrap();
         let mut hashes = Vec::new();
         for arm in ["C", "L"] {
             let dir = pair.join(arm);
             std::fs::create_dir(&dir).unwrap();
-            let p = json!({"node":"A1","run_id":pair,"contract":PROGRESS_CONTRACT,"arm":arm,"a0":a0,"a0_hash":file_hash(&a0.join("summary.json")).unwrap(),
-                "corpus":corpus,"train_hash":m.train.sha256,"dev_hash":m.validation.sha256,"cross_hash":file_hash(&a0.join("cross-development.json")).unwrap(),
+            let p = record!({"node":"A1","run_id":pair,"contract":PROGRESS_CONTRACT,"arm":arm,"a0":a0,"a0_hash":file_hash(&a0.join("summary.r3b")).unwrap(),
+                "corpus":corpus,"train_hash":m.train.sha256,"dev_hash":m.validation.sha256,"cross_hash":file_hash(&a0.join("cross-development.r3b")).unwrap(),
                 "parent":parent,"parent_sha256":file_hash(&parent).unwrap(),"parent_receipt":parent_receipt,"parent_receipt_sha256":file_hash(&parent_receipt).unwrap(),
                 "initial_model_hash":l.model.weight_hash().unwrap(),"initial_adam_hash":optimizer_hash(&adam.moments).unwrap(),"initial_state":state,
                 "tokenizer_hash":l.tokenizer.semantic_id(),"source_digest":neural::hash(b"synthetic fixture source"),"lr_policy":arm,"lr_offset":0,
-                "tape":(0..512).map(|_|json!([[0],17])).collect::<Vec<_>>(),"denominators":vec![[1,1];512],"tape_hash":"fixture","denominators_hash":"fixture",
+                "tape":(0..512).map(|_|record!([[0],17])).collect::<Vec<_>>(),"denominators":vec![[1,1];512],"tape_hash":"fixture","denominators_hash":"fixture",
                 "anchor_floor":178,"baseline_dev":0,"baseline_watch":0,"baseline_errors":0});
-            save(&dir.join("policy.json"), &p).unwrap();
-            hashes.push(file_hash(&dir.join("policy.json")).unwrap());
+            save(&dir.join("policy.r3b"), &p).unwrap();
+            hashes.push(file_hash(&dir.join("policy.r3b")).unwrap());
             let inputs = load_verified_inputs(&a0, Some(&p)).unwrap();
             let segment = dir.join("segment-00-0000");
             std::fs::create_dir(&segment).unwrap();
-            let mut receipts = json!({});
+            let mut receipts = record!({});
             let mut last = Value::Null;
             for n in [0, 128, 256, 512] {
                 let dr: Vec<_> = dev.iter().map(|e| state_row(&l, e)).collect();
                 let wr: Vec<_> = f.watch.iter().map(|e| state_row(&l, e)).collect();
-                last = json!({"new_updates":n,"model_content_hash":l.model.weight_hash().unwrap(),"final_evaluation_complete":true,
+                last = record!({"new_updates":n,"model_content_hash":l.model.weight_hash().unwrap(),"final_evaluation_complete":true,
                     "dev":skill_score(&dr).unwrap(),"watch":skill_score(&wr).unwrap(),"dev_rows":dr,"watch_rows":wr});
                 bind_progress_evaluation(&p, &mut last, &inputs, &l).unwrap();
                 if n > 0 {
                     let (key, evaluation_digest, panel_digest) =
                         evaluation_identity(&p, &last).unwrap();
-                    last["decision"] = serde_json::to_value(EvaluationDecision {
+                    last["decision"] = replica_v3::binary::to_value(EvaluationDecision {
                         key,
                         evaluation_digest,
                         panel_digest,
@@ -8210,7 +8195,7 @@ mod tests {
                     .unwrap();
                 }
                 record_bound_panel(
-                    &segment.join(format!("eval-{n:04}.json")),
+                    &segment.join(format!("eval-{n:04}.r3b")),
                     &last,
                     &mut receipts,
                 )
@@ -8228,17 +8213,17 @@ mod tests {
                     .unwrap();
                 }
             }
-            let mut scores = json!({});
+            let mut scores = record!({});
             for (id, file, cases, hash) in [
                 (
                     "cross",
-                    "cross.json",
+                    "cross.r3b",
                     cross.as_slice(),
                     &inputs.hashes["cross"],
                 ),
                 (
                     "ordinary",
-                    "ordinary400.json",
+                    "ordinary400.r3b",
                     ordinary.as_slice(),
                     &inputs.hashes["ordinary"],
                 ),
@@ -8250,15 +8235,15 @@ mod tests {
                 } else {
                     summarize(&rows).unwrap()
                 };
-                record_bound_panel(&segment.join(file),&json!({"policy":"normal_greedy_v1","rows":rows,"score":score,"bindings":{id:binding}}),&mut receipts).unwrap();
+                record_bound_panel(&segment.join(file),&record!({"policy":"normal_greedy_v1","rows":rows,"score":score,"bindings":{id:binding}}),&mut receipts).unwrap();
                 scores[id] = score;
             }
-            let mut trace = String::new();
+            let mut trace = Vec::new();
             for n in 0..512 {
-                trace.push_str(&format!("{}\n",json!({"new_update":n+1,"indices":[0],"sampler_state":17,"input_tokens":1,"target_tokens":1,
-                "ids":["train/0"],"optimizer_step":n+1,"lr_bits":progress_lr(arm,n+1).unwrap().to_bits(),"ce":0.,"objective":0.,"gradient_norm":0.,"update_norm":0.})));
+                replica_v3::binary::write_record(&mut trace,&record!({"new_update":n+1,"indices":[0],"sampler_state":17,"input_tokens":1,"target_tokens":1,
+                "ids":["train/0"],"optimizer_step":n+1,"lr_bits":progress_lr(arm,n+1).unwrap().to_bits(),"ce":0.,"objective":0.,"gradient_norm":0.,"update_norm":0.})).unwrap();
             }
-            std::fs::write(segment.join("trace.jsonl"), trace).unwrap();
+            std::fs::write(segment.join("trace.r3rows"), trace).unwrap();
             let mut final_state = state.clone();
             final_state.step = 512;
             save_arm(
@@ -8269,18 +8254,18 @@ mod tests {
                 "SCREENING_BUDGET_REACHED",
             )
             .unwrap();
-            let r = json!({"arm":arm,"policy_sha256":hashes.last().unwrap(),"checkpoint_file_sha256":file_hash(&segment.join("final")).unwrap(),
-                "exposure":{"trace_sha256":file_hash(&segment.join("trace.jsonl")).unwrap()},"segment_updates":512,"new_updates":512,"cumulative_model_step":512,"sampler_state":17,
+            let r = record!({"arm":arm,"policy_sha256":hashes.last().unwrap(),"checkpoint_file_sha256":file_hash(&segment.join("final")).unwrap(),
+                "exposure":{"trace_sha256":file_hash(&segment.join("trace.r3rows")).unwrap()},"segment_updates":512,"new_updates":512,"cumulative_model_step":512,"sampler_state":17,
                 "last_evaluation":last,"model_content_hash":l.model.weight_hash().unwrap(),"adam_hash":optimizer_hash(&adam.moments).unwrap(),"cross":scores["cross"],"ordinary":scores["ordinary"],
                 "raw_development_gate":false,"candidate_eligible":false,"resume_allowed":false,"reason":"SCREENING_BUDGET_REACHED","comparison_eligible":true,"cleanup_limit_exceeded":false,
                 "checkpoint_saved":true,"save_error":null,"final_evaluation_complete":true,"control":{"terminal_reason":"COMPLETED","observed_conditions":[]},"panel_receipts":receipts,
                 "evaluation_decision_digest":digest(&last["decision"]).unwrap(),"guard_streaks":[0,0,0]});
-            save(&segment.join("result.json"), &r).unwrap();
+            save(&segment.join("result.r3b"), &r).unwrap();
             state.step = 0;
         }
         save(
-            &pair.join("pair.json"),
-            &json!({"node":"A1","arms":["C","L"],"policy_hashes":hashes}),
+            &pair.join("pair.r3b"),
+            &record!({"node":"A1","arms":["C","L"],"policy_hashes":hashes}),
         )
         .unwrap();
         (a0, pair)
@@ -8298,7 +8283,7 @@ mod tests {
         let tokens = l.tokenizer.encode(e.answer.as_bytes()).unwrap();
         let mut raw = tokens.clone();
         raw.push(EOS);
-        json!({"id":e.id,"scene":scene(e),"family":e.family,"category":e.category,"question":e.request.input,"generated_question":e.request.input,
+        record!({"id":e.id,"scene":scene(e),"family":e.family,"category":e.category,"question":e.request.input,"generated_question":e.request.input,
             "evidence":e.request.evidence,"generated_evidence":e.request.evidence,"expected":e.answer,"actual":e.answer,"raw_tokens":raw,"raw_bytes":bytes_receipt(&l.tokenizer,&tokens),
             "raw_generated_count":raw.len(),"eos_index":raw.len()-1,"provided":prompt.provided,"excluded":prompt.excluded,"prompt_length":prompt.token_ids.len(),
             "request_digest":digest(&e.request).unwrap(),"prompt_digest":digest(&prompt.token_ids).unwrap(),"native_prompt_digest":prompt.token_digest,
@@ -8310,7 +8295,7 @@ mod tests {
         for mutation in 0..8 {
             let dir = tempfile::tempdir().unwrap();
             let (a0, pair) = state_fixture(dir.path());
-            let p = read_json(&pair.join("C/policy.json")).unwrap();
+            let p = read_metadata(&pair.join("C/policy.r3b")).unwrap();
             let before = load_verified_inputs(&a0, Some(&p)).unwrap();
             assert_eq!(
                 (before.ordinary.len(), before.dev.len(), before.cross.len()),
@@ -8321,7 +8306,7 @@ mod tests {
                 match mutation {
                     0 => cases[0].request.input.push('x'),
                     1 => cases[0].answer.push('x'),
-                    2 => cases[0].request.evidence.items.push(serde_json::from_value(json!({
+                    2 => cases[0].request.evidence.items.push(replica_v3::binary::from_value(record!({
                         "event_id":1,"original_excerpt":"changed original evidence","source":"manual","recorded_at":1,"observed_at":1,
                         "version_status":"current","retrieval_reason":"lexical","relation_path":[],"excerpt_truncated":false
                     })).unwrap()),
@@ -8347,10 +8332,10 @@ mod tests {
             } else if mutation == 4 {
                 let path = progress_path(&before.a0, "baseline")
                     .unwrap()
-                    .join("frozen.json");
-                let mut f = read_json(&path).unwrap();
-                f["registry"]["changed"] = json!(true);
-                std::fs::write(path, serde_json::to_vec(&f).unwrap()).unwrap();
+                    .join("frozen.r3b");
+                let mut f = read_metadata(&path).unwrap();
+                f["registry"]["changed"] = record!(true);
+                std::fs::write(path, replica_v3::binary::to_vec(&f).unwrap()).unwrap();
             } else if mutation == 5 {
                 let mut cases = before.dev.clone();
                 cases[0].request.input.push('x');
@@ -8363,8 +8348,8 @@ mod tests {
                     cross.pop();
                 }
                 std::fs::write(
-                    a0.join("cross-development.json"),
-                    serde_json::to_vec(&cross).unwrap(),
+                    a0.join("cross-development.r3b"),
+                    replica_v3::binary::to_vec(&cross).unwrap(),
                 )
                 .unwrap();
             }
@@ -8374,7 +8359,7 @@ mod tests {
             assert!(err.to_string().contains("FROZEN_INPUT_MISMATCH"), "{err}");
             assert_eq!(c.generation_calls, 0);
             assert!(progress_close(&pair, &mut repair_control()).is_err());
-            assert!(!pair.join("comparison.json").exists());
+            assert!(!pair.join("comparison.r3b").exists());
         }
         println!(
             "T-D01/02/03/05/06/07: actual entry and owned-input fixtures; SMALL/TINY/scalar updates0"
@@ -8384,27 +8369,27 @@ mod tests {
     fn state_data_candidate_rejects_ordinary_length_end_despite_high_qa() {
         let dir = tempfile::tempdir().unwrap();
         let (a0, pair) = state_fixture(dir.path());
-        let p = read_json(&pair.join("C/policy.json")).unwrap();
+        let p = read_metadata(&pair.join("C/policy.r3b")).unwrap();
         let inputs = load_verified_inputs(&a0, Some(&p)).unwrap();
         let segment = pair.join("C/segment-00-0000");
         let l = checkpoint::load(&segment.join("final"), Device::Cpu, true).unwrap();
-        let path = segment.join("ordinary400.json");
-        let mut panel = read_json(&path).unwrap();
+        let path = segment.join("ordinary400.r3b");
+        let mut panel = read_metadata(&path).unwrap();
         let tokens = l.tokenizer.encode(b"xx").unwrap();
         assert_eq!(tokens.len(), 2);
         let row = &mut panel["rows"][0];
-        row["actual"] = json!("xx");
-        row["raw_tokens"] = json!(tokens);
+        row["actual"] = record!("xx");
+        row["raw_tokens"] = record!(tokens);
         row["raw_bytes"] = bytes_receipt(&l.tokenizer, &tokens);
-        row["raw_generated_count"] = json!(2);
+        row["raw_generated_count"] = record!(2);
         row["eos_index"] = Value::Null;
-        row["generation"] = json!({"tokens":tokens,"generated":2,"finish":"length"});
-        row["finish_reason"] = json!("length");
-        row["exact_match"] = json!(false);
+        row["generation"] = record!({"tokens":tokens,"generated":2,"finish":"length"});
+        row["finish_reason"] = record!("length");
+        row["exact_match"] = record!(false);
         row["components"] = components(Some("xx"), &inputs.ordinary[0].answer, &[]);
         let rows = panel["rows"].as_array().unwrap();
         let score = summarize(rows).unwrap();
-        assert_eq!(score["qa"], json!([335, 336]));
+        assert_eq!(score["qa"], record!([335, 336]));
         assert_eq!(score["generation_failures"], 0); // Length end needs the full generation check.
         assert_eq!(skill_score(rows).unwrap()["generation_error_cases"], 1);
         let binding = bind_progress_panel(
@@ -8419,29 +8404,29 @@ mod tests {
         .unwrap();
         panel["score"] = score.clone();
         panel["bindings"]["ordinary"] = binding;
-        std::fs::write(&path, serde_json::to_vec(&panel).unwrap()).unwrap();
-        let result_path = segment.join("result.json");
-        let mut result = read_json(&result_path).unwrap();
+        std::fs::write(&path, replica_v3::binary::to_vec(&panel).unwrap()).unwrap();
+        let result_path = segment.join("result.r3b");
+        let mut result = read_metadata(&result_path).unwrap();
         result["ordinary"] = score;
-        result["panel_receipts"]["ordinary400.json"] =
-            json!({"sha256":file_hash(&path).unwrap(),"bindings":panel["bindings"]});
-        result["candidate_eligible"] = json!(true);
-        std::fs::write(&result_path, serde_json::to_vec(&result).unwrap()).unwrap();
+        result["panel_receipts"]["ordinary400.r3b"] =
+            record!({"sha256":file_hash(&path).unwrap(),"bindings":panel["bindings"]});
+        result["candidate_eligible"] = record!(true);
+        std::fs::write(&result_path, replica_v3::binary::to_vec(&result).unwrap()).unwrap();
         let error = progress_close(&pair, &mut repair_control()).unwrap_err();
         assert!(
             error.to_string().contains("non-normal final generation"),
             "{error}"
         );
-        assert!(!pair.join("comparison.json").exists());
+        assert!(!pair.join("comparison.r3b").exists());
         // A fully recorded wrong/length-ended model output still belongs in the denominator.
-        result["candidate_eligible"] = json!(false);
-        std::fs::write(&result_path, serde_json::to_vec(&result).unwrap()).unwrap();
+        result["candidate_eligible"] = record!(false);
+        std::fs::write(&result_path, replica_v3::binary::to_vec(&result).unwrap()).unwrap();
         progress_close(&pair, &mut repair_control()).unwrap();
-        let comparison = read_json(&pair.join("comparison.json")).unwrap();
+        let comparison = read_metadata(&pair.join("comparison.r3b")).unwrap();
         assert_eq!(comparison["endpoints"][0]["ordinary"]["denominator"], 400);
         assert_eq!(
             comparison["endpoints"][0]["ordinary"]["qa"],
-            json!([335, 336])
+            record!([335, 336])
         );
         assert_eq!(comparison["raw_development_gate"], false);
         println!(
@@ -8454,46 +8439,46 @@ mod tests {
         let (_, pair) = state_fixture(dir.path());
         // Reuse the TINY fixture's checked lineage; the labels are not optimizer calls.
         for (kind, arm, raw_file, panel) in [
-            ("F16", "F", "raw.json", "dev"),
-            ("N256", "N", "cross.json", "cross"),
+            ("F16", "F", "raw.r3b", "dev"),
+            ("N256", "N", "cross.r3b", "cross"),
         ] {
             std::fs::create_dir(pair.join(arm)).unwrap();
             std::fs::copy(
-                pair.join("C/policy.json"),
-                pair.join(arm).join("policy.json"),
+                pair.join("C/policy.r3b"),
+                pair.join(arm).join("policy.r3b"),
             )
             .unwrap();
             let output = dir.path().join(kind);
             std::fs::create_dir(&output).unwrap();
-            save(&output.join("reaudit.json"), &json!({"current_raw_recount":"VERIFIED","mode":"READ_ONLY_REAUDIT",
-                "endpoints":[{"arm":arm,"policy_sha256":file_hash(&pair.join(arm).join("policy.json")).unwrap(),"segment":pair.join("C/segment-00-0000")}]})).unwrap();
+            save(&output.join("reaudit.r3b"), &record!({"current_raw_recount":"VERIFIED","mode":"READ_ONLY_REAUDIT",
+                "endpoints":[{"arm":arm,"policy_sha256":file_hash(&pair.join(arm).join("policy.r3b")).unwrap(),"segment":pair.join("C/segment-00-0000")}]})).unwrap();
             let mut control = repair_control();
             control.time_boundary = Some("panel_next_case");
             assert!(progress_observe(&pair, &output, kind, &mut control).is_err());
             assert_eq!((control.generation_calls, control.teacher_calls), (0, 0));
             let observed = output.join(kind);
-            let registration = read_json(&observed.join("registration.json")).unwrap();
-            let result = read_json(&observed.join("result.json")).unwrap();
-            let raw = read_json(&observed.join(raw_file)).unwrap();
+            let registration = read_metadata(&observed.join("registration.r3b")).unwrap();
+            let result = read_metadata(&observed.join("result.r3b")).unwrap();
+            let raw = read_metadata(&observed.join(raw_file)).unwrap();
             assert_eq!(result["status"], "FAILED_OR_INCOMPLETE");
             assert_eq!(result["candidate_eligible"], false);
             assert_eq!(result["resume_allowed"], false);
             assert_eq!(result["control"]["terminal_reason"], "TIME_BUDGET");
             assert_eq!(
                 result["registration_sha256"],
-                file_hash(&observed.join("registration.json")).unwrap()
+                file_hash(&observed.join("registration.r3b")).unwrap()
             );
             assert_eq!(
                 result["panel_receipts"][raw_file]["sha256"],
                 file_hash(&observed.join(raw_file)).unwrap()
             );
-            assert_eq!(raw["rows"], json!([]));
+            assert_eq!(raw["rows"], record!([]));
             assert_eq!(raw["bindings"][panel]["complete"], false);
             assert_eq!(
                 raw["bindings"][panel]["evaluator_source"],
                 registration["source_sha"]
             );
-            assert!(!observed.join("ordinary.json").exists());
+            assert!(!observed.join("ordinary.r3b").exists());
             if kind == "N256" {
                 assert_eq!(registration["maximum_new_generations"], 912);
                 assert!(
@@ -8519,47 +8504,47 @@ mod tests {
                 for arm in ["C", "L"] {
                     let segment = pair.join(arm).join("segment-00-0000");
                     let file = if mutation == 2 {
-                        "ordinary400.json"
+                        "ordinary400.r3b"
                     } else {
-                        "cross.json"
+                        "cross.r3b"
                     };
                     let path = segment.join(file);
-                    let mut raw = read_json(&path).unwrap();
+                    let mut raw = read_metadata(&path).unwrap();
                     match mutation {
-                        1 => raw["rows"] = json!([]),
+                        1 => raw["rows"] = record!([]),
                         2 | 3 => {
                             raw["rows"].as_array_mut().unwrap().pop();
                         }
                         4 => raw["rows"][1] = raw["rows"][0].clone(),
-                        5 => raw["rows"][0]["expected"] = json!("different"),
+                        5 => raw["rows"][0]["expected"] = record!("different"),
                         6 => raw["rows"].as_array_mut().unwrap().swap(0, 1),
-                        7 => raw["rows"][0]["actual"] = json!("wrong"),
-                        8 => raw["bindings"]["cross"]["model_hash"] = json!("other model"),
+                        7 => raw["rows"][0]["actual"] = record!("wrong"),
+                        8 => raw["bindings"]["cross"]["model_hash"] = record!("other model"),
                         9 => raw["rows"][0]["eos_index"] = Value::Null,
-                        10 => raw["rows"][0]["error"] = json!("invalid UTF-8"),
+                        10 => raw["rows"][0]["error"] = record!("invalid UTF-8"),
                         _ => unreachable!(),
                     }
-                    std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+                    std::fs::write(&path, replica_v3::binary::to_vec(&raw).unwrap()).unwrap();
                     // Even freshly forged file receipts do not override frozen membership or tokenizer checks.
                     if mutation != 9 {
-                        let rp = segment.join("result.json");
-                        let mut result = read_json(&rp).unwrap();
+                        let rp = segment.join("result.r3b");
+                        let mut result = read_metadata(&rp).unwrap();
                         if mutation == 1 {
-                            result["raw_development_gate"] = json!(true);
+                            result["raw_development_gate"] = record!(true);
                         }
                         result["panel_receipts"][file] =
-                            json!({"sha256":file_hash(&path).unwrap(),"bindings":raw["bindings"]});
-                        std::fs::write(rp, serde_json::to_vec(&result).unwrap()).unwrap();
+                            record!({"sha256":file_hash(&path).unwrap(),"bindings":raw["bindings"]});
+                        std::fs::write(rp, replica_v3::binary::to_vec(&result).unwrap()).unwrap();
                     }
                 }
             }
             let result = progress_close(&pair, &mut repair_control());
             if mutation == 0 {
                 result.unwrap();
-                assert!(pair.join("comparison.json").is_file());
+                assert!(pair.join("comparison.r3b").is_file());
             } else {
                 assert!(result.is_err(), "mutation{mutation}");
-                assert!(!pair.join("comparison.json").exists());
+                assert!(!pair.join("comparison.r3b").exists());
             }
         }
         println!(
@@ -8572,7 +8557,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let (a0, pair) = state_fixture(dir.path());
             progress_close(&pair, &mut repair_control()).unwrap();
-            let p = read_json(&pair.join("C/policy.json")).unwrap();
+            let p = read_metadata(&pair.join("C/policy.r3b")).unwrap();
             let input = load_verified_inputs(&a0, Some(&p)).unwrap();
             let corpus = progress_path(&p, "corpus").unwrap();
             let mut manifest = input.manifest;
@@ -8582,7 +8567,7 @@ mod tests {
                 input.dev
             };
             cases[0].answer.push('x');
-            let bytes = serde_json::to_vec(&cases).unwrap();
+            let bytes = replica_v3::binary::to_vec(&cases).unwrap();
             let target = if split == "train" {
                 &mut manifest.train
             } else {
@@ -8592,8 +8577,8 @@ mod tests {
             target.sha256 = neural::hash(&bytes);
             target.bytes = bytes.len();
             std::fs::write(
-                corpus.join("manifest.json"),
-                serde_json::to_vec(&manifest).unwrap(),
+                corpus.join("manifest.r3b"),
+                replica_v3::binary::to_vec(&manifest).unwrap(),
             )
             .unwrap();
             assert!(data::load_legacy(&corpus).is_ok());
@@ -8606,8 +8591,8 @@ mod tests {
             .into_iter()
             .map(|p| (p, file_hash(Path::new(p)).unwrap()))
             .collect();
-            let harness = dir.path().join("fixture-harness.json");
-            save(&harness,&json!({"result":"CHECKED_SCOPE_PASS","source_unchanged":true,"source_files":files})).unwrap();
+            let harness = dir.path().join("fixture-harness.r3b");
+            save(&harness,&record!({"result":"CHECKED_SCOPE_PASS","source_unchanged":true,"source_files":files})).unwrap();
             let out = dir.path().join("never-generated");
             let mut c = repair_control();
             let error = progress_renewal(&pair, &harness, &out, 1, &mut c).unwrap_err();
@@ -8623,19 +8608,19 @@ mod tests {
     fn state_data_resume_binds_immutable_raw_files() {
         let dir = tempfile::tempdir().unwrap();
         let (_, pair) = state_fixture(dir.path());
-        let p = read_json(&pair.join("C/policy.json")).unwrap();
+        let p = read_metadata(&pair.join("C/policy.r3b")).unwrap();
         let segment = pair.join("C/segment-00-0000");
-        let r = read_json(&segment.join("result.json")).unwrap();
+        let r = read_metadata(&segment.join("result.r3b")).unwrap();
         verify_resume_evaluation_files(&p, &r, std::slice::from_ref(&segment)).unwrap();
-        let path = segment.join("eval-0512.json");
+        let path = segment.join("eval-0512.r3b");
         let original = std::fs::read(&path).unwrap();
-        let mut raw: Value = serde_json::from_slice(&original).unwrap();
-        raw["dev_rows"][0]["actual"] = json!("changed after checkpoint");
-        std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+        let mut raw: Value = replica_v3::binary::from_slice(&original).unwrap();
+        raw["dev_rows"][0]["actual"] = record!("changed after checkpoint");
+        std::fs::write(&path, replica_v3::binary::to_vec(&raw).unwrap()).unwrap();
         assert!(verify_resume_evaluation_files(&p, &r, std::slice::from_ref(&segment)).is_err());
         assert_eq!(r["last_evaluation"]["dev_rows"][0]["actual"], "b");
         let mut changed = p.clone();
-        changed["parent_sha256"] = json!("0".repeat(64));
+        changed["parent_sha256"] = record!("0".repeat(64));
         assert!(load_verified_inputs(&progress_path(&p, "a0").unwrap(), Some(&changed)).is_err());
     }
     #[test]
@@ -8645,37 +8630,37 @@ mod tests {
         for arm in ["C", "L"] {
             let segment = pair.join(arm).join("segment-00-0000");
             for name in [
-                "eval-0000.json",
-                "eval-0128.json",
-                "eval-0256.json",
-                "eval-0512.json",
-                "cross.json",
-                "ordinary400.json",
+                "eval-0000.r3b",
+                "eval-0128.r3b",
+                "eval-0256.r3b",
+                "eval-0512.r3b",
+                "cross.r3b",
+                "ordinary400.r3b",
             ] {
                 let path = segment.join(name);
-                let mut raw = read_json(&path).unwrap();
+                let mut raw = read_metadata(&path).unwrap();
                 raw.as_object_mut().unwrap().remove("bindings");
-                std::fs::write(path, serde_json::to_vec(&raw).unwrap()).unwrap();
+                std::fs::write(path, replica_v3::binary::to_vec(&raw).unwrap()).unwrap();
             }
-            let path = segment.join("result.json");
-            let mut r = read_json(&path).unwrap();
+            let path = segment.join("result.r3b");
+            let mut r = read_metadata(&path).unwrap();
             r.as_object_mut().unwrap().remove("panel_receipts");
             r["last_evaluation"]
                 .as_object_mut()
                 .unwrap()
                 .remove("bindings");
-            r["reason"] = json!("CANCELLED");
-            r["comparison_eligible"] = json!(false);
+            r["reason"] = record!("CANCELLED");
+            r["comparison_eligible"] = record!(false);
             r["control"] =
-                json!({"terminal_reason":"CANCELLED","observed_conditions":["CANCELLED"]});
-            std::fs::write(path, serde_json::to_vec(&r).unwrap()).unwrap();
+                record!({"terminal_reason":"CANCELLED","observed_conditions":["CANCELLED"]});
+            std::fs::write(path, replica_v3::binary::to_vec(&r).unwrap()).unwrap();
         }
-        let original = file_hash(&pair.join("C/segment-00-0000/result.json")).unwrap();
+        let original = file_hash(&pair.join("C/segment-00-0000/result.r3b")).unwrap();
         assert!(progress_close(&pair, &mut repair_control()).is_err());
-        assert!(!pair.join("comparison.json").exists());
-        let out = dir.path().join("reaudit.json");
+        assert!(!pair.join("comparison.r3b").exists());
+        let out = dir.path().join("reaudit.r3b");
         progress_close_to(&pair, &out, true, &mut repair_control()).unwrap();
-        let report = read_json(&out).unwrap();
+        let report = read_metadata(&out).unwrap();
         assert!(
             report["endpoints"][0]["current_reaudit"]["panels"]["cross"]
                 .get("verified_rows")
@@ -8687,7 +8672,7 @@ mod tests {
         assert_eq!(report["endpoints"][0]["resume_allowed"], false);
         assert_eq!(
             original,
-            file_hash(&pair.join("C/segment-00-0000/result.json")).unwrap()
+            file_hash(&pair.join("C/segment-00-0000/result.r3b")).unwrap()
         );
         let l = repair_loaded();
         let mut e = repair_episode("invalid-output/0");
@@ -8698,14 +8683,14 @@ mod tests {
         raw.push(EOS);
         let error = l.tokenizer.decode(&tokens).unwrap_err().to_string();
         row["actual"] = Value::Null;
-        row["error"] = json!(error);
-        row["error_class"] = json!("strict_utf8");
-        row["raw_tokens"] = json!(raw);
+        row["error"] = record!(error);
+        row["error_class"] = record!("strict_utf8");
+        row["raw_tokens"] = record!(raw);
         row["raw_bytes"] = bytes_receipt(&l.tokenizer, &tokens);
-        row["raw_generated_count"] = json!(raw.len());
-        row["eos_index"] = json!(raw.len() - 1);
-        row["generation"] = json!({"tokens":tokens,"generated":raw.len(),"finish":"stop"});
-        row["exact_match"] = json!(false);
+        row["raw_generated_count"] = record!(raw.len());
+        row["eos_index"] = record!(raw.len() - 1);
+        row["generation"] = record!({"tokens":tokens,"generated":raw.len(),"finish":"stop"});
+        row["exact_match"] = record!(false);
         row["components"] = components(None, &e.answer, &[]);
         let spec = PanelSpec {
             id: "dev",
@@ -8728,8 +8713,8 @@ mod tests {
     fn state_data_guard_time_after_raw_and_checkpoint() {
         for boundary in ["progress_eval_recorded", "progress_eval_checkpoint"] {
             let dir = tempfile::tempdir().unwrap();
-            let p = json!({"run_id":"isolated","baseline_dev":208,"baseline_watch":18,"baseline_errors":2});
-            let e = json!({"new_updates":256,"model_content_hash":"fixture-model","final_evaluation_complete":true,
+            let p = record!({"run_id":"isolated","baseline_dev":208,"baseline_watch":18,"baseline_errors":2});
+            let e = record!({"new_updates":256,"model_content_hash":"fixture-model","final_evaluation_complete":true,
                 "dev":{"denominator":256,"exact_matches":180,"generation_error_cases":0},
                 "watch":{"denominator":32,"exact_matches":18,"generation_error_cases":0},"dev_rows":[],"watch_rows":[]});
             let mut last = Value::Null;
@@ -8776,8 +8761,8 @@ mod tests {
     fn state_data_guard_idempotence_corruption_and_simultaneous_cancel() {
         let dir = tempfile::tempdir().unwrap();
         let p =
-            json!({"run_id":"fixture","baseline_dev":208,"baseline_watch":18,"baseline_errors":2});
-        let e = json!({"new_updates":128,"model_content_hash":"model","final_evaluation_complete":true,"dev_rows":[],"watch_rows":[],
+            record!({"run_id":"fixture","baseline_dev":208,"baseline_watch":18,"baseline_errors":2});
+        let e = record!({"new_updates":128,"model_content_hash":"model","final_evaluation_complete":true,"dev_rows":[],"watch_rows":[],
             "dev":{"denominator":256,"exact_matches":180,"generation_error_cases":0},"watch":{"denominator":32,"exact_matches":18,"generation_error_cases":0}});
         let mut c = repair_control();
         c.time_boundary = Some("progress_eval_recorded");
@@ -8797,7 +8782,7 @@ mod tests {
             )
             .is_err()
         );
-        let persisted = serde_json::to_vec(&last).unwrap();
+        let persisted = replica_v3::binary::to_vec(&last).unwrap();
         let mut resumed = repair_control();
         progress_evaluation_boundary(
             &p,
@@ -8828,12 +8813,12 @@ mod tests {
             assert_eq!(streak, [1, 0, 0]);
         }
         for (field, value) in [
-            ("final_evaluation_complete", json!(false)),
-            ("new_updates", json!(256)),
-            ("model_content_hash", json!("wrong")),
-            ("dev", json!({})),
+            ("final_evaluation_complete", record!(false)),
+            ("new_updates", record!(256)),
+            ("model_content_hash", record!("wrong")),
+            ("dev", record!({})),
         ] {
-            let mut bad: Value = serde_json::from_slice(&persisted).unwrap();
+            let mut bad: Value = replica_v3::binary::from_slice(&persisted).unwrap();
             bad[field] = value;
             assert!(
                 progress_evaluation_boundary(
@@ -8937,9 +8922,9 @@ mod tests {
             train_loss: None,
             validation_loss: None,
         };
-        let p = json!({"run_id":"tiny-split","baseline_dev":208,"baseline_watch":18,"baseline_errors":2});
+        let p = record!({"run_id":"tiny-split","baseline_dev":208,"baseline_watch":18,"baseline_errors":2});
         let model = l.model.weight_hash().unwrap();
-        let e = json!({"new_updates":128,"model_content_hash":model,"final_evaluation_complete":true,"dev_rows":[],"watch_rows":[],
+        let e = record!({"new_updates":128,"model_content_hash":model,"final_evaluation_complete":true,"dev_rows":[],"watch_rows":[],
             "dev":{"denominator":256,"exact_matches":180,"generation_error_cases":0},"watch":{"denominator":32,"exact_matches":18,"generation_error_cases":0}});
         let mut control = repair_control();
         control.time_boundary = Some("progress_eval_recorded");
@@ -9053,7 +9038,7 @@ mod tests {
         let mut l = repair_loaded();
         let docs: Vec<_> = cases
             .iter()
-            .map(|e| serde_json::to_vec(e).unwrap())
+            .map(|e| replica_v3::binary::to_vec(e).unwrap())
             .collect();
         l.tokenizer = ByteBpe::train(&docs, &neural::hash(b"cross test only"), 801).unwrap();
         assert_eq!(
@@ -9087,32 +9072,32 @@ mod tests {
         let (none, capacity) = data::crossed_copy_development(&used, 971031).unwrap();
         assert!(none.is_empty());
         assert_eq!(capacity["status"], "CAPACITY");
-        assert_eq!(capacity["one_digit_unseen_unreserved"], json!([]));
+        assert_eq!(capacity["one_digit_unseen_unreserved"], record!([]));
     }
     #[test]
     fn progress_metric_denominator_teacher_and_precancel() {
-        let row = json!({"id":"fixture/0","scene":"fixture","family":"cross/H3/digits-1/kind-0/pattern-0/view-0",
+        let row = record!({"id":"fixture/0","scene":"fixture","family":"cross/H3/digits-1/kind-0/pattern-0/view-0",
             "actual":"센서1의 구역1 이동 지시는 직진이다. [event:1]","expected":"센서1의 구역1 이동 지시는 직진이다. [event:1]",
             "exact_match":true,"error":null,"generation_completed":true,"generation":{"finish":"stop","generated":10},"finish_reason":"stop","eos_index":9,"interruption":null,
             "components":{"entity":true,"citation_exact":true},"teacher_forced_diagnostic_after_generation":{"teacher_forced_correct_tokens":10,"target_tokens_including_eos":10}});
         let mut rows = vec![row; 512];
         for (i, row) in rows.iter_mut().enumerate() {
-            row["id"] = json!(format!("fixture/{}/{i}", i / 4));
-            row["scene"] = json!(format!("fixture/{}", i / 4));
+            row["id"] = record!(format!("fixture/{}/{i}", i / 4));
+            row["scene"] = record!(format!("fixture/{}", i / 4));
         }
         assert_eq!(progress_copy_score(&rows, 512).unwrap()["skill_pass"], true);
         assert_eq!(
             progress_copy_score(&rows[..511], 512).unwrap()["skill_pass"],
             false
         );
-        rows[0]["error"] = json!("UTF-8");
-        rows[0]["exact_match"] = json!(false);
+        rows[0]["error"] = record!("UTF-8");
+        rows[0]["exact_match"] = record!(false);
         let score = progress_copy_score(&rows, 512).unwrap();
         assert_eq!(score["denominator"], 512);
         assert_eq!(score["skill_pass"], false);
         assert_eq!(
             progress_teacher_relation(&rows)["teacher_all_correct_by_free_exact_false_true"],
-            json!([[0, 0], [1, 511]])
+            record!([[0, 0], [1, 511]])
         );
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("unused");
@@ -9124,12 +9109,12 @@ mod tests {
     }
     #[test]
     fn skill_explicit_renewal_preserves_stop_and_rejects_other_terminal() {
-        let previous = json!({"reason":"QUALITY_GUARD","control":{"terminal_reason":"QUALITY_GUARD","observed_conditions":["QUALITY_GUARD"]},
+        let previous = record!({"reason":"QUALITY_GUARD","control":{"terminal_reason":"QUALITY_GUARD","observed_conditions":["QUALITY_GUARD"]},
             "checkpoint_saved":true,"comparison_eligible":false,"candidate_eligible":false,"resume_allowed":false,
             "save_error":null,"cleanup_limit_exceeded":false,"new_updates":128,"bad_streak":0,
             "last_evaluation":{"final_evaluation_complete":true,"new_error_ids":["case/new-invalid"]}});
         let before = previous.clone();
-        assert!(quality_renewal_eligible(&previous, &json!({}), false));
+        assert!(quality_renewal_eligible(&previous, &record!({}), false));
         assert_eq!(before, previous);
         for reason in [
             "CANCELLED",
@@ -9139,8 +9124,8 @@ mod tests {
             "COMPLETED",
         ] {
             let mut bad = previous.clone();
-            bad["reason"] = json!(reason);
-            assert!(!quality_renewal_eligible(&bad, &json!({}), false));
+            bad["reason"] = record!(reason);
+            assert!(!quality_renewal_eligible(&bad, &record!({}), false));
         }
         for key in [
             "save_error",
@@ -9151,42 +9136,42 @@ mod tests {
         ] {
             let mut bad = previous.clone();
             bad.as_object_mut().unwrap().remove(key);
-            assert!(!quality_renewal_eligible(&bad, &json!({}), false), "{key}");
+            assert!(!quality_renewal_eligible(&bad, &record!({}), false), "{key}");
         }
         for (key, value) in [
-            ("save_error", json!("disk error")),
-            ("cleanup_limit_exceeded", json!(true)),
-            ("bad_streak", json!(2)),
-            ("new_updates", json!(512)),
+            ("save_error", record!("disk error")),
+            ("cleanup_limit_exceeded", record!(true)),
+            ("bad_streak", record!(2)),
+            ("new_updates", record!(512)),
         ] {
             let mut bad = previous.clone();
             bad[key] = value;
-            assert!(!quality_renewal_eligible(&bad, &json!({}), false), "{key}");
+            assert!(!quality_renewal_eligible(&bad, &record!({}), false), "{key}");
         }
         assert!(!quality_renewal_eligible(
             &previous,
-            &json!({"renewal":{}}),
+            &record!({"renewal":{}}),
             false
         ));
-        assert!(!quality_renewal_eligible(&previous, &json!({}), true));
+        assert!(!quality_renewal_eligible(&previous, &record!({}), true));
         let mut at512 = previous.clone();
-        at512["new_updates"] = json!(512);
+        at512["new_updates"] = record!(512);
         assert!(quality_renewal_eligible(
             &at512,
-            &json!({"renewal":{}}),
+            &record!({"renewal":{}}),
             true
         ));
         assert!(!quality_renewal_eligible(
             &at512,
-            &json!({"finish_copy_budget":true}),
+            &record!({"finish_copy_budget":true}),
             true
         ));
-        at512["new_updates"] = json!(1024);
-        assert!(!quality_renewal_eligible(&at512, &json!({}), true));
+        at512["new_updates"] = record!(1024);
+        assert!(!quality_renewal_eligible(&at512, &record!({}), true));
     }
     #[test]
     fn skill_generation_guard_growth_resume_and_unchanged_strict_mode() {
-        let evaluation = |n| json!({"dev_rows":(0..n).map(|i|json!({"id":format!("utf8/{i}"),"error_class":"strict_utf8","actual":null})).collect::<Vec<_>>(),"watch_rows":[]});
+        let evaluation = |n| record!({"dev_rows":(0..n).map(|i|record!({"id":format!("utf8/{i}"),"error_class":"strict_utf8","actual":null})).collect::<Vec<_>>(),"watch_rows":[]});
         let mut previous = 4;
         let mut streak = 0;
         let acknowledged = BTreeSet::from(["utf8/0".to_owned()]);
@@ -9206,9 +9191,9 @@ mod tests {
             &mut streak
         ));
         assert_eq!((previous, streak), (4, 1));
-        let persisted = serde_json::to_vec(&(previous, streak)).unwrap();
+        let persisted = replica_v3::binary::to_vec(&(previous, streak)).unwrap();
         let (mut restored_previous, mut restored_streak): (usize, usize) =
-            serde_json::from_slice(&persisted).unwrap();
+            replica_v3::binary::from_slice(&persisted).unwrap();
         assert!(skill_generation_guard(
             &evaluation(5),
             &acknowledged,
@@ -9239,9 +9224,9 @@ mod tests {
             &mut streak
         ));
         for (key, value) in [
-            ("error_class", json!("control_token")),
-            ("actual", json!("")),
-            ("whitespace_only", json!(true)),
+            ("error_class", record!("control_token")),
+            ("actual", record!("")),
+            ("whitespace_only", record!(true)),
         ] {
             let mut bad = evaluation(1);
             bad["dev_rows"][0][key] = value;
@@ -9428,8 +9413,8 @@ mod tests {
             }
             assert_eq!(seen.len(), 4096);
         }
-        let persisted = serde_json::to_vec(&tape).unwrap();
-        let restored: Vec<(Vec<usize>, u64)> = serde_json::from_slice(&persisted).unwrap();
+        let persisted = replica_v3::binary::to_vec(&tape).unwrap();
+        let restored: Vec<(Vec<usize>, u64)> = replica_v3::binary::from_slice(&persisted).unwrap();
         assert_eq!(&tape[193..], &restored[193..]);
         let mut duplicate = episodes;
         duplicate[1].id = duplicate[0].id.clone();
@@ -9437,14 +9422,14 @@ mod tests {
     }
     #[test]
     fn harness_h3_metric_requires_complete_eos_and_entity_citation_thresholds() {
-        let row = json!({"expected":"센서31의 구역1 이동 지시는 동쪽이다. [event:7]","actual":"센서31의 구역1 이동 지시는 동쪽이다. [event:7]",
+        let row = record!({"expected":"센서31의 구역1 이동 지시는 동쪽이다. [event:7]","actual":"센서31의 구역1 이동 지시는 동쪽이다. [event:7]",
             "question":"센서31의 구역1 원문은?","category":0,"family":"skill/H3/test","exact_match":true,"error":null,"interruption":null,
             "finish_reason":"stop","generation":{"finish":"stop","generated":21},"eos_index":20,"generation_completed":true,"components":{"entity":true,"citation_exact":true}});
         let rows: Vec<_> = (0..256)
             .map(|i| {
                 let mut r = row.clone();
-                r["id"] = json!(format!("metric/{i}"));
-                r["scene"] = json!(format!("base/{}", i / 4));
+                r["id"] = record!(format!("metric/{i}"));
+                r["scene"] = record!(format!("base/{}", i / 4));
                 r
             })
             .collect();
@@ -9452,19 +9437,19 @@ mod tests {
         assert_eq!(skill_score(&rows).unwrap()["context_correct"], 256);
         assert_eq!(skill_score(&rows).unwrap()["value_correct"], 256);
         for (field, value) in [
-            ("finish_reason", json!("length")),
+            ("finish_reason", record!("length")),
             ("eos_index", Value::Null),
-            ("generation_completed", json!(false)),
-            ("actual", json!("")),
+            ("generation_completed", record!(false)),
+            ("actual", record!("")),
         ] {
             let mut bad = rows.clone();
             bad[0][field] = value;
             if field == "actual" {
-                bad[0]["exact_match"] = json!(false);
+                bad[0]["exact_match"] = record!(false);
             }
             if field == "finish_reason" {
-                bad[0]["generation"]["finish"] = json!("length");
-                bad[0]["exact_match"] = json!(false);
+                bad[0]["generation"]["finish"] = record!("length");
+                bad[0]["exact_match"] = record!(false);
             }
             assert_eq!(skill_score(&bad).unwrap()["skill_pass"], false, "{field}");
             assert_eq!(skill_score(&bad).unwrap()["denominator"], 256);
@@ -9472,9 +9457,9 @@ mod tests {
         for field in ["entity", "citation_exact"] {
             let mut bad = rows.clone();
             for row in &mut bad[..3] {
-                row["components"][field] = json!(false);
-                row["exact_match"] = json!(false);
-                row["actual"] = json!("잘못된 답변");
+                row["components"][field] = record!(false);
+                row["exact_match"] = record!(false);
+                row["actual"] = record!("잘못된 답변");
             }
             assert_eq!(skill_score(&bad).unwrap()["skill_pass"], false, "{field}");
         }
@@ -9485,8 +9470,8 @@ mod tests {
         let segment = dir.path().join("segment");
         std::fs::create_dir(&segment).unwrap();
         save(
-            &dir.path().join("policy.json"),
-            &json!({"stage":"H3","constant_lr":3e-5}),
+            &dir.path().join("policy.r3b"),
+            &record!({"stage":"H3","constant_lr":3e-5}),
         )
         .unwrap();
         let checkpoint = segment.join("must-not-load");
@@ -9508,11 +9493,11 @@ mod tests {
         let source = dir.path().join("source");
         let output = dir.path().join("copy");
         data::prepare(&source, 317, 20_000, &[], "entity-cue").unwrap();
-        let source_hash = file_hash(&source.join("train.json")).unwrap();
+        let source_hash = file_hash(&source.join("train.r3b")).unwrap();
         data::copy_curriculum(&source, &output, 917_260_311).unwrap();
         let (_, train, dev) = data::load_legacy(&output).unwrap();
         let seal_descriptor: data::Split =
-            serde_json::from_value(read_json(&output.join("seal-manifest.json")).unwrap()).unwrap();
+            replica_v3::binary::from_value(read_metadata(&output.join("seal-manifest.r3b")).unwrap()).unwrap();
         let seal = data::load_split_legacy(&output, &seal_descriptor).unwrap();
         let tok_path = dir.path().join("tokenizer");
         data::tokenizer(&output, &tok_path, 4096).unwrap();
@@ -9548,7 +9533,7 @@ mod tests {
         let extra = duplicate[0].request.evidence.items[0].clone();
         duplicate[0].request.evidence.items.push(extra);
         assert!(verify_copy_curriculum(&train, &dev, &duplicate, &l).is_err());
-        assert_eq!(file_hash(&source.join("train.json")).unwrap(), source_hash);
+        assert_eq!(file_hash(&source.join("train.r3b")).unwrap(), source_hash);
     }
     fn training_run<'a>(checkpoint: &'a Path, output: &'a Path) -> Run<'a> {
         Run {
@@ -9790,7 +9775,7 @@ mod tests {
     fn repair_corpus(root: &Path, validation: &[Episode]) -> data::CorpusManifest {
         std::fs::create_dir_all(root).unwrap();
         let write = |name: &str, episodes: &[Episode]| {
-            let bytes = serde_json::to_vec(episodes).unwrap();
+            let bytes = replica_v3::binary::to_vec(episodes).unwrap();
             std::fs::write(root.join(name), &bytes).unwrap();
             data::Split {
                 file: name.into(),
@@ -9807,10 +9792,10 @@ mod tests {
             generator: "independent".into(),
             seed: 0,
             split_rule: "distinct".into(),
-            train: write("train.json", &[repair_episode("train/0")]),
-            validation: write("validation.json", validation),
+            train: write("train.r3b", &[repair_episode("train/0")]),
+            validation: write("validation.r3b", validation),
         };
-        std::fs::write(root.join("manifest.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+        std::fs::write(root.join("manifest.r3b"), replica_v3::binary::to_vec(&m).unwrap()).unwrap();
         m
     }
     fn repair_frozen(root: &Path, validation: &[Episode], l: &Loaded) -> Frozen {
@@ -9827,7 +9812,7 @@ mod tests {
         .unwrap();
         Frozen {
             version: 1,
-            registry: json!({}),
+            registry: record!({}),
             corpus: corpus.clone(),
             parent_corpus: corpus,
             start,
@@ -9852,12 +9837,12 @@ mod tests {
             repair_episode("validation/1"),
         ];
         let f = repair_frozen(dir.path(), &episodes, &l);
-        let fixture = dir.path().join("frozen.json");
+        let fixture = dir.path().join("frozen.r3b");
         save(&fixture, &f).unwrap();
         episodes[0].request.input = "changed same ID".into();
         repair_corpus(&f.corpus, &episodes); // Updated manifest is valid for the changed bytes.
         assert!(data::load_legacy(&f.corpus).is_ok());
-        let output = dir.path().join("new.jsonl");
+        let output = dir.path().join("new.r3rows");
         let mut control = repair_control();
         let result = replay(
             &fixture,
@@ -9920,9 +9905,9 @@ mod tests {
             });
             assert!(guarded.is_err());
             assert_eq!(model_call_count, 0);
-            let fixture = dir.path().join(format!("frozen-{mutation}.json"));
+            let fixture = dir.path().join(format!("frozen-{mutation}.r3b"));
             save(&fixture, &f).unwrap();
-            let existing = dir.path().join("existing.jsonl");
+            let existing = dir.path().join("existing.r3rows");
             std::fs::write(&existing, b"preserve output").unwrap();
             // Binding error, not a missing-model error, must take precedence even here.
             let error = replay(
@@ -9943,8 +9928,8 @@ mod tests {
         let mut manifest = repair_corpus(&f.corpus, &original);
         manifest.validation.sha256 = neural::hash(b"wrong manifest");
         std::fs::write(
-            f.corpus.join("manifest.json"),
-            serde_json::to_vec(&manifest).unwrap(),
+            f.corpus.join("manifest.r3b"),
+            replica_v3::binary::to_vec(&manifest).unwrap(),
         )
         .unwrap();
         assert!(replay_cases(&f, "all").is_err());
@@ -9966,9 +9951,9 @@ mod tests {
             repair_episode("validation/1"),
         ];
         let f = repair_frozen(dir.path(), &cases, &l);
-        let fixture = dir.path().join("frozen.json");
+        let fixture = dir.path().join("frozen.r3b");
         save(&fixture, &f).unwrap();
-        let output = dir.path().join("all.jsonl");
+        let output = dir.path().join("all.r3rows");
         let mut control = repair_control();
         replay(
             &fixture,
@@ -9987,7 +9972,7 @@ mod tests {
         assert_eq!(header["evaluated_cases_hash"], digest(&cases).unwrap());
         assert_eq!(rows.len(), 2);
         assert_eq!(control.generation_calls, 3);
-        let matched = dir.path().join("matched.jsonl");
+        let matched = dir.path().join("matched.r3rows");
         let mut second = repair_control();
         replay(
             &fixture,
@@ -10189,7 +10174,7 @@ mod tests {
             }));
             // Enter the same final-evaluation/finalization path used at n=50, no optimizer calls.
             let mut evaluation = arm_evaluation(&l, &watch, &train, &mut c).unwrap();
-            evaluation["new_updates"] = json!(50);
+            evaluation["new_updates"] = record!(50);
             let complete = evaluation["final_evaluation_complete"] == true;
             let mut saves = 0;
             let report = finish_arm(&mut c, complete, |_| {
@@ -10361,7 +10346,7 @@ mod tests {
         e.request.limits.context_tokens = 512;
         e.request.limits.max_tokens = 128;
         e.answer = answer.into();
-        let bytes = serde_json::to_vec(&e).unwrap();
+        let bytes = replica_v3::binary::to_vec(&e).unwrap();
         let tok = ByteBpe::train(
             &[bytes.clone(), bytes],
             &neural::hash(b"independent grammar fixture"),
@@ -10442,7 +10427,7 @@ mod tests {
         arm_control.observe(StopReason::Cancelled);
         let result = finish_arm(&mut arm_control, false, |_| Ok(()));
         for arm in [&c, &w] {
-            save(&arm.join("result.json"), &result).unwrap();
+            save(&arm.join("result.r3b"), &result).unwrap();
         }
         let mut budget = repair_control();
         let out = dir.path().join("close");
@@ -10460,7 +10445,7 @@ mod tests {
             .is_err()
         );
         assert_eq!(budget.generation_calls, 0);
-        let summary = read_json(&out.join("summary.json"))
+        let summary = read_metadata(&out.join("summary.r3b"))
             .expect("close must retain the actual arm disqualification");
         assert_eq!(summary["comparison_eligible"], false);
         assert_eq!(summary["candidate_eligible"], false);
@@ -10508,7 +10493,7 @@ mod tests {
             );
             arm["error"] = Value::Null;
             if boundary == "explicit_false" {
-                arm["comparison_eligible"] = json!(false);
+                arm["comparison_eligible"] = record!(false);
             }
             if boundary == "missing" {
                 arm.as_object_mut()
@@ -10518,12 +10503,12 @@ mod tests {
             let mut close_control = repair_control();
             let result = finish_close(
                 dir.path(),
-                json!({"candidate_eligible":true}),
+                record!({"candidate_eligible":true}),
                 &[arm.clone(), arm],
                 true,
                 &mut close_control,
             );
-            let report = read_json(&dir.path().join("summary.json")).unwrap();
+            let report = read_metadata(&dir.path().join("summary.r3b")).unwrap();
             assert_eq!(
                 result.is_ok(),
                 boundary == "complete",
@@ -10543,7 +10528,7 @@ mod tests {
             "INTEGRITY_FAIL",
         ] {
             let mut stopped = arm.clone();
-            stopped["reason"] = json!(failure);
+            stopped["reason"] = record!(failure);
             assert!(!arm_terminal_eligible(&stopped));
         }
         let dir = tempfile::tempdir().unwrap();
@@ -10552,7 +10537,7 @@ mod tests {
         assert!(
             finish_close(
                 dir.path(),
-                json!({"candidate_eligible":true}),
+                record!({"candidate_eligible":true}),
                 &[arm.clone(), arm],
                 true,
                 &mut final_cancel
@@ -10560,7 +10545,7 @@ mod tests {
             .is_err()
         );
         assert_eq!(
-            read_json(&dir.path().join("summary.json")).unwrap()["candidate_eligible"],
+            read_metadata(&dir.path().join("summary.r3b")).unwrap()["candidate_eligible"],
             false
         );
     }
@@ -10602,33 +10587,33 @@ mod tests {
             &l.optimizer,
         )
         .unwrap();
-        let tape: Vec<_> = (1..=50).map(|i| json!([[i], i])).collect();
-        let policy = json!({"fixture_hash":"4".repeat(64),"source_id":l.manifest.source_id,"binary_hash":"5".repeat(64),"config":config,"parent":{"manifest":{"training":{"step":0}}},"tape":tape,"tape_hash":digest(&tape).unwrap()});
-        save(&dir.path().join("policy.json"), &policy).unwrap();
-        let trace: Vec<_> = (1..=50).map(|i|json!({"new_update":i,"cumulative_model_step":i,"optimizer_step":i,"schedule_step":i,"lr":config.learning_rate(i),"indices":[i],"ids":[format!("fixture-{i}")],"sampler_state":i,"input_tokens":2,"target_tokens":1})).collect();
-        let row = json!({"generation_completed":true,"interruption":null});
-        let eval = json!({"watch_rows":vec![row.clone();32],"train_exposure_panel":vec![row;16],"final_evaluation_complete":true,"comparison_eligible":true,"not_run_count":0,"attempted_case_count":48,"completed_generation_count":48,"planned_case_count":48,"terminal_reason":null,"model_step":50,"model_content_hash":l.model.weight_hash().unwrap()});
-        save(&dir.path().join("eval-050.json"), &eval).unwrap();
+        let tape: Vec<_> = (1..=50).map(|i| record!([[i], i])).collect();
+        let policy = record!({"fixture_hash":"4".repeat(64),"source_id":l.manifest.source_id,"binary_hash":"5".repeat(64),"config":config,"parent":{"manifest":{"training":{"step":0}}},"tape":tape,"tape_hash":digest(&tape).unwrap()});
+        save(&dir.path().join("policy.r3b"), &policy).unwrap();
+        let trace: Vec<_> = (1..=50).map(|i|record!({"new_update":i,"cumulative_model_step":i,"optimizer_step":i,"schedule_step":i,"lr":config.learning_rate(i),"indices":[i],"ids":[format!("fixture-{i}")],"sampler_state":i,"input_tokens":2,"target_tokens":1})).collect();
+        let row = record!({"generation_completed":true,"interruption":null});
+        let eval = record!({"watch_rows":vec![row.clone();32],"train_exposure_panel":vec![row;16],"final_evaluation_complete":true,"comparison_eligible":true,"not_run_count":0,"attempted_case_count":48,"completed_generation_count":48,"planned_case_count":48,"terminal_reason":null,"model_step":50,"model_content_hash":l.model.weight_hash().unwrap()});
+        save(&dir.path().join("eval-050.r3b"), &eval).unwrap();
         let mut control = repair_control();
         let mut arm = finish_arm(&mut control, true, |_| Ok(()));
         for (key, value) in [
             ("error", Value::Null),
-            ("new_updates", json!(50)),
-            ("cumulative_model_step", json!(50)),
+            ("new_updates", record!(50)),
+            ("cumulative_model_step", record!(50)),
             (
                 "policy_sha256",
-                json!(file_hash(&dir.path().join("policy.json")).unwrap()),
+                record!(file_hash(&dir.path().join("policy.r3b")).unwrap()),
             ),
             (
                 "checkpoint_file_sha256",
-                json!(file_hash(&dir.path().join("final")).unwrap()),
+                record!(file_hash(&dir.path().join("final")).unwrap()),
             ),
             (
                 "final_evaluation_sha256",
-                json!(file_hash(&dir.path().join("eval-050.json")).unwrap()),
+                record!(file_hash(&dir.path().join("eval-050.r3b")).unwrap()),
             ),
             ("last_evaluation", eval.clone()),
-            ("model_content_hash", json!(l.model.weight_hash().unwrap())),
+            ("model_content_hash", record!(l.model.weight_hash().unwrap())),
         ] {
             arm[key] = value;
         }
@@ -10639,7 +10624,7 @@ mod tests {
         std::fs::create_dir(&good).unwrap();
         finish_close(
             &good,
-            json!({"candidate_eligible":true}),
+            record!({"candidate_eligible":true}),
             &[arm.clone(), arm.clone()],
             true,
             &mut repair_control(),
@@ -10652,27 +10637,27 @@ mod tests {
             "policy_sha256",
         ] {
             let mut bad = arm.clone();
-            bad[key] = json!("f".repeat(64));
+            bad[key] = record!("f".repeat(64));
             assert!(
                 verify_arm_receipt(dir.path(), &policy, &trace, &bad, &"4".repeat(64)).is_err(),
                 "{key}"
             );
         }
         let mut bad_clock = trace.clone();
-        bad_clock[49]["optimizer_step"] = json!(49);
+        bad_clock[49]["optimizer_step"] = record!(49);
         assert!(
             verify_arm_receipt(dir.path(), &policy, &bad_clock, &arm, &"4".repeat(64)).is_err()
         );
         let mut partial = eval;
-        partial["train_exposure_panel"] = json!([]);
-        partial["final_evaluation_complete"] = json!(false);
+        partial["train_exposure_panel"] = record!([]);
+        partial["final_evaluation_complete"] = record!(false);
         std::fs::write(
-            dir.path().join("eval-050.json"),
-            serde_json::to_vec(&partial).unwrap(),
+            dir.path().join("eval-050.r3b"),
+            replica_v3::binary::to_vec(&partial).unwrap(),
         )
         .unwrap();
         arm["final_evaluation_sha256"] =
-            json!(file_hash(&dir.path().join("eval-050.json")).unwrap());
+            record!(file_hash(&dir.path().join("eval-050.r3b")).unwrap());
         arm["last_evaluation"] = partial;
         assert!(verify_arm_receipt(dir.path(), &policy, &trace, &arm, &"4".repeat(64)).is_err());
         assert_eq!(control.generation_calls, 0);
@@ -10817,9 +10802,9 @@ mod tests {
         };
         let a = arm_config(&base, "C").unwrap();
         let b = arm_config(&base, "W").unwrap();
-        let mut av = serde_json::to_value(&a).unwrap();
-        let bv = serde_json::to_value(&b).unwrap();
-        av["first_target_weight"] = json!(1.);
+        let mut av = replica_v3::binary::to_value(&a).unwrap();
+        let bv = replica_v3::binary::to_value(&b).unwrap();
+        av["first_target_weight"] = record!(1.);
         assert_eq!(av, bv);
         let (mut r1, mut r2) = (Rng::new(73), Rng::new(73));
         let pool: Vec<_> = (0..64).collect();
@@ -10922,12 +10907,12 @@ mod tests {
     }
     #[test]
     fn recovery_ledger_counts_decode_errors_and_rejects_duplicates() {
-        let good = json!({"id":"a","family":"qa/test","category":0,"actual":"ok","expected":"ok","error":null,"generation":{"finish":"stop","generated":2},"exact_match":true});
-        let bad = json!({"id":"b","family":"copy/test","category":0,"actual":null,"expected":"x","error":"invalid UTF-8","generation":{"finish":"stop","generated":3},"exact_match":false});
+        let good = record!({"id":"a","family":"qa/test","category":0,"actual":"ok","expected":"ok","error":null,"generation":{"finish":"stop","generated":2},"exact_match":true});
+        let bad = record!({"id":"b","family":"copy/test","category":0,"actual":null,"expected":"x","error":"invalid UTF-8","generation":{"finish":"stop","generated":3},"exact_match":false});
         let s = summarize(&[good.clone(), bad]).unwrap();
         assert_eq!(s["denominator"], 2);
-        assert_eq!(s["qa"], json!([1, 1]));
-        assert_eq!(s["auxiliary"], json!([0, 1]));
+        assert_eq!(s["qa"], record!([1, 1]));
+        assert_eq!(s["auxiliary"], record!([0, 1]));
         assert_eq!(s["invalid_utf8"], 1);
         assert!(summarize(&[good.clone(), good]).is_err());
     }
@@ -11032,7 +11017,7 @@ mod tests {
     }
     #[test]
     fn progress_fork_required_fields_closed_resume_and_final_cancel() {
-        let endpoint = json!({"reason":"SCREENING_BUDGET_REACHED","comparison_eligible":true,"cleanup_limit_exceeded":false,"new_updates":512,"checkpoint_saved":true,
+        let endpoint = record!({"reason":"SCREENING_BUDGET_REACHED","comparison_eligible":true,"cleanup_limit_exceeded":false,"new_updates":512,"checkpoint_saved":true,
             "save_error":null,"final_evaluation_complete":true,"control":{"terminal_reason":"COMPLETED","observed_conditions":[]},"resume_allowed":false});
         assert!(progress_endpoint_safe(&endpoint));
         for key in endpoint.as_object().unwrap().keys() {
@@ -11041,9 +11026,9 @@ mod tests {
             assert!(!progress_endpoint_safe(&bad), "{key}");
         }
         let mut interrupted = endpoint.clone();
-        interrupted["control"]["terminal_reason"] = json!("CANCELLED");
+        interrupted["control"]["terminal_reason"] = record!("CANCELLED");
         assert!(!progress_endpoint_safe(&interrupted));
-        let policy = json!({"contract":PROGRESS_CONTRACT,"entry":"EXPERIMENT_FORK","parent_sha256":"a".repeat(64),"maximum_updates":512,
+        let policy = record!({"contract":PROGRESS_CONTRACT,"entry":"EXPERIMENT_FORK","parent_sha256":"a".repeat(64),"maximum_updates":512,
             "max_input_tokens":2_000_000,"max_target_tokens":500_000,"h3_max_updates":2048,"h3_seconds":7200,"normal_policy":"normal_greedy_v1","lr_policy":"C"});
         assert!(progress_policy_valid(&policy));
         for key in [
@@ -11062,21 +11047,21 @@ mod tests {
             bad.as_object_mut().unwrap().remove(key);
             assert!(!progress_policy_valid(&bad), "{key}");
         }
-        let closed = json!({"reason":"SCREENING_BUDGET_REACHED","resume_allowed":false,"checkpoint_saved":true,"new_updates":1024});
-        let bytes = serde_json::to_vec(&closed).unwrap();
+        let closed = record!({"reason":"SCREENING_BUDGET_REACHED","resume_allowed":false,"checkpoint_saved":true,"new_updates":1024});
+        let bytes = replica_v3::binary::to_vec(&closed).unwrap();
         assert!(!progress_time_resume(&closed));
-        assert_eq!(bytes, serde_json::to_vec(&closed).unwrap());
-        let time = json!({"reason":"TIME_BUDGET","resume_allowed":true,"checkpoint_saved":true,"control":{"observed_conditions":["TIME_BUDGET"]},"save_error":null,"cleanup_limit_exceeded":false,"new_updates":256});
+        assert_eq!(bytes, replica_v3::binary::to_vec(&closed).unwrap());
+        let time = record!({"reason":"TIME_BUDGET","resume_allowed":true,"checkpoint_saved":true,"control":{"observed_conditions":["TIME_BUDGET"]},"save_error":null,"cleanup_limit_exceeded":false,"new_updates":256});
         assert!(progress_time_resume(&time));
         for reason in ["CANCELLED", "QUALITY_GUARD", "INTEGRITY_FAIL"] {
             let mut bad = time.clone();
-            bad["reason"] = json!(reason);
+            bad["reason"] = record!(reason);
             assert!(!progress_time_resume(&bad));
         }
         let dir = tempfile::tempdir().unwrap();
         let segment = dir.path().join("segment");
         std::fs::create_dir(&segment).unwrap();
-        save(&dir.path().join("policy.json"), &policy).unwrap();
+        save(&dir.path().join("policy.r3b"), &policy).unwrap();
         let checkpoint = segment.join("not-loaded");
         let output = dir.path().join("not-created");
         let mut run = training_run(&checkpoint, &output);
@@ -11104,31 +11089,31 @@ mod tests {
     }
     #[test]
     fn progress_guards_keep_errors_in_denominator_and_require_streaks() {
-        let p = json!({"baseline_dev":208,"baseline_watch":18,"baseline_errors":2});
-        let mut e = json!({"final_evaluation_complete":true,"dev":{"denominator":256,"exact_matches":208,"generation_error_cases":2},"watch":{"denominator":32,"exact_matches":18,"generation_error_cases":0}});
+        let p = record!({"baseline_dev":208,"baseline_watch":18,"baseline_errors":2});
+        let mut e = record!({"final_evaluation_complete":true,"dev":{"denominator":256,"exact_matches":208,"generation_error_cases":2},"watch":{"denominator":32,"exact_matches":18,"generation_error_cases":0}});
         let mut streak = [0; 3];
         assert!(!progress_guard(&p, &e, &mut streak).unwrap());
-        e["dev"]["generation_error_cases"] = json!(4);
+        e["dev"]["generation_error_cases"] = record!(4);
         assert!(!progress_guard(&p, &e, &mut streak).unwrap());
-        e["dev"]["exact_matches"] = json!(182);
+        e["dev"]["exact_matches"] = record!(182);
         assert!(!progress_guard(&p, &e, &mut streak).unwrap());
         assert!(progress_guard(&p, &e, &mut streak).unwrap());
-        e["dev"]["exact_matches"] = json!(208);
+        e["dev"]["exact_matches"] = record!(208);
         assert!(!progress_guard(&p, &e, &mut streak).unwrap());
         assert_eq!(streak, [0; 3]);
-        e["watch"]["exact_matches"] = json!(14);
+        e["watch"]["exact_matches"] = record!(14);
         assert!(!progress_guard(&p, &e, &mut streak).unwrap());
         assert!(progress_guard(&p, &e, &mut streak).unwrap());
-        e["watch"]["exact_matches"] = json!(18);
-        e["dev"]["generation_error_cases"] = json!(8);
+        e["watch"]["exact_matches"] = record!(18);
+        e["dev"]["generation_error_cases"] = record!(8);
         assert!(!progress_guard(&p, &e, &mut streak).unwrap());
         assert!(progress_guard(&p, &e, &mut streak).unwrap());
-        e["dev"]["generation_error_cases"] = json!(58);
+        e["dev"]["generation_error_cases"] = record!(58);
         assert!(progress_guard(&p, &e, &mut [0; 3]).unwrap());
-        e["dev"]["denominator"] = json!(255);
+        e["dev"]["denominator"] = record!(255);
         assert!(progress_guard(&p, &e, &mut streak).is_err());
-        e["dev"]["denominator"] = json!(256);
-        e["final_evaluation_complete"] = json!(false);
+        e["dev"]["denominator"] = record!(256);
+        e["final_evaluation_complete"] = record!(false);
         assert!(progress_guard(&p, &e, &mut streak).is_err());
     }
     #[test]
@@ -11148,18 +11133,18 @@ mod tests {
                 })
             })
             .collect();
-        let bytes = serde_json::to_vec(&old).unwrap();
-        std::fs::write(root.join("train.json"), &bytes).unwrap();
+        let bytes = replica_v3::binary::to_vec(&old).unwrap();
+        std::fs::write(root.join("train.r3b"), &bytes).unwrap();
         manifest.train = data::Split {
-            file: "train.json".into(),
+            file: "train.r3b".into(),
             sha256: neural::hash(&bytes),
             bytes: bytes.len(),
             documents: 4096,
             tokens: None,
         };
         std::fs::write(
-            root.join("manifest.json"),
-            serde_json::to_vec(&manifest).unwrap(),
+            root.join("manifest.r3b"),
+            replica_v3::binary::to_vec(&manifest).unwrap(),
         )
         .unwrap();
         let output = dir.path().join("pair");
@@ -11175,7 +11160,7 @@ mod tests {
         let mut l = repair_loaded();
         let docs: Vec<_> = f[2048..]
             .iter()
-            .map(|e| serde_json::to_vec(e).unwrap())
+            .map(|e| replica_v3::binary::to_vec(e).unwrap())
             .collect();
         l.tokenizer =
             ByteBpe::train(&docs, &neural::hash(b"renewal test tokenizer only"), 801).unwrap();
@@ -11193,7 +11178,7 @@ mod tests {
         let tapes = progress_renewal_tapes(&old, 19177).unwrap();
         assert_eq!(tapes, progress_renewal_tapes(&old, 19177).unwrap());
         let restored: [Vec<(Vec<usize>, u64)>; 2] =
-            serde_json::from_slice(&serde_json::to_vec(&tapes).unwrap()).unwrap();
+            replica_v3::binary::from_slice(&replica_v3::binary::to_vec(&tapes).unwrap()).unwrap();
         for arm in 0..2 {
             let data = if arm == 0 { &f } else { &n };
             let mut draws = BTreeMap::<usize, usize>::new();
@@ -11224,8 +11209,8 @@ mod tests {
         std::fs::create_dir(&again).unwrap();
         data::renewed_copy_curricula(&original, &dev, &again, 82119).unwrap();
         assert_eq!(
-            file_hash(&output.join("corpus-N/train.json")).unwrap(),
-            file_hash(&again.join("corpus-N/train.json")).unwrap()
+            file_hash(&output.join("corpus-N/train.r3b")).unwrap(),
+            file_hash(&again.join("corpus-N/train.r3b")).unwrap()
         );
     }
     #[test]
@@ -11329,8 +11314,8 @@ mod tests {
                 optimizer_hash(&restored_adam.moments).unwrap()
             );
             assert_eq!(
-                serde_json::to_value(state).unwrap(),
-                serde_json::to_value(restored_state).unwrap()
+                replica_v3::binary::to_value(state).unwrap(),
+                replica_v3::binary::to_value(restored_state).unwrap()
             );
         }
         println!(
@@ -11339,10 +11324,10 @@ mod tests {
     }
     #[test]
     fn progress_lr_native_split_adam_clock_and_cursor_parity() {
-        let diagnostic = json!({"loss":f64::from(0.009906131_f32)});
+        let diagnostic = record!({"loss":f64::from(0.009906131_f32)});
         let stored: Value =
-            serde_json::from_slice(&serde_json::to_vec(&diagnostic).unwrap()).unwrap();
-        assert_ne!(diagnostic, stored); // The locked JSON reader can round a diagnostic f64 by one ULP.
+            replica_v3::binary::from_slice(&replica_v3::binary::to_vec(&diagnostic).unwrap()).unwrap();
+        assert_eq!(diagnostic, stored); // Native metadata preserves the original f64 bits.
         assert_eq!(progress_snapshot(&diagnostic).unwrap(), stored);
         assert!(progress_lr("L", 0).is_err());
         assert_eq!(progress_lr("C", 512).unwrap(), 3e-5);
@@ -11408,6 +11393,7 @@ mod tests {
                 rng.next_u64();
                 s.sampler_state = rng.state;
             };
+            state.resume_binding = Some(checkpoint::ResumeBinding::default_for(&state, &l.tokenizer));
             let mut adam = Adam::new(&l.model.vars).unwrap();
             update(&l, &mut adam, &mut state, 63);
             save_arm(
@@ -11436,8 +11422,8 @@ mod tests {
                 optimizer_hash(&other.moments).unwrap()
             );
             assert_eq!(
-                serde_json::to_value(state).unwrap(),
-                serde_json::to_value(other_state).unwrap()
+                replica_v3::binary::to_value(state).unwrap(),
+                replica_v3::binary::to_value(other_state).unwrap()
             );
         }
         println!(

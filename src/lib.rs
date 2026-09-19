@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod archive;
+pub mod binary;
 pub mod codec;
 pub mod event;
 pub mod journal;
@@ -35,7 +36,7 @@ pub enum Error {
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
-    Json(#[from] serde_json::Error),
+    Binary(#[from] crate::binary::Error),
     #[error(transparent)]
     Tensor(#[from] candle_core::Error),
 }

@@ -350,7 +350,7 @@ fn artifact_probe(
             ));
         }
     };
-    let value: serde_json::Value = serde_json::from_slice(&read_bounded(cases, 64 * 1024 * 1024)?)?;
+    let value: replica_v3::binary::Value = replica_v3::binary::from_slice(&read_bounded(cases, 64 * 1024 * 1024)?)?;
     let rows = value
         .as_array()
         .or_else(|| value.get("train").and_then(|v| v.as_array()))
@@ -359,7 +359,7 @@ fn artifact_probe(
         return Err(Error::Invalid("probe case bound".into()));
     }
     for row in rows.iter().take(limit) {
-        let request: model::ModelRequest = serde_json::from_value(row["request"].clone())?;
+        let request: model::ModelRequest = replica_v3::binary::from_value(row["request"].clone())?;
         let prompt = loaded.tokenizer.prepare(
             &request,
             loaded.model.config.context as u32,
@@ -387,10 +387,7 @@ fn artifact_probe(
             ),
             Err(e) => (Vec::new(), String::new(), format!("ERROR:{e}")),
         };
-        println!(
-            "{}",
-            serde_json::json!({"id":row["id"],"prompt_digest":prompt.token_digest,"logits":logits,"tokens":tokens,"text":text,"finish":finish,"weights_content":loaded.model.weights_content_id()?,"semantic_tokenizer":loaded.tokenizer.semantic_id(),"tensor_bytes_digest":hash(&loaded.model.vars["embedding"].flatten_all()?.to_vec1::<f32>()?.iter().flat_map(|x|x.to_le_bytes()).collect::<Vec<_>>()),"relative_regression_only":true})
-        );
+        replica_v3::binary::print_record(&replica_v3::binary::record!({"id":row["id"],"prompt_digest":prompt.token_digest,"logits":logits,"tokens":tokens,"text":text,"finish":finish,"weights_content":loaded.model.weights_content_id()?,"semantic_tokenizer":loaded.tokenizer.semantic_id(),"tensor_bytes_digest":hash(&loaded.model.vars["embedding"].flatten_all()?.to_vec1::<f32>()?.iter().flat_map(|x|x.to_le_bytes()).collect::<Vec<_>>()),"relative_regression_only":true}))?;
     }
     Ok(())
 }
@@ -398,10 +395,10 @@ fn kernel_profile(checkpoint_path: &std::path::Path, fixture: &std::path::Path) 
     use candle_core::{Device, Tensor};
     use replica_v3::neural::{checkpoint, read_bounded, transformer::ForwardTimings};
     let loaded = checkpoint::load(checkpoint_path, Device::Cpu, false)?;
-    let frozen: serde_json::Value =
-        serde_json::from_slice(&read_bounded(fixture, 2 * 1024 * 1024)?)?;
+    let frozen: replica_v3::binary::Value =
+        replica_v3::binary::from_slice(&read_bounded(fixture, 2 * 1024 * 1024)?)?;
     let request: model::ModelRequest =
-        serde_json::from_value(frozen["train"][0]["request"].clone())?;
+        replica_v3::binary::from_value(frozen["train"][0]["request"].clone())?;
     let prompt = loaded.tokenizer.prepare(
         &request,
         loaded.model.config.context as u32,
@@ -481,10 +478,10 @@ fn kernel_compare(checkpoint_path: &std::path::Path, fixture: &std::path::Path) 
         transformer::{Kernel, decode_linear},
     };
     let mut loaded = checkpoint::load(checkpoint_path, Device::Cpu, false)?;
-    let frozen: serde_json::Value =
-        serde_json::from_slice(&read_bounded(fixture, 2 * 1024 * 1024)?)?;
+    let frozen: replica_v3::binary::Value =
+        replica_v3::binary::from_slice(&read_bounded(fixture, 2 * 1024 * 1024)?)?;
     let request: model::ModelRequest =
-        serde_json::from_value(frozen["train"][0]["request"].clone())?;
+        replica_v3::binary::from_value(frozen["train"][0]["request"].clone())?;
     let prompt = loaded.tokenizer.prepare(
         &request,
         loaded.model.config.context as u32,
@@ -591,119 +588,10 @@ fn kernel_compare(checkpoint_path: &std::path::Path, fixture: &std::path::Path) 
     );
     Ok(())
 }
-// Explicit P0 audit of a frozen legacy artifact. Never opens a user database or
+// Explicit audit of a native artifact. Never opens a user database or
 // publishes a replacement checkpoint; save timing uses an owned temporary path.
 fn storage_audit(path: &std::path::Path) -> Result<()> {
-    use replica_v3::neural::{checkpoint, hash, read_bounded};
-    let (manifest, tokenizer) = checkpoint::legacy_metadata(path)?;
-    let start = Instant::now();
-    let bytes = read_bounded(
-        &path.join("weights.safetensors"),
-        manifest.architecture.parameters() * 12 + 1024 * 1024,
-    )?;
-    let read_ms = elapsed(start);
-    let start = Instant::now();
-    let digest = hash(&bytes);
-    let hash_ms = elapsed(start);
-    if digest != manifest.weights_sha256 || bytes.len() != manifest.weights_bytes {
-        return Err(Error::Corrupt("audit checkpoint identity".into()));
-    }
-    let header_bytes = u64::from_le_bytes(
-        bytes
-            .get(..8)
-            .ok_or_else(|| Error::Corrupt("tensor header".into()))?
-            .try_into()
-            .map_err(|_| Error::Corrupt("tensor header".into()))?,
-    );
-    let start = Instant::now();
-    let tensors =
-        safetensors::SafeTensors::deserialize(&bytes).map_err(|e| Error::Corrupt(e.to_string()))?;
-    let mut names = tensors.names();
-    names.sort();
-    let mut totals = [0usize; 4];
-    println!("| tensor | shape | numel | dtype | bytes | 역할 |");
-    println!("|---|---|---:|---|---:|---|");
-    for name in names {
-        let tensor = tensors
-            .tensor(name)
-            .map_err(|e| Error::Corrupt(e.to_string()))?;
-        let (role, index) = if name.starts_with("model.") {
-            ("MODEL", 0)
-        } else if name.starts_with("adam.m.") {
-            ("MOMENT1", 1)
-        } else if name.starts_with("adam.v.") {
-            ("MOMENT2", 2)
-        } else {
-            ("OTHER", 3)
-        };
-        totals[index] += tensor.data().len();
-        if tensor.dtype() != safetensors::Dtype::F32
-            || tensor
-                .data()
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .any(|v| !f32::from_le_bytes(*v).is_finite())
-        {
-            return Err(Error::Corrupt(format!("audit invalid tensor {name}")));
-        }
-        println!(
-            "| {name} | {:?} | {} | {:?} | {} | {role} |",
-            tensor.shape(),
-            tensor.shape().iter().product::<usize>(),
-            tensor.dtype(),
-            tensor.data().len()
-        );
-    }
-    let inspect_ms = elapsed(start);
-    if totals.iter().sum::<usize>() as u64 + header_bytes + 8 != bytes.len() as u64 {
-        return Err(Error::Corrupt("audit tensor byte accounting".into()));
-    }
-    println!(
-        "\nweights_sha256={digest}; file_bytes={}; length_prefix=8; JSON_header_bytes={header_bytes}; role_bytes={totals:?}",
-        bytes.len()
-    );
-    println!(
-        "read_ms={read_ms:.3}; hash_ms={hash_ms:.3}; tensor_inventory_and_finite_scan_ms={inspect_ms:.3}; cache=OS_CACHE_NOT_FLUSHED"
-    );
-    for file in ["manifest.json", "tokenizer.json"] {
-        let b = read_bounded(&path.join(file), 1024 * 1024)?;
-        println!("{file}: bytes={} sha256={}", b.len(), hash(&b));
-    }
-    println!(
-        "training_state={}",
-        serde_json::to_string(&manifest.training)?
-    );
-    println!(
-        "tokenizer_vocab={}; tokenizer_id={}",
-        tokenizer.vocab_size(),
-        tokenizer.id()
-    );
-    drop(bytes);
-    let start = Instant::now();
-    let loaded = checkpoint::legacy_load(path, candle_core::Device::Cpu, true)?;
-    println!(
-        "legacy_resume_load_ms={:.3}; model_tensors={}; optimizer_tensors={}",
-        elapsed(start),
-        loaded.model.vars.len(),
-        loaded.optimizer.len()
-    );
-    let root = tempfile::tempdir()?;
-    let start = Instant::now();
-    let saved = checkpoint::legacy_save(
-        &root.path().join("save"),
-        &loaded.model,
-        &loaded.tokenizer,
-        loaded.manifest,
-        &loaded.optimizer,
-    )?;
-    println!(
-        "legacy_save_with_full_readback_hash_validation_sync_ms={:.3}; saved_bytes={}; tensor_shape_inventory_matches={}",
-        elapsed(start),
-        saved.weights_bytes,
-        saved.tensors == manifest.tensors
-    );
-    Ok(())
+    native_load_audit(path, "inference")
 }
 fn checkpoint_load_audit(path: &std::path::Path, mode: &str) -> Result<()> {
     let resume = match mode {
@@ -713,7 +601,7 @@ fn checkpoint_load_audit(path: &std::path::Path, mode: &str) -> Result<()> {
     };
     let start = Instant::now();
     let loaded =
-        replica_v3::neural::checkpoint::legacy_load(path, candle_core::Device::Cpu, resume)?;
+        replica_v3::neural::checkpoint::load(path, candle_core::Device::Cpu, resume)?;
     println!(
         "mode={mode} load_ms={:.3} weights_bytes_read={} model_tensor_bytes={} optimizer_tensor_bytes={} backend=CPU accelerate={} OS_cache=NOT_FLUSHED",
         elapsed(start),
@@ -734,24 +622,14 @@ fn checkpoint_load_audit(path: &std::path::Path, mode: &str) -> Result<()> {
     Ok(())
 }
 fn lineage_audit(paths: &[String]) -> Result<()> {
-    use replica_v3::neural::{checkpoint, hash, read_bounded};
+    use replica_v3::neural::checkpoint;
     println!(
         "| run 경로 | 상태 | 시작 step | 종료 step | updates | 시작 input | 종료 input | 종료 target | sampler u64 | weights SHA-256 |"
     );
     println!("|---|---|---:|---:|---:|---:|---:|---:|---:|---|");
     for path in paths {
         let path = std::path::Path::new(path);
-        let (m, _) = checkpoint::legacy_metadata(path)?;
-        let bytes = read_bounded(
-            &path.join("weights.safetensors"),
-            m.architecture.parameters() * 12 + 1024 * 1024,
-        )?;
-        if hash(&bytes) != m.weights_sha256 || bytes.len() != m.weights_bytes {
-            return Err(Error::Corrupt(format!(
-                "lineage artifact changed: {}",
-                path.display()
-            )));
-        }
+        let (m, _) = checkpoint::metadata(path)?;
         if let Some(s) = &m.training {
             println!(
                 "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
@@ -948,9 +826,9 @@ fn smoke(checkpoint: &str, cli: &str, output: &str) -> Result<()> {
             .args(args)
             .output()?;
         write_new(
-            &root.join(format!("cli-{calls:03}.json")),
-            &serde_json::to_vec_pretty(
-                &serde_json::json!({"args":args,"exit":out.status.code(),"stdout":String::from_utf8_lossy(&out.stdout),"stderr":String::from_utf8_lossy(&out.stderr),"elapsed_ms":elapsed(start)}),
+            &root.join(format!("cli-{calls:03}.r3b")),
+            &replica_v3::binary::to_vec(
+                &replica_v3::binary::record!({"args":args,"exit":out.status.code(),"stdout":String::from_utf8_lossy(&out.stdout),"stderr":String::from_utf8_lossy(&out.stderr),"elapsed_ms":elapsed(start)}),
             )?,
         )?;
         calls += 1;
@@ -1176,9 +1054,9 @@ fn smoke(checkpoint: &str, cli: &str, output: &str) -> Result<()> {
         }
     }
     write_new(
-        &root.join("fixture.json"),
-        &serde_json::to_vec_pretty(
-            &serde_json::json!({"created_at":created_at,"seed":seed,"checkpoint":manifest,"cases":cases}),
+        &root.join("fixture.r3b"),
+        &replica_v3::binary::to_vec(
+            &replica_v3::binary::record!({"created_at":created_at,"seed":seed,"checkpoint":manifest,"cases":cases}),
         )?,
     )?;
     let mut correct = 0;
@@ -1216,7 +1094,7 @@ fn smoke(checkpoint: &str, cli: &str, output: &str) -> Result<()> {
             }
             let answer = store.result(input.id)?;
             let mut passed = false;
-            let mut detail = serde_json::json!({"error":"no successful answer"});
+            let mut detail = replica_v3::binary::record!({"error":"no successful answer"});
             if let Some(answer) = &answer {
                 if let Kind::AssistantAnswer {
                     evidence,
@@ -1238,7 +1116,7 @@ fn smoke(checkpoint: &str, cli: &str, output: &str) -> Result<()> {
                         .map_err(|_| Error::Corrupt("smoke answer UTF-8".into()))?;
                     let score = score_answer(case, text, evidence);
                     passed = score.0;
-                    detail = serde_json::json!({"event":answer.id,"text":text,"provided":provided,"excluded":excluded,"cited":evidence,"generation":generation,"score_reason":score.1});
+                    detail = replica_v3::binary::record!({"event":answer.id,"text":text,"provided":provided,"excluded":excluded,"cited":evidence,"generation":generation,"score_reason":score.1});
                     let before = store.count()?;
                     drop(store);
                     // An absent model path makes any accidental second inference fail.
@@ -1271,7 +1149,7 @@ fn smoke(checkpoint: &str, cli: &str, output: &str) -> Result<()> {
             }
             correct += usize::from(passed);
             restarts += usize::from(round == 1 && passed);
-            let row = serde_json::json!({"round":round,"case":case.id,"category":case.category,"question":case.request.input,"required":case.required,"expected_citations":case.citations,"passed":passed,"actual":detail});
+            let row = replica_v3::binary::record!({"round":round,"case":case.id,"category":case.category,"question":case.request.input,"required":case.required,"expected_citations":case.citations,"passed":passed,"actual":detail});
             println!("{row}");
             results.push(row);
         }
@@ -1283,11 +1161,11 @@ fn smoke(checkpoint: &str, cli: &str, output: &str) -> Result<()> {
         }
     }
     store.doctor(true)?;
-    let summary = serde_json::json!({"correct":correct,"total":cases.len()*2,"fresh_process_repeat_correct":restarts,"same_key_no_model_replays":replays,"canonical_originals_checked":originals.len(),"memory_sizes":store.storage_sizes()?,"results_sha256":hash(&serde_json::to_vec(&results)?),"semantic_review":"separate"});
+    let summary = replica_v3::binary::record!({"correct":correct,"total":cases.len()*2,"fresh_process_repeat_correct":restarts,"same_key_no_model_replays":replays,"canonical_originals_checked":originals.len(),"memory_sizes":store.storage_sizes()?,"results_sha256":hash(&replica_v3::binary::to_vec(&results)?),"semantic_review":"separate"});
     println!("{summary}");
     write_new(
-        &root.join("results.json"),
-        &serde_json::to_vec_pretty(&serde_json::json!({"summary":summary,"results":results}))?,
+        &root.join("results.r3b"),
+        &replica_v3::binary::to_vec(&replica_v3::binary::record!({"summary":summary,"results":results}))?,
     )?;
     if correct != cases.len() * 2 || replays != cases.len() * 2 {
         return Err(Error::Model(
@@ -1414,11 +1292,11 @@ fn native_failures(checkpoint: &str, cli: &str, output: &str) -> Result<()> {
         .as_deref()
         .is_some_and(|e| e.contains("worker timeout"))
         && start.elapsed() < Duration::from_secs(3);
-    let row = serde_json::json!({"mode":"load-timeout","trained_reference_sha256":manifest.weights_sha256,"passed":passed,"error":error,"elapsed_ms":elapsed(start),"layer":"actual native owned worker; no application DB in this transport check"});
+    let row = replica_v3::binary::record!({"mode":"load-timeout","trained_reference_sha256":manifest.weights_sha256,"passed":passed,"error":error,"elapsed_ms":elapsed(start),"layer":"actual native owned worker; no application DB in this transport check"});
     println!("{row}");
     write_new(
-        &root.join("load-timeout.json"),
-        &serde_json::to_vec_pretty(&row)?,
+        &root.join("load-timeout.r3b"),
+        &replica_v3::binary::to_vec(&row)?,
     )?;
     measurements.push(row);
     for (index, mode) in [
@@ -1567,17 +1445,17 @@ fn native_failures(checkpoint: &str, cli: &str, output: &str) -> Result<()> {
             && String::from_utf8_lossy(&replay.stderr).contains("persisted failure")
             && store.count()? == before
             && store.result(input.id)? == Some(terminal.clone());
-        let row = serde_json::json!({"mode":mode,"trained_reference_sha256":manifest.weights_sha256,"selected_artifact":selected,"passed":pass && replay_ok,"exit":result.status.code(),"stdout":String::from_utf8_lossy(&result.stdout),"stderr":stderr,"elapsed_ms":elapsed(start),"failure_payload":String::from_utf8_lossy(&terminal.payload),"same_key_failure_preserved":replay_ok});
+        let row = replica_v3::binary::record!({"mode":mode,"trained_reference_sha256":manifest.weights_sha256,"selected_artifact":selected,"passed":pass && replay_ok,"exit":result.status.code(),"stdout":String::from_utf8_lossy(&result.stdout),"stderr":stderr,"elapsed_ms":elapsed(start),"failure_payload":String::from_utf8_lossy(&terminal.payload),"same_key_failure_preserved":replay_ok});
         println!("{row}");
         write_new(
-            &root.join(format!("{mode}.json")),
-            &serde_json::to_vec_pretty(&row)?,
+            &root.join(format!("{mode}.r3b")),
+            &replica_v3::binary::to_vec(&row)?,
         )?;
         measurements.push(row);
     }
     write_new(
-        &root.join("summary.json"),
-        &serde_json::to_vec_pretty(&measurements)?,
+        &root.join("summary.r3b"),
+        &replica_v3::binary::to_vec(&measurements)?,
     )?;
     if measurements.iter().any(|r| r["passed"] != true) {
         return Err(Error::Model(
@@ -2107,7 +1985,7 @@ fn prepare_holdout(path: &std::path::Path) -> Result<()> {
         cases: heldout_memory_v2(seed, false),
         value_pairs: heldout_memory_v2(seed, true),
     };
-    let bytes = serde_json::to_vec(&fixture)?;
+    let bytes = replica_v3::binary::to_vec(&fixture)?;
     replica_v3::neural::write_new(path, &bytes)?;
     println!(
         "heldout_sha256={} version=2 seed={seed} cases=200 categories=5 each=40 independent_renderer=true",
@@ -2201,7 +2079,7 @@ fn evaluate_native(
         return Err(Error::Invalid("evaluation mode".into()));
     }
     let raw = neural::read_bounded(fixture, 8 * 1024 * 1024)?;
-    let fixture: Holdout = serde_json::from_slice(&raw)?;
+    let fixture: Holdout = replica_v3::binary::from_slice(&raw)?;
     if ![1, 2].contains(&fixture.version)
         || fixture.cases.len() != 200
         || fixture.value_pairs.len() != 200
@@ -2221,11 +2099,7 @@ fn evaluate_native(
         .write(true)
         .create_new(true)
         .open(output)?;
-    writeln!(
-        log,
-        "{}",
-        serde_json::json!({"header":true,"mode":mode,"fixture_sha256":neural::hash(&raw),"checkpoint_sha256":loaded.manifest.weights_sha256,"tokenizer_sha256":loaded.tokenizer.id(),"architecture":loaded.model.config,"training":loaded.manifest.training,"trained_steps":loaded.manifest.trained_steps,"diagnostic_only":loaded.manifest.diagnostic_only,"load_ms":load_ms,"backend":neural::cpu_backend(),"dtype":"F32","rubric":"independent_core_value_time_citations_v2","semantic_review":"separate"})
-    )?;
+    replica_v3::binary::write_record(&mut log, &replica_v3::binary::record!({"header":true,"mode":mode,"fixture_sha256":neural::hash(&raw),"checkpoint_sha256":loaded.manifest.weights_sha256,"tokenizer_sha256":loaded.tokenizer.id(),"architecture":loaded.model.config,"training":loaded.manifest.training,"trained_steps":loaded.manifest.trained_steps,"diagnostic_only":loaded.manifest.diagnostic_only,"load_ms":load_ms,"backend":neural::cpu_backend(),"dtype":"F32","rubric":"independent_core_value_time_citations_v2","semantic_review":"separate"}))?;
     let cases = if mode == "value-swap" {
         fixture.value_pairs
     } else {
@@ -2315,11 +2189,7 @@ fn evaluate_native(
             generation_ms.push(actual.generation_ms as f64);
             generated_tokens += actual.generated;
         }
-        writeln!(
-            log,
-            "{}",
-            serde_json::json!({"case":case.id,"category":case.category,"question":request.input,"evidence":request.evidence,"expected_core_value":case.required,"expected_citations":case.citations,"actual_citations":actual_citations,"provided":provided,"excluded":excluded,"input_tokens":tokens,"input_digest":token_digest,"actual_text":text,"actual_generation":generated,"passed":passed,"reason":reason,"elapsed_ms":elapsed(start)})
-        )?;
+        replica_v3::binary::write_record(&mut log, &replica_v3::binary::record!({"case":case.id,"category":case.category,"question":request.input,"evidence":request.evidence,"expected_core_value":case.required,"expected_citations":case.citations,"actual_citations":actual_citations,"provided":provided,"excluded":excluded,"input_tokens":tokens,"input_digest":token_digest,"actual_text":text,"actual_generation":generated,"passed":passed,"reason":reason,"elapsed_ms":elapsed(start)}))?;
         log.flush()?;
         println!(
             "mode={mode} case={} category={} passed={passed} reason={reason} text={text:?}",
@@ -2332,8 +2202,8 @@ fn evaluate_native(
     let success: usize = correct.iter().sum();
     let quality =
         success >= 190 && correct.iter().all(|&n| n >= 36) && accepted_invalid_citations == 0;
-    let summary = serde_json::json!({"summary":true,"mode":mode,"correct":correct,"total":total,"success":success,"denominator":total.iter().sum::<usize>(),"task_target_pass":quality,"generation_or_validation_failures":failures,"rejected_invalid_citations":invalid_citations,"accepted_invalid_citations":accepted_invalid_citations});
-    writeln!(log, "{summary}")?;
+    let summary = replica_v3::binary::record!({"summary":true,"mode":mode,"correct":correct,"total":total,"success":success,"denominator":total.iter().sum::<usize>(),"task_target_pass":quality,"generation_or_validation_failures":failures,"rejected_invalid_citations":invalid_citations,"accepted_invalid_citations":accepted_invalid_citations});
+    replica_v3::binary::write_record(&mut log, &summary)?;
     log.sync_all()?;
     println!("{summary}");
     if !generation_ms.is_empty() {
@@ -2354,9 +2224,8 @@ fn evaluate_native(
     Ok(())
 }
 fn retrieval_baseline(fixture: &std::path::Path, output: &std::path::Path) -> Result<()> {
-    use std::io::Write;
     let raw = replica_v3::neural::read_bounded(fixture, 8 * 1024 * 1024)?;
-    let fixture: Holdout = serde_json::from_slice(&raw)?;
+    let fixture: Holdout = replica_v3::binary::from_slice(&raw)?;
     let mut log = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -2387,31 +2256,19 @@ fn retrieval_baseline(fixture: &std::path::Path, output: &std::path::Path) -> Re
             known += 1;
             matched += usize::from(hit);
         }
-        writeln!(
-            log,
-            "{}",
-            serde_json::json!({"case":case.id,"category":case.category,"query":case.request.input,"bundle":bundle,"required":case.required,"top1_value_hit":hit,"neural_generation":false})
-        )?;
+        replica_v3::binary::write_record(&mut log, &replica_v3::binary::record!({"case":case.id,"category":case.category,"query":case.request.input,"bundle":bundle,"required":case.required,"top1_value_hit":hit,"neural_generation":false}))?;
     }
-    writeln!(
-        log,
-        "{}",
-        serde_json::json!({"summary":true,"top1_value_hits":matched,"known_value_cases":known,"metric":"retrieval-only raw evidence, not answer accuracy"})
-    )?;
+    replica_v3::binary::write_record(&mut log, &replica_v3::binary::record!({"summary":true,"top1_value_hits":matched,"known_value_cases":known,"metric":"retrieval-only raw evidence, not answer accuracy"}))?;
     log.sync_all()?;
     println!("retrieval_only_top1_value_hits={matched}/{known}; not neural answer accuracy");
     Ok(())
 }
 
 fn compare_pairs(original: &std::path::Path, swapped: &std::path::Path) -> Result<()> {
-    use serde_json::Value;
+    use replica_v3::binary::Value;
     let read = |path: &std::path::Path| -> Result<Vec<Value>> {
         let raw = replica_v3::neural::read_bounded(path, 16 * 1024 * 1024)?;
-        let lines = std::str::from_utf8(&raw).map_err(|e| Error::Invalid(e.to_string()))?;
-        let rows: Vec<Value> = lines
-            .lines()
-            .map(serde_json::from_str)
-            .collect::<std::result::Result<_, _>>()?;
+        let rows: Vec<Value> = replica_v3::binary::records_from_slice(&raw)?;
         Ok(rows
             .into_iter()
             .filter(|r| r.get("case").is_some())
@@ -2444,10 +2301,7 @@ fn compare_pairs(original: &std::path::Path, swapped: &std::path::Path) -> Resul
         }
         both_correct += usize::from(a["passed"] == true && b["passed"] == true);
     }
-    println!(
-        "{}",
-        serde_json::json!({"value_changed_pairs":total,"identical_nonnull_output":unchanged,"at_least_one_missing_output":missing_output,"both_answers_correct":both_correct,"metric":"paired actual generation; unchanged output cannot demonstrate value binding"})
-    );
+    replica_v3::binary::print_record(&replica_v3::binary::record!({"value_changed_pairs":total,"identical_nonnull_output":unchanged,"at_least_one_missing_output":missing_output,"both_answers_correct":both_correct,"metric":"paired actual generation; unchanged output cannot demonstrate value binding"}))?;
     Ok(())
 }
 
@@ -2490,7 +2344,7 @@ mod evaluation_tests {
         let fixture = d.path().join("fixture");
         std::fs::write(
             &fixture,
-            serde_json::to_vec(&Holdout {
+            replica_v3::binary::to_vec(&Holdout {
                 version: 1,
                 seed: 7,
                 cases: heldout(7, false),
@@ -2502,9 +2356,9 @@ mod evaluation_tests {
         let scored = d.path().join("scored");
         let error = evaluate_native(&trained, &fixture, "trained", &scored).unwrap_err();
         assert!(matches!(error, Error::Model(ref s) if s.contains("quality gate failed")));
-        let log = std::fs::read_to_string(&scored).unwrap();
-        let header: serde_json::Value = serde_json::from_str(log.lines().next().unwrap()).unwrap();
-        let summary: serde_json::Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+        let log: Vec<replica_v3::binary::Value> = replica_v3::binary::read_records(&scored).unwrap();
+        let header = log.first().unwrap();
+        let summary = log.last().unwrap();
         assert_eq!(header["trained_steps"], 1);
         assert!(header["training"].is_null());
         assert_eq!(summary["denominator"], 200);
@@ -2536,7 +2390,7 @@ mod evaluation_tests {
                     .all(|id| rows.iter().any(|r| r.event_id == *id))
             );
             for (a, b) in rows.iter().zip(&pair.request.evidence.items) {
-                let mut expected = serde_json::to_value(a).unwrap();
+                let mut expected = replica_v3::binary::to_value(a).unwrap();
                 if let Some(value) = &case.required
                     && case.citations.contains(&a.event_id)
                 {
@@ -2546,7 +2400,7 @@ mod evaluation_tests {
                         .replace(value, pair.required.as_ref().unwrap())
                         .into();
                 }
-                assert_eq!(expected, serde_json::to_value(b).unwrap());
+                assert_eq!(expected, replica_v3::binary::to_value(b).unwrap());
             }
             if case.category == 0 {
                 positions.insert(
@@ -2609,11 +2463,11 @@ mod evaluation_tests {
         // serialized into the ModelRequest passed to the production model.
         let another = heldout_memory_v2(721_919, false);
         assert_ne!(
-            serde_json::to_value(&cases[0].request).unwrap(),
-            serde_json::to_value(&another[0].request).unwrap()
+            replica_v3::binary::to_value(&cases[0].request).unwrap(),
+            replica_v3::binary::to_value(&another[0].request).unwrap()
         );
         assert!(
-            serde_json::to_value(&cases[0].request)
+            replica_v3::binary::to_value(&cases[0].request)
                 .unwrap()
                 .get("required")
                 .is_none()
@@ -3240,7 +3094,7 @@ fn archive_measure(root: &std::path::Path) -> Result<()> {
         println!(
             "archive={label} durable_export_ms={durable_ms:.3} same_process_open_ms={open_ms:.3} index_rebuild_ms={:.3} info={}",
             archive.index_rebuild_ms,
-            serde_json::to_string(&info)?
+            replica_v3::binary::describe(&info)?
         );
         if identity
             .as_ref()
@@ -3430,7 +3284,7 @@ fn archive_read_probe(path: &std::path::Path, mode: &str) -> Result<()> {
             "mode=archive process_open_ms={:.3} index_rebuild_ms={:.3} info={}",
             elapsed(start),
             archive.index_rebuild_ms,
-            serde_json::to_string(&archive.info)?
+            replica_v3::binary::describe(&archive.info)?
         );
         let start = Instant::now();
         let event = archive.get(1)?;

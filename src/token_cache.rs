@@ -622,7 +622,7 @@ pub(super) fn measure(
         file_hash(&std::env::current_exe()?)?
     );
     let mut sizes = BTreeMap::new();
-    for format in ["source-json", "snapshot", "cache-raw", "cache-zstd3"] {
+    for format in ["record-binary", "snapshot", "cache-raw", "cache-zstd3"] {
         if format == "cache-zstd3" && hashes[1] == [0; 32] {
             println!("CACHE_FORMAT=cache-zstd3 NOT_SELECTED_NOT_SMALLER");
             continue;
@@ -639,12 +639,12 @@ pub(super) fn measure(
                 usize,
                 String,
             ) = match format {
-                "source-json" => {
+                "record-binary" => {
                     let manifest_bytes =
-                        neural::read_bounded(&corpus.join("manifest.json"), MAX_FILE)?;
+                        neural::read_bounded(&corpus.join("manifest.r3b"), MAX_FILE)?;
                     phase[0] += point.elapsed().as_secs_f64();
                     point = Instant::now();
-                    let manifest: data::CorpusManifest = serde_json::from_slice(&manifest_bytes)?;
+                    let manifest: data::CorpusManifest = replica_v3::binary::from_slice(&manifest_bytes)?;
                     phase[2] += point.elapsed().as_secs_f64();
                     point = Instant::now();
                     for split in [&manifest.train, &manifest.validation] {
@@ -665,12 +665,12 @@ pub(super) fn measure(
                         || hex(&hash(&validation)) != manifest.validation.sha256
                         || validation.len() != manifest.validation.bytes
                     {
-                        return Err(bad("benchmark source JSON manifest binding"));
+                        return Err(bad("benchmark source R3BIN manifest binding"));
                     }
                     phase[1] += point.elapsed().as_secs_f64();
                     point = Instant::now();
-                    let episodes: Vec<Episode> = serde_json::from_slice(&train)?;
-                    let dev: Vec<Episode> = serde_json::from_slice(&validation)?;
+                    let episodes: Vec<Episode> = replica_v3::binary::from_slice(&train)?;
+                    let dev: Vec<Episode> = replica_v3::binary::from_slice(&validation)?;
                     if episodes.len() != manifest.train.documents
                         || dev.len() != manifest.validation.documents
                         || episodes.len() != s.train.len()
@@ -680,12 +680,12 @@ pub(super) fn measure(
                             .any(|(e, i)| case_hash(e) != case_hash(&s.cases[*i as usize]))
                     {
                         return Err(bad(
-                            "benchmark source JSON ordered train differs from snapshot",
+                            "benchmark source R3BIN ordered train differs from snapshot",
                         ));
                     }
                     let frozen = s.cases.iter().map(case_hash).collect::<BTreeSet<_>>();
                     if dev.iter().any(|e| !frozen.contains(&case_hash(e))) {
-                        return Err(bad("benchmark source JSON validation content differs"));
+                        return Err(bad("benchmark source R3BIN validation content differs"));
                     }
                     phase[2] += point.elapsed().as_secs_f64();
                     point = Instant::now();
@@ -813,15 +813,15 @@ pub(super) fn measure(
             sizes.insert(format, bytes);
         }
     }
-    let json = sizes["source-json"];
+    let record_bytes = sizes["record-binary"];
     let snapshot = sizes["snapshot"];
     let raw = sizes["cache-raw"];
     let cold = sizes.get("cache-zstd3").copied().unwrap_or(0);
     println!(
-        "STORAGE_RETAINED source_json={json} snapshot={snapshot} raw_cache={raw} cold_cache={cold} completion_metadata=72 original_plus_snapshot={} with_raw_cache={} retained_all={} MODEL_NATIVE_BYTES={} MODEL_FORMAT_UNCHANGED=true NEW_SMALL_UPDATES=0 GENERATIONS=0 TEACHERS=0",
-        json + snapshot,
-        json + snapshot + raw + 72,
-        json + snapshot + raw + cold + 72,
+        "STORAGE_RETAINED source_record={record_bytes} snapshot={snapshot} raw_cache={raw} cold_cache={cold} completion_metadata=72 original_plus_snapshot={} with_raw_cache={} retained_all={} MODEL_NATIVE_BYTES={} MODEL_FORMAT_UNCHANGED=true NEW_SMALL_UPDATES=0 GENERATIONS=0 TEACHERS=0",
+        record_bytes + snapshot,
+        record_bytes + snapshot + raw + 72,
+        record_bytes + snapshot + raw + cold + 72,
         std::fs::metadata(owned_path(root, &s.parent.file.locator, true)?)?.len()
     );
     Ok(())
@@ -878,7 +878,7 @@ pub(super) fn measure_source(
         std::process::id()
     );
     let formats = [
-        "source-json",
+        "record-binary",
         "native-raw",
         "native-zstd3",
         "cache-raw",
@@ -898,9 +898,9 @@ pub(super) fn measure_source(
             let mut phase = [0.; 9];
             let t = Instant::now();
             let mut files = Vec::new();
-            if format == "source-json" {
+            if format == "record-binary" {
                 for name in [
-                    "manifest.json",
+                    "manifest.r3b",
                     legacy_meta.train.file.as_str(),
                     legacy_meta.validation.file.as_str(),
                 ] {
@@ -925,15 +925,15 @@ pub(super) fn measure_source(
             let t = Instant::now();
             let mut packed = None;
             let mut episodes = None;
-            if format == "source-json" {
-                let m: data::CorpusManifest = serde_json::from_slice(&files[0])?;
+            if format == "record-binary" {
+                let m: data::CorpusManifest = replica_v3::binary::from_slice(&files[0])?;
                 if neural::hash(&files[1]) != m.train.sha256
                     || neural::hash(&files[2]) != m.validation.sha256
                 {
                     return Err(bad("measurement legacy hash"));
                 }
-                let train: Vec<Episode> = serde_json::from_slice(&files[1])?;
-                let dev: Vec<Episode> = serde_json::from_slice(&files[2])?;
+                let train: Vec<Episode> = replica_v3::binary::from_slice(&files[1])?;
+                let dev: Vec<Episode> = replica_v3::binary::from_slice(&files[2])?;
                 data::validate_episodes(&train)?;
                 data::validate_episodes(&dev)?;
                 data::check_split(&train, &dev)?;
@@ -999,15 +999,15 @@ pub(super) fn measure_source(
             }
             phase[5] = t.elapsed().as_secs_f64() / draws.len() as f64;
             let t = Instant::now();
-            let encoded = if format == "source-json" {
-                let train = serde_json::to_vec(&legacy_train)?;
-                let dev = serde_json::to_vec(&legacy_dev)?;
+            let encoded = if format == "record-binary" {
+                let train = replica_v3::binary::to_vec(&legacy_train)?;
+                let dev = replica_v3::binary::to_vec(&legacy_dev)?;
                 let mut exported = legacy_meta.clone();
                 exported.train.sha256 = neural::hash(&train);
                 exported.train.bytes = train.len();
                 exported.validation.sha256 = neural::hash(&dev);
                 exported.validation.bytes = dev.len();
-                vec![serde_json::to_vec_pretty(&exported)?, train, dev]
+                vec![replica_v3::binary::to_vec(&exported)?, train, dev]
             } else if format.starts_with("native-") {
                 vec![data::native::encode(&source, format == "native-zstd3")?]
             } else {
@@ -1020,10 +1020,10 @@ pub(super) fn measure_source(
             };
             phase[6] = t.elapsed().as_secs_f64();
             let t = Instant::now();
-            if format == "source-json" {
-                let m: data::CorpusManifest = serde_json::from_slice(&encoded[0])?;
-                let train: Vec<Episode> = serde_json::from_slice(&encoded[1])?;
-                let dev: Vec<Episode> = serde_json::from_slice(&encoded[2])?;
+            if format == "record-binary" {
+                let m: data::CorpusManifest = replica_v3::binary::from_slice(&encoded[0])?;
+                let train: Vec<Episode> = replica_v3::binary::from_slice(&encoded[1])?;
+                let dev: Vec<Episode> = replica_v3::binary::from_slice(&encoded[2])?;
                 if m.train.sha256 != neural::hash(&encoded[1])
                     || m.validation.sha256 != neural::hash(&encoded[2])
                     || data::native::ordered_bytes(&train)
@@ -1031,7 +1031,7 @@ pub(super) fn measure_source(
                     || data::native::ordered_bytes(&dev)
                         != data::native::ordered_bytes(&source.validation)
                 {
-                    return Err(bad("measurement JSON export equality"));
+                    return Err(bad("measurement R3BIN export equality"));
                 }
             } else if format.starts_with("native-") {
                 if data::native::decode(&encoded[0])?.semantic != source.semantic {

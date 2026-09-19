@@ -1089,7 +1089,9 @@ fn native_resume_ignores_ambient_policy_json() {
         });
         fs::copy(fixture.join("parent.r3m"), &path).unwrap();
         if let Some(bytes) = policy {
+            // Hostile retired input is a negative fixture, never a JSON parser/writer.
             fs::write(root.join("policy.json"), bytes).unwrap();
+            fs::write(root.join("policy.r3b"), bytes).unwrap();
         }
         let out = root.join("trained");
         let result = Command::new(env!("CARGO_BIN_EXE_replica-train"))

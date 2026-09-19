@@ -1,5 +1,27 @@
 # Replica v3 B0 runbook
 
+## Current binary interfaces after the data reset
+
+Old models, corpora and execution logs were deleted by user instruction. Commands
+below describing old experiment roots are historical and cannot resume them.
+SQLite memory storage remains enabled. Source corpus generation uses R3CORP;
+train cache uses R3TOK; inference/resume uses R3MODEL; native experiment control
+uses R3ER. Former JSON metadata and line logs now require R3BIN `.r3b` and
+concatenated `.r3rows` records. Merely renaming a JSON file will fail validation.
+
+Standalone tokenizer/config files and model IPC use R3BIN. Build parent/worker
+together. `tokenizer inspect` and `sampling-exposure` emit a binary record to
+stdout; use `replica_v3::binary::from_slice` in Rust consumers. Stream readers use
+`read_records`, not line splitting. CLI human status output remains plain text.
+Legacy recovery commands require `--archived-controls` and native record inputs;
+they do not reopen JSON files. Text checkpoint import is retired with an explicit
+error. No prior failed receipt is converted into a new successful execution.
+
+Post-training `best-*.r3b` and `train-control.r3b` preserve metrics/usage as typed
+binary. `final`, `start` and step checkpoint files contain R3MODEL regardless of
+filename extension. Model and optimizer tensors are never serialized as JSON.
+The active codec layout and compatibility boundaries are in STORAGE_FORMAT.md.
+
 ## Retention-first bounded research
 
 The registered 2026-09-19 R-REPLAY is closed after an execution failure following

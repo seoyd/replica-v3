@@ -1,5 +1,14 @@
 # 의존성과 저장 비용 실측
 
+2026-09-19 현재 상태: 제품·학습·도구·테스트의 JSON 직렬화는 자체 R3BIN으로
+대체했다. `serde_json`/`safetensors` 직접 의존은 제거했고 SQLite는 유지한다.
+실제 `cargo tree --locked --offline -i serde_json`에서 남은 경로는 기존
+Candle의 safetensors 및 tokenizers 내부 의존이다. Serde는 Rust 타입 매핑에만
+사용하며 JSON parser/writer가 아니다. 모델 weights/Adam은 기존 R3MODEL,
+source corpus는 R3CORP, token cache는 R3TOK, native 실험은 R3ER 그대로다.
+새 크기·속도 benchmark는 실행하지 않았으므로 아래 역사 측정치를 이번 전환의
+성능 이득으로 인용하지 않는다. 삭제된 기존 모델·자료도 복구하지 않았다.
+
 계약: R3-CUSTOMIZE-AND-DIAGNOSE-1.0. 조사일: 2026-09-17.
 단계: P0 기준 실측, P6에서 현재 JSON/저장 경로 차이 보완. 독립 검토는 INDEPENDENT_PENDING이다.
 

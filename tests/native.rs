@@ -134,9 +134,9 @@ fn semantic_identity_and_bounded_experimental_configuration() {
     assert_eq!(cache.history_id(), hash(b""));
     assert_eq!(MIXER.state_schema_id, "absolute-kv-history-v1");
     let tok = tokenizer();
-    let mut json: serde_json::Value = serde_json::from_slice(tok.bytes()).unwrap();
-    json["train_hash"] = hash(b"different provenance").into();
-    let other = ByteBpe::from_bytes(&serde_json::to_vec_pretty(&json).unwrap()).unwrap();
+    let mut record_bytes: replica_v3::binary::Value = replica_v3::binary::from_slice(tok.bytes()).unwrap();
+    record_bytes["train_hash"] = hash(b"different provenance").into();
+    let other = ByteBpe::from_bytes(&replica_v3::binary::to_vec(&record_bytes).unwrap()).unwrap();
     assert_eq!(tok.semantic_id(), other.semantic_id());
     assert_ne!(tok.id(), other.id());
     assert_eq!(
@@ -326,7 +326,7 @@ fn own_byte_bpe_roundtrip_no_control_promotion_or_truncation() {
     assert!(tok.decode(&[PAD]).is_err());
     assert!(tok.decode(&[u32::MAX]).is_err());
     let d = tempfile::tempdir().unwrap();
-    let p = d.path().join("tokenizer.json");
+    let p = d.path().join("tokenizer.r3b");
     tok.save(&p).unwrap();
     assert!(tok.save(&p).is_err());
     let bytes = std::fs::read(&p).unwrap();
@@ -337,11 +337,11 @@ fn own_byte_bpe_roundtrip_no_control_promotion_or_truncation() {
         tok.encode("새 문장".as_bytes()).unwrap()
     );
     assert_eq!(std::fs::read(&p).unwrap(), bytes);
-    let mut bad: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    bad["truncation"] = serde_json::json!({"max_length":1024});
-    assert!(ByteBpe::from_bytes(&serde_json::to_vec(&bad).unwrap()).is_err());
+    let mut bad: replica_v3::binary::Value = replica_v3::binary::from_slice(&bytes).unwrap();
+    bad["truncation"] = replica_v3::binary::record!({"max_length":1024});
+    assert!(ByteBpe::from_bytes(&replica_v3::binary::to_vec(&bad).unwrap()).is_err());
     assert!(ByteBpe::from_bytes(&vec![b' '; MAX_TOKENIZER_BYTES + 1]).is_err());
-    let mut bad: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let mut bad: replica_v3::binary::Value = replica_v3::binary::from_slice(&bytes).unwrap();
     let key = bad["vocab"]
         .as_object()
         .unwrap()
@@ -350,7 +350,7 @@ fn own_byte_bpe_roundtrip_no_control_promotion_or_truncation() {
         .unwrap()
         .clone();
     bad["vocab"][key] = u32::MAX.into();
-    assert!(ByteBpe::from_bytes(&serde_json::to_vec(&bad).unwrap()).is_err());
+    assert!(ByteBpe::from_bytes(&replica_v3::binary::to_vec(&bad).unwrap()).is_err());
 }
 #[test]
 fn native_prompt_boundaries_and_exact_evidence_tail() {
@@ -645,36 +645,27 @@ fn native_kv_chunk_rollover_parity_reset_and_identity() {
     }
 }
 #[test]
-fn legacy_checkpoint_import_roundtrip_and_corruption_rejection() {
+fn native_checkpoint_roundtrip_and_corruption_rejection() {
     use candle_core::Device;
     use replica_v3::neural::{checkpoint, transformer::*};
     let tok = tokenizer();
     let model = Transformer::init(Config::tiny(tok.vocab_size()), 27, Device::Cpu).unwrap();
     let d = tempfile::tempdir().unwrap();
-    let p = d.path().join("checkpoint");
+    let p = d.path().join("checkpoint.r3m");
     let manifest = checkpoint::initialized(&model, &tok, 27, hash(b"fixture-source")).unwrap();
-    let original =
-        checkpoint::legacy_save(&p, &model, &tok, manifest, &Default::default()).unwrap();
-    assert!(
-        checkpoint::legacy_save(&p, &model, &tok, original.clone(), &Default::default()).is_err()
-    );
-    let loaded = checkpoint::legacy_load(&p, Device::Cpu, false).unwrap();
-    assert_eq!(
-        loaded.model.weight_hash().unwrap(),
-        model.weight_hash().unwrap()
-    );
-    let path = p.join("weights.safetensors");
-    let bytes = std::fs::read(&path).unwrap();
-    std::fs::write(&path, &bytes[..bytes.len() - 1]).unwrap();
-    assert!(checkpoint::legacy_load(&p, Device::Cpu, false).is_err());
-    std::fs::write(&path, &bytes).unwrap();
-    let mut broken = original;
-    broken.tokenizer_sha256 = hash(b"wrong tokenizer");
-    std::fs::write(
-        p.join("manifest.json"),
-        serde_json::to_vec(&broken).unwrap(),
-    )
-    .unwrap();
+    let saved = checkpoint::save(&p, &model, &tok, manifest, &Default::default()).unwrap();
+    assert!(checkpoint::save(&p, &model, &tok, saved, &Default::default()).is_err());
+    let loaded = checkpoint::load(&p, Device::Cpu, false).unwrap();
+    assert_eq!(loaded.model.weight_hash().unwrap(), model.weight_hash().unwrap());
+    assert_eq!(&std::fs::read(&p).unwrap()[..8], b"R3MODEL\0");
+    let bytes = std::fs::read(&p).unwrap();
+    std::fs::write(&p, &bytes[..bytes.len()-1]).unwrap();
+    assert!(checkpoint::load(&p, Device::Cpu, false).is_err());
+    std::fs::write(&p, &bytes).unwrap();
+    let mut corrupt=bytes.clone();
+    *corrupt.last_mut().unwrap() ^= 1;
+    std::fs::write(&p, corrupt).unwrap();
+    assert!(checkpoint::load(&p, Device::Cpu, false).is_err());
     assert!(checkpoint::legacy_load(&p, Device::Cpu, false).is_err());
 }
 
@@ -777,69 +768,22 @@ fn native_local_global_mask_and_greedy_generation_boundaries() {
 }
 
 #[test]
-fn legacy_checkpoint_import_rejects_self_checksummed_nan_unknown_tensor_and_precision() {
-    use candle_core::{DType, Device, Tensor};
+fn native_checkpoint_rejects_nonfinite_unknown_missing_and_wrong_shape() {
+    use candle_core::{Device, Tensor, Var};
     use replica_v3::neural::{checkpoint, transformer::*};
     let tok = tokenizer();
-    let model = Transformer::init(Config::tiny(tok.vocab_size()), 37, Device::Cpu).unwrap();
+    let mut model = Transformer::init(Config::tiny(tok.vocab_size()), 37, Device::Cpu).unwrap();
     let d = tempfile::tempdir().unwrap();
-    let p = d.path().join("checkpoint");
-    let manifest = checkpoint::legacy_save(
-        &p,
-        &model,
-        &tok,
-        checkpoint::initialized(&model, &tok, 37, hash(b"fixture-source")).unwrap(),
-        &Default::default(),
-    )
-    .unwrap();
-    let base: std::collections::HashMap<String, Tensor> = model
-        .vars
-        .iter()
-        .map(|(k, v)| (format!("model.{k}"), v.as_detached_tensor()))
-        .collect();
-    for corruption in ["nan", "unknown", "missing", "precision", "shape"] {
-        let mut tensors = base.clone();
+    let manifest=checkpoint::initialized(&model,&tok,37,hash(b"fixture-source")).unwrap();
+    let base=model.vars.clone();
+    for corruption in ["nan", "unknown", "missing", "shape"] {
+        model.vars=base.clone();
         match corruption {
-            "nan" => {
-                let mut v = tensors["model.final_norm"].to_vec1::<f32>().unwrap();
-                v[0] = f32::NAN;
-                tensors.insert(
-                    "model.final_norm".into(),
-                    Tensor::new(v.as_slice(), &Device::Cpu).unwrap(),
-                );
-            }
-            "unknown" => {
-                tensors.insert(
-                    "unknown".into(),
-                    Tensor::new(&[1f32], &Device::Cpu).unwrap(),
-                );
-            }
-            "missing" => {
-                tensors.remove("model.final_norm");
-            }
-            "precision" => {
-                tensors.insert(
-                    "model.final_norm".into(),
-                    tensors["model.final_norm"].to_dtype(DType::F16).unwrap(),
-                );
-            }
-            _ => {
-                tensors.insert(
-                    "model.final_norm".into(),
-                    Tensor::new(&[1f32], &Device::Cpu).unwrap(),
-                );
-            }
+            "nan"=>{let mut v=model.vars["final_norm"].to_vec1::<f32>().unwrap();v[0]=f32::NAN;model.vars.insert("final_norm".into(),Var::from_tensor(&Tensor::new(v.as_slice(),&Device::Cpu).unwrap()).unwrap());}
+            "unknown"=>{model.vars.insert("unknown".into(),Var::from_tensor(&Tensor::new(&[1f32],&Device::Cpu).unwrap()).unwrap());}
+            "missing"=>{model.vars.remove("final_norm");}
+            _=>{model.vars.insert("final_norm".into(),Var::from_tensor(&Tensor::new(&[1f32],&Device::Cpu).unwrap()).unwrap());}
         }
-        let path = p.join("weights.safetensors");
-        candle_core::safetensors::save(&tensors, &path).unwrap();
-        let bytes = std::fs::read(&path).unwrap();
-        let mut m = manifest.clone();
-        m.weights_sha256 = hash(&bytes);
-        m.weights_bytes = bytes.len();
-        std::fs::write(p.join("manifest.json"), serde_json::to_vec(&m).unwrap()).unwrap();
-        assert!(
-            checkpoint::legacy_load(&p, Device::Cpu, false).is_err(),
-            "{corruption}"
-        );
+        assert!(checkpoint::save(&d.path().join(format!("{corruption}.r3m")),&model,&tok,manifest.clone(),&Default::default()).is_err(),"{corruption}");
     }
 }

@@ -8096,7 +8096,7 @@ fn path_prepare(
         publish(&dir, "inputs.r3er", &Record::Inputs(Box::new(s)))?;
     }
     println!(
-        "PATH_PREPARE=VERIFIED QUALITY_UPDATES=0 PARITY_BUDGET=4 TAPE=2+1+1 JSON_NATIVE_FULL_EQUAL={}",
+        "PATH_PREPARE=VERIFIED QUALITY_UPDATES=0 PARITY_BUDGET=4 TAPE=2+1+1 RECORD_NATIVE_FULL_EQUAL={}",
         legacy.is_some()
     );
     Ok(())
@@ -8524,7 +8524,7 @@ pub enum Action {
         compare: Option<PathBuf>,
     },
     SourceMeasure {
-        #[arg(long,value_parser=["source-json","native-raw","native-zstd3","cache-raw","cache-zstd3"])]
+        #[arg(long,value_parser=["record-binary","native-raw","native-zstd3","cache-raw","cache-zstd3"])]
         format: Option<String>,
         #[arg(long)]
         root: PathBuf,
@@ -13923,7 +13923,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                     return Err(bad("legacy reference changed"));
                 }
                 episodes = train;
-                println!("PATH=EXPLICIT_LEGACY_REFERENCE JSON_READS=3");
+                println!("PATH=EXPLICIT_LEGACY_REFERENCE JSON_READS=0 R3BIN_READS=3");
             } else {
                 println!("PATH=NATIVE_CORPUS JSON_READS=0");
             }
@@ -14687,7 +14687,7 @@ fn import_row(v: &Value, e: &Episode, ordinal: u32, l: &Loaded) -> Result<EvalRo
             progress_u64(g, "attention_workspace_bytes")?,
         ])
     };
-    let tokens: Vec<u32> = serde_json::from_value(required("raw_tokens")?.clone())?;
+    let tokens: Vec<u32> = replica_v3::binary::from_value(required("raw_tokens")?.clone())?;
     if v["raw_generated_count"] != tokens.len() || v["expected"] != e.answer {
         return Err(bad("legacy tokens/expected"));
     }
@@ -14702,8 +14702,8 @@ fn import_row(v: &Value, e: &Episode, ordinal: u32, l: &Loaded) -> Result<EvalRo
                 .as_str()
                 .ok_or_else(|| bad("legacy native prompt"))?,
         )?,
-        provided: serde_json::from_value(required("provided")?.clone())?,
-        excluded: serde_json::from_value(required("excluded")?.clone())?,
+        provided: replica_v3::binary::from_value(required("provided")?.clone())?,
+        excluded: replica_v3::binary::from_value(required("excluded")?.clone())?,
         tokens,
         eos: v["eos_index"]
             .as_u64()
@@ -14712,8 +14712,8 @@ fn import_row(v: &Value, e: &Episode, ordinal: u32, l: &Loaded) -> Result<EvalRo
         started: bool_value(v, "generation_started")?,
         completed: bool_value(v, "generation_completed")?,
         finish,
-        error: serde_json::from_value(required("error")?.clone())?,
-        error_class: serde_json::from_value(required("error_class")?.clone())?,
+        error: replica_v3::binary::from_value(required("error")?.clone())?,
+        error_class: replica_v3::binary::from_value(required("error_class")?.clone())?,
         interruption: if required("interruption")?.is_null() {
             None
         } else {
@@ -14724,7 +14724,7 @@ fn import_row(v: &Value, e: &Episode, ordinal: u32, l: &Loaded) -> Result<EvalRo
         retained: if g.is_null() {
             vec![]
         } else {
-            serde_json::from_value(g["retained"].clone())?
+            replica_v3::binary::from_value(g["retained"].clone())?
         },
         teacher: teacher_record(required("teacher_forced_diagnostic_after_generation")?)?,
         diagnostic: None,
@@ -14792,7 +14792,7 @@ fn read_legacy_owned(path: &Path) -> Result<(Value, FileRef)> {
         locator: path.canonicalize()?.display().to_string(),
         digest: hash(&bytes),
     };
-    Ok((serde_json::from_slice(&bytes)?, reference))
+    Ok((replica_v3::binary::from_slice(&bytes)?, reference))
 }
 #[allow(clippy::too_many_arguments)]
 fn import_legacy(
@@ -14822,7 +14822,7 @@ fn import_legacy(
     let terminal_path = cross
         .parent()
         .ok_or_else(|| bad("legacy terminal directory"))?
-        .join("result.json");
+        .join("result.r3b");
     let (old_terminal, terminal_ref) = read_legacy_owned(&terminal_path)?;
     if old_terminal["candidate_eligible"] != false || old_terminal["resume_allowed"] != false {
         return Err(bad(
@@ -14830,7 +14830,7 @@ fn import_legacy(
         ));
     }
     let posthoc = raw[1].get("binding").is_some();
-    let registration_path = cross.parent().unwrap().join("registration.json");
+    let registration_path = cross.parent().unwrap().join("registration.r3b");
     let (registration, registration_ref) = if posthoc {
         let (value, reference) = read_legacy_owned(&registration_path)?;
         (Some(value), Some(reference))
@@ -15112,7 +15112,7 @@ fn import_legacy(
     publish(output, "terminal.r3er", &Record::Segment(t))?;
     close_native(output, "terminal.r3er", control)?;
     let note = format!(
-        "MODE=READ_ONLY_IMPORT_REAUDIT\nPARSER=serde_json-1.0.151; features=default,std,alloc; float_roundtrip=false\nCONVERTER=R3ER-v1\nCONVERTER_SOURCE={}\nHISTORICAL_IN_MEMORY_FLOAT_BITS=UNKNOWN\nLEGACY_FLOAT_IDENTITY=LEGACY_ROUNDTRIP_UNPROVEN\nHISTORICAL_CANDIDATE_PROMOTION=NOT_AUTHORIZED\nOLD_RESUME_FLAGS=UNCHANGED\nCANONICAL_JSON_WRITES=0\nLEGACY_JSON_READS=EXPLICIT_IMPORT_ONLY (shared recursive frozen validator included)\n",
+        "MODE=READ_ONLY_IMPORT_REAUDIT\nPARSER=R3BIN-v1; typed-numeric-bits\nCONVERTER=R3ER-v1\nCONVERTER_SOURCE={}\nHISTORICAL_IN_MEMORY_FLOAT_BITS=UNKNOWN\nLEGACY_FLOAT_IDENTITY=LEGACY_ROUNDTRIP_UNPROVEN\nHISTORICAL_CANDIDATE_PROMOTION=NOT_AUTHORIZED\nOLD_RESUME_FLAGS=UNCHANGED\nCANONICAL_JSON_WRITES=0\nJSON_READS=0; R3BIN_IMPORT=EXPLICIT_ONLY\n",
         hex(&evaluator_source())
     );
     publish_bytes(&output.join("import-report.txt"), note.as_bytes())?;
@@ -15323,8 +15323,8 @@ fn bench(root: &Path, terminal: &str, output: &Path, control: &mut RunControl) -
     let record = Record::Evaluation(e.clone());
     let binary = record.encode()?;
     // Comparison serialization includes every typed field, including teacher/timing and hashes.
-    // JSON byte-array hashes are explicitly reported; original legacy schema is a separate figure.
-    let json = serde_json::to_vec(&record)?;
+    // R3BIN byte-array hashes are explicitly reported; original legacy schema is a separate figure.
+    let record_bytes = replica_v3::binary::to_vec(&record)?;
     let original = s
         .origins
         .iter()
@@ -15334,13 +15334,13 @@ fn bench(root: &Path, terminal: &str, output: &Path, control: &mut RunControl) -
     if hash(&old_bytes) != original.original.digest {
         return Err(bad("benchmark original changed"));
     }
-    let old: Value = serde_json::from_slice(&old_bytes)?;
+    let old: Value = replica_v3::binary::from_slice(&old_bytes)?;
     let old_rows = old["dev_rows"]
         .as_array()
         .ok_or_else(|| bad("benchmark legacy rows"))?;
     if old_rows.len() != e.rows.len()
         || old_rows.iter().zip(&e.rows).any(|(a, b)| {
-            serde_json::from_value::<Vec<u32>>(a["raw_tokens"].clone())
+            replica_v3::binary::from_value::<Vec<u32>>(a["raw_tokens"].clone())
                 .ok()
                 .as_ref()
                 != Some(&b.tokens)
@@ -15348,7 +15348,7 @@ fn bench(root: &Path, terminal: &str, output: &Path, control: &mut RunControl) -
     {
         return Err(bad("benchmark content differs"));
     }
-    let legacy = serde_json::to_vec(old_rows)?;
+    let legacy = replica_v3::binary::to_vec(old_rows)?;
     let cases: Vec<_> = panel(&s, PanelKind::Dev)?
         .cases
         .iter()
@@ -15362,9 +15362,9 @@ fn bench(root: &Path, terminal: &str, output: &Path, control: &mut RunControl) -
     let count = e.rows.len();
     let tokens: usize = e.rows.iter().map(|r| r.tokens.len()).sum();
     let mut report = format!(
-        "CONTENT=identical typed record fields; JSON byte-array digests; no compression\nROWS={count} TOKENS={tokens}\nBINARY_BYTES={} TYPED_JSON_BYTES={}\nWARMUP=5 REPETITIONS=10 BUILD={} BACKEND={} RAYON_THREADS={:?} VECLIB_THREADS={:?}\nTIMES=nanoseconds median/p95; durable includes write+sync+readback+directory sync\n",
+        "CONTENT=identical typed record fields; R3BIN byte-array digests; no compression\nROWS={count} TOKENS={tokens}\nBINARY_BYTES={} TYPED_R3BIN_BYTES={}\nWARMUP=5 REPETITIONS=10 BUILD={} BACKEND={} RAYON_THREADS={:?} VECLIB_THREADS={:?}\nTIMES=nanoseconds median/p95; durable includes write+sync+readback+directory sync\n",
         binary.len(),
-        json.len(),
+        record_bytes.len(),
         if cfg!(debug_assertions) {
             "debug"
         } else {
@@ -15374,36 +15374,36 @@ fn bench(root: &Path, terminal: &str, output: &Path, control: &mut RunControl) -
         std::env::var("RAYON_NUM_THREADS"),
         std::env::var("VECLIB_MAXIMUM_THREADS")
     );
-    report.push_str(&format!("LEGACY_ROWS_JSON_BYTES={} ACTIVE_BINARY_CASE_BYTES={} ACTIVE_CASES_PLUS_BINARY_PANEL={}\nLEGACY_COMPARISON=schema dedup + codec; legacy rows repeat input/expected/derived text; binary reconstructs it from the included active owned cases and tokenizer\nCANONICAL_INPUTS_FILE_BYTES={} (also includes unused training/other panels, excluded from this panel comparison)\n",legacy.len(),case_bytes.len(),binary.len()+case_bytes.len(),std::fs::metadata(root.join("inputs.r3er"))?.len()));
-    for format in ["binary", "typed-json", "legacy-row-json"] {
+    report.push_str(&format!("ROW_R3BIN_BYTES={} ACTIVE_BINARY_CASE_BYTES={} ACTIVE_CASES_PLUS_BINARY_PANEL={}\nLEGACY_COMPARISON=schema dedup + codec; legacy rows repeat input/expected/derived text; binary reconstructs it from the included active owned cases and tokenizer\nCANONICAL_INPUTS_FILE_BYTES={} (also includes unused training/other panels, excluded from this panel comparison)\n",legacy.len(),case_bytes.len(),binary.len()+case_bytes.len(),std::fs::metadata(root.join("inputs.r3er"))?.len()));
+    for format in ["binary", "typed-r3bin", "row-r3bin"] {
         for operation in ["encode", "decode", "hash", "verify", "durable"] {
             let (median, p95) = timed(control, 10, |i| {
                 match (format, operation) {
                     ("binary", "encode") => {
                         std::hint::black_box(record.encode()?);
                     }
-                    ("typed-json", "encode") => {
-                        std::hint::black_box(serde_json::to_vec(&record)?);
+                    ("typed-r3bin", "encode") => {
+                        std::hint::black_box(replica_v3::binary::to_vec(&record)?);
                     }
-                    ("legacy-row-json", "encode") => {
-                        std::hint::black_box(serde_json::to_vec(old_rows)?);
+                    ("row-r3bin", "encode") => {
+                        std::hint::black_box(replica_v3::binary::to_vec(old_rows)?);
                     }
                     ("binary", "decode") => {
                         std::hint::black_box(Record::decode(&binary)?);
                     }
-                    ("typed-json", "decode") => {
-                        std::hint::black_box(serde_json::from_slice::<Value>(&json)?);
+                    ("typed-r3bin", "decode") => {
+                        std::hint::black_box(replica_v3::binary::from_slice::<Value>(&record_bytes)?);
                     }
-                    ("legacy-row-json", "decode") => {
-                        std::hint::black_box(serde_json::from_slice::<Vec<Value>>(&legacy)?);
+                    ("row-r3bin", "decode") => {
+                        std::hint::black_box(replica_v3::binary::from_slice::<Vec<Value>>(&legacy)?);
                     }
                     ("binary", "hash") => {
                         std::hint::black_box(hash(&binary));
                     }
-                    ("typed-json", "hash") => {
-                        std::hint::black_box(hash(&json));
+                    ("typed-r3bin", "hash") => {
+                        std::hint::black_box(hash(&record_bytes));
                     }
-                    ("legacy-row-json", "hash") => {
+                    ("row-r3bin", "hash") => {
                         std::hint::black_box(hash(&legacy));
                     }
                     ("binary", "verify") => {
@@ -15412,12 +15412,12 @@ fn bench(root: &Path, terminal: &str, output: &Path, control: &mut RunControl) -
                         };
                         std::hint::black_box(rescore(&s, &v, &l, true)?);
                     }
-                    ("typed-json", "verify") => {
-                        std::hint::black_box(serde_json::from_slice::<Value>(&json)?);
-                        std::hint::black_box(hash(&json));
+                    ("typed-r3bin", "verify") => {
+                        std::hint::black_box(replica_v3::binary::from_slice::<Value>(&record_bytes)?);
+                        std::hint::black_box(hash(&record_bytes));
                     }
-                    ("legacy-row-json", "verify") => {
-                        let rows: Vec<Value> = serde_json::from_slice(&legacy)?;
+                    ("row-r3bin", "verify") => {
+                        let rows: Vec<Value> = replica_v3::binary::from_slice(&legacy)?;
                         let spec = super::PanelSpec {
                             id: "dev",
                             cases: &cases,
@@ -15434,7 +15434,7 @@ fn bench(root: &Path, terminal: &str, output: &Path, control: &mut RunControl) -
                     (_, "durable") => {
                         let bytes = match format {
                             "binary" => &binary,
-                            "typed-json" => &json,
+                            "typed-r3bin" => &record_bytes,
                             _ => &legacy,
                         };
                         let p = output.join(format!("{format}-{i}.dat"));
@@ -15451,7 +15451,7 @@ fn bench(root: &Path, terminal: &str, output: &Path, control: &mut RunControl) -
             report.push_str(&format!("{format} {operation}: {median}/{p95}\n"));
         }
     }
-    report.push_str(&format!("RSS_KIB_AFTER={:?}\nRSS_LIMITATION=process snapshot, not allocation peak; encode includes validation allocations; JSON decode is dynamic Value, not native control; semantic verify times have different work and are not a speed ratio\n",rss_kib().ok()));
+    report.push_str(&format!("RSS_KIB_AFTER={:?}\nRSS_LIMITATION=process snapshot, not allocation peak; encode includes validation allocations; R3BIN decode is a dynamic record, not native control; semantic verify times have different work and are not a speed ratio\n",rss_kib().ok()));
     publish_bytes(&output.join("measurement.txt"), report.as_bytes())?;
     print!("{report}");
     Ok(())
@@ -16496,9 +16496,9 @@ mod binary_tests {
     use std::fs;
     #[test]
     fn legacy_posthoc_summary_location_is_explicit_and_null_is_rejected() {
-        let score = json!({"auxiliary":[2,4],"qa":[1,3]});
-        let terminal = json!({"cross":score});
-        let rows_only = json!({"binding":{"complete":true},"rows":[]});
+        let score = record!({"auxiliary":[2,4],"qa":[1,3]});
+        let terminal = record!({"cross":score});
+        let rows_only = record!({"binding":{"complete":true},"rows":[]});
         assert_eq!(
             legacy_panel_summary(&rows_only, &terminal, PanelKind::Cross, "score", true).unwrap(),
             &terminal["cross"]
@@ -16510,18 +16510,18 @@ mod binary_tests {
             legacy_panel_summary(&rows_only, &Value::Null, PanelKind::Cross, "score", true)
                 .is_err()
         );
-        let null = json!({"binding":{},"score":null});
+        let null = record!({"binding":{},"score":null});
         assert!(legacy_panel_summary(&null, &terminal, PanelKind::Cross, "score", true).is_err());
     }
     #[test]
     fn legacy_owned_digest_is_from_the_consumed_bytes() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("legacy.json");
-        let before = br#"{"number":0.009906130842864513}"#;
-        fs::write(&file, before).unwrap();
+        let file = dir.path().join("legacy.r3b");
+        let before = replica_v3::binary::to_vec(&record!({"number":0.009906130842864513_f64})).unwrap();
+        fs::write(&file, &before).unwrap();
         let (owned, reference) = read_legacy_owned(&file).unwrap();
-        fs::write(&file, br#"{"number":0}"#).unwrap();
-        assert_eq!(reference.digest, hash(before));
+        fs::write(&file, replica_v3::binary::to_vec(&record!({"number":0})).unwrap()).unwrap();
+        assert_eq!(reference.digest, hash(&before));
         assert_ne!(reference.digest, hash(&fs::read(&file).unwrap()));
         assert_ne!(owned["number"], 0);
     }

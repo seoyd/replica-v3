@@ -1,5 +1,13 @@
 # Native model implementation
 
+2026-09-19 active storage update: the user deleted all local learned data and
+retained Rust source/Git history. The run results below are historical, not
+currently available artifacts. Project serialization now uses R3BIN for former
+JSON metadata/tokenizer files/IPC/diagnostics; native model weights and Adam remain
+R3MODEL. SQLite is retained for memory, not tensors. Text checkpoint import is
+retired with an error. See STORAGE_FORMAT.md for active wire boundaries. This
+migration does not train a replacement SMALL model or improve measured quality.
+
 Contract: GOAL1-NATIVE-TRPP-1.0. Verified through S3; S4 learning remains under
 investigation after task-quality failures. No final acceptance has been declared.
 The following observations are scoped to their named phase, not overall task success.

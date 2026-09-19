@@ -20,7 +20,7 @@ fn main() {
         out.write_all(&u32::MAX.to_le_bytes()).unwrap();
         return;
     }
-    write_frame(&mut out, &serde_json::json!({"ready":true}), MAX_RESPONSE).unwrap();
+    write_frame(&mut out, &replica_v3::binary::record!({"ready":true}), MAX_RESPONSE).unwrap();
     let req: ModelRequest = read_frame(&mut std::io::stdin().lock(), MAX_REQUEST).unwrap();
     if mode == "timeout" {
         std::thread::sleep(Duration::from_secs(10));

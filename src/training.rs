@@ -549,11 +549,7 @@ pub fn evaluate_corpus(
         .write(true)
         .create_new(true)
         .open(output)?;
-    writeln!(
-        log,
-        "{}",
-        serde_json::json!({"header":true,"split":split,"checkpoint_sha256":loaded.manifest.weights_sha256,"split_sha256":split_hash,"limit":limit,"final_heldout":false,"oracle_question_ablation":rephrase || rephrase_field,"oracle_field_task_label":rephrase_field || (single_record && !qa_record),"oracle_record_selection":single_record,"eligible_episodes":episodes.len()})
-    )?;
+    replica_v3::binary::write_record(&mut log, &replica_v3::binary::record!({"header":true,"split":split,"checkpoint_sha256":loaded.manifest.weights_sha256,"split_sha256":split_hash,"limit":limit,"final_heldout":false,"oracle_question_ablation":rephrase || rephrase_field,"oracle_field_task_label":rephrase_field || (single_record && !qa_record),"oracle_record_selection":single_record,"eligible_episodes":episodes.len()}))?;
     let mut exact = 0;
     let mut failed = 0;
     let mut groups: BTreeMap<String, [usize; 2]> = BTreeMap::new();
@@ -574,7 +570,7 @@ pub fn evaluate_corpus(
         let count = groups.entry(group).or_default();
         count[0] += usize::from(matched);
         count[1] += 1;
-        writeln!(log, "{row}")?;
+        replica_v3::binary::write_record(&mut log, &row)?;
         log.flush()?;
         println!(
             "{split} id={} exact={matched} error={}",
@@ -586,15 +582,15 @@ pub fn evaluate_corpus(
         }
     }
     let _ = control.check("evaluate_summary");
-    let mut summary = serde_json::json!({"summary":true,"split":split,"exact_matches":exact,"denominator":evaluated.len(),"generation_failures":failed,"groups_correct_total":groups,"final_heldout":false,"oracle_question_ablation":rephrase || rephrase_field,"oracle_field_task_label":rephrase_field || (single_record && !qa_record),"oracle_record_selection":single_record});
+    let mut summary = replica_v3::binary::record!({"summary":true,"split":split,"exact_matches":exact,"denominator":evaluated.len(),"generation_failures":failed,"groups_correct_total":groups,"final_heldout":false,"oracle_question_ablation":rephrase || rephrase_field,"oracle_field_task_label":rephrase_field || (single_record && !qa_record),"oracle_record_selection":single_record});
     summary["diagnostic_score"] = recovery::summarize(&evaluated)?;
     recovery::add_partial_counts(&mut summary, &evaluated, limit, &control);
-    writeln!(log, "{summary}")?;
+    replica_v3::binary::write_record(&mut log, &summary)?;
     log.sync_all()?;
     let _ = control.seal_terminal();
-    let mut terminal = serde_json::json!({"terminal":true});
+    let mut terminal = replica_v3::binary::record!({"terminal":true});
     recovery::add_partial_counts(&mut terminal, &evaluated, limit, &control);
-    writeln!(log, "{terminal}")?;
+    replica_v3::binary::write_record(&mut log, &terminal)?;
     log.sync_all()?;
     println!("{summary}");
     control.stop_result()
@@ -692,16 +688,13 @@ pub fn sampling_exposure(start: &Path, end: &Path, corpus: &Path, limit: usize) 
         }
         result
     };
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&serde_json::json!({
+    replica_v3::binary::print_record(&replica_v3::binary::record!({
             "method":"DETERMINISTIC_SAMPLER_REPLAY_NOT_PER_DRAW_LOG", "sampler_state_matches":true,
             "start_step":start.step,"end_step":end.step,"corpus_sha256":manifest.train.sha256,
             "episodes":episodes.len(),"draws":counts.iter().sum::<usize>(),
             "all_exposure_histogram":histogram(&counts),"prefix_exposure_histogram":histogram(&counts[..limit]),
-            "prefix":episodes.iter().zip(&counts).take(limit).map(|(e,n)|serde_json::json!({"id":e.id,"draws":n})).collect::<Vec<_>>()
-        }))?
-    );
+            "prefix":episodes.iter().zip(&counts).take(limit).map(|(e,n)|replica_v3::binary::record!({"id":e.id,"draws":n})).collect::<Vec<_>>()
+        }))?;
     Ok(())
 }
 fn rss_kib() -> Result<u64> {
@@ -1005,7 +998,7 @@ fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<
         manifest.validation.tokens = Some(validation.iter().map(|s| s.tokens.len()).sum());
         println!(
             "CORPUS_REPORT {}",
-            serde_json::json!({
+            replica_v3::binary::record!({
                 "corpus":manifest,"source_directory":run.corpus,"tokenizer_sha256":loaded.tokenizer.id(),
                 "tokenizer_training_hash":loaded.tokenizer.train_hash,"previous_corpora":state.previous_corpora,
                 "token_count_kind":"available framed samples before sampling/repetition; LM overlap context included"
@@ -1177,10 +1170,10 @@ fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<
                     m.weights_sha256
                 );
                 if improved {
-                    let record = serde_json::json!({"checkpoint":path.file_name(),"validation_loss":value,"step":state.step});
+                    let record = replica_v3::binary::record!({"checkpoint":path.file_name(),"validation_loss":value,"step":state.step});
                     neural::write_new(
-                        &run.output.join(format!("best-{:06}.json", state.step)),
-                        &serde_json::to_vec(&record)?,
+                        &run.output.join(format!("best-{:06}.r3b", state.step)),
+                        &replica_v3::binary::to_vec(&record)?,
                     )?;
                 }
             }
@@ -1224,17 +1217,18 @@ fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<
     let _ = control.seal_terminal();
     reason = control.reason().unwrap_or(reason);
     let mut receipt = control.receipt();
-    receipt["reason"] = serde_json::json!(reason);
-    receipt["checkpoint_saved"] = serde_json::json!(saved.is_ok());
-    receipt["checkpoint_save_status_reason"] = serde_json::json!(saved_reason);
-    receipt["save_error"] = serde_json::json!(saved.as_ref().err().map(ToString::to_string));
-    receipt["work_error"] = serde_json::json!(outcome.as_ref().err().map(ToString::to_string));
-    receipt["work_elapsed_seconds"] = serde_json::json!(work_elapsed);
-    receipt["cleanup_elapsed_seconds"] = serde_json::json!(cleanup.elapsed().as_secs_f64());
-    receipt["final_evaluation_complete"] = serde_json::json!(last_validated == Some(state.step));
+    receipt["reason"] = replica_v3::binary::record!(reason);
+    receipt["checkpoint_saved"] = replica_v3::binary::record!(saved.is_ok());
+    receipt["checkpoint_save_status_reason"] = replica_v3::binary::record!(saved_reason);
+    receipt["save_error"] = replica_v3::binary::record!(saved.as_ref().err().map(ToString::to_string));
+    receipt["work_error"] = replica_v3::binary::record!(outcome.as_ref().err().map(ToString::to_string));
+    receipt["work_elapsed_seconds"] = replica_v3::binary::record!(work_elapsed);
+    receipt["cleanup_elapsed_seconds"] = replica_v3::binary::record!(cleanup.elapsed().as_secs_f64());
+    receipt["final_evaluation_complete"] = replica_v3::binary::record!(last_validated == Some(state.step));
     receipt["executed_input_tokens_including_uncommitted"] =
-        serde_json::json!(executed_input_tokens);
-    receipt["candidate_eligible"] = serde_json::json!(false);
+        replica_v3::binary::record!(executed_input_tokens);
+    receipt["candidate_eligible"] = replica_v3::binary::record!(false);
+    neural::write_new(&run.output.join("train-control.r3b"), &replica_v3::binary::to_vec(&receipt)?)?;
     println!("TRAIN_CONTROL {receipt}");
     println!(
         "TRAIN_END reason={reason} steps={} consumed_tokens={} target_tokens={} train_loss={:?} validation_loss={:?} elapsed_s={:.3} peak_sampled_rss_KiB={peak:?} checkpoint={} sha256={} exact_resume=optimizer_boundary task_quality=NOT_EVALUATED",
@@ -1397,8 +1391,8 @@ mod tests {
         .unwrap();
         assert_eq!(isolated.evidence.items.len(), 1);
         assert_eq!(
-            serde_json::to_value(&isolated.evidence.items[0]).unwrap(),
-            serde_json::to_value(&request.evidence.items[3]).unwrap()
+            replica_v3::binary::to_value(&isolated.evidence.items[0]).unwrap(),
+            replica_v3::binary::to_value(&request.evidence.items[3]).unwrap()
         );
         assert_eq!(isolated.input, request.input);
         let mut changed = request.clone();
@@ -1440,7 +1434,7 @@ mod tests {
             } else {
                 invalid.evidence.items.pop();
             }
-            let before = serde_json::to_value(&invalid).unwrap();
+            let before = replica_v3::binary::to_value(&invalid).unwrap();
             assert!(
                 isolate_current_record(
                     &mut invalid,
@@ -1450,7 +1444,7 @@ mod tests {
                 )
                 .is_err()
             );
-            assert_eq!(serde_json::to_value(&invalid).unwrap(), before);
+            assert_eq!(replica_v3::binary::to_value(&invalid).unwrap(), before);
         }
         let mut qa = request.clone();
         qa.input = "센서531904의 구역8 이동 지시와 근거는?".into();
@@ -1466,7 +1460,7 @@ mod tests {
         .unwrap();
         assert_eq!(qa.evidence.items[0].event_id, 14);
         qa.evidence.items[0].original_excerpt = "장비531904의 구역8 이동 지시는 서쪽이다.".into();
-        let before = serde_json::to_value(&qa).unwrap();
+        let before = replica_v3::binary::to_value(&qa).unwrap();
         assert!(
             isolate_current_record(
                 &mut qa,
@@ -1476,7 +1470,7 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(serde_json::to_value(&qa).unwrap(), before);
+        assert_eq!(replica_v3::binary::to_value(&qa).unwrap(), before);
     }
     #[test]
     fn harness_m02_qa_wrong_full_name_rejected_before_mutation() {
@@ -1500,7 +1494,7 @@ mod tests {
                 ..Default::default()
             },
         };
-        let before = serde_json::to_value(&request).unwrap();
+        let before = replica_v3::binary::to_value(&request).unwrap();
         assert!(
             isolate_current_record(
                 &mut request,
@@ -1510,7 +1504,7 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(serde_json::to_value(&request).unwrap(), before);
+        assert_eq!(replica_v3::binary::to_value(&request).unwrap(), before);
         for input in [
             "센서310의 구역1 지시는?",
             "센서31의 구역10 지시는?",
@@ -1518,7 +1512,7 @@ mod tests {
             "다른센서31의 구역1 지시는?",
         ] {
             request.input = input.into();
-            let before = serde_json::to_value(&request).unwrap();
+            let before = replica_v3::binary::to_value(&request).unwrap();
             assert!(
                 isolate_current_record(
                     &mut request,
@@ -1528,7 +1522,7 @@ mod tests {
                 )
                 .is_err()
             );
-            assert_eq!(serde_json::to_value(&request).unwrap(), before);
+            assert_eq!(replica_v3::binary::to_value(&request).unwrap(), before);
         }
         request.input = "센서31의 구역1 지시는?".into();
         isolate_current_record(
@@ -1560,7 +1554,7 @@ mod tests {
         other.original_excerpt = "장비31의 구역1 이동 지시는 서쪽이다.".into();
         request.evidence.items.push(other);
         for _ in 0..2 {
-            let before = serde_json::to_value(&request).unwrap();
+            let before = replica_v3::binary::to_value(&request).unwrap();
             assert!(
                 isolate_current_record(
                     &mut request,
@@ -1570,7 +1564,7 @@ mod tests {
                 )
                 .is_err()
             );
-            assert_eq!(serde_json::to_value(&request).unwrap(), before);
+            assert_eq!(replica_v3::binary::to_value(&request).unwrap(), before);
             let mut qa = request.clone();
             qa.input = "센서31의 구역1 지시는?".into();
             isolate_current_record(&mut qa, "센서31", "구역1", RecordTargetMode::ExactEntity)
@@ -1615,9 +1609,9 @@ mod tests {
             assert!(draw_indices(&pool, &config, &mut actual).is_err());
             assert_eq!(actual.state, before);
         }
-        let mut legacy = serde_json::to_value(TrainConfig::default()).unwrap();
+        let mut legacy = replica_v3::binary::to_value(TrainConfig::default()).unwrap();
         legacy.as_object_mut().unwrap().remove("sample_group_size");
-        let decoded: TrainConfig = serde_json::from_value(legacy).unwrap();
+        let decoded: TrainConfig = replica_v3::binary::from_value(legacy).unwrap();
         assert_eq!(decoded.sample_group_size, 1);
     }
     #[test]
@@ -1717,12 +1711,12 @@ mod tests {
         for invalid in [0., 17., f64::NAN, f64::INFINITY] {
             assert!(response_loss(&logits, &b, invalid).is_err());
         }
-        let mut legacy = serde_json::to_value(TrainConfig::default()).unwrap();
+        let mut legacy = replica_v3::binary::to_value(TrainConfig::default()).unwrap();
         legacy
             .as_object_mut()
             .unwrap()
             .remove("first_target_weight");
-        let decoded: TrainConfig = serde_json::from_value(legacy).unwrap();
+        let decoded: TrainConfig = replica_v3::binary::from_value(legacy).unwrap();
         assert_eq!(decoded.first_target_weight, 1.);
     }
     #[test]

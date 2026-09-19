@@ -10,8 +10,10 @@ while retaining Rust source and Git history. That data reset is complete.
 Historical artifact paths below and in linked documents are no longer available.
 Do not resume an old experiment, reconstruct its receipts or restore deleted data
 from Git as part of ordinary work. The requested removal of product/training/tool
-JSON use and direct JSON/SQLite dependencies remains pending implementation;
-transitive JSON dependencies inside generic libraries are permitted.
+JSON use and direct JSON dependency removal is implemented. SQLite is retained
+under the latest user scope. Transitive JSON dependencies inside existing generic
+libraries are permitted. Use R3BIN for former text metadata/IPC/record streams;
+reuse R3MODEL/R3CORP/R3TOK/R3ER for their existing domain schemas.
 The earlier storage freeze does not restrict that explicitly requested removal.
 Permanent acceptance criteria: `docs/GOAL1_CONTRACT.md`.
 Active stages, budgets and stop conditions: `docs/QUALITY_RECOVERY_PLAN.md`.
@@ -28,7 +30,8 @@ Keep temporary instructions local; do not link them from delivered sources/docs.
 `src/neural.rs` owns project tokenizer framing and mapping.
 `src/neural/transformer.rs` owns the native model and bounded KV.
 `src/neural/artifact.rs` owns native inference/resume serialization.
-`src/neural/checkpoint.rs` owns training state and explicit legacy import.
+`src/neural/checkpoint.rs` owns training state; retired text import fails explicitly.
+`src/binary.rs` owns typed R3BIN metadata and record-stream serialization.
 `src/store.rs`, `event.rs`, `codec.rs` own immutable memory and history.
 `src/retrieval.rs`, `app.rs` own evidence packing and committed responses.
 `src/train_main.rs` is the separate training executable.

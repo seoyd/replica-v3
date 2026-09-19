@@ -1,11 +1,10 @@
 #![forbid(unsafe_code)]
 //! Thin offline runner for the existing v3 checks. Receipts are observations, not approval.
 use clap::{Parser, Subcommand};
-use serde_json::{Value, json};
+use replica_v3::binary::{Value, record};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, OpenOptions},
-    io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -69,8 +68,7 @@ fn file_hash(path: &Path) -> Result<String> {
 }
 fn write_new(path: &Path, value: &Value) -> Result<()> {
     let mut f = OpenOptions::new().write(true).create_new(true).open(path)?;
-    serde_json::to_writer_pretty(&mut f, value)?;
-    f.write_all(b"\n")?;
+    replica_v3::binary::write_record(&mut f, value)?;
     f.sync_all()?;
     Ok(())
 }
@@ -205,7 +203,7 @@ impl Runner {
         let blocked_cache = stderr_text.contains("offline")
             && (stderr_text.contains("failed to download")
                 || stderr_text.contains("no matching package"));
-        let row = json!({"command":program,"args":args,"target":std::env::consts::ARCH,"features":FEATURES,
+        let row = record!({"command":program,"args":args,"target":std::env::consts::ARCH,"features":FEATURES,
             "status":if blocked_cache {"BLOCKED_DEPENDENCY_CACHE"} else if passed {"PASS"} else {"FAIL"},
             "exit_code":status.code(),"stop_reason":stopped,"elapsed_seconds":start.elapsed().as_secs_f64(),
             "executed_tests":counts.as_ref().and_then(|c| c.as_ref().ok()).map(|n|n[0]+n[1]),
@@ -213,7 +211,7 @@ impl Runner {
             "skipped_tests":counts.as_ref().and_then(|c| c.as_ref().ok()).map(|n|n[2]),
             "count_error":counts.as_ref().and_then(|c|c.as_ref().err()).map(ToString::to_string),
             "stdout":stdout,"stderr":stderr});
-        write_new(&self.output.join(format!("command-{n:02}.json")), &row)?;
+        write_new(&self.output.join(format!("command-{n:02}.r3b")), &row)?;
         println!(
             "command={n} status={} executed_tests={}",
             row["status"], row["executed_tests"]
@@ -264,11 +262,22 @@ fn boundaries(files: &[PathBuf]) -> Result<Value> {
             continue;
         } // Only the checker may name denied instruction files.
         let text = fs::read_to_string(p)?;
+        if p.extension().is_some_and(|e| e == "rs")
+            && text.contains("serde_json::")
+        {
+            return Err(format!("project JSON serialization: {}", p.display()).into());
+        }
         if ["imsi1.md", "imsi2.md", "01_IMPLEMENTATION_PROMPT.md"]
             .iter()
             .any(|name| text.contains(name))
         {
             return Err(format!("temporary instruction reference: {}", p.display()).into());
+        }
+    }
+    let manifest = fs::read_to_string("Cargo.toml")?;
+    for name in ["serde_json", "safetensors"] {
+        if manifest.lines().any(|l| l.trim_start().starts_with(&format!("{name} ="))) {
+            return Err(format!("direct text-format dependency: {name}").into());
         }
     }
     let lock = fs::read_to_string("Cargo.lock")?;
@@ -278,14 +287,11 @@ fn boundaries(files: &[PathBuf]) -> Result<Value> {
         }
     }
     Ok(
-        json!({"inspected_files":inspected.len(),"result":"CHECKED_BOUNDARIES_PASS","limitations":"literal module/dependency checks are heuristics, not a whole-program proof; locked Candle/tokenizers and native SQLite/Accelerate are allowed"}),
+        record!({"inspected_files":inspected.len(),"result":"CHECKED_BOUNDARIES_PASS","limitations":"literal module/dependency checks are heuristics, not a whole-program proof; locked Candle/tokenizers and native SQLite/Accelerate are allowed"}),
     )
 }
 fn evaluation_rows(path: &Path) -> Result<Vec<Value>> {
-    let all: Vec<Value> = fs::read_to_string(path)?
-        .lines()
-        .map(serde_json::from_str)
-        .collect::<std::result::Result<_, _>>()?;
+    let all: Vec<Value> = replica_v3::binary::read_records(path)?;
     let terminal = all.last().ok_or("empty evaluation")?;
     if terminal["terminal"] != true
         || terminal["final_evaluation_complete"] != true
@@ -320,7 +326,7 @@ fn evaluation_rows(path: &Path) -> Result<Vec<Value>> {
             || row["actual"].as_str().is_none_or(|s| s.trim().is_empty())
             || row["finish_reason"] != "stop"
             || eos.is_none_or(|i| {
-                i + 1 != raw.len() || raw.get(i) != Some(&json!(replica_v3::neural::EOS))
+                i + 1 != raw.len() || raw.get(i) != Some(&record!(replica_v3::neural::EOS))
             })
         {
             return Err(
@@ -339,7 +345,7 @@ fn release_evidence(checkpoint: &Path, stages: [(&str, &Path); 3]) -> Result<Val
     let weight = file_hash(checkpoint).map_err(|e| format!("BLOCKED_INPUT checkpoint: {e}"))?;
     let mut reports = Vec::new();
     for (stage, path) in stages {
-        let receipt: Value = serde_json::from_slice(
+        let receipt: Value = replica_v3::binary::from_slice(
             &fs::read(path).map_err(|e| format!("BLOCKED_INPUT {stage}: {e}"))?,
         )?;
         if receipt["checkpoint_file_sha256"] != weight
@@ -397,12 +403,12 @@ fn release_evidence(checkpoint: &Path, stages: [(&str, &Path); 3]) -> Result<Val
         {
             return Err("release generation failure".into());
         }
-        reports.push(json!({"stage":stage,"receipt_hash":file_hash(path)?,"rows":rows.len()}));
+        reports.push(record!({"stage":stage,"receipt_hash":file_hash(path)?,"rows":rows.len()}));
     }
-    Ok(json!(reports))
+    Ok(record!(reports))
 }
 fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
-    write_new(&r.output.join("boundaries.json"), &boundaries(files)?)?;
+    write_new(&r.output.join("boundaries.r3b"), &boundaries(files)?)?;
     match &cli.command {
         Checks::Quick {
             native_corpus,
@@ -625,7 +631,7 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                 ("training", "harness_m"),
                 ("native", "native_numeric_references"),
                 ("native", "progress_attention_observer"),
-                ("native", "legacy_checkpoint_import_roundtrip"),
+                ("native", "native_checkpoint_roundtrip"),
                 ("runtime", "rv02_whole_evidence"),
                 ("store", "lifecycle_restart"),
                 ("experiment_record", "binary_"),
@@ -648,8 +654,8 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
         } => {
             if *limit == 0
                 || !checkpoint.is_file()
-                || !corpus.join("manifest.json").is_file()
-                || !transfer_corpus.join("manifest.json").is_file()
+                || !corpus.join("manifest.r3b").is_file()
+                || !transfer_corpus.join("manifest.r3b").is_file()
             {
                 return Err("BLOCKED_INPUT explicit checkpoint/corpus/transfer split".into());
             }
@@ -660,7 +666,7 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                 ("restart", corpus),
                 ("transfer", transfer_corpus),
             ] {
-                let out = r.output.join(format!("{name}.jsonl"));
+                let out = r.output.join(format!("{name}.r3rows"));
                 let args = vec![
                     "evaluate".into(),
                     "--checkpoint".into(),
@@ -687,7 +693,7 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                 let signatures: Vec<_> = rows
                     .iter()
                     .map(|row| {
-                        json!([
+                        record!([
                             row["id"],
                             row["raw_tokens"],
                             row["actual"],
@@ -711,7 +717,7 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
         } => {
             r.cargo("test", &["--all-targets", "--", "--test-threads=1"], true)?;
             let evidence = release_evidence(checkpoint, [("S4", s4), ("S5", s5), ("S6", s6)])?;
-            write_new(&r.output.join("release-evidence.json"), &evidence)?;
+            write_new(&r.output.join("release-evidence.r3b"), &evidence)?;
         }
     }
     Ok(())
@@ -739,11 +745,11 @@ fn main() {
         };
         let outcome = execute(&cli, &mut runner, &files);
         let unchanged = source_identity()?.0 == source;
-        let summary = json!({"source_digest":source,"source_files":source_files,"source_unchanged":unchanged,"commands":runner.records,
+        let summary = record!({"source_digest":source,"source_files":source_files,"source_unchanged":unchanged,"commands":runner.records,
             "result":if outcome.is_ok() && unchanged {"CHECKED_SCOPE_PASS"} else {"FAIL_OR_BLOCKED"},
             "error":outcome.as_ref().err().map(ToString::to_string),"actual_small_updates":0,
             "quality":"NOT_GRANTED_BY_HARNESS","goal1_accepted":false,"not_run":"dependent commands after first failure; S4/S5/S6 unless explicit release evidence passes"});
-        write_new(&output.join("summary.json"), &summary)?;
+        write_new(&output.join("summary.r3b"), &summary)?;
         outcome?;
         if !unchanged {
             return Err("source changed during checks".into());
@@ -860,22 +866,27 @@ mod tests {
     #[test]
     fn harness_model_rows_require_actual_eos_and_keep_failures() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("rows.jsonl");
-        let header = json!({"header":true,"oracle_question_ablation":false,"oracle_field_task_label":false,"oracle_record_selection":false});
-        let row = json!({"id":"independent/0","actual":"a","expected":"a","exact_match":true,"raw_tokens":[8,2],"eos_index":1,"finish_reason":"stop","generation_completed":true,"error":null});
+        let path = dir.path().join("rows.r3rows");
+        let header = record!({"header":true,"oracle_question_ablation":false,"oracle_field_task_label":false,"oracle_record_selection":false});
+        let row = record!({"id":"independent/0","actual":"a","expected":"a","exact_match":true,"raw_tokens":[8,2],"eos_index":1,"finish_reason":"stop","generation_completed":true,"error":null});
         let terminal =
-            json!({"terminal":true,"final_evaluation_complete":true,"comparison_eligible":true});
-        let write =
-            |row: &Value| fs::write(&path, format!("{header}\n{row}\n{terminal}\n")).unwrap();
+            record!({"terminal":true,"final_evaluation_complete":true,"comparison_eligible":true});
+        let write = |row: &Value| {
+            let mut bytes = Vec::new();
+            for value in [&header, row, &terminal] {
+                replica_v3::binary::write_record(&mut bytes, value).unwrap();
+            }
+            fs::write(&path, bytes).unwrap();
+        };
         write(&row);
         assert_eq!(evaluation_rows(&path).unwrap().len(), 1);
         for (key, value) in [
-            ("error", json!("invalid UTF-8")),
-            ("finish_reason", json!("length")),
+            ("error", record!("invalid UTF-8")),
+            ("finish_reason", record!("length")),
             ("eos_index", Value::Null),
-            ("actual", json!("")),
-            ("raw_tokens", json!([8, 3])),
-            ("generation_completed", json!(false)),
+            ("actual", record!("")),
+            ("raw_tokens", record!([8, 3])),
+            ("generation_completed", record!(false)),
         ] {
             let mut bad = row.clone();
             bad[key] = value;

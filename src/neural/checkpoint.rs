@@ -1,14 +1,13 @@
 //! Strict tensor-only artifacts; manifest publication is the commit point.
 use super::{
-    ByteBpe, hash, read_bounded,
+    ByteBpe,
     transformer::{Config, Transformer},
-    write_new,
 };
 use crate::{Error, Result};
 use candle_core::{Device, Tensor};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     path::Path,
 };
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -339,37 +338,6 @@ pub(super) fn expected(m: &Manifest) -> BTreeMap<String, Vec<usize>> {
     }
     result
 }
-fn validate<'a>(
-    m: &Manifest,
-    tok: &ByteBpe,
-    bytes: &'a [u8],
-) -> Result<safetensors::SafeTensors<'a>> {
-    validate_metadata(m, tok)?;
-    if m.weights_bytes != bytes.len() || m.weights_sha256 != hash(bytes) {
-        return Err(Error::Corrupt("legacy tensor bytes/checksum".into()));
-    }
-    let tensors =
-        safetensors::SafeTensors::deserialize(bytes).map_err(|e| Error::Corrupt(e.to_string()))?;
-    if tensors.len() != m.tensors.len() {
-        return Err(Error::Corrupt("checkpoint tensor count".into()));
-    }
-    for (name, shape) in &m.tensors {
-        let t = tensors
-            .tensor(name)
-            .map_err(|e| Error::Corrupt(e.to_string()))?;
-        if t.shape() != shape
-            || t.dtype() != safetensors::Dtype::F32
-            || t.data()
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .any(|b| !f32::from_le_bytes(*b).is_finite())
-        {
-            return Err(Error::Corrupt(format!("invalid checkpoint tensor {name}")));
-        }
-    }
-    Ok(tensors)
-}
 pub fn validate_metadata(m: &Manifest, tok: &ByteBpe) -> Result<()> {
     m.architecture.validate()?;
     if m.version != 1
@@ -431,122 +399,12 @@ pub fn validate_metadata(m: &Manifest, tok: &ByteBpe) -> Result<()> {
     }
     Ok(())
 }
-pub fn legacy_metadata(path: &Path) -> Result<(Manifest, ByteBpe)> {
-    let manifest: Manifest =
-        serde_json::from_slice(&read_bounded(&path.join("manifest.json"), 1024 * 1024)?)?;
-    manifest.architecture.validate()?;
-    let tok = ByteBpe::load(&path.join("tokenizer.json"))?;
-    if manifest.version != 1
-        || manifest.dtype != "F32"
-        || manifest.tokenizer_sha256 != tok.id()
-        || manifest.architecture.vocab != tok.vocab_size()
-    {
-        return Err(Error::Corrupt(
-            "checkpoint metadata/tokenizer binding".into(),
-        ));
-    }
-    Ok((manifest, tok))
+// Retired input API: no text or safetensors fallback, including explicit imports.
+pub fn legacy_metadata(_path: &Path) -> Result<(Manifest, ByteBpe)> {
+    Err(Error::Unsupported("legacy model format retired; use native R3MODEL".into()))
 }
-pub fn legacy_load(path: &Path, device: Device, resume: bool) -> Result<Loaded> {
-    let (mut manifest, tok) = legacy_metadata(path)?;
-    let cap =
-        manifest.architecture.parameters() * 4 * if manifest.training.is_some() { 3 } else { 1 }
-            + 1024 * 1024;
-    let bytes = read_bounded(&path.join("weights.safetensors"), cap)?;
-    let tensors = validate(&manifest, &tok, &bytes)?;
-    manifest.trained_steps = manifest.training.as_ref().map_or(0, |s| s.step);
-    manifest.diagnostic_only |= manifest.training.as_ref().is_some_and(|s| s.contrast16);
-    manifest.legacy_identity = Some(LegacyIdentity {
-        config_json_sha256: manifest.architecture.id()?,
-        tokenizer_json_sha256: tok.id(),
-        tensor_file_sha256: manifest.weights_sha256.clone(),
-    });
-    let mut model = BTreeMap::new();
-    let mut optimizer = BTreeMap::new();
-    for name in manifest.tensors.keys() {
-        if let Some(key) = name.strip_prefix("model.") {
-            let view = tensors
-                .tensor(name)
-                .map_err(|e| Error::Corrupt(e.to_string()))?;
-            let values: Vec<f32> = view
-                .data()
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|b| f32::from_le_bytes(*b))
-                .collect();
-            model.insert(
-                key.to_string(),
-                Tensor::from_vec(values, view.shape(), &device)?,
-            );
-        } else if resume {
-            let view = tensors
-                .tensor(name)
-                .map_err(|e| Error::Corrupt(e.to_string()))?;
-            let values: Vec<f32> = view
-                .data()
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|b| f32::from_le_bytes(*b))
-                .collect();
-            optimizer.insert(
-                name.clone(),
-                Tensor::from_vec(values, view.shape(), &device)?,
-            );
-        }
-    }
-    let mut model = Transformer::from_tensors(manifest.architecture.clone(), model, device)?;
-    manifest.model_content_digest = model.weights_content_id()?;
-    model.bind_tokenizer(&tok.id())?;
-    Ok(Loaded {
-        model,
-        tokenizer: tok,
-        manifest,
-        optimizer,
-    })
-}
-pub fn legacy_save(
-    path: &Path,
-    model: &Transformer,
-    tokenizer: &ByteBpe,
-    mut manifest: Manifest,
-    optimizer: &BTreeMap<String, Tensor>,
-) -> Result<Manifest> {
-    std::fs::create_dir(path)?;
-    let mut tensors: HashMap<String, Tensor> = model
-        .vars
-        .iter()
-        .map(|(name, var)| (format!("model.{name}"), var.as_detached_tensor()))
-        .collect();
-    for (name, t) in optimizer {
-        if tensors.insert(name.clone(), t.detach()).is_some() {
-            return Err(Error::Invalid("duplicate checkpoint tensor".into()));
-        }
-    }
-    let weights = path.join("weights.safetensors");
-    candle_core::safetensors::save(&tensors, &weights)?;
-    std::fs::File::open(&weights)?.sync_all()?;
-    tokenizer.save(&path.join("tokenizer.json"))?;
-    let cap = model.config.parameters() * 12 + 1024 * 1024;
-    let bytes = read_bounded(&weights, cap)?;
-    manifest.weights_sha256 = hash(&bytes);
-    manifest.weights_bytes = bytes.len();
-    manifest.tokenizer_sha256 = tokenizer.id();
-    manifest.architecture = model.config.clone();
-    manifest.tensors = tensors
-        .iter()
-        .map(|(k, t)| (k.clone(), t.dims().to_vec()))
-        .collect();
-    validate(&manifest, tokenizer, &bytes)?;
-    let temporary = path.join("manifest.pending");
-    write_new(&temporary, &serde_json::to_vec_pretty(&manifest)?)?;
-    // Atomic no-clobber publication; an interrupted directory without manifest is
-    // explicitly incomplete. Earlier checkpoint directories are never modified.
-    std::fs::hard_link(&temporary, path.join("manifest.json"))?;
-    std::fs::File::open(path)?.sync_all()?;
-    std::fs::remove_file(temporary)?;
-    Ok(manifest)
+pub fn legacy_load(_path: &Path, _device: Device, _resume: bool) -> Result<Loaded> {
+    Err(Error::Unsupported("legacy model format retired; use native R3MODEL".into()))
 }
 pub fn initialized(
     model: &Transformer,
@@ -573,5 +431,5 @@ pub fn initialized(
         model_content_digest: model.weights_content_id()?,
     })
 }
-// Native is the only default loader. Legacy conversion is always explicit.
+// Native is the only loader; retired text checkpoint inputs fail explicitly.
 pub use super::artifact::{load, metadata, save};

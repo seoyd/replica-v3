@@ -474,7 +474,7 @@ fn run() -> Result<()> {
                     replica_v3::codec::Compression::Auto
                 },
             )?;
-            println!("{}", serde_json::to_string(&info)?);
+            println!("{}", replica_v3::binary::describe(&info)?);
             return Ok(());
         }
         let overlay = journal
@@ -508,7 +508,7 @@ fn run() -> Result<()> {
         match command {
             Archives::Inspect => println!(
                 "{}\nindex_rebuild_ms={:.3} live_sqlite_replacement=false",
-                serde_json::to_string(&archive.info)?,
+                replica_v3::binary::describe(&archive.info)?,
                 archive.index_rebuild_ms
             ),
             Archives::Show {
@@ -571,7 +571,7 @@ fn run() -> Result<()> {
                 };
                 println!(
                     "{}",
-                    serde_json::to_string(&archive.directed_graph(&q, &seeds, direction)?)?
+                    replica_v3::binary::describe(&archive.directed_graph(&q, &seeds, direction)?)?
                 );
             }
             Archives::Search {
@@ -589,7 +589,7 @@ fn run() -> Result<()> {
                 q.before = before;
                 q.history = history;
                 q.graph = !lexical_only;
-                println!("{}", serde_json::to_string(&archive.search(&q)?)?);
+                println!("{}", replica_v3::binary::describe(&archive.search(&q)?)?);
             }
             Archives::Export { .. } => unreachable!(),
         }
@@ -619,7 +619,7 @@ fn run() -> Result<()> {
             return Err(Error::Cancelled);
         }
         println!("{}", response.text);
-        eprintln!("{}", serde_json::to_string(&response.generation)?);
+        eprintln!("{}", replica_v3::binary::describe(&response.generation)?);
         return Ok(());
     }
     let path = cli.db.map(Ok).unwrap_or_else(default_db)?;

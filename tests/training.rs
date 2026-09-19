@@ -8,9 +8,9 @@ mod data;
 fn native_assertion_bytes(path: &std::path::Path, split: &str) -> Vec<u8> {
     let corpus = data::native::read(path).unwrap();
     match split {
-        "train.json" => serde_json::to_vec(&corpus.train).unwrap(),
-        "validation.json" => serde_json::to_vec(&corpus.validation).unwrap(),
-        "manifest.json" => serde_json::to_vec(&corpus.manifest).unwrap(),
+        "train.r3b" => replica_v3::binary::to_vec(&corpus.train).unwrap(),
+        "validation.r3b" => replica_v3::binary::to_vec(&corpus.validation).unwrap(),
+        "manifest.r3b" => replica_v3::binary::to_vec(&corpus.manifest).unwrap(),
         _ => panic!("unknown test split"),
     }
 }
@@ -20,12 +20,13 @@ fn harness_m04_cli_close_reports_stopped_arm_before_any_replay() {
     for name in ["C", "W"] {
         let path = dir.path().join(name);
         std::fs::create_dir(&path).unwrap();
-        std::fs::write(path.join("result.json"), br#"{"reason":"CANCELLED","comparison_eligible":false,"final_evaluation_complete":false}"#).unwrap();
+        std::fs::write(path.join("result.r3b"), replica_v3::binary::to_vec(&replica_v3::binary::record!({"reason":"CANCELLED","comparison_eligible":false,"final_evaluation_complete":false})).unwrap()).unwrap();
     }
     let output = dir.path().join("closed");
     let result = Command::new(env!("CARGO_BIN_EXE_replica-train"))
         .args([
             "recovery",
+            "--archived-controls",
             "close",
             "--fixture",
             "absent-fixture",
@@ -45,13 +46,10 @@ fn harness_m04_cli_close_reports_stopped_arm_before_any_replay() {
         .output()
         .unwrap();
     assert!(!result.status.success());
-    assert!(
-        String::from_utf8(result.stderr)
-            .unwrap()
-            .contains("INELIGIBLE_OR_UNVERIFIED_ARM")
-    );
-    let summary: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(output.join("summary.json")).unwrap()).unwrap();
+    let error = String::from_utf8(result.stderr).unwrap();
+    assert!(error.contains("INELIGIBLE_OR_UNVERIFIED_ARM"), "{error}");
+    let summary: replica_v3::binary::Value =
+        replica_v3::binary::from_slice(&std::fs::read(output.join("summary.r3b")).unwrap()).unwrap();
     assert_eq!(summary["comparison_eligible"], false);
     assert_eq!(summary["candidate_eligible"], false);
     assert_eq!(summary["model_calls"], 0);
@@ -59,7 +57,7 @@ fn harness_m04_cli_close_reports_stopped_arm_before_any_replay() {
 }
 #[test]
 fn harness_m01_m02_malformed_cli_rejects_before_output_or_model_load() {
-    use serde_json::{Value, json};
+    use replica_v3::binary::{Value, record};
     use std::{
         process::Stdio,
         time::{Duration, Instant},
@@ -82,10 +80,10 @@ fn harness_m01_m02_malformed_cli_rejects_before_output_or_model_load() {
         .output()
         .unwrap();
     assert!(prepared.status.success());
-    let original_train = native_assertion_bytes(&source, "train.json");
-    let original_validation = native_assertion_bytes(&source, "validation.json");
+    let original_train = native_assertion_bytes(&source, "train.r3b");
+    let original_validation = native_assertion_bytes(&source, "validation.r3b");
     let original_manifest: Value =
-        serde_json::from_slice(&native_assertion_bytes(&source, "manifest.json")).unwrap();
+        replica_v3::binary::from_slice(&native_assertion_bytes(&source, "manifest.r3b")).unwrap();
     for (case, entity, context, value) in [
         ("entity", "", "구역1", "동쪽"),
         ("context", "센서31", "", "동쪽"),
@@ -96,7 +94,7 @@ fn harness_m01_m02_malformed_cli_rejects_before_output_or_model_load() {
     ] {
         let corpus = dir.path().join(case);
         let qa = case == "qa-name";
-        let mut rows: Vec<Value> = serde_json::from_slice(if qa {
+        let mut rows: Vec<Value> = replica_v3::binary::from_slice(if qa {
             &original_validation
         } else {
             &original_train
@@ -107,31 +105,31 @@ fn harness_m01_m02_malformed_cli_rejects_before_output_or_model_load() {
             .position(|e| e["category"] == 0 && !e["family"].as_str().unwrap().starts_with("copy/"))
             .unwrap();
         for row in &mut rows[start..start + if qa { 1 } else { 4 }] {
-            row["request"]["input"] = json!(format!(
+            row["request"]["input"] = record!(format!(
                 "{}의 {context} 이동 지시와 근거는?",
                 if qa { "장비31" } else { entity }
             ));
-            row["binding"] = json!(format!("{entity}/{context}/{value}"));
+            row["binding"] = record!(format!("{entity}/{context}/{value}"));
             let records = row["request"]["evidence"]["items"].as_array_mut().unwrap();
             records.truncate(2);
             records[0]["original_excerpt"] =
-                json!(format!("{entity}의 {context} 이동 지시는 {value}이다."));
-            records[0]["version_status"] = json!("current");
-            records[1]["original_excerpt"] = json!("장비32의 구역2 이동 지시는 서쪽이다.");
-            records[1]["version_status"] = json!("current");
+                record!(format!("{entity}의 {context} 이동 지시는 {value}이다."));
+            records[0]["version_status"] = record!("current");
+            records[1]["original_excerpt"] = record!("장비32의 구역2 이동 지시는 서쪽이다.");
+            records[1]["version_status"] = record!("current");
             let answer = format!(
                 "{} [event:{}]",
                 records[0]["original_excerpt"].as_str().unwrap(),
                 records[0]["event_id"]
             );
-            row["answer"] = json!(answer);
+            row["answer"] = record!(answer);
         }
-        let changed = serde_json::to_vec(&rows).unwrap();
+        let changed = replica_v3::binary::to_vec(&rows).unwrap();
         let split = if qa { "validation" } else { "train" };
         let fixture = data::native::from_episodes(
-            serde_json::from_value(original_manifest.clone()).unwrap(),
-            serde_json::from_slice(if qa { &original_train } else { &changed }).unwrap(),
-            serde_json::from_slice(if qa { &changed } else { &original_validation }).unwrap(),
+            replica_v3::binary::from_value(original_manifest.clone()).unwrap(),
+            replica_v3::binary::from_slice(if qa { &original_train } else { &changed }).unwrap(),
+            replica_v3::binary::from_slice(if qa { &changed } else { &original_validation }).unwrap(),
         )
         .unwrap();
         data::native::write(&corpus, &fixture, true).unwrap();
@@ -188,21 +186,21 @@ fn harness_m01_m02_malformed_cli_rejects_before_output_or_model_load() {
         );
         assert!(!output.exists(), "malformed input published output");
         assert_eq!(
-            serde_json::from_slice::<Value>(&native_assertion_bytes(
+            replica_v3::binary::from_slice::<Value>(&native_assertion_bytes(
                 &corpus,
-                &format!("{split}.json")
+                &format!("{split}.r3b")
             ))
             .unwrap(),
-            serde_json::from_slice::<Value>(&changed).unwrap()
+            replica_v3::binary::from_slice::<Value>(&changed).unwrap()
         );
         assert_eq!(std::fs::read(&corpus).unwrap(), before);
     }
     assert_eq!(
-        native_assertion_bytes(&source, "train.json"),
+        native_assertion_bytes(&source, "train.r3b"),
         original_train
     );
     assert_eq!(
-        native_assertion_bytes(&source, "validation.json"),
+        native_assertion_bytes(&source, "validation.r3b"),
         original_validation
     );
 }
@@ -264,8 +262,8 @@ fn ordinary_qa_ablation_cli_keeps_gold_and_distinguishes_question_from_record() 
     )
     .unwrap();
     let artifact_hash = hash(&std::fs::read(&artifact).unwrap());
-    let validation_bytes = native_assertion_bytes(&corpus, "validation.json");
-    let validation: Vec<serde_json::Value> = serde_json::from_slice(&validation_bytes).unwrap();
+    let validation_bytes = native_assertion_bytes(&corpus, "validation.r3b");
+    let validation: Vec<replica_v3::binary::Value> = replica_v3::binary::from_slice(&validation_bytes).unwrap();
     let cases: Vec<_> = validation
         .iter()
         .filter(|r| {
@@ -299,11 +297,7 @@ fn ordinary_qa_ablation_cli_keeps_gold_and_distinguishes_question_from_record() 
             args.push("--single-qa-record");
         }
         run(&args);
-        let rows: Vec<serde_json::Value> = std::fs::read_to_string(output)
-            .unwrap()
-            .lines()
-            .map(|s| serde_json::from_str(s).unwrap())
-            .collect();
+        let rows: Vec<replica_v3::binary::Value> = replica_v3::binary::read_records(&output).unwrap();
         assert_eq!(rows[0]["oracle_question_ablation"], question);
         assert_eq!(rows[0]["oracle_record_selection"], record);
         assert_eq!(rows[0]["oracle_field_task_label"], false);
@@ -355,7 +349,7 @@ fn ordinary_qa_ablation_cli_keeps_gold_and_distinguishes_question_from_record() 
     }
     assert_eq!(
         validation_bytes,
-        native_assertion_bytes(&corpus, "validation.json")
+        native_assertion_bytes(&corpus, "validation.r3b")
     );
     assert_eq!(artifact_hash, hash(&std::fs::read(artifact).unwrap()));
 }
@@ -529,13 +523,13 @@ fn full_qa_pairs_keep_split_and_bind_question_value_citation_in_both_orders() {
         "8",
     ]);
     assert_eq!(
-        native_assertion_bytes(&source, "validation.json"),
-        native_assertion_bytes(&output, "validation.json")
+        native_assertion_bytes(&source, "validation.r3b"),
+        native_assertion_bytes(&output, "validation.r3b")
     );
-    let original: Vec<serde_json::Value> =
-        serde_json::from_slice(&native_assertion_bytes(&source, "train.json")).unwrap();
-    let train: Vec<serde_json::Value> =
-        serde_json::from_slice(&native_assertion_bytes(&output, "train.json")).unwrap();
+    let original: Vec<replica_v3::binary::Value> =
+        replica_v3::binary::from_slice(&native_assertion_bytes(&source, "train.r3b")).unwrap();
+    let train: Vec<replica_v3::binary::Value> =
+        replica_v3::binary::from_slice(&native_assertion_bytes(&output, "train.r3b")).unwrap();
     assert_eq!(train.len(), 128);
     for group in train.as_chunks::<8>().0 {
         for i in 0..4 {
@@ -550,7 +544,7 @@ fn full_qa_pairs_keep_split_and_bind_question_value_citation_in_both_orders() {
                 .clone();
             reversed.reverse();
             assert_eq!(
-                serde_json::json!(reversed),
+                replica_v3::binary::record!(reversed),
                 b["request"]["evidence"]["items"]
             );
             if let Some(id) = a["id"]
@@ -623,9 +617,9 @@ fn full_qa_pairs_keep_split_and_bind_question_value_citation_in_both_orders() {
     assert!(!out.status.success());
     assert_eq!(
         train,
-        serde_json::from_slice::<Vec<serde_json::Value>>(&native_assertion_bytes(
+        replica_v3::binary::from_slice::<Vec<replica_v3::binary::Value>>(&native_assertion_bytes(
             &output,
-            "train.json"
+            "train.r3b"
         ))
         .unwrap()
     );
@@ -658,13 +652,13 @@ fn query_pairs_require_question_and_evidence_with_validation_unchanged() {
     let read =
         |profile: &str, split: &str| native_assertion_bytes(&dir.path().join(profile), split);
     assert_eq!(
-        read("field-pairs", "validation.json"),
-        read("query-pairs", "validation.json")
+        read("field-pairs", "validation.r3b"),
+        read("query-pairs", "validation.r3b")
     );
-    let before: Vec<serde_json::Value> =
-        serde_json::from_slice(&read("field-pairs", "train.json")).unwrap();
-    let after: Vec<serde_json::Value> =
-        serde_json::from_slice(&read("query-pairs", "train.json")).unwrap();
+    let before: Vec<replica_v3::binary::Value> =
+        replica_v3::binary::from_slice(&read("field-pairs", "train.r3b")).unwrap();
+    let after: Vec<replica_v3::binary::Value> =
+        replica_v3::binary::from_slice(&read("query-pairs", "train.r3b")).unwrap();
     let mut layouts = std::collections::BTreeSet::new();
     for (old, group) in before
         .as_chunks::<4>()
@@ -771,13 +765,13 @@ fn field_pairs_change_only_training_questions_and_selected_value() {
     let read =
         |profile: &str, split: &str| native_assertion_bytes(&dir.path().join(profile), split);
     assert_eq!(
-        read("field-cue", "validation.json"),
-        read("field-pairs", "validation.json")
+        read("field-cue", "validation.r3b"),
+        read("field-pairs", "validation.r3b")
     );
-    let before: Vec<serde_json::Value> =
-        serde_json::from_slice(&read("field-cue", "train.json")).unwrap();
-    let after: Vec<serde_json::Value> =
-        serde_json::from_slice(&read("field-pairs", "train.json")).unwrap();
+    let before: Vec<replica_v3::binary::Value> =
+        replica_v3::binary::from_slice(&read("field-cue", "train.r3b")).unwrap();
+    let after: Vec<replica_v3::binary::Value> =
+        replica_v3::binary::from_slice(&read("field-pairs", "train.r3b")).unwrap();
     let mut forms = BTreeMap::<String, BTreeSet<String>>::new();
     let mut paired = 0;
     for (old_group, group) in before.chunks(4).zip(after.chunks(4)) {
@@ -910,9 +904,9 @@ fn field_cue_targets_are_supported_and_ordinary_qa_is_unchanged() {
             String::from_utf8_lossy(&result.stderr)
         );
     }
-    for split in ["train.json", "validation.json"] {
-        let read = |profile: &str| -> Vec<serde_json::Value> {
-            serde_json::from_slice(&native_assertion_bytes(&dir.path().join(profile), split))
+    for split in ["train.r3b", "validation.r3b"] {
+        let read = |profile: &str| -> Vec<replica_v3::binary::Value> {
+            replica_v3::binary::from_slice(&native_assertion_bytes(&dir.path().join(profile), split))
                 .unwrap()
         };
         let before = read("entity-cue");
@@ -1131,9 +1125,9 @@ fn entity_cue_auxiliary_pairs_require_evidence_and_preserve_ordinary_qa() {
     }
     let names: std::collections::BTreeSet<_> = ["장치", "설비", "센서", "장비"].into();
     let mut copy_questions = Vec::new();
-    for split in ["train.json", "validation.json"] {
-        let read = |profile: &str| -> Vec<serde_json::Value> {
-            serde_json::from_slice(&native_assertion_bytes(&dir.path().join(profile), split))
+    for split in ["train.r3b", "validation.r3b"] {
+        let read = |profile: &str| -> Vec<replica_v3::binary::Value> {
+            replica_v3::binary::from_slice(&native_assertion_bytes(&dir.path().join(profile), split))
                 .unwrap()
         };
         let original = read("record-copy");
@@ -1244,9 +1238,9 @@ fn record_copy_targets_keep_source_bytes_and_temporal_qa() {
     }
     let mut copied = 0;
     let mut rephrased = 0;
-    for split in ["train.json", "validation.json"] {
-        let read = |profile: &str| -> Vec<serde_json::Value> {
-            serde_json::from_slice(&native_assertion_bytes(&dir.path().join(profile), split))
+    for split in ["train.r3b", "validation.r3b"] {
+        let read = |profile: &str| -> Vec<replica_v3::binary::Value> {
+            replica_v3::binary::from_slice(&native_assertion_bytes(&dir.path().join(profile), split))
                 .unwrap()
         };
         let original = read("evidence-first");
@@ -1296,7 +1290,7 @@ fn record_copy_targets_keep_source_bytes_and_temporal_qa() {
                     assert_eq!(before["answer"], after["answer"]);
                 }
                 if before["request"]["input"] != after["request"]["input"] {
-                    assert_eq!(split, "train.json", "validation QA stays independent");
+                    assert_eq!(split, "train.r3b", "validation QA stays independent");
                     assert_eq!(after["category"], 1);
                     assert!(
                         after["family"]
@@ -1353,9 +1347,9 @@ fn evidence_first_training_preserves_questions_records_and_supported_answers() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    for split in ["train.json", "validation.json"] {
-        let read = |profile: &str| -> Vec<serde_json::Value> {
-            serde_json::from_slice(&native_assertion_bytes(&dir.path().join(profile), split))
+    for split in ["train.r3b", "validation.r3b"] {
+        let read = |profile: &str| -> Vec<replica_v3::binary::Value> {
+            replica_v3::binary::from_slice(&native_assertion_bytes(&dir.path().join(profile), split))
                 .unwrap()
         };
         let original = read("counterfactual");
@@ -1434,11 +1428,11 @@ fn counterfactual_corpus_requires_evidence_for_identical_questions() {
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("variants are not independent questions")
     );
-    let read = |file| -> Vec<serde_json::Value> {
-        serde_json::from_slice(&native_assertion_bytes(&corpus, file)).unwrap()
+    let read = |file| -> Vec<replica_v3::binary::Value> {
+        replica_v3::binary::from_slice(&native_assertion_bytes(&corpus, file)).unwrap()
     };
-    let train = read("train.json");
-    let validation = read("validation.json");
+    let train = read("train.r3b");
+    let validation = read("validation.r3b");
     assert_eq!(train.len(), 240);
     assert_eq!(validation.len(), 50);
     let mut changed_positions = std::collections::BTreeSet::new();
@@ -1544,11 +1538,11 @@ fn curriculum_corpus_keeps_copy_training_explicit_and_time_independent() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let read = |name| -> Vec<serde_json::Value> {
-        serde_json::from_slice(&native_assertion_bytes(&corpus, name)).unwrap()
+    let read = |name| -> Vec<replica_v3::binary::Value> {
+        replica_v3::binary::from_slice(&native_assertion_bytes(&corpus, name)).unwrap()
     };
-    let train = read("train.json");
-    let validation = read("validation.json");
+    let train = read("train.r3b");
+    let validation = read("validation.r3b");
     assert_eq!(train.len(), 120);
     let copy: Vec<_> = train
         .iter()
@@ -1610,11 +1604,11 @@ fn balanced_corpus_varies_distractor_identity_context_and_version_order() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let read = |file| -> Vec<serde_json::Value> {
-        serde_json::from_slice(&native_assertion_bytes(&corpus, file)).unwrap()
+    let read = |file| -> Vec<replica_v3::binary::Value> {
+        replica_v3::binary::from_slice(&native_assertion_bytes(&corpus, file)).unwrap()
     };
-    let train = read("train.json");
-    let validation = read("validation.json");
+    let train = read("train.r3b");
+    let validation = read("validation.r3b");
     let mut signs = std::collections::BTreeSet::new();
     let mut id_signs = std::collections::BTreeSet::new();
     let mut context_prefixes = std::collections::BTreeSet::new();
@@ -1635,7 +1629,7 @@ fn balanced_corpus_varies_distractor_identity_context_and_version_order() {
                 replica_v3::app::citations(episode["answer"].as_str().unwrap()).unwrap()[0];
             let correct = rows.iter().find(|r| r["event_id"] == target).unwrap();
             let other = rows.iter().find(|r| r["event_id"] != target).unwrap();
-            let number = |row: &serde_json::Value| -> u64 {
+            let number = |row: &replica_v3::binary::Value| -> u64 {
                 row["original_excerpt"]
                     .as_str()
                     .unwrap()
@@ -1731,9 +1725,9 @@ fn grounding_corpus_teaches_binding_and_supported_sequence_without_runtime_rende
     let mut modes = std::collections::BTreeSet::new();
     let mut sequence = 0;
     let mut restored_past = 0;
-    for filename in ["train.json", "validation.json"] {
-        let rows: Vec<serde_json::Value> =
-            serde_json::from_slice(&native_assertion_bytes(&corpus, filename)).unwrap();
+    for filename in ["train.r3b", "validation.r3b"] {
+        let rows: Vec<replica_v3::binary::Value> =
+            replica_v3::binary::from_slice(&native_assertion_bytes(&corpus, filename)).unwrap();
         for row in rows {
             let family = row["family"].as_str().unwrap();
             let evidence = row["request"]["evidence"]["items"].as_array().unwrap();
@@ -1812,7 +1806,7 @@ fn grounding_corpus_teaches_binding_and_supported_sequence_without_runtime_rende
 fn corpus_and_tokenizer_use_train_only_and_reject_split_leakage() {
     let d = tempfile::tempdir().unwrap();
     let corpus = d.path().join("corpus");
-    let tokenizer = d.path().join("tokenizer.json");
+    let tokenizer = d.path().join("tokenizer.r3b");
     let run = |args: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_replica-train"))
             .args(args)
@@ -1860,9 +1854,9 @@ fn corpus_and_tokenizer_use_train_only_and_reject_split_leakage() {
         input.to_str().unwrap(),
     ]);
     assert!(out.status.success());
-    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(json["ids"], serde_json::json!(tok.encode(raw).unwrap()));
-    assert_eq!(json["roundtrip_sha256"], replica_v3::neural::hash(raw));
+    let record_bytes: replica_v3::binary::Value = replica_v3::binary::from_slice(&out.stdout).unwrap();
+    assert_eq!(record_bytes["ids"], replica_v3::binary::record!(tok.encode(raw).unwrap()));
+    assert_eq!(record_bytes["roundtrip_sha256"], replica_v3::neural::hash(raw));
     let original_bytes = std::fs::read(&corpus).unwrap();
     let original = data::native::read(&corpus).unwrap();
     let train = data::native::ordered_bytes(&original.train);
@@ -1952,6 +1946,24 @@ fn native_training_resume_is_identical_in_fresh_processes() {
     ]);
     let a = checkpoint::load(&full.join("final"), Device::Cpu, true).unwrap();
     let b = checkpoint::load(&resumed.join("final"), Device::Cpu, true).unwrap();
+    // All persisted training metadata is native; tensor checkpoints retain R3MODEL.
+    for root in [&full, &partial, &resumed] {
+        let control: replica_v3::binary::Value = replica_v3::binary::from_slice(
+            &std::fs::read(root.join("train-control.r3b")).unwrap(),
+        ).unwrap();
+        assert!(control.is_object());
+        for entry in std::fs::read_dir(root).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_file() {
+                let bytes = std::fs::read(&path).unwrap();
+                assert!(bytes.starts_with(b"R3MODEL") || bytes.starts_with(b"R3BIN"), "{}", path.display());
+                assert!(!matches!(path.extension().and_then(|s| s.to_str()), Some("json" | "jsonl")));
+                if bytes.starts_with(b"R3BIN") {
+                    replica_v3::binary::from_slice::<replica_v3::binary::Value>(&bytes).unwrap();
+                }
+            }
+        }
+    }
     assert_eq!(a.manifest.weights_sha256, b.manifest.weights_sha256);
     assert_eq!(a.optimizer.len(), a.model.vars.len() * 2);
     for (name, t) in &a.optimizer {
@@ -2124,26 +2136,34 @@ fn curriculum_resume_crosses_sampling_boundary_in_fresh_process() {
     let dir = tempfile::tempdir().unwrap();
     let corpus = dir.path().join("corpus");
     std::fs::create_dir(&corpus).unwrap();
-    let episodes = |split: &str, values: &[&str]| -> Vec<serde_json::Value> {
+    let episodes = |split: &str, values: &[&str]| -> Vec<replica_v3::binary::Value> {
         values.iter().enumerate().map(|(i, value)| {
             let input = format!("source {value}");
             let identity = format!("{split}-{i}");
-            serde_json::json!({"id":identity,"category":3,"family":format!("{}/{split}",if i % 2 == 0 {"copy"} else {"qa"}),"binding":identity,"sequence":hash(input.as_bytes()),"request":{"request_id":identity,"system":"","input":input,"evidence":replica_v3::retrieval::EvidenceBundle::default(),"limits":{"max_tokens":8,"context_tokens":64,"timeout_ms":5000}},"answer":value})
+            replica_v3::binary::record!({"id":identity,"category":3,"family":format!("{}/{split}",if i % 2 == 0 {"copy"} else {"qa"}),"binding":identity,"sequence":hash(input.as_bytes()),"request":{"request_id":identity,"system":"","input":input,"evidence":replica_v3::retrieval::EvidenceBundle::default(),"limits":{"max_tokens":8,"context_tokens":64,"timeout_ms":5000}},"answer":value})
         }).collect()
     };
-    let train = serde_json::to_vec(&episodes("train", &["12", "left", "47", "right"])).unwrap();
-    let validation = serde_json::to_vec(&episodes("validation", &["98", "up"])).unwrap();
+    let train = replica_v3::binary::to_vec(&episodes("train", &["12", "left", "47", "right"])).unwrap();
+    let validation = replica_v3::binary::to_vec(&episodes("validation", &["98", "up"])).unwrap();
     let split = |name: &str, bytes: &[u8], count: usize| {
-        std::fs::write(corpus.join(format!("{name}.json")), bytes).unwrap();
-        serde_json::json!({"file":format!("{name}.json"),"sha256":hash(bytes),"bytes":bytes.len(),"documents":count,"tokens":null})
+        std::fs::write(corpus.join(format!("{name}.r3b")), bytes).unwrap();
+        replica_v3::binary::record!({"file":format!("{name}.r3b"),"sha256":hash(bytes),"bytes":bytes.len(),"documents":count,"tokens":null})
     };
-    let manifest = serde_json::json!({"version":1,"scope":"SYNTHETIC_ONLY","permission":"test fixture","generator":"resume-boundary-fixture","seed":29,"split_rule":"disjoint episodes and families","train":split("train", &train, 4),"validation":split("validation", &validation, 2)});
+    let manifest = replica_v3::binary::record!({"version":1,"scope":"SYNTHETIC_ONLY","permission":"test fixture","generator":"resume-boundary-fixture","seed":29,"split_rule":"disjoint episodes and families","train":split("train", &train, 4),"validation":split("validation", &validation, 2)});
     std::fs::write(
-        corpus.join("manifest.json"),
-        serde_json::to_vec(&manifest).unwrap(),
+        corpus.join("manifest.r3b"),
+        replica_v3::binary::to_vec(&manifest).unwrap(),
     )
     .unwrap();
-    let tok = ByteBpe::train(&[b"source 12 left 47 right".to_vec()], &hash(&train), 280).unwrap();
+    let native = data::native::from_episodes(
+        replica_v3::binary::from_value(manifest.clone()).unwrap(),
+        replica_v3::binary::from_slice(&train).unwrap(),
+        replica_v3::binary::from_slice(&validation).unwrap(),
+    ).unwrap();
+    let train_hash = native.manifest.train.sha256.clone();
+    let corpus = dir.path().join("source.r3c");
+    data::native::write(&corpus, &native, false).unwrap();
+    let tok = ByteBpe::train(&[b"source 12 left 47 right".to_vec()], &train_hash, 280).unwrap();
     let model = Transformer::init(Config::tiny(tok.vocab_size()), 29, Device::Cpu).unwrap();
     let initial = dir.path().join("initial");
     checkpoint::save(
@@ -2232,7 +2252,7 @@ fn curriculum_resume_crosses_sampling_boundary_in_fresh_process() {
         "{}",
         String::from_utf8_lossy(&exposure.stderr)
     );
-    let exposure: serde_json::Value = serde_json::from_slice(&exposure.stdout).unwrap();
+    let exposure: replica_v3::binary::Value = replica_v3::binary::from_slice(&exposure.stdout).unwrap();
     assert_eq!(exposure["draws"], 4);
     assert_eq!(exposure["sampler_state_matches"], true);
     for i in [1, 3] {
@@ -2243,7 +2263,7 @@ fn curriculum_resume_crosses_sampling_boundary_in_fresh_process() {
     }
     let exposure = audit("full/final");
     assert!(exposure.status.success());
-    let exposure: serde_json::Value = serde_json::from_slice(&exposure.stdout).unwrap();
+    let exposure: replica_v3::binary::Value = replica_v3::binary::from_slice(&exposure.stdout).unwrap();
     assert_eq!(exposure["draws"], 8);
     let mut corrupted =
         checkpoint::load(&dir.path().join("full/final"), Device::Cpu, true).unwrap();
@@ -2323,8 +2343,8 @@ fn curriculum_resume_crosses_sampling_boundary_in_fresh_process() {
         grouped_resumed.manifest.weights_sha256
     );
     assert_eq!(
-        serde_json::to_value(&grouped_full.manifest.training).unwrap(),
-        serde_json::to_value(&grouped_resumed.manifest.training).unwrap()
+        replica_v3::binary::to_value(&grouped_full.manifest.training).unwrap(),
+        replica_v3::binary::to_value(&grouped_resumed.manifest.training).unwrap()
     );
     assert_eq!(
         grouped_full
@@ -2351,7 +2371,7 @@ fn curriculum_resume_crosses_sampling_boundary_in_fresh_process() {
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
-    let exposure: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    let exposure: replica_v3::binary::Value = replica_v3::binary::from_slice(&result.stdout).unwrap();
     assert_eq!(exposure["draws"], 4);
     assert_eq!(exposure["sampler_state_matches"], true);
     for (i, draws) in [2, 0, 2, 0].into_iter().enumerate() {
@@ -2360,22 +2380,30 @@ fn curriculum_resume_crosses_sampling_boundary_in_fresh_process() {
     let changed = dir.path().join("changed-corpus");
     std::fs::create_dir(&changed).unwrap();
     let next_train =
-        serde_json::to_vec(&episodes("next-train", &["31", "down", "68", "back"])).unwrap();
+        replica_v3::binary::to_vec(&episodes("next-train", &["31", "down", "68", "back"])).unwrap();
     let next_validation =
-        serde_json::to_vec(&episodes("next-validation", &["85", "north"])).unwrap();
+        replica_v3::binary::to_vec(&episodes("next-validation", &["85", "north"])).unwrap();
     let mut next_manifest = manifest.clone();
     for (name, bytes, count) in [
         ("train", &next_train, 4),
         ("validation", &next_validation, 2),
     ] {
-        std::fs::write(changed.join(format!("{name}.json")), bytes).unwrap();
-        next_manifest[name] = serde_json::json!({"file":format!("{name}.json"),"sha256":hash(bytes),"bytes":bytes.len(),"documents":count,"tokens":null});
+        std::fs::write(changed.join(format!("{name}.r3b")), bytes).unwrap();
+        next_manifest[name] = replica_v3::binary::record!({"file":format!("{name}.r3b"),"sha256":hash(bytes),"bytes":bytes.len(),"documents":count,"tokens":null});
     }
     std::fs::write(
-        changed.join("manifest.json"),
-        serde_json::to_vec(&next_manifest).unwrap(),
+        changed.join("manifest.r3b"),
+        replica_v3::binary::to_vec(&next_manifest).unwrap(),
     )
     .unwrap();
+    let native = data::native::from_episodes(
+        replica_v3::binary::from_value(next_manifest.clone()).unwrap(),
+        replica_v3::binary::from_slice(&next_train).unwrap(),
+        replica_v3::binary::from_slice(&next_validation).unwrap(),
+    ).unwrap();
+    let next_train_hash = native.manifest.train.sha256.clone();
+    let changed = dir.path().join("changed-source.r3c");
+    data::native::write(&changed, &native, false).unwrap();
     let change_source = hash(b"corpus change source fixture");
     let next_run = |name: &str, explicit: bool, partial: bool, resume: bool| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_replica-train"));
@@ -2439,8 +2467,8 @@ fn curriculum_resume_crosses_sampling_boundary_in_fresh_process() {
     assert_eq!(state.config.microbatch, 2);
     assert_eq!(state.config.curriculum_steps, 5);
     assert_eq!(state.config.first_target_weight, 7.);
-    assert_eq!(state.corpus_hash, hash(&next_train));
-    assert_eq!(state.previous_corpora, [hash(&train)]);
+    assert_eq!(state.corpus_hash, next_train_hash);
+    assert_eq!(state.previous_corpora, [train_hash]);
 }
 
 #[test]
@@ -2516,7 +2544,7 @@ fn native_training_cancel_keeps_optimizer_boundary_checkpoint() {
             .success()
     );
     let result = child.wait_with_output().unwrap();
-    let lines = observer.join().unwrap();
+    let _lines = observer.join().unwrap();
     assert!(!result.status.success());
     assert!(String::from_utf8_lossy(&result.stderr).contains("cancelled"));
     let restored = checkpoint::load(&output.join("final"), Device::Cpu, true).unwrap();
@@ -2527,13 +2555,7 @@ fn native_training_cancel_keeps_optimizer_boundary_checkpoint() {
         "cancel integration actual TINY optimizer updates={}",
         state.step
     );
-    let receipt: serde_json::Value = serde_json::from_str(
-        lines
-            .iter()
-            .find_map(|line| line.strip_prefix("TRAIN_CONTROL "))
-            .unwrap(),
-    )
-    .unwrap();
+    let receipt: replica_v3::binary::Value = replica_v3::binary::from_slice(&std::fs::read(output.join("train-control.r3b")).unwrap()).unwrap();
     assert_eq!(receipt["reason"], "CANCELLED");
     assert_eq!(receipt["checkpoint_saved"], true);
     assert_eq!(receipt["work_budget_seconds"], 900.);

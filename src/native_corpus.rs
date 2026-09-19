@@ -164,7 +164,7 @@ pub fn import_legacy(source: &Path, output: &Path, compressed: bool) -> Result<(
     let (m, train, dev) = load_legacy(source)?;
     let mut c = from_episodes(m.clone(), train, dev)?;
     for (role, name) in [
-        ("manifest", "manifest.json"),
+        ("manifest", "manifest.r3b"),
         ("train", m.train.file.as_str()),
         ("validation", m.validation.file.as_str()),
     ] {
@@ -179,7 +179,7 @@ pub fn import_legacy(source: &Path, output: &Path, compressed: bool) -> Result<(
             return Err(bad("import source changed"));
         }
         if role == "manifest" {
-            let observed: CorpusManifest = serde_json::from_slice(&bytes)?;
+            let observed: CorpusManifest = replica_v3::binary::from_slice(&bytes)?;
             let mut a = Vec::new();
             let mut b = Vec::new();
             manifest_encode(&observed, &mut a);
@@ -667,8 +667,8 @@ mod tests {
         m.train = save_split(&legacy, "train", &c.train).unwrap();
         m.validation = save_split(&legacy, "validation", &c.validation).unwrap();
         std::fs::write(
-            legacy.join("manifest.json"),
-            serde_json::to_vec(&m).unwrap(),
+            legacy.join("manifest.r3b"),
+            replica_v3::binary::to_vec(&m).unwrap(),
         )
         .unwrap();
         let native = dir.path().join("source.r3c");

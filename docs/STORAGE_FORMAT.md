@@ -1,5 +1,57 @@
 # B0 storage format v1
 
+## Active project serialization: R3BIN v1 (2026-09-19)
+
+All project JSON serialization has been removed. SQLite remains for operational
+memory; its RPV3 payload and R3ARCH snapshots/journal are unchanged. R3MODEL still
+stores native F32 weights and, for resume artifacts, optimizer/objective/state.
+R3CORP source corpus, R3TOK train cache and typed R3ER experiment records keep
+their existing layouts. Model weights have not newly become binary in this change.
+
+R3BIN is the project-owned codec for former text metadata/configuration, standalone
+tokenizer files, IPC request/response frames, older diagnostic schemas and checker
+reports. It uses the existing bounded byte reader, canonical varints and SHA256;
+Serde only maps Rust types to typed values, with no JSON parser or text body.
+
+| Offset | Bytes | Meaning |
+| --- | ---: | --- |
+| 0 | 8 | `R3BIN` followed by three zero bytes |
+| 8 | 2 | version1, little endian |
+| 10 | 2 | flags0 |
+| 12 | 8 | payload byte count, little endian |
+| 20 | 32 | SHA256 of typed payload |
+| 52 | variable | typed payload |
+
+Tags: null0, false1, true2, unsigned varint3, negative zigzag-varint4,
+IEEE-f32 little-endian bits5, IEEE-f64 bits6, length-prefixed strict UTF-8 string7,
+raw bytes8, sequence9, sorted string-key map10. Sequences/maps start with a count;
+each map key is length-prefixed UTF-8. Unknown tags/version/flags, noncanonical
+integers, duplicate/unordered keys, invalid UTF-8, truncation, checksum failure,
+trailing bytes, excessive nesting/count/size are rejected. f64 bits including
+negative zero remain exact; model/domain validators still reject nonfinite values
+where required. Limits: payload128MiB, total items1,000,000, nesting64.
+
+Single metadata files use `.r3b`; record streams use `.r3rows` and concatenate
+complete frames with no newline separator. Worker transport retains its outer
+length prefix and bounds, now carrying R3BIN. Parent and worker must be upgraded
+together. New wire hashes change with these bytes; semantic mapping/model hashes
+retain their existing definitions. The native model's historical provenance
+fields mentioning JSON hold digests only; no JSON is embedded or reopened.
+
+Training best-result metadata and terminal usage are R3BIN; final weights/Adam
+remain R3MODEL. Human progress/Markdown reports remain text, never authoritative
+serialized model state. `corpus import-legacy` now only accepts an explicit R3BIN
+manifest/split directory into R3CORP; it cannot read historical JSON. The retired
+text/safetensors model import errors without reading or publishing a model.
+Old artifacts were deleted by user instruction, so no old-format restoration or
+silent hash conversion is claimed. Historical JSON descriptions below do not
+describe the active interface. Comparisons in the updated storage probes are
+R3BIN versus schema-specific binary; old JSON benchmark numbers are historical.
+
+Direct project serde_json/safetensors dependencies are absent. Existing Candle
+and tokenizers dependencies may retain their internal JSON support. No promise
+of a JSON-free transitive dependency tree is made.
+
 ## Terminal count compatibility and diagnostic evidence
 
 R3ER kind14 and the objective-metrics variant use a common512 segment limit for

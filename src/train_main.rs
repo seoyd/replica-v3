@@ -14,9 +14,9 @@ struct Cli {
 enum Commands {
     /// Frozen, bounded quality recovery diagnostics; never a product answer path.
     Recovery {
-        /// Explicit historical JSON controls; native commands need no legacy reader.
+        /// Archived control schemas using R3BIN metadata; native commands use R3ER.
         #[arg(long)]
-        legacy_json: bool,
+        archived_controls: bool,
         #[command(subcommand)]
         command: training::recovery::Command,
     },
@@ -191,7 +191,7 @@ enum Contrast {
 }
 #[derive(Subcommand)]
 enum Models {
-    /// Explicit legacy JSON+safetensors conversion; never changes the source directory.
+    /// Retired model import: rejected; use native R3MODEL checkpoints.
     ImportLegacy {
         #[arg(long)]
         source: PathBuf,
@@ -226,7 +226,7 @@ enum Models {
 }
 #[derive(Subcommand)]
 enum Corpus {
-    /// Explicit read-only JSON import. Normal train/eval accepts only native source files.
+    /// Import R3BIN manifest/splits into R3CORP. Text input is rejected.
     ImportLegacy {
         #[arg(long)]
         source: PathBuf,
@@ -317,10 +317,10 @@ fn run() -> Result<()> {
         } => data::binding_pairs(&source, &output),
         Commands::Recovery {
             command,
-            legacy_json,
+            archived_controls,
         } => {
-            if !legacy_json && !matches!(command, training::recovery::Command::Native { .. }) {
-                return Err(replica_v3::Error::Invalid("historical recovery requires explicit --legacy-json; use recovery native for native source execution".into()));
+            if !archived_controls && !matches!(command, training::recovery::Command::Native { .. }) {
+                return Err(replica_v3::Error::Invalid("historical recovery requires explicit --archived-controls; use recovery native for native source execution".into()));
             }
             training::recovery::run(command)
         }
@@ -485,7 +485,7 @@ fn run() -> Result<()> {
             let model = Transformer::init(config, seed, candle_core::Device::Cpu)?;
             let manifest = checkpoint::initialized(&model, &tok, seed, source_id)?;
             let saved = checkpoint::save(&output, &model, &tok, manifest, &Default::default())?;
-            println!("{}", serde_json::to_string_pretty(&saved)?);
+            println!("{}", replica_v3::binary::describe(&saved)?);
             Ok(())
         }
         Commands::Model {
@@ -493,7 +493,7 @@ fn run() -> Result<()> {
         } => {
             let loaded =
                 replica_v3::neural::checkpoint::load(&checkpoint, candle_core::Device::Cpu, false)?;
-            println!("{}", serde_json::to_string_pretty(&loaded.manifest)?);
+            println!("{}", replica_v3::binary::describe(&loaded.manifest)?);
             println!(
                 "parameters={} actual_weight_hash={}",
                 loaded.model.config.parameters(),
@@ -589,10 +589,7 @@ fn run() -> Result<()> {
             if recovered != bytes {
                 return Err(replica_v3::Error::Corrupt("tokenizer roundtrip".into()));
             }
-            println!(
-                "{}",
-                serde_json::json!({"tokenizer_sha256":tok.id(),"vocab":tok.vocab_size(),"ids":ids,"roundtrip_sha256":hash(&recovered)})
-            );
+            replica_v3::binary::print_record(&replica_v3::binary::record!({"tokenizer_sha256":tok.id(),"vocab":tok.vocab_size(),"ids":ids,"roundtrip_sha256":hash(&recovered)}))?;
             Ok(())
         }
         Commands::Corpus {

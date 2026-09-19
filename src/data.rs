@@ -242,7 +242,7 @@ pub fn load_split_legacy(root: &Path, split: &Split) -> Result<Vec<Episode>> {
     if hash(&bytes) != split.sha256 || bytes.len() != split.bytes {
         return Err(Error::Corrupt("corpus hash/size".into()));
     }
-    let docs: Vec<Episode> = serde_json::from_slice(&bytes)?;
+    let docs: Vec<Episode> = replica_v3::binary::from_slice(&bytes)?;
     if docs.len() != split.documents {
         return Err(Error::Invalid("corpus count".into()));
     }
@@ -289,7 +289,7 @@ pub(crate) fn validate_episodes(docs: &[Episode]) -> Result<()> {
 }
 pub fn load_legacy(root: &Path) -> Result<(CorpusManifest, Vec<Episode>, Vec<Episode>)> {
     let manifest: CorpusManifest =
-        serde_json::from_slice(&read_bounded(&root.join("manifest.json"), 65536)?)?;
+        replica_v3::binary::from_slice(&read_bounded(&root.join("manifest.r3b"), 65536)?)?;
     if manifest.version != 1 {
         return Err(Error::Invalid("corpus version".into()));
     }
@@ -491,11 +491,11 @@ fn synthetic(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
         .collect()
 }
 fn save_split(root: &Path, name: &str, docs: &[Episode]) -> Result<Split> {
-    let bytes = serde_json::to_vec(docs)?;
+    let bytes = replica_v3::binary::to_vec(docs)?;
     if bytes.len() > MAX_CORPUS {
         return Err(Error::Invalid("corpus byte budget".into()));
     }
-    let file = format!("{name}.json");
+    let file = format!("{name}.r3b");
     write_new(&root.join(&file), &bytes)?;
     Ok(Split {
         file,
@@ -899,7 +899,7 @@ fn curriculum(count: usize, seed: u64, validation: bool, balanced: bool) -> Vec<
             },
             sequence: if balanced {
                 hash(
-                    &serde_json::to_vec(&(&question, &items))
+                    &replica_v3::binary::to_vec(&(&question, &items))
                         .expect("serializable synthetic episode"),
                 )
             } else {
@@ -1091,7 +1091,7 @@ fn grounding(count: usize, seed: u64, validation: bool) -> Vec<Episode> {
             if validation { "validation" } else { "train" }
         );
         episode.sequence =
-            hash(&serde_json::to_vec(&(&episode.request.input, items)).expect("synthetic episode"));
+            hash(&replica_v3::binary::to_vec(&(&episode.request.input, items)).expect("synthetic episode"));
     }
     episodes
 }
@@ -1228,7 +1228,7 @@ fn counterfactual(count: usize, seed: u64, validation: bool) -> Result<Vec<Episo
             episode.family = format!("{}/counterfactual/{variant}", base.family);
             episode.request.request_id = episode.id.clone();
             episode.sequence = hash(
-                &serde_json::to_vec(&(&episode.request.input, items)).expect("synthetic variant"),
+                &replica_v3::binary::to_vec(&(&episode.request.input, items)).expect("synthetic variant"),
             );
             out.push(episode);
         }
@@ -1300,7 +1300,7 @@ fn record_copy(count: usize, seed: u64, validation: bool) -> Result<Vec<Episode>
             episode.answer = format!("{} [event:{}]", record.original_excerpt, record.event_id);
         }
         episode.sequence = hash(
-            &serde_json::to_vec(&(&episode.request.input, &episode.request.evidence.items))
+            &replica_v3::binary::to_vec(&(&episode.request.input, &episode.request.evidence.items))
                 .expect("synthetic record-copy episode"),
         );
     }
@@ -1342,7 +1342,7 @@ fn entity_cue(count: usize, seed: u64, validation: bool) -> Result<Vec<Episode>>
         episode.answer = name.into();
         episode.family.push_str("/entity-cue");
         episode.sequence = hash(
-            &serde_json::to_vec(&(&episode.request.input, &episode.request.evidence.items))
+            &replica_v3::binary::to_vec(&(&episode.request.input, &episode.request.evidence.items))
                 .expect("synthetic entity-cue episode"),
         );
     }
@@ -1437,7 +1437,7 @@ fn field_cue(count: usize, seed: u64, validation: bool) -> Result<Vec<Episode>> 
         episode.answer = answer;
         episode.family.push_str(&format!("/{field}"));
         episode.sequence = hash(
-            &serde_json::to_vec(&(&episode.request.input, &episode.request.evidence.items))
+            &replica_v3::binary::to_vec(&(&episode.request.input, &episode.request.evidence.items))
                 .expect("synthetic field-cue episode"),
         );
     }
@@ -1542,7 +1542,7 @@ fn field_pairs(count: usize, seed: u64) -> Result<Vec<Episode>> {
                 _ => unreachable!("own auxiliary field"),
             };
             episode.sequence = hash(
-                &serde_json::to_vec(&(&episode.request.input, &episode.request.evidence.items))
+                &replica_v3::binary::to_vec(&(&episode.request.input, &episode.request.evidence.items))
                     .expect("synthetic paired field episode"),
             );
         }
@@ -1634,7 +1634,7 @@ fn query_pairs(count: usize, seed: u64) -> Result<Vec<Episode>> {
                 parsed[selected].0, parsed[selected].1, episode.answer
             );
             episode.sequence = hash(
-                &serde_json::to_vec(&(&episode.request.input, &episode.request.evidence.items))
+                &replica_v3::binary::to_vec(&(&episode.request.input, &episode.request.evidence.items))
                     .expect("synthetic query-value pair"),
             );
         }
@@ -1739,7 +1739,7 @@ pub fn prepare(
     let manifest=CorpusManifest{version:1,scope:if local.is_empty(){"SYNTHETIC_ONLY"}else{"SYNTHETIC_AND_EXPLICIT_LOCAL"}.into(),permission:"project-generated; supplied paths explicitly authorized for training".into(),generator:revision.into(),seed,split_rule:"episode first; disjoint entity binding, template family and sequence; final test created independently".into(),train:native::split("train",&train),validation:native::split("validation",&validation)};
     let corpus = native::from_episodes(manifest, train, validation.clone())?;
     native::write(root, &corpus, true)?;
-    println!("{}", serde_json::to_string_pretty(&corpus.manifest)?);
+    println!("{}", replica_v3::binary::describe(&corpus.manifest)?);
     if matches!(
         profile,
         "counterfactual" | "evidence-first" | "record-copy" | "entity-cue" | "field-cue"
@@ -1880,7 +1880,7 @@ pub fn binding_pairs(source: &Path, output: &Path) -> Result<()> {
                 parsed[if swapped { 1 - selected } else { selected }].2
             );
             episode.family.push_str("/query-value-pair");
-            episode.sequence = hash(&serde_json::to_vec(&(
+            episode.sequence = hash(&replica_v3::binary::to_vec(&(
                 &episode.request.input,
                 &episode.request.evidence.items,
             ))?);
@@ -1899,7 +1899,7 @@ pub fn binding_pairs(source: &Path, output: &Path) -> Result<()> {
     );
     let corpus = native::from_episodes(manifest, train, validation)?;
     native::write(output, &corpus, true)?;
-    println!("{}", serde_json::to_string_pretty(&corpus.manifest)?);
+    println!("{}", replica_v3::binary::describe(&corpus.manifest)?);
     Ok(())
 }
 pub fn qa_pairs(source: &Path, output: &Path, groups: usize) -> Result<()> {
@@ -2029,7 +2029,7 @@ pub fn qa_pairs(source: &Path, output: &Path, groups: usize) -> Result<()> {
                     if reversed {
                         e.request.evidence.items.reverse();
                     }
-                    e.sequence = hash(&serde_json::to_vec(&(
+                    e.sequence = hash(&replica_v3::binary::to_vec(&(
                         &e.request.input,
                         &e.request.evidence.items,
                     ))?);
@@ -2046,7 +2046,7 @@ pub fn qa_pairs(source: &Path, output: &Path, groups: usize) -> Result<()> {
     manifest.generator.push_str("/qa-binding-pairs-v1");
     let corpus = native::from_episodes(manifest, train, validation)?;
     native::write(output, &corpus, true)?;
-    println!("{}", serde_json::to_string_pretty(&corpus.manifest)?);
+    println!("{}", replica_v3::binary::describe(&corpus.manifest)?);
     Ok(())
 }
 /// A diagnostic subset of existing QA bytes, never a new heldout benchmark.
@@ -2077,7 +2077,7 @@ pub fn qa_subset(source: &Path, output: &Path, count: usize) -> Result<()> {
     );
     let corpus = native::from_episodes(manifest, train, validation)?;
     native::write(output, &corpus, true)?;
-    println!("{}", serde_json::to_string_pretty(&corpus.manifest)?);
+    println!("{}", replica_v3::binary::describe(&corpus.manifest)?);
     Ok(())
 }
 /// Materialized H3 education, isolated from inference. Reuses the existing corpus format.
@@ -2246,7 +2246,7 @@ pub fn copy_curriculum(source: &Path, output: &Path, seed: u64) -> Result<()> {
                         "skill/H3/{split}/digits-{digits}/{kind}/shape-{shape}/view-{view}"
                     ),
                     binding: format!("{entity}/{context}/{value}"),
-                    sequence: hash(&serde_json::to_vec(&(
+                    sequence: hash(&replica_v3::binary::to_vec(&(
                         &request.input,
                         &request.evidence.items,
                     ))?),
@@ -2291,12 +2291,12 @@ pub fn copy_curriculum(source: &Path, output: &Path, seed: u64) -> Result<()> {
     };
     let seal = save_split(output, "seal", &splits[2])?;
     write_new(
-        &output.join("seal-manifest.json"),
-        &serde_json::to_vec_pretty(&seal)?,
+        &output.join("seal-manifest.r3b"),
+        &replica_v3::binary::to_vec(&seal)?,
     )?;
     write_new(
-        &output.join("manifest.json"),
-        &serde_json::to_vec_pretty(&manifest)?,
+        &output.join("manifest.r3b"),
+        &replica_v3::binary::to_vec(&manifest)?,
     )?;
     println!(
         "H3_materialized anchors=2048 focus=2048 dev=256 seal=256 seed={seed} optimizer_updates=0"
@@ -2307,7 +2307,7 @@ pub fn copy_curriculum(source: &Path, output: &Path, seed: u64) -> Result<()> {
 pub fn crossed_copy_development(
     prior: &[Episode],
     seed: u64,
-) -> Result<(Vec<Episode>, serde_json::Value)> {
+) -> Result<(Vec<Episode>, replica_v3::binary::Value)> {
     crossed_copy_panel(prior, seed, 128, false)
 }
 /// Frozen development contrasts only. Labels stay outside ModelRequest.
@@ -2776,9 +2776,9 @@ fn crossed_copy_panel(
     seed: u64,
     bases: usize,
     training: bool,
-) -> Result<(Vec<Episode>, serde_json::Value)> {
+) -> Result<(Vec<Episode>, replica_v3::binary::Value)> {
     use replica_v3::neural::transformer::Rng;
-    use serde_json::json;
+    use replica_v3::binary::record;
     let prefixes = ["장치", "설비", "센서", "장비"];
     let mut seen = BTreeSet::new();
     for e in prior {
@@ -2799,7 +2799,7 @@ fn crossed_copy_panel(
         .flat_map(|p| (0..10).map(move |n| format!("{p}{n}")))
         .filter(|e| available(e))
         .collect();
-    let mut meta = json!({"role":"DEVELOPMENT_ONLY","generator":"cross-copy-v1","seed":seed,
+    let mut meta = record!({"role":"DEVELOPMENT_ONLY","generator":"cross-copy-v1","seed":seed,
         "planned_bases":bases,"planned_views":bases*4,"one_digit_unseen_unreserved":one_digit,
         "reserved_old_seal":"entire hash partition2; cases unopened","max_attempts_per_base":10000,
         "one_digit_patterns":"general/repeated/alternating/adjacent coincide; not independent conditions",
@@ -2863,8 +2863,8 @@ fn crossed_copy_panel(
         }
         let Some((entity, renamed)) = pair else {
             meta["failed_stratum"] =
-                json!({"digits":digits,"kind":kind,"pattern":pattern,"base":base});
-            meta["constructed_views_not_a_gate"] = json!(out.len());
+                record!({"digits":digits,"kind":kind,"pattern":pattern,"base":base});
+            meta["constructed_views_not_a_gate"] = record!(out.len());
             // Never silently shrink the requested panel or count seen IDs as unseen.
             return Ok((Vec::new(), meta));
         };
@@ -2937,7 +2937,7 @@ fn crossed_copy_panel(
                 family: if training {format!("renewal/H3/train/digits-{digits}/kind-{kind}/pattern-{pattern}/replica-{}/view-{view}",base%2)}
                     else {format!("cross/H3/digits-{digits}/kind-{kind}/pattern-{pattern}/replica-{}/view-{view}",base%2)},
                 binding: format!("{name}/{context}/{val}"),
-                sequence: hash(&serde_json::to_vec(&(
+                sequence: hash(&replica_v3::binary::to_vec(&(
                     &request.input,
                     &request.evidence.items,
                 ))?),
@@ -2947,20 +2947,20 @@ fn crossed_copy_panel(
         }
     }
     check_split(prior, &out)?;
-    meta["status"] = json!("MATERIALIZED_NOT_VALIDATED");
-    meta["bases"] = json!(bases);
-    meta["views"] = json!(out.len());
-    meta["unique_entities"] = json!(
+    meta["status"] = record!("MATERIALIZED_NOT_VALIDATED");
+    meta["bases"] = record!(bases);
+    meta["views"] = record!(out.len());
+    meta["unique_entities"] = record!(
         out.iter()
             .map(|e| e.binding.split('/').next().unwrap())
             .collect::<BTreeSet<_>>()
             .len()
     );
     if training {
-        meta["role"] = json!("TRAINING_ONLY");
-        meta["generator"] = json!("controlled-renewal-H3-v1");
+        meta["role"] = record!("TRAINING_ONLY");
+        meta["generator"] = record!("controlled-renewal-H3-v1");
         meta["counterexample_same_number_context_event"] =
-            json!("base%4==1; others independently sampled");
+            record!("base%4==1; others independently sampled");
     }
     Ok((out, meta))
 }
@@ -2970,8 +2970,8 @@ pub fn renewed_copy_curricula(
     heldout: &[Episode],
     output: &Path,
     seed: u64,
-) -> Result<serde_json::Value> {
-    use serde_json::json;
+) -> Result<replica_v3::binary::Value> {
+    use replica_v3::binary::record;
     let (parent, old, dev) = original;
     if old.len() != 4096 || dev.len() != 256 {
         return Err(Error::Invalid("original H3 curriculum required".into()));
@@ -2982,7 +2982,7 @@ pub fn renewed_copy_curricula(
     }
     check_split(old, &focus)?;
     check_split(&focus, dev)?;
-    let mut report = json!({"generator":meta,"original_train_hash":parent.train.sha256,"seed":seed,"arms":{},"optimizer_updates":0});
+    let mut report = record!({"generator":meta,"original_train_hash":parent.train.sha256,"seed":seed,"arms":{},"optimizer_updates":0});
     for (arm, count) in [("F", 512), ("N", 2048)] {
         let dir = output.join(format!("corpus-{arm}"));
         std::fs::create_dir(&dir)?;
@@ -2993,10 +2993,10 @@ pub fn renewed_copy_curricula(
             generator:"controlled-renewal-H3-v1".into(),seed,split_rule:"holdout full entity excluded; old seal partition reserved; original train binding/raw disjoint; base views kept together".into(),
             train:save_split(&dir,"train",&train)?,validation:save_split(&dir,"validation",dev)?};
         write_new(
-            &dir.join("manifest.json"),
-            &serde_json::to_vec_pretty(&manifest)?,
+            &dir.join("manifest.r3b"),
+            &replica_v3::binary::to_vec(&manifest)?,
         )?;
-        report["arms"][arm] = json!({"corpus":dir,"focus_views":count,"focus_bases":count/4,"train_hash":manifest.train.sha256,"dev_hash":manifest.validation.sha256});
+        report["arms"][arm] = record!({"corpus":dir,"focus_views":count,"focus_bases":count/4,"train_hash":manifest.train.sha256,"dev_hash":manifest.validation.sha256});
     }
     Ok(report)
 }
@@ -3037,8 +3037,8 @@ pub fn tokenizer(root: &Path, output: &Path, vocab: usize) -> Result<()> {
     manifest.train.tokens = Some(count(&train)?);
     manifest.validation.tokens = Some(count(&validation)?);
     write_new(
-        &output.with_extension("manifest.json"),
-        &serde_json::to_vec_pretty(&serde_json::json!({
+        &output.with_extension("manifest.r3b"),
+        &replica_v3::binary::to_vec(&replica_v3::binary::record!({
             "tokenizer_sha256":tok.id(),"corpus":manifest,"training_text_bytes":docs.iter().map(Vec::len).sum::<usize>(),
             "training_text_tokens":tokens,"actual_vocab":tok.vocab_size()
         }))?,

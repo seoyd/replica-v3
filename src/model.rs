@@ -98,7 +98,7 @@ struct Ready {
     ready: bool,
 }
 pub fn write_frame<T: Serialize>(writer: &mut impl Write, value: &T, max: usize) -> Result<()> {
-    let bytes = serde_json::to_vec(value)?;
+    let bytes = crate::binary::to_vec(value)?;
     if bytes.len() > max {
         return Err(Error::Model("IPC frame too large".into()));
     }
@@ -116,7 +116,7 @@ pub fn read_frame<T: DeserializeOwned>(reader: &mut impl Read, max: usize) -> Re
     }
     let mut bytes = vec![0; len];
     reader.read_exact(&mut bytes)?;
-    Ok(serde_json::from_slice(&bytes)?)
+    Ok(crate::binary::from_slice(&bytes)?)
 }
 struct OwnedChild {
     child: Child,
@@ -142,7 +142,7 @@ pub fn run_worker(
     if request.evidence.items.len() > MAX_EVIDENCE {
         return Err(Error::Invalid("evidence limit".into()));
     }
-    let bytes = serde_json::to_vec(request)?;
+    let bytes = crate::binary::to_vec(request)?;
     if bytes.len() > MAX_REQUEST {
         return Err(Error::Model("request bytes limit".into()));
     }
@@ -256,7 +256,7 @@ pub struct PreparedPrompt {
 impl PreparedPrompt {
     pub fn receipt(&self, request: &ModelRequest) -> Result<PromptReceipt> {
         Ok(PromptReceipt {
-            request_digest: format!("{:x}", Sha256::digest(serde_json::to_vec(request)?)),
+            request_digest: format!("{:x}", Sha256::digest(crate::binary::to_vec(request)?)),
             token_digest: self.token_digest.clone(),
             tokenizer_id: self.tokenizer_id.clone(),
             config_id: self.config_id.clone(),

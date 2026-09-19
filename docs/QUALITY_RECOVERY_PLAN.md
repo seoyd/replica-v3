@@ -1,6 +1,6 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: data reset completed; source migration pending
+## Active: native project serialization after the data reset
 
 On 2026-09-19 the user authorized deleting all learned artifacts, corpora, raw
 user data, long-term memory and execution logs, retaining Rust source and Git
@@ -9,13 +9,18 @@ No default operating memory directory existed. The protocols below are historica
 and do not authorize restoring their deleted inputs or starting another old arm.
 No new training or quality improvement occurred during this reset.
 
-The user also requested removal of JSON use in product, training and tools, and
-direct JSON/SQLite dependencies, permitting internal transitive JSON dependencies
-of generic libraries. That source migration is still pending; existing Rust/Cargo
-files remain unchanged. Reuse the current native implementation when implementing
-it. Previous storage-freeze instructions do not override the new authorization.
-Data reset, dependency removal, fresh training and model quality require separate
-verification. Do not describe deletion alone as a completed binary-only product.
+The latest user request removes project JSON use in product, training, tools and
+tests. SQLite remains for memory transactions/indexes. Direct serde_json and
+safetensors dependencies are removed; the existing generic libraries' transitive
+dependencies remain permitted. R3BIN replaces text metadata, standalone tokenizer
+serialization, IPC and diagnostic record streams. R3MODEL/R3CORP/R3TOK/R3ER keep
+their domain-specific binary layouts. No JSON parser, JSON writer or text fallback
+is used by project code. Text checkpoint import is retired explicitly.
+Old JSON instructions/paths below describe historical interfaces, not supported
+inputs to the new binary paths. Do not recreate deleted runs or their bindings.
+Focused TINY serialization/process tests are allowed; no SMALL quality training
+or experiment restart is part of this migration. Storage verification cannot
+establish model quality or Goal1 readiness.
 
 ## Closed at8: user-authorized retention retry01 after the save-reason repair
 

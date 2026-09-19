@@ -463,11 +463,11 @@ fn rv02_real_tokenizer_never_silently_truncates() {
             // The native product explicitly rejects this serialized tokenizer,
             // including left/right truncation and fixed padding, before generation.
             assert!(ByteBpe::from_bytes(&bytes).is_err());
-            let mut tampered: serde_json::Value = serde_json::from_slice(native.bytes()).unwrap();
-            let foreign: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let mut tampered: replica_v3::binary::Value = replica_v3::binary::from_slice(native.bytes()).unwrap();
+            let foreign: replica_v3::binary::Value = replica_v3::binary::from_slice(&bytes).unwrap();
             tampered["truncation"] = foreign["truncation"].clone();
             tampered["padding"] = foreign["padding"].clone();
-            assert!(ByteBpe::from_bytes(&serde_json::to_vec(&tampered).unwrap()).is_err());
+            assert!(ByteBpe::from_bytes(&replica_v3::binary::to_vec(&tampered).unwrap()).is_err());
             assert_eq!(tokenizer.to_string(false).unwrap().as_bytes(), bytes);
             assert_eq!(
                 native.prepare(&request, 2048, "fixture").unwrap().token_ids,
