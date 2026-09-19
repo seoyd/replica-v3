@@ -1,5 +1,36 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 First-target4 research — implementation and direct checks
+
+The user authorized further bounded experiments changing one grounded variable
+at a time. Existing `fresh paired-prepare --first-target-four` now registers a
+single P6144/ADJACENT fork, coefficient4, at most3840 new updates. Existing response
+loss/native objective binding and actual training/evaluation paths are reused.
+Native file formats, model core, tokenizer, sampler/data, LR3e-5 and Adam are
+unchanged. The retained coefficient1 control spans paired256+follow-through3584;
+matched full evaluation steps are6400/7424/8448/9984. It is a historical control,
+not a newly executed second arm or retroactive approval of either closed study.
+
+EXECUTED_THIS_RUN with Rust1.98.1, locked/offline Cargo, Accelerate/thread1:
+weighted scalar CE/gradient/mask test1 PASS;3840-row tape/binary/bounds/evaluation
+schedule test1 PASS; paired fresh-process regression1 PASS (342.91s). The latter
+checks coefficient4 continuous2 versus1+1 exact weights/Adam, native coefficient
+bits, an actual weight difference from coefficient1, pure-report no-write and
+retained quality/publication failure interlocks. Actual TINY optimizer25,
+generation345/teacher345 including27 setup observations; scalar optimizer0.
+An initial exact-name listing returned0 tests and is NOT counted as PASS; the
+correct fully qualified scalar test then ran and passed. Clippy exit0 with the
+pre-existing `quality_recovery.rs` map-key warning; no new warning.
+
+Production-feature release P6144 parity ran1 ignored test explicitly:16/16 exact
+raw outputs,160 generated tokens, errors0, teacher0/optimizer0; original inventory
+unchanged. New SMALL learning is0 at this verification stage. Future run counts
+will be recorded separately. Tests and hashes are local under
+`artifacts/first-target4-20260920-evidence/`; source changes are in `src/fresh.rs`,
+the existing scalar test in `src/training.rs`, and `tests/training.rs`.
+Current quality and Goal1 readiness/acceptance remain false. No independent
+acceptance has been claimed; conditional final200/S5/S6 remain pending quality.
+
 ## 2026-09-20 Fixed exposure follow-through completed; joint quality failed
 
 EXECUTED_THIS_RUN on frozen source `cd52b21a9af5276ff53ab2f63b946d1266578bb8`.

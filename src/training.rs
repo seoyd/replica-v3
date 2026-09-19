@@ -1768,7 +1768,7 @@ mod tests {
         let logits = Var::from_vec(values.clone(), (2, 4, 12), &device).unwrap();
         let labels = b.target.flatten_all().unwrap().to_vec1::<u32>().unwrap();
         let masks = b.mask.flatten_all().unwrap().to_vec1::<f32>().unwrap();
-        for weight in [1., 8.] {
+        for weight in [1., 4., 8.] {
             let (ce, objective, count) = response_loss(&logits, &b, weight).unwrap();
             assert_eq!(count, 4); // Denominator is actual supervised tokens, not weighted count or PAD.
             let gradients = objective.backward().unwrap();

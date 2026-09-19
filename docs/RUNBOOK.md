@@ -1,5 +1,23 @@
 # Replica v3 B0 runbook
 
+## First-target coefficient research
+
+The explicitly authorized one-variable trial uses the existing paired preparation:
+
+```sh
+replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT --parity NEW_PARITY_ROOT --output NEW_ROOT --first-target-four
+replica-train fresh run --root NEW_ROOT/ADJACENT
+replica-train fresh paired-report --root NEW_ROOT
+```
+
+This registers only ADJACENT, coefficient4 and at most3840 updates from P6144.
+It uses the same finite sample order as the retained coefficient1 control. It
+does not continue the9984 endpoint or reopen either old study. The native resume
+binding includes the coefficient; pure reporting does not perform a control rerun.
+Use the full matched-step control raw for comparison. Default paired preparation
+still registers the original two256-update policies with coefficient1. Production
+features, thread1, fresh output paths and prior confirmed resume checks below apply.
+
 ## Explicit paired follow-through
 
 The follow-up requested on2026-09-20 creates a new research root from the closed

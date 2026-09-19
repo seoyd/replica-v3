@@ -1,5 +1,38 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: first-target coefficient, one-variable research
+
+The user's2026-09-20 authorization permits grounded, bounded experiments changing
+one variable at a time after the fixed-condition follow-through. Register one new
+P6144 fork with retained weights/Adam/tokenizer and the identical3840-row ADJACENT
+tape, native corpus/phrases/selectors, eight tasks, batch8 and constant LR3e-5.
+Only the existing first supervised token coefficient changes1→4. Do not restart
+the closed runs, reset Adam, collect data, alter generation or change storage/core.
+The objective is `(sum(response NLL) + 3*sum(first-target NLL))/actual target count`;
+prompt/PAD stay masked, EOS stays supervised, reported CE stays unweighted.
+This also changes the objective's gradient magnitude; it is not a pure LR change.
+
+Evidence: seen train-pair underfitting and high first-target NLL in retained
+own-model teacher rows, documented in EXPERIMENT_STATUS. This does not prove a
+loss defect. Compare with the preserved coefficient1 ADJACENT lineage at matched
+absolute6400/7424/8448/9984, not with a different parent or unequal-budget endpoint.
+The control spans the original256 and follow-through3584; its files stay read-only.
+Reuse the existing native objective binding, Plan/Fork/finite tape and evaluator.
+P16 production parity, scalar weighted gradients, max-tape readback and actual
+TINY continuous2 versus fresh-process1+1 must pass before new SMALL learning.
+
+New caps: SMALL3840 updates,12M input/1M target including discarded work,
+12000 generation/10000 own-model teacher,21600 active seconds;900s command plus
+120s cleanup. TINY regression cap64 updates/512 generation/512 teacher, scalar
+optimizer0. These are new research budgets, not amendments to old closed budgets.
+The first real update is saved and resumed in a fresh process inside this cap.
+Screens at absolute6176/6208/6272/6912/7936/8960/9472; full train64/primary512/
+transfer128/selector192 at6400/7424/8448/9984. Joint quality, original P retention
+guards, two-full-panel stagnation, cancel/numeric/storage/UNKNOWN interlocks and
+strict normal greedy/EOS/UTF-8 remain unchanged. No retries after unsafe failure.
+Stop on the first joint pass and proceed to the authorized independent S4/S5/S6.
+A loss or first-token improvement alone never qualifies a model.
+
 ## Closed: explicitly requested bounded exposure follow-through
 
 The follow-through completed3584 updates at absolute9984, with primary368/512,
