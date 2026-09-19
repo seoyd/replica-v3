@@ -92,6 +92,40 @@ fn evidence_manifest(root: &Path) -> Vec<(PathBuf, bool, u64, Vec<u8>)> {
     out
 }
 #[test]
+fn retention_probe_save_reason_uses_native_writer_and_fresh_resume_loader() {
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
+    let root = d.path().join("save");
+    call(
+        &[
+            "fixture-retention-save",
+            "--from",
+            p(&bootstrap),
+            "--output",
+            p(&root),
+        ],
+        None,
+        true,
+        &d.path().join("write.log"),
+    );
+    let before = evidence_manifest(&root);
+    call(
+        &[
+            "fixture-retention-save",
+            "--from",
+            p(&bootstrap),
+            "--output",
+            p(&root),
+            "--verify",
+        ],
+        None,
+        true,
+        &d.path().join("read.log"),
+    );
+    assert_eq!(before, evidence_manifest(&root));
+}
+
+#[test]
 fn retention_audit_publication_requires_committed_final_in_fresh_process() {
     let d = tempfile::tempdir().unwrap();
     let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());

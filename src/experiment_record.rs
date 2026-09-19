@@ -26,6 +26,8 @@ const BRIDGE_CONTRACT: &str = "R3-QUALITY-FIRST-BRIDGE-1.0";
 const BRIDGE_RESTART_CONTRACT: &str = "R3-BRIDGE-EVIDENCE-RESTART-1.0";
 const BOUNDED_BRIDGE_CONTRACT: &str = "R3-QUALITY-RECOVERY-BOUNDED-BRIDGE-1.0";
 const RETENTION_CONTRACT: &str = "R3-RETENTION-FIRST-1.0";
+// Train probes use the existing native screening termination, not a new codec value.
+const RETENTION_SAVE_REASON: &str = "RECOVERY_SCREENING";
 
 fn bad(s: &str) -> Error {
     Error::Corrupt(format!("R3ER: {s}"))
@@ -5584,6 +5586,62 @@ fn screen_report(root: &Path, terminal: &str, control: &mut RunControl) -> Resul
         || c.stop != t.stop
         || root.join("close-stop.r3er").exists()
     {
+        if let Some(n) = &t.native {
+            println!(
+                "RESEARCH_EXECUTION_FAILED=true COMPLETE=false RESUME={} CANDIDATE={} NEW_SMALL_UPDATES={} INPUT={} TARGET={} GENERATIONS={} TEACHERS={} LAST_DURABLE={} physical={} model={} Adam={} step={} STOP={:?} ERROR={:?} COMMAND_ELAPSED={}",
+                t.resume,
+                t.candidate,
+                t.updates,
+                n.counters[0] - s.parent.counters[0],
+                n.counters[1] - s.parent.counters[1],
+                chain.iter().map(|(_, t)| t.generations).sum::<u64>(),
+                chain.iter().map(|(_, t)| t.teachers).sum::<u64>(),
+                n.file.locator,
+                hex(&n.file.digest),
+                hex(&n.model),
+                n.adam.as_ref().map(hex).unwrap_or_default(),
+                n.step,
+                c.stop,
+                c.error,
+                c.elapsed.finite()?
+            );
+        }
+        if s.retention() {
+            let file = absolute_reference(&root.join("retention-probe-0000/audit-final.r3er"))?;
+            let parity = absolute_reference(&root.join("parent-parity/audit-final.r3er"))?;
+            verify_audit_publication(&parity)?;
+            let Record::ArtifactAudit(parity) = read_absolute(&parity)? else {
+                return Err(bad("retention parity usage kind"));
+            };
+            println!(
+                "RETENTION_PREPARATION_GENERATIONS entered={} returned={} generated_tokens={} COMMAND_ELAPSED={}",
+                parity.calls[0],
+                parity.calls[1],
+                parity
+                    .fresh
+                    .iter()
+                    .map(|(_, r)| r.tokens.len())
+                    .sum::<usize>(),
+                parity.elapsed.finite()?
+            );
+            verify_audit_publication(&file)?;
+            let Record::ArtifactAudit(a) = read_absolute(&file)? else {
+                return Err(bad("retention failed probe kind"));
+            };
+            let mut sum = 0.;
+            let mut targets = 0;
+            for (_, r) in &a.fresh {
+                if let TeacherRecord::Measured(v) = &r.teacher {
+                    sum += v.mean.finite()? * v.target as f64;
+                    targets += v.target;
+                }
+            }
+            println!(
+                "RETENTION_PREUPDATE_PROBE calls={:?} targets={targets} TOKEN_MEAN_NLL={} POSTUPDATE_PROBE=NOT_RUN SCREEN=NOT_RUN",
+                a.calls,
+                sum / targets.max(1) as f64
+            );
+        }
         return Err(bad("screen execution/storage/cancel error"));
     }
     let completion = if history.quality {
@@ -8320,6 +8378,15 @@ fn resolve_native(root: &Path, s: &RunSnapshot, n: &CheckpointRef, resume: bool)
 
 #[derive(Subcommand)]
 pub enum Action {
+    #[cfg(feature = "test-support")]
+    FixtureRetentionSave {
+        #[arg(long)]
+        from: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        verify: bool,
+    },
     /// Pure historical recount and train-only replay provenance/coverage, no generation.
     RetentionInspect {
         #[arg(long)]
@@ -8709,6 +8776,51 @@ pub(super) fn command(action: Action) -> Result<()> {
     let mut control = RunControl::command(matches!(action, Action::Run { .. }))?;
     control.deadline = control.start + Duration::from_secs(1800);
     match action {
+        #[cfg(feature = "test-support")]
+        Action::FixtureRetentionSave {
+            from,
+            output,
+            verify,
+        } => {
+            let s = read_inputs(&from)?;
+            if !s.tiny_spec {
+                return Err(bad("retention save fixture requires TINY"));
+            }
+            let mut l = resolve_native(&from, &s, &s.parent, true)?;
+            let mut state = l.manifest.training.clone().unwrap();
+            // Explicit test-only migration of the known bootstrap objective, as in
+            // FixtureFork. Production retention already has its bound v2 fork state.
+            state.resume_binding =
+                Some(checkpoint::ResumeBinding::default_for(&state, &l.tokenizer));
+            let adam = Adam {
+                moments: l.optimizer.clone(),
+            };
+            if !verify {
+                std::fs::create_dir(&output)?;
+                save_native(
+                    &output,
+                    "probe.r3m",
+                    &s,
+                    &mut l,
+                    &state,
+                    &adam,
+                    0,
+                    RETENTION_SAVE_REASON,
+                )?;
+            }
+            let restored = checkpoint::load(&output.join("probe.r3m"), Device::Cpu, true)?;
+            if restored.manifest.training.as_ref() != Some(&state)
+                || restored.model.weight_hash()? != l.model.weight_hash()?
+                || optimizer_hash(&restored.optimizer)? != optimizer_hash(&adam.moments)?
+            {
+                return Err(bad("retention probe native save parity"));
+            }
+            println!(
+                "RETENTION_ACTUAL_SAVE_RELOAD=PASS reason={RETENTION_SAVE_REASON} STEP={} SMALL_UPDATES=0 TINY_UPDATES=0 MODEL_FORWARD=0",
+                state.step
+            );
+            Ok(())
+        }
         Action::RetentionInspect { screen } => retention_inspect(&screen, &mut control),
         Action::RetentionPrepare { screen, output } => {
             retention_prepare(&screen, &output, &mut control)
@@ -13882,7 +13994,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                         &state,
                         &adam,
                         index,
-                        "RETENTION_PROBE",
+                        RETENTION_SAVE_REASON,
                     )?
                 };
                 if n > 0 {
