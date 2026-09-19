@@ -1,6 +1,119 @@
 # 진단 및 구현 상태
 
-## 2026-09-19 Existing path stabilization — source 수리 검증
+## 2026-09-19 Existing path stabilization — 검증·무학습 관측 완료
+
+RESULT=PASS / STABILIZATION_SCOPE_VERIFIED=true. 아래 수리 source 검증 후 코드 변경 없이
+기존 원자료 재채점과 P6144 고정16 출력을 완료했다. 이 절의 후속 결과는 report-only다.
+품질 PASS가 아니며 새 SMALL 학습은0이다. 모델 품질 회복은 NOT_CLAIMED,
+H3/S4=NOT_PASSED, S5/S6=NOT_RUN_PREREQUISITE, GOAL1_READY=false,
+GOAL1_ACCEPTED=false, INDEPENDENT_REVIEW=NOT_RUN이다. final200은 개봉하지 않았다.
+
+### Candidate·실행 identity·보존 확인
+
+- Source: `abd967980645a878f22069708daa9fbfce70bf87`.
+  origin/main 정상 push 후 실제 remote 전체 SHA 일치를 확인했다.
+  이 source에서 strict binary row 회귀를 재확인했고, production feature로 P parity를 실행했다.
+- [실제 코드 diff](https://github.com/seoyd/replica-v3/compare/b0e38e18cb66b87bdaf1f657b8e74332723cb996...abd967980645a878f22069708daa9fbfce70bf87).
+  코드만의 diff: `git diff b0e38e18cb66b87bdaf1f657b8e74332723cb996 abd967980645a878f22069708daa9fbfce70bf87 -- src tests`.
+- Current source digest: `cb89a1598abcea8baeab82e547d14feedfc2701295fcf996d1da9d781212ffe9`.
+  보존한 release 보고 실행물: `artifacts/existing-path-stabilization-20260919-executable`,
+  SHA256 `12645bd790286ed444fa05c4b72c4ef29718b05acac9b91412afd399ab7a71aa`.
+- 실제 parity test 실행물: `target/release/deps/replica_train-b3f42933fdd30cfd`,
+  SHA256 `af882a83366af9e4db21a0570a4fc172d9a3c7d514f0547bfe5dc502c31ab1b1`.
+  `--features accelerate`만 사용했으며 test-support native clock은 포함하지 않았다.
+- 과거 학습 실행물은 그대로 `artifacts/selector-consistency-20260919-executable`,
+  SHA256 `40399be6f56f62864397f4d9c4ba2894e6209bb845a4128e1116e766b183b623`이다.
+  과거 plan/source/binary hash를 이번 값으로 바꾸지 않았다.
+- 원본 P root와 C/S study root의12,193개 파일,5,172,587,548 bytes를
+  경로/유형/길이/hash로 전후 비교했다. binary inventory가 byte-identical이며 SHA256는
+  `b1a3060d9bc2d950f65ec18d604460e6b03800c6a745fd02366d64f89e2a9fa8`다.
+
+### DERIVED_EXISTING_RAW — 동결 원자료 재채점
+
+기존 `study-report --frozen-executable`가 native/model/step/policy/corpus/raw/teacher/
+command chain을 확인했다. 기존 Rust 재채점 도구를 현재 release library로 다시 빌드해
+raw tokens를 decode하고 full/body/citation 및 원본/뒤집기 pair를 교차 확인했다.
+재채점의 optimizer/generation/teacher는0/0/0이며 과거 사용량은 신규 호출이 아니다.
+
+| 모델·절대 step | train /64 | primary /512 | transfer /128 | selector /192 |
+| --- | ---: | ---: | ---: | --- |
+| P6144 | 58 | 425 | 79 | 2 |
+| C8192 | 58 | 420 | 80 | 7 |
+| S7168 | 51 | 350 | 67 | NOT_RUN_QUALITY_STOP |
+
+각 표의 primary/transfer EOS/UTF-8 오류는0이다. C8192와 S7168은 서로 다른 예산의
+종료점이다. 같은+1024의 사후 재집계에서는 C7168 primary436, S7168 primary350이며
+C/D/E는155 대70, 나머지5과제는281 대280이었다. 새로운 학습 결과가 아니다.
+
+| selector 원본/뒤집기 관측 | P6144 | C8192 |
+| --- | --- | --- |
+| full | 131 / 2 | 129 / 7 |
+| body | 149 / 13 | 159 / 15 |
+| citation | 146 / 26 | 147 / 36 |
+| both-correct /192 | 0 | 0 |
+| 동일 출력 /192 | 184 | 186 |
+
+기존 연구 판정은 여전히 STUDY_INCONCLUSIVE_UNEQUAL_BUDGET, candidate=null이다.
+S의 나머지1,024회·selector 패널을 실행하지 않았고 resume=false를 보존했다.
+
+### EXECUTED_THIS_RUN — P6144 출력 동등성
+
+기존 metadata 순서에서 bucket당2개씩16개 ID를 과거 출력 읽기 전에 등록했다.
+동일 native tokenizer/weights와 정상 greedy/EOS/strict UTF-8로16회 생성하여
+raw token sequence, actual, error, finish, EOS index, native prompt digest가 모두 일치했다.
+실제160 tokens, EOS16, 생성 오류0, teacher0, optimizer/backward/update0/0/0이다.
+RunControl 관측 구간4.2924905초, 전체 test13.68초, release test 컴파일14.64초이며
+이 수치를 성능 개선 benchmark로 해석하지 않는다. 모델 오류를 고친 점수도 아니다.
+
+누적 고유 테스트15개는 최종 PASS다. runner 명령21회, 실제 테스트 실행21건
+(PASS18/FAIL3),0-test 명령1회는 통과에서 제외했다. 내부 시나리오는 앞의 T01~T12
+표로 구분한다. 아래 source 단계 합계에 post-commit binary row 회귀1회와 SMALL
+parity1회가 추가됐으며 TINY 사용량55/507/482는 증가하지 않았다.
+
+### 실제 명령과 허용된 로컬 증거
+
+공통 실행 환경: `VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1`.
+직접 TINY tests는 `cargo test --locked --offline --features accelerate,test-support`에
+각 로그명의 `--test training` 또는 `--bin replica-train` 필터를 사용했다.
+FX05는 `R3_FRESH_TEST_COMPACT=1`; 프로세스 검사는 `--exact --nocapture`였다.
+SMALL 생성은 아래 명령 한 번뿐이다.
+
+```sh
+R3_PARITY_PARENT=artifacts/fresh-exposure-phrase-20260919/P-PHRASE \
+R3_PARITY_OUTPUT=artifacts/existing-path-stabilization-20260919-parity \
+cargo test --locked --offline --release --features accelerate --bin replica-train \
+  training::fresh::tests::stabilization_fixed_parent_parity \
+  -- --exact --ignored --nocapture --test-threads=1
+
+artifacts/existing-path-stabilization-20260919-executable fresh study-report \
+  --root artifacts/selector-consistency-20260919 \
+  --frozen-executable artifacts/selector-consistency-20260919-executable
+```
+
+허용된 원자료는 다음 경로 안의 기존 연구 자료와 별도 새 관측뿐이다. 업로드하지 않았다.
+
+- P native: `artifacts/fresh-exposure-phrase-20260919/P-PHRASE/segment-0003/final`,
+  file SHA256 `c4d6989fbcaad60516053dda206caf43abc08c4b388c3f765e4c446864f60e20`.
+- C native: `artifacts/selector-consistency-20260919/C-KEEP/segment-0003/final`,
+  file SHA256 `d3090407de205045d3992add382124417cce287ea5080bf2eda4078bcfcee011`.
+- S native: `artifacts/selector-consistency-20260919/S-SELECT/segment-0002/final`,
+  file SHA256 `6c31d173c31a4f08e600f901289fa16d2779dd8639030d482a18b43b2bbbc8a0`.
+- 각 root의 `corpus.r3cor`, `transfer.r3cor`, `tokenizer.r3b`, `plan.r3b`,
+  `eval-STEP-PANEL.r3rows`, `*-teachers.r3rows`, `segment-*-finished.r3b`.
+- 새 parity: `artifacts/existing-path-stabilization-20260919-parity/`의
+  `selection.r3b`, `parity.r3rows`, `result.r3b`.
+  result SHA256 `139d0e79ee876e7dea83919c7a185de0be0810b87600bbdd0a56d0c731c8acf9`.
+- 증거 root: `artifacts/existing-path-stabilization-20260919-evidence/`.
+  `candidate-code.patch` SHA256 `948783a5c1ef1ceb83ec39d995a908475f535ba9711e31e7f4f2dc4271a48008`;
+  `parent-parity.log`, `parity-receipt-recount.log`, `closed-study-recount.log`,
+  `endpoints-recount.log`, `equal-1024-recount.log`, `selector-pairs-recount.log`,
+  `native-identities.log`, `originals-before/after.r3rows`, source push와 직접 회귀 로그.
+
+STABILIZATION_REMAINING=NONE. 기존 fmt/strict clippy 경고, 독립 검토와 모델 품질
+미달은 별도 상태다. 이번 예산을 더 사용하지 않는다. 추적 새 파일0; ignored 로컬
+관측·실행 로그와 재사용 Rust 검사 소스만 추가했다.
+
+### Source 단계 종료 시점의 상세 기록
 
 R3-EXISTING-PATH-STABILIZATION-1.0. 시작 HEAD는
 `0edf0327e2aadaa0e1e0e39af58c03c3b7746804`, 기준 source는
@@ -65,10 +178,10 @@ teacher1의 실제 진입을 exit86으로 확인했지만 반환·최종 token/�
 `fresh_fx*.log`, `unit-*.log`, `check.log`, `clippy*.log`, `release.log`, `fmt-*.log`.
 전역 fmt/strict lint 실패를 소스 경계 회귀 실패나 품질 실패와 혼합하지 않는다.
 
-### 다음 의무와 품질 판정
+### Source 단계 이후의 의무와 품질 판정
 
-이 source 단계에서는 기존 C/S 재검산과 고정 P6144 parity16을 아직 실행하지 않았다.
-source commit/push 후 동결 코드로 읽기 전용 관측하고 별도 보고 commit으로 기록한다.
+source 단계 종료 당시 C/S 재검산과 고정 P6144 parity16은 NOT_RUN이었다.
+source commit/push 후 동결 코드로 수행한 결과는 이 절 앞부분의 후속 기록과 같다.
 추가 SMALL 학습0; 모델 품질 향상은 NOT_CLAIMED다. 원래 C8192/S7168의 서로 다른
 예산, S의 품질 중단/resume=false, final200 NOT_OPENED는 유지한다.
 S4=NOT_PASSED, S5/S6=NOT_RUN_PREREQUISITE, GOAL1_READY=false,

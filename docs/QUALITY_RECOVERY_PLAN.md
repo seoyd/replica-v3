@@ -2,6 +2,15 @@
 
 ## Active: existing execution path stabilization
 
+Closed on2026-09-19: STABILIZATION_SCOPE_VERIFIED. Source
+`abd967980645a878f22069708daa9fbfce70bf87` was pushed and remote-verified.
+Direct lifecycle regressions passed; frozen-source P6144 parity16 matched all raw
+outputs. C/S recount confirmed the existing unequal-budget result with no candidate.
+Original inventory is unchanged. New SMALL updates0/generation16/teacher0; TINY
+optimizer55/generation507/teacher482 including failed test execution. Do not extend
+this run or resume S. Model quality and Goal1 remain unaccepted. Details and local
+evidence paths are in EXPERIMENT_STATUS.
+
 R3-EXISTING-PATH-STABILIZATION-1.0, source reference
 `b0e38e18cb66b87bdaf1f657b8e74332723cb996`. Freeze features and learning.
 Fix only native command-capped timeout classification, preserving returned failure
