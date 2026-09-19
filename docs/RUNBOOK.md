@@ -1,5 +1,27 @@
 # Replica v3 B0 runbook
 
+## Fresh joint baseline
+
+Build with installed Rust, `--locked --offline --features accelerate` and use
+`VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1` for model commands.
+`replica-check --output NEW_CHECK_DIRECTORY quick --fresh` exercises only the
+fresh corpus, tokenizer, numerical mask/accumulation/KV and fresh-process resume
+boundaries. Fixtures create their own native data and do not need historical parents.
+
+`replica-train fresh prepare --output NEW_RUN_DIRECTORY` creates the8192/512/128
+native sources, train-only tokenizer, random SMALL artifact and typed binary plan.
+`replica-train fresh run --root RUN_DIRECTORY` performs first1 and saves, then a
+new invocation continues with the same plan/Adam/clock/sampler. Pure time pauses
+alone permit continuation within the original aggregate budget. Closed/error/
+unknown segments block. Never delete markers to retry. The actual binary/source
+must match the preparation identity. `fresh report --root RUN_DIRECTORY` is pure
+read-only accounting; it does not manufacture missing execution evidence.
+
+Plan/metadata/summaries use R3BIN; corpora use R3CORP; weights/Adam use R3MODEL;
+raw evaluation and per-update metrics are native record streams. SQLite is not
+used by these training commands. Conditional S5 still uses the existing memory DB.
+Preparation and checkpoint serialization do not establish model quality.
+
 ## Current binary interfaces after the data reset
 
 For a bounded synthetic storage check, build

@@ -1,5 +1,64 @@
 # 진단 및 구현 상태
 
+## 2026-09-19 Fresh joint baseline — F0–F3
+
+R3-FRESH-JOINT-BASELINE-1.0. 시작 source1885626a4f84ec79137e4e79414269a019de7e3f,
+main/origin seoyd/replica-v3, Rust1.98.1, locked/offline Accelerate CPU F32 thread1.
+시작 시 artifacts/docs/logs/기본 운영 기억 경로가 없음을 로컬 확인했다. 추가 삭제나
+과거 모델 복구는 하지 않았다. `.DS_Store`는 그대로 보존했다.
+
+**EXECUTED_THIS_RUN:** 기존 trainer에 명시적인 fresh binary plan/균형 sampler를
+연결했다. forward/backward/Adam loop는 복제하지 않았다. native checkpoint의 기존
+execution-policy binding에 plan/order hash를 묶는다. 일반 default resume로의 우회는
+거부한다. 별도 training-only `src/fresh.rs`에서 여덟 과제 corpus, 독립 request-only
+resolver, 준비/실행/평가를 구성한다. 원문 full/짧은 값/대상/맥락/현재/과거·복원/
+없음·모호함/인과 유보를 처음부터 함께 학습한다. 제품 inference에 oracle이 없다.
+R3BIN/R3CORP/R3MODEL 형식, tokenizer 알고리즘, SMALL 구조와 SQLite는 변경하지 않았다.
+
+`replica-check --output artifacts/fresh-joint-check-final-20260919 quick --fresh`:
+관련 고유 회귀9개 PASS와 컴파일 PASS. tokenizer raw/역할/숫자, scalar CE와 gradient,
+shift/mask/EOS, 다른 길이의 target 가중 gradient 누적, cached/uncached255/256/257,
+4epoch sampler 전수, 실제 native 저장과 별도 process2 vs1+1 및 정책 누락 거부,
+worker 오류·취소를 검사했다. 예정4096 step metadata는 합성 count이며 optimizer0.
+추가 평가-row 검사는 같은 TINY checkpoint의 writer→reader→fresh-process 재독과
+파일 불변을 확인했다. source 마지막 변경은 부분 평가의 완료 flag를 성공 후에만
+기록하도록 맞췄으며 release 컴파일을 통과했다.
+
+실패도 보존: 첫 TINY fixture의 context 변경은 지원 profile 검사에 거부됐다(optimizer0).
+기존 bounded experimental 수치 profile(2x32, context512)로 fixture를 명시하고 통과했다.
+metadata fixture의 corpus/tokenizer hash 불일치도 writer가 거부했고 일치시킨 뒤 통과했다.
+전체 suite·역사 부모 복원·QA32 재학습은 하지 않았다. 여기까지 SMALL updates0,
+TINY optimizer16(2 vs1+1을4번), scalar Adam2, 추가 TINY generation2; 중복 실행을
+고유 테스트 수에 더하지 않았다. 학습 품질 증거가 아니다.
+
+실제 준비 명령:
+`VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 artifacts/fresh-joint-20260919-executable fresh prepare --output artifacts/fresh-joint-20260919`.
+실행파일 SHA256 `c5cc6702cbd56c940e8ba00664575465bcd89272428aa2e6220fcbe8b58752ec`.
+이후 이 실행파일/정책/자료를 고정한다. 큰 corpus/model/raw는 게시하지 않는다.
+
+| 새 자료 | examples | framed tokens(노출 전) | 최대 sequence |
+| --- | ---: | ---: | ---: |
+| train |8192|1700452|351|
+| primary dev |512|105940|343|
+| transfer dev |128|30064|318|
+
+학습 텍스트5,048,249 bytes, tokenizer용1,614,444 tokens. 실제 vocab562,
+SMALL parameters9,513,408, tensor memory 계획5,440,696,320 bytes(실측 RSS 아님),
+따라서 microbatch8/accumulation1을 고정했다. 모든 provided evidence/길이/conflicting
+token-prefix 검사를 학습 전에 통과했다. primary는 다른 전체 entity/scene이며 문법은
+공유한다. transfer는 새 표현 및 일부 record-count 조합이다. 독립 final200은 미개봉.
+
+- train semantic `ccee0d2d9a6803b6b8b157ac7e46483d0f7558d30482a31f40f3366ce9183b5d`
+- tokenizer `ec945ee5f3cbd87992bdfa13f199de2a671b94b64337dff04d85e01d982ab9ef`
+- initial weights `6d435ddd77ed2314b2038054238b32a07038715dd8dbbbf953d06d4109f9dd86`
+- typed plan digest `2e7d0f0f1d38dc474671cc11fc523393a433c3a8bb28cce3e7296597c9c227eb`
+
+로컬 허용 경로 `artifacts/fresh-joint-20260919/`: plan.r3b, metadata.r3b,
+corpus.r3cor, transfer.r3cor, tokenizer.r3b, initial.r3m. 단계 로그는 로컬
+`/tmp/r3-fresh-*.log`, checker 실행기록은 위 check-final 디렉터리다.
+CURRENT_MODEL_STATUS=NOT_TRAINED; MODEL_QUALITY_PASS=false; S4/S5/S6=NOT_RUN;
+GOAL1_READY=false; INDEPENDENT_REVIEW=PENDING. 다음은 이 한 run의 첫1/fresh resume다.
+
 ## 2026-09-19 R3BIN 후속 점검·저장 최적화
 
 기준 source `e2684bd3957a491959c44f4e6ae7df05ea58951b`를 이어서 수정했다.

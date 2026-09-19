@@ -28,6 +28,9 @@ struct Cli {
 enum Checks {
     /// Offline source checks and direct regressions; no quality evaluation or learning.
     Quick {
+        /// Only fresh joint corpus, numerical, native resume and runtime gates.
+        #[arg(long, conflicts_with_all = ["native_corpus", "bridge_receipts"])]
+        fresh: bool,
         /// Direct source-corpus/objective/resume regressions only; no unrelated storage suites.
         #[arg(long)]
         native_corpus: bool,
@@ -411,9 +414,26 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
     write_new(&r.output.join("boundaries.r3b"), &boundaries(files)?)?;
     match &cli.command {
         Checks::Quick {
+            fresh,
             native_corpus,
             bridge_receipts,
         } => {
+            if *fresh {
+                r.cargo("check", &["--bin", "replica-train"], false)?;
+                for (target, filter) in [
+                    ("native", "own_byte_bpe_roundtrip_no_control_promotion_or_truncation"),
+                    ("native", "native_numeric_references_and_causal_padding_gradients"),
+                    ("native", "fresh_kv_window_255_256_257_matches_uncached_prefix"),
+                    ("training", "fresh_balanced_two_updates_match_fresh_process_resume_and_reject_unbound"),
+                    ("runtime", "rust_child_protocol_failures_timeouts_stderr_and_cancellation"),
+                ] {
+                    r.cargo("test", &["--test", target, filter, "--", "--exact", "--nocapture"], true)?;
+                }
+                for filter in ["fresh_data_disjoint_resolver_and_balanced_epoch", "first_target_objective_matches_scalar_ce_and_gradients_without_mask_leakage", "adam_matches_independent_reference_and_teacher_forcing_masks", "fresh_accumulation_and_metadata_boundary"] {
+                    r.cargo("test", &["--bin", "replica-train", filter, "--", "--nocapture"], true)?;
+                }
+                return Ok(());
+            }
             r.run(
                 "cargo",
                 &["fmt", "--all", "--", "--check"],

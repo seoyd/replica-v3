@@ -5,6 +5,8 @@ pub mod contrast;
 pub mod recovery;
 #[path = "target_loss.rs"]
 pub mod target_loss;
+#[path = "fresh.rs"]
+pub mod fresh;
 use crate::data::{self, Episode};
 use candle_core::{DType, Device, Tensor, Var};
 use replica_v3::{
@@ -284,7 +286,7 @@ fn validation_loss(
     for index in 0..samples.len() {
         control.check("before_validation_teacher")?;
         let b = batch(samples, &[index], &model.device)?;
-        control.teacher_calls += 1;
+        control.begin_teacher()?;
         let (loss, n) = masked_loss(
             &model.forward(&b.input, Some(&b.valid))?,
             &b.target,
@@ -737,9 +739,12 @@ pub fn train(run: Run<'_>, cancel: std::sync::Arc<AtomicBool>) -> Result<()> {
     train_controlled(run, &mut control)
 }
 fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<()> {
+    train_with_policy(run, control, None)
+}
+fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Option<(&fresh::Plan, &Path)>) -> Result<()> {
     control.measure_rss = run.measure_rss;
     control.check("training_started")?;
-    if run.resume {
+    if run.resume && fresh.is_none() {
         recovery::reject_unbound_objective_resume(run.checkpoint)?;
     }
     if run.extend_steps.is_none()
@@ -968,10 +973,19 @@ fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<
     }
     // New runs and explicit extensions bind the exact executed generic schedule/loss.
     // Ordinary resume was checked before any tensor work and cannot change this policy.
-    state.resume_binding = Some(checkpoint::ResumeBinding::default_for(
-        &state,
-        &loaded.tokenizer,
-    ));
+    let binding = match fresh {
+        Some((plan, _)) => {
+            if config != plan.config { return Err(Error::Invalid("fresh config mismatch".into())); }
+            let binding = plan.binding(&state, &loaded.tokenizer)?;
+            if run.resume && (state.resume_binding.as_ref() != Some(&binding) || state.sampler_state != state.step as u64) {
+                return Err(Error::Invalid("fresh sampler/objective/policy mismatch; optimizer_calls=0".into()));
+            }
+            if !run.resume { state.sampler_state = 0; }
+            binding
+        }
+        None => checkpoint::ResumeBinding::default_for(&state, &loaded.tokenizer),
+    };
+    state.resume_binding = Some(binding);
     println!(
         "available_framed_train_tokens={} available_framed_validation_tokens={} frozen_tokenizer={} previous_corpora={:?}",
         train.iter().map(|s| s.tokens.len()).sum::<usize>(),
@@ -1010,22 +1024,27 @@ fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<
     let mut reason = "BUDGET_REACHED";
     let mut last_validated = None;
     let mut executed_input_tokens = 0u64;
+    let mut fresh_stop = None;
+    let mut fresh_trace = if fresh.is_some() {
+        Some(std::fs::OpenOptions::new().write(true).create_new(true).open(run.output.join("updates.r3rows"))?)
+    } else {None};
     let outcome = (|| -> Result<()> {
-        let initial_loss = validation_loss(&loaded.model, &validation, control)?;
-        last_validated = Some(state.step);
+        let initial_loss = if fresh.is_some() { state.validation_loss.unwrap_or(0.) } else { validation_loss(&loaded.model, &validation, control)? };
+        last_validated = if fresh.is_some() {None} else {Some(state.step)};
         println!(
-            "backend={} dtype=F32 profile={} parameters={} train_samples={} validation_samples={} initial_validation_loss={initial_loss:.8} numeric_overfit_only={} loaded_weight_hash={} random_initial_weight_hash={} peak_sampled_rss_KiB={peak:?}",
+            "backend={} dtype=F32 profile={} parameters={} train_samples={} validation_samples={} initial_validation_loss={} numeric_overfit_only={} loaded_weight_hash={} random_initial_weight_hash={} peak_sampled_rss_KiB={peak:?}",
             neural::cpu_backend(),
             loaded.model.config.profile,
             loaded.model.config.parameters(),
             train.len(),
             validation.len(),
+            if fresh.is_some() {"NOT_RUN_FIXED_PROBE_FOLLOWS".into()} else {format!("{initial_loss:.8}")},
             run.numeric_probe,
             loaded.model.weight_hash()?,
             loaded.manifest.initial_weight_hash
         );
         let mut best = state.validation_loss.unwrap_or(initial_loss);
-        state.validation_loss = Some(initial_loss);
+        if fresh.is_none() {state.validation_loss = Some(initial_loss);}
         let mut initial = loaded.manifest.clone();
         initial.training = Some(state.clone());
         initial.status = "TRAINING".into();
@@ -1038,8 +1057,13 @@ fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<
             &adam.moments,
         )?;
         control.check("training_start_checkpoint_saved")?;
+        if let Some((plan, root)) = fresh {
+            fresh_stop = fresh::evaluate_boundary(plan, root, &run.output.join("start"), state.step, control)?;
+            if state.step == 128 || state.step.is_multiple_of(512) {last_validated=Some(state.step);}
+        }
         let mut token_budget_reached = false;
         while state.step < config.max_steps {
+            if fresh_stop.is_some() { reason = "TRAINING"; break; }
             control.check("training_step")?;
             if run.stop_after.is_some_and(|n| state.step >= n) {
                 reason = "TRAINING";
@@ -1052,14 +1076,19 @@ fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<
             let mut targets = 0usize;
             let mut step_tokens = 0;
             let mut aborted = false;
-            for _ in 0..config.accumulation {
+            let mut task_stats = Vec::new();
+            let balanced = fresh.map(|(plan, _)| plan.draw(state.step));
+            for micro in 0..config.accumulation {
                 control.check("before_training_microbatch")?;
                 let pool = if state.step < config.curriculum_steps {
                     &copy_indices
                 } else {
                     &all_indices
                 };
-                let indices = draw_indices(pool, &config, &mut rng)?;
+                let indices = match &balanced {
+                    Some(indices) => indices[micro*config.microbatch..(micro+1)*config.microbatch].to_vec(),
+                    None => draw_indices(pool, &config, &mut rng)?,
+                };
                 let b = batch(&train, &indices, &loaded.model.device)?;
                 if state
                     .consumed_tokens
@@ -1069,11 +1098,21 @@ fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<
                     aborted = true;
                     break;
                 }
+                let logits = loaded.model.forward(&b.input, Some(&b.valid))?;
                 let (loss, objective, n) = response_loss(
-                    &loaded.model.forward(&b.input, Some(&b.valid))?,
+                    &logits,
                     &b,
                     config.first_target_weight,
                 )?;
+                if fresh.is_some() {
+                    let predictions=logits.argmax(2)?.to_vec2::<u32>()?;
+                    let labels=b.target.to_vec2::<u32>()?;let masks=b.mask.to_vec2::<f32>()?;
+                    for (row,&index) in indices.iter().enumerate() {
+                        let (ce,count)=masked_loss(&logits.narrow(0,row,1)?,&b.target.narrow(0,row,1)?,&b.mask.narrow(0,row,1)?)?;
+                        let correct=predictions[row].iter().zip(&labels[row]).zip(&masks[row]).filter(|((a,b),m)|a==b&&**m>0.).count();
+                        task_stats.push(replica_v3::binary::record!({"bucket":micro*config.microbatch+row,"index":index,"input":train[index].tokens.len()-1,"target":count,"ce":ce.to_scalar::<f32>()?,"correct_tokens":correct,"padding":b.input.dim(1)?-(train[index].tokens.len()-1)}));
+                    }
+                }
                 let value = f64::from(loss.to_scalar::<f32>()?);
                 let objective_value = f64::from(objective.to_scalar::<f32>()?);
                 if !value.is_finite() || !objective_value.is_finite() {
@@ -1116,9 +1155,15 @@ fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<
                 adam.step(&loaded.model.vars, &gradients, &config, state.step + 1)?;
             state.step += 1;
             state.target_tokens += targets as u64;
-            state.sampler_state = rng.state;
+            state.sampler_state = if fresh.is_some() {state.step as u64} else {rng.state};
             state.train_loss = Some(loss_sum / targets as f64);
             state.validation_loss = None;
+            if let Some(trace)=&mut fresh_trace {
+                use std::io::Write;
+                replica_v3::binary::write_value_record(trace,&replica_v3::binary::record!({"step":state.step,"sampler":state.sampler_state,"epoch":state.step/1024,"draw":balanced,"tasks":task_stats,"input":step_tokens,"target":targets,"ce":state.train_loss,"lr":config.learning_rate(state.step),"grad_norm":grad_norm,"clip":(config.clip/(grad_norm+1e-12)).min(1.),"delta_norm":delta}))?;
+                trace.flush()?;
+                if state.step==1||state.step.is_multiple_of(32){trace.sync_all()?;}
+            }
             control.check("training_optimizer_returned")?;
             let rss = control.last_rss_kib;
             peak = peak.max(rss);
@@ -1139,16 +1184,18 @@ fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<
                     loaded.model.weight_hash()?
                 );
             }
-            if state.step.is_multiple_of(config.validate_every) || state.step == config.max_steps {
-                let value = validation_loss(&loaded.model, &validation, control)?;
+            if state.step.is_multiple_of(config.validate_every) || state.step == config.max_steps || (fresh.is_some() && state.step == 128) {
+                let value = if fresh.is_some() { state.train_loss.unwrap() } else { validation_loss(&loaded.model, &validation, control)? };
                 last_validated = Some(state.step);
-                state.validation_loss = Some(value);
-                println!(
+                if fresh.is_none() {
+                    state.validation_loss = Some(value);
+                    println!(
                     "validation step={} loss={value:.8} samples={} selection=VALIDATION_ONLY",
                     state.step,
                     validation.len()
-                );
-                let improved = value < best;
+                    );
+                }
+                let improved = fresh.is_none() && value < best;
                 best = best.min(value);
                 loaded.model.refresh_identity()?;
                 let mut manifest = loaded.manifest.clone();
@@ -1164,6 +1211,11 @@ fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<
                     &adam.moments,
                 )?;
                 control.check("training_checkpoint_saved")?;
+                if let Some((plan, root)) = fresh {
+                    last_validated=None;
+                    fresh_stop = fresh::evaluate_boundary(plan, root, &path, state.step, control)?;
+                    last_validated=Some(state.step);
+                }
                 println!(
                     "checkpoint={} sha256={} best_validation={improved}",
                     path.display(),
@@ -1178,7 +1230,7 @@ fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<
                 }
             }
         }
-        if !token_budget_reached && last_validated != Some(state.step) {
+        if fresh.is_none() && !token_budget_reached && last_validated != Some(state.step) {
             state.validation_loss = Some(validation_loss(&loaded.model, &validation, control)?);
             last_validated = Some(state.step);
         }
@@ -1228,6 +1280,10 @@ fn train_controlled(run: Run<'_>, control: &mut recovery::RunControl) -> Result<
     receipt["executed_input_tokens_including_uncommitted"] =
         replica_v3::binary::record!(executed_input_tokens);
     receipt["candidate_eligible"] = replica_v3::binary::record!(false);
+    if fresh.is_some() {
+        receipt["fresh_stop"] = replica_v3::binary::record!(fresh_stop);
+        receipt["validation_loss_kind"] = replica_v3::binary::record!("see fixed-probe evaluation; checkpoint loss is training CE");
+    }
     neural::write_new(&run.output.join("train-control.r3b"), &replica_v3::binary::to_vec(&receipt)?)?;
     println!("TRAIN_CONTROL {receipt}");
     println!(

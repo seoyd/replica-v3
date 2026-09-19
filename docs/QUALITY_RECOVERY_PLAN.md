@@ -1,5 +1,52 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: fresh joint baseline after the complete data reset
+
+R3-FRESH-JOINT-BASELINE-1.0, reference1885626a4f84ec79137e4e79414269a019de7e3f.
+This replaces the old parent-dependent continuation instructions for new work.
+No deleted model/corpus/receipt is restored. No new storage/SQLite/kernel work.
+Use existing native formats and the ordinary trainer, CPU F32 Accelerate thread1.
+
+F0 current state → F1 focused numeric/process checks → F2 native joint corpus and
+independent constrained resolver → F3 train-only tokenizer/fresh plan → F4 one
+bounded run → F5 fixed development candidate/independent200 → conditional F6 S5/S6.
+Eight equally sampled buckets cover full copy, explicit field, entity selection,
+context, current/valid time, past/correction/restoration, missing/ambiguous evidence,
+and unconfirmed causality. Train8192/primary512/transfer128; base views stay together.
+Full entity SHA256 partition is disjoint; primary grammar is shared deliberately.
+Transfer reports unseen phrasing separately from record-count combinations.
+
+Seeds model17/data20260919/sampler29. SMALL topology unchanged; tokenizer trained
+once on all train text, maximum4096 actual vocabulary. Default response+EOS CE,
+first-target1, no SPAN/curriculum. Fresh Adam .9/.999/eps1e-8, decay.01, clip1;
+LR3e-4, warmup128, cosine final.1, absolute clock. Batch8, or fixed2x4 only if
+the pre-run memory planning guard exceeds16GiB. One draw per bucket/update,
+base permutation per epoch and rotating views, no replacement within1024 updates.
+Plan hash and exact order/config/tokenizer/source are bound inside native checkpoints.
+Generic resume cannot silently substitute the default sampler/objective.
+
+Limits: SMALL4096 updates/input20M/active10800s, segment900s plus cleanup120s;
+generation4096/own teacher6000, TINY128. First1 save and fresh-process resume are
+inside the4096 budget. Only clean time pauses resume; missing completion is UNKNOWN
+and blocks retry. No source/data/seed/LR/loss changes after execution freeze.
+
+Screen64 at0/128/512/1024/2048/3072/4096. Primary512 at1024/2048/4096;
+transfer128 at2048/4096. Fixed train64 generation at0/1024/2048/4096 and its
+teacher CE initially/every512. Errors count in full denominators. Initial random
+invalid output is not a numeric failure. Nonfinite/data/I/O/cancel/resource errors
+stop. Two screen regressions of>=12 below a best>=32 plus CE>=1.2x stop;
+1024 dev0 with no train signal and2048 at least4 empty buckets without progress
+close the run. End4096 is final; no automatic extension or replacement attempt.
+
+Same-checkpoint development gate: primary>=487/512, every bucket>=58/64,
+transfer>=116/128, errors0 and no accepted invalid citations. Freeze a qualifying
+2048/4096 candidate before independent200 (>=190, each of5 categories>=36/40).
+No final data generation/reading by trainer before that gate. S4 pass alone permits
+normal worker/memory/restart S5 and separate groupedINT4 S6 (loss<=2pp, additional
+generation<=1024, training0). No independent acceptance is self-granted.
+
+The data-reset and storage-only phases below are completed history.
+
 ## Active: native project serialization after the data reset
 
 On 2026-09-19 the user authorized deleting all learned artifacts, corpora, raw

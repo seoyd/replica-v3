@@ -74,6 +74,19 @@ pub(super) struct RunControl {
     hook: Option<Box<dyn FnMut(&str, &Arc<AtomicBool>)>>,
 }
 impl RunControl {
+    pub(super) fn set_call_limits(&mut self, generation: usize, teacher: usize) {
+        self.generation_limit = generation;
+        self.teacher_limit = teacher;
+    }
+    pub(super) fn begin_teacher(&mut self) -> Result<()> {
+        self.check("before_teacher_budget")?;
+        if self.teacher_calls >= self.teacher_limit {
+            self.observe(StopReason::TokenBudget);
+            return self.stop_result();
+        }
+        self.teacher_calls += 1;
+        Ok(())
+    }
     pub(super) fn new(
         cancel: Arc<AtomicBool>,
         duration: Duration,
@@ -188,6 +201,10 @@ impl RunControl {
     }
     fn effective_timeout(&mut self, original: u64) -> Result<u64> {
         self.check("generation_budget")?;
+        if self.generation_calls >= self.generation_limit {
+            self.observe(StopReason::TokenBudget);
+            return self.stop_result().map(|_|0);
+        }
         let remaining = self
             .deadline
             .saturating_duration_since(self.now())
@@ -1239,7 +1256,7 @@ fn teacher_observation(
     probe: bool,
 ) -> Result<Value> {
     control.check("teacher_started")?;
-    control.teacher_calls += 1;
+    control.begin_teacher()?;
     let mut gold = l.tokenizer.encode(e.answer.as_bytes())?;
     gold.push(EOS);
     let mut sequence = prompt.to_vec();

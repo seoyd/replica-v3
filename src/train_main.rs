@@ -12,6 +12,11 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Commands {
+    /// Fresh joint baseline using the existing native trainer.
+    Fresh {
+        #[command(subcommand)]
+        command: training::fresh::Command,
+    },
     /// Frozen, bounded quality recovery diagnostics; never a product answer path.
     Recovery {
         /// Archived control schemas using R3BIN metadata; native commands use R3ER.
@@ -301,6 +306,7 @@ enum Tokenizer {
 }
 fn run() -> Result<()> {
     match Cli::parse().command {
+        Commands::Fresh { command } => training::fresh::execute(command),
         Commands::Corpus {
             command:
                 Corpus::ImportLegacy {

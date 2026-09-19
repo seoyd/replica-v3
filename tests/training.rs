@@ -2649,3 +2649,40 @@ fn native_export_kill_before_publication_preserves_source_and_allows_retry() {
     );
     assert_eq!(std::fs::read(&source).unwrap(), original);
 }
+
+#[test]
+fn fresh_balanced_two_updates_match_fresh_process_resume_and_reject_unbound() {
+    use candle_core::Device;
+    use replica_v3::neural::checkpoint;
+    let d=tempfile::tempdir().unwrap();
+    let call=|args:&[&str],success:bool| {
+        let out=Command::new(env!("CARGO_BIN_EXE_replica-train")).args(args)
+            .env("VECLIB_MAXIMUM_THREADS","1").env("RAYON_NUM_THREADS","1").output().unwrap();
+        assert_eq!(out.status.success(),success,"{}\n{}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));
+    };
+    let full=d.path().join("full");let split=d.path().join("split");
+    for root in [&full,&split] {call(&["fresh","fixture","--output",root.to_str().unwrap()],true);}
+    call(&["fresh","fixture-full","--root",full.to_str().unwrap()],true);
+    call(&["fresh","run","--root",split.to_str().unwrap()],true);
+    let first=split.join("segment-0000/final");
+    call(&["train","--resume",first.to_str().unwrap(),"--corpus",split.join("corpus.r3cor").to_str().unwrap(),"--output",d.path().join("forbidden").to_str().unwrap()],false);
+    assert!(!d.path().join("forbidden").exists());
+    call(&["fresh","run","--root",split.to_str().unwrap()],true);
+    let a=checkpoint::load(&full.join("segment-0000/final"),Device::Cpu,true).unwrap();
+    let b=checkpoint::load(&split.join("segment-0001/final"),Device::Cpu,true).unwrap();
+    assert_eq!(a.model.weight_hash().unwrap(),b.model.weight_hash().unwrap());
+    for (k,t) in &a.optimizer {assert_eq!(t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),b.optimizer[k].flatten_all().unwrap().to_vec1::<f32>().unwrap());}
+    let sa=a.manifest.training.unwrap();let sb=b.manifest.training.unwrap();
+    assert_eq!((sa.step,sa.sampler_state,sa.consumed_tokens,sa.target_tokens),(2,2,sb.consumed_tokens,sb.target_tokens));
+    assert_eq!(sa.config,sb.config);assert_eq!(sb.step,2);assert_eq!(sb.sampler_state,2);
+    call(&["fresh","fixture-eval","--root",split.to_str().unwrap()],true);
+    let raw=split.join("eval-0002-fixture.r3rows");let before=std::fs::read(&raw).unwrap();
+    call(&["fresh","fixture-eval","--root",split.to_str().unwrap()],true);
+    assert_eq!(before,std::fs::read(&raw).unwrap());
+    call(&["fresh","run","--root",split.to_str().unwrap()],false);
+    let p=split.join("plan.r3b");let mut policy:replica_v3::binary::Value=replica_v3::binary::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+    policy["config"]["seed"]=replica_v3::binary::record!(30);
+    std::fs::write(&p,policy.to_vec().unwrap()).unwrap();
+    call(&["fresh","run","--root",split.to_str().unwrap()],false);
+    println!("FRESH_TINY_OPTIMIZER_CALLS=4 fresh_process_resume=EXACT missing_policy=REJECTED");
+}

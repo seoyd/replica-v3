@@ -787,3 +787,19 @@ fn native_checkpoint_rejects_nonfinite_unknown_missing_and_wrong_shape() {
         assert!(checkpoint::save(&d.path().join(format!("{corruption}.r3m")),&model,&tok,manifest.clone(),&Default::default()).is_err(),"{corruption}");
     }
 }
+
+#[test]
+fn fresh_kv_window_255_256_257_matches_uncached_prefix() {
+    use candle_core::{Device,Tensor};
+    use replica_v3::neural::transformer::{Config,Transformer};
+    let mut c=Config::tiny(264);c.profile="NATIVE_TRPP_EXPERIMENTAL_V1".into();c.context=512;c.window=256;
+    let model=Transformer::init(c,17,Device::Cpu).unwrap();
+    for n in [255,256,257] {
+        let ids:Vec<u32>=(0..n).map(|i|8+(i%256) as u32).collect();
+        let input=Tensor::new(ids.as_slice(),&Device::Cpu).unwrap().unsqueeze(0).unwrap();
+        let full=model.forward(&input,None).unwrap();let mut cache=model.cache("fresh-window");let mut parts=vec![];
+        for chunk in ids.chunks(128){parts.push(model.forward_cached(&Tensor::new(chunk,&Device::Cpu).unwrap().unsqueeze(0).unwrap(),&mut cache,"fresh-window").unwrap());}
+        assert!(max_error(&full,&Tensor::cat(&parts,1).unwrap())<2e-5);
+        assert_eq!(cache.retained_tokens(),[n.min(256),n]);
+    }
+}

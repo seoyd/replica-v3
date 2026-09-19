@@ -16,6 +16,11 @@ libraries are permitted. Use R3BIN for former text metadata/IPC/record streams;
 reuse R3MODEL/R3CORP/R3TOK/R3ER for their existing domain schemas.
 The earlier storage freeze does not restrict that explicitly requested removal.
 Permanent acceptance criteria: `docs/GOAL1_CONTRACT.md`.
+The active fresh joint baseline now authorizes new educational synthetic data,
+one train-only tokenizer and random SMALL initialization, with fresh Adam and
+response CE first-target weight1. Old parents/receipts remain unavailable and are
+not prerequisites. Use the fresh section of the active plan for its single4096
+update budget, balanced sampler, development gates and conditional S4/S5/S6.
 Active stages, budgets and stop conditions: `docs/QUALITY_RECOVERY_PLAN.md`.
 Observed results and historical failures: `docs/EXPERIMENT_STATUS.md`.
 Architecture and artifact semantics: `docs/NATIVE_MODEL.md`.
@@ -49,6 +54,8 @@ Default builds and tests use `--locked --offline`.
 On the current M4, use `--features accelerate` and one compute thread.
 Build the checker with `cargo build --locked --offline --features accelerate --bin replica-check`.
 Run `target/debug/replica-check quick --output NEW_DIRECTORY` before learning.
+For the fresh baseline use `target/debug/replica-check --output NEW_DIRECTORY quick --fresh`;
+this runs only the relevant independent numeric/corpus/native-process regressions.
 Use `replica-check model --help` for explicit artifact/corpus validation.
 Use `replica-check release --help` for receipt-bound release verification.
 Run only directly relevant tests during implementation.
