@@ -1,5 +1,220 @@
 # 진단 및 구현 상태
 
+## 2026-09-19 Selector consistency — 실행 종료, S 품질 회귀로 중단
+
+EXECUTED_THIS_RUN / DERIVED_EXISTING_RAW. C-KEEP는 신규2048회, S-SELECT는 신규1024회를
+실행했다. C는 absolute8192/BUDGET_REACHED, S는 absolute7168/QUALITY_REGRESSION_PRIMARY로
+닫혔고 둘 다 resume=false다. S primary350은 부모425보다75개 낮아 중단 기준64개를
+넘었다. S의 나머지1024회는 사용하지 않았으며 예산 연장·재초기화·추가 arm은 없다.
+전체 판정은 **STUDY_INCONCLUSIVE_UNEQUAL_BUDGET**이다. C의 최종 개발 gate도 FAIL이다.
+코드 수리 PASS와 실제 모델 품질 회복을 구분한다. candidate=null, final200 NOT_OPENED,
+Goal1 S4 미통과, S5/S6 NOT_RUN_PREREQUISITE, GOAL1_READY=false, GOAL1_ACCEPTED=false다.
+독립 검토/수용은 NOT_RUN이다. S의8192 및 selector192는 NOT_RUN_QUALITY_STOP이며
+7168을 계획된8192 endpoint로 부르지 않는다.
+
+### 실제 candidate와 실행 identity
+
+기준 source `e97e2c665c5de29a1a6a84b85864016406f92cf3`, 시작 report HEAD
+`e9645747a54a45cb864394840ff8c4a21ccf0ae9`다. 원래 untracked `.DS_Store`와
+P6144/과거 C6144의 원문·raw·checkpoint·실패·종료 기록은 보존했다.
+
+| 구분 | 실제 commit |
+| --- | --- |
+| FX04/FX05 수리 | `c7b5943fac96fa36ba2f00a887b1916b66d354a6` |
+| 두 군 학습에 사용한 고정 source | `fbffc0edf943818e008a37bf9c5b5cf921fdc36a` |
+| 학습 종료 후 읽기 전용 보고 수리 candidate | `b0e38e18cb66b87bdaf1f657b8e74332723cb996` |
+
+각 source commit은 origin/main에 정상 push하고 당시 remote 전체 SHA 일치를 확인했다.
+이 절은 이후의 report-only 변경이다. 실제 diff는
+`git diff e97e2c665c5de29a1a6a84b85864016406f92cf3 b0e38e18cb66b87bdaf1f657b8e74332723cb996`.
+학습 source 이후 코드 차이는 `src/fresh.rs`의 종료된 연구 보고/노출 digest 수리뿐이다.
+학습 중 source/binary/policy/data 변경0이며 종료된 run을 새 binary로 재개하지 않았다.
+
+학습 실행물 `artifacts/selector-consistency-20260919-executable`의 SHA256는
+`40399be6f56f62864397f4d9c4ba2894e6209bb845a4128e1116e766b183b623`,
+embedded source digest는 `6c01663cc979fb99072aa328210034ffa23bb6d57e10cf097e175afa6ba35575`.
+보고 실행물 `artifacts/selector-consistency-20260919-report-executable`의 SHA256는
+`e0bcf12e680a314d1983af6edbd145bc53f08440c522513f377d7f178d1b7f3f`,
+report source digest는 `144f37c98eb47dacb10e98a0a025848263f83a90886ba5034b9b9cbe6ec7fa4b`.
+학습모델은 기존9,513,408 parameter SMALL/F32/Accelerate, stable Rust1.98.1,
+locked/offline, compute thread1이다. topology/tokenizer/loss/Adam은 변경하지 않았다.
+
+### 같은 가중치에 묶인 실제 패널
+
+normal greedy→EOS→strict UTF-8의 전체 답변 exact다. body/citation은 보조 지표다.
+원 raw를 native tokenizer로 다시 해석하고 frozen expected·질문·근거·model/step·
+필수 teacher·완료 receipt와 대조했다. 서로 다른 panel의 평균 CE를 섞지 않았다.
+S는 품질 중단 당시7168이며 C8192와 학습량이 다르다.
+
+| model / panel | full | body | citation | base4 | EOS | errors | teacher CE |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| P6144 train64 |58|59|61|12/16|64|0|.035539381|
+| C8192 train64 |58|60|60|12/16|64|0|.040672453|
+| S7168 train64 |51|58|55|11/16|64|0|.060994693|
+| P6144 primary512 |425|444|455|81/128|512|0|.050290101|
+| C8192 primary512 |420|450|452|80/128|512|0|.060070283|
+| S7168 primary512 |350|416|391|71/128|512|0|.070221167|
+| P6144 transfer128 |79|103|81|15/32|128|0|.639897667|
+| C8192 transfer128 |80|94|85|16/32|128|0|.673838937|
+| S7168 transfer128 |67|91|76|15/32|128|0|.606143554|
+| P6144 selector192 |2|13|26|0/48|192|0|1.360439311|
+| C8192 selector192 |7|15|36|0/48|192|0|1.528235119|
+| S selector192 |NOT_RUN|NOT_RUN|NOT_RUN|NOT_RUN|NOT_RUN|NOT_RUN|NOT_RUN|
+
+| bucket A–H | P primary /64 | C8192 primary /64 | S7168 primary /64 | P transfer /16 | C8192 transfer /16 | S7168 transfer /16 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| A full copy |51|56|47|7|4|4|
+| B requested field |62|61|61|8|8|8|
+| C entity selection |42|44|20|4|7|0|
+| D context selection |52|48|27|4|7|4|
+| E current/valid time |37|37|23|9|8|4|
+| F past/correction/restore |63|61|59|16|16|16|
+| G missing/ambiguous |54|49|49|15|14|15|
+| H causal uncertainty |64|64|64|16|16|16|
+
+| 새 update | C screen /64 | S screen /64 | C train/primary/transfer | S train/primary/transfer |
+| --- | ---: | ---: | --- | --- |
+|256|53|46|NOT_RUN|NOT_RUN|
+|512|54|38|NOT_RUN|NOT_RUN|
+|1024|52|42|59/64,436/512,68/128|51/64,350/512,67/128|
+|1536|49|NOT_RUN|NOT_RUN|NOT_RUN|
+|2048|46|NOT_RUN|58/64,420/512,80/128|NOT_RUN|
+
+모든 실행된 screen의 생성 오류는0이다. 고정 train64 teacher CE는
+C(+256/512/1024/1536/2048) .068373/.044666/.029985/.029673/.040672,
+S(+256/512/1024) .047106/.076076/.060995였다. S +512 screen38은 중단 조건을
+충족하지 않았고 +1024 primary350에서 실제 중단됐다. C의 중간436을 최종 winner로
+승격하지 않는다. 개발 gate(primary487/각bucket58/transfer116/오류0)는 유지했다.
+
+### paired 결과와 해석 범위
+
+아래 C는8192, S는7168이므로 두 군 간 최종 동등 예산 비교로 해석하지 않는다.
+
+| panel / metric | P→C gain/loss | P→S gain/loss | C→S gain/loss |
+| --- | --- | --- | --- |
+| train full |1/1|4/11|5/12|
+| primary full |33/38|25/100|31/101|
+| primary body |29/23|33/61|30/64|
+| primary citation |28/31|16/80|23/84|
+| primary base4 |9/10|6/16|5/14|
+| transfer full |7/6|1/13|2/15|
+| transfer body |3/12|5/17|8/11|
+| transfer citation |7/3|1/6|4/13|
+| transfer base4 |2/1|1/1|2/3|
+
+사후 읽기 전용으로 같은+1024의 기존 raw도 비교했다. C7168 primary436은
+[50,64,46,56,53,59,44,64], S7168은[47,61,20,27,23,59,49,64]였다.
+C→S full gain20/loss106, C/D/E155→70(-85), 다른5과제281→280(-1)이다.
+같은 시점 transfer는68→67(gain13/loss14); C/D/E21→8이나 F/G/H35→47이었다.
+이 관측을 중간 checkpoint 채택이나 사후 독립 test로 사용하지 않았다.
+모든 bucket별 body/citation/full gain/loss, 문구·ID길이·기록수·prompt길이 및
+base4 집계는 아래 accounting 로그에 보존했다.
+
+selector 원본/뒤집기192의 pair는 P [both0, original-only131, flip-only2, neither59],
+C [0,129,7,56]이었다. 동일 출력은184/192→186/192, both-correct base4는둘다0/48.
+뒤집은 출력의 [선택된/다른 제공된/없는event/무인용]은 P [26,143,4,19],
+C [36,144,4,8]이다. C/D/E pair 분해도 `selector-accounting.log`에 있다.
+S의 counterpart는 중단 이후 생성하지 않았다. S가 새 선택 능력을 얻었다는 결론은
+NOT_MEASURED이며, 확인된 것은 기존 선택 과제의 큰 하락이다.
+
+다음 단일 미실행 가설: C/D/E selector 변형 노출 비율50%가 현재 부모의 기존
+선택 규칙 보존과 충돌할 수 있다. 새 승인 연구에서 그 비율만25%와 비교하는 것이
+한 후보이며 현재 실행은0이다. 이번 결과만으로 shortcut·망각·tokenizer·수식의
+원인을 확정하지 않는다. S의 counterfactual 중간 측정 부재도 해석의 한계다.
+
+### 실제 노출·예산·중단
+
+| 항목 | C-KEEP | S-SELECT |
+| --- | ---: | ---: |
+| 실제 새 optimizer updates |2048|1024|
+| 각 bucket draw |2048|1024|
+| 총 draw / original phrase / P variant |16384 /8192 /8192|8192 /4096 /4096|
+| selector-mutated draw |0|1536|
+| committed input / discarded input |3511224 /3337|1756444 /0|
+| actual input(미커밋 포함) |3514561|1756444|
+| committed target / discarded target |252312 /218|126156 /0|
+| actual target(미커밋 포함) |252530|126156|
+| padding token |1427807|712420|
+| generation / teacher |1792 /1984|832 /960|
+| arm active seconds |2297.348288834|1131.415137793|
+
+부모 관측 generation208/teacher208을 포함한 전체는2832/3152, SMALL updates3072다.
+준비·관측·segment receipt 기준 active3489.766446919초이며 compile 시간과 다르다.
+각 segment900초+cleanup120초 안에서 저장했고, C의 두 pure timeout 및 S의 한
+pure timeout은 실제 새 process에서 계속됐다. actual LR bits4539475662290099561
+(3e-5) 하나뿐이다. C/S gradient norm 범위 .003219–11.986928 / .082109–11.171036,
+parameter delta L2 .001464–.041293 / .017495–.037246, clip 적용279/507회였다.
+원래8과제 순서와 P 문구비율을 보존했고 같은 실제1024 prefix에서 case/phrase/LR,
+A/B/F/G/H 입력·target 노출을 별도로 검산했다. S는 한 epoch만 실행했으므로
+전체3072 flip이나 원사례2회 노출을 달성했다고 하지 않는다.
+
+### checkpoint·인가된 로컬 증거
+
+학습 root는 `artifacts/selector-consistency-20260919/`, 로그 root는
+`artifacts/selector-consistency-20260919-evidence/`다. 로컬 읽기 전용 검토용이며
+checkpoint/corpus/raw/원문은 Git에 게시하지 않는다. 실험 root에는 study.r3b,
+study-ready.r3b, parent-audit.r3b, diagnostic.r3b와 각 arm의 plan/registration,
+corpus.r3cor, variants.r3cor, tokenizer.r3b, initial.r3m이 있다. S에는selectors.r3cor와
+selector-metadata.r3b도 있다. raw는각arm의eval-STEP-PANEL.r3rows,
+필수teacher는별도*-teachers.r3rows, call prepared/resolved와 segment start/finished를
+함께 확인한다. 봉인 final200이나 사용자 DB는 읽지 않았다.
+
+| identity | C-KEEP 마지막 durable | S-SELECT 마지막 durable |
+| --- | --- | --- |
+| 경로(root 기준) | `C-KEEP/segment-0003/final` | `S-SELECT/segment-0002/final` |
+| step / bytes |8192 /114180928|7168 /114180928|
+| 실제 물리 SHA256 |`d3090407de205045d3992add382124417cce287ea5080bf2eda4078bcfcee011`|`6c31d173c31a4f08e600f901289fa16d2779dd8639030d482a18b43b2bbbc8a0`|
+| weights hash |`f57b372796770767df3b13b1303b5c2ee7ef61f55a4d008497f888d761151db2`|`934260e5966f3bc701237ce3653b4cbbcc7d7ed3322932cfeb1536ca3e6e929b`|
+| Adam hash |`cc93d2dfcc4b0210c5f9601ace2032e4190cd3d15e8cc5c069f4de6855c902d4`|`b5eb34b06b2bc17fcd34d1cd04900eac0383f8e4c546d5604772e3a2346c25b3`|
+| state hash |`d14462f476a0f16e6ead9168000db27654b1b6f19e9ca1c39676b74795af6fb9`|`764d4fa5102bd2f182491d91c37f763187daef790a557def54b6a78f91a22d6a`|
+
+마지막 native 내용을 직접 읽어 확인했으며 optimizer/generation/teacher 추가0이다.
+저장 도중의 binding 전 TRAIN_END hash와 최종 확정 파일 hash를 혼동하지 않는다.
+부모 physical/weights/Adam/tokenizer hashes는 바로 아래 S0–S3 절과identity.log에 있다.
+
+핵심 실행 증거: `C-KEEP-segment-0000.log`부터0003, `S-SELECT-segment-0000.log`부터0002,
+각`*-closed-report.log`, `study-report-repaired.log`, `accounting.log`,
+`equal-1024-accounting.log`, `selector-accounting.log`, `prefix-exposure-verified.log`,
+`endpoint-native-hashes.log`. 집계는 읽기 전용 Rust 도구를 사용했다.
+
+### 수리 검증과 보고 오류의 처리
+
+FX04는 수정 전 실제 checkpoint-timeout이 Finished가 되는 RED를 보존했다.
+수정 후 optimizer-returned/저장 전/후3개 actual TINY process를 통과했고 최종
+evaluate-only의 optimizer0·weights/Adam/state 불변을 확인했다. FX05는 첫/중간/마지막
+미호출6개와 UNKNOWN kill/sync/cancel/binding/teacher 누락 차단을 검증했다.
+실제 native 진입 후 exit86, 반환된0token 취소/length/invalid UTF-8, EOS 뒤deadline,
+마지막 teacher만 남은 새 process(optimizer0,generation0,teacher1)도 검사했다.
+
+학습 source의 `replica-check quick --fresh-selector`는관련14개 test+cargo check PASS.
+별도 FX04/FX05 process 행렬 및 native first1/fresh process도 위 로그에 있다.
+새 전체 suite나 추가 암기시험은 실행하지 않았다. TINY 실행 집계는optimizer86,
+generation757, teacher747(진입 후 kill의 알려진 호출 포함), scalar Adam은성공2회와
+비유한 입력 거부1회다. kill의 알 수 없는 token/경과시간은UNKNOWN이며0이 아니다.
+기존 fixture 실패와0-test 필터 호출은 PASS 수에 넣지 않았다. 전체 fmt의 기존
+차이는 남아 있으며 전체 fmt PASS를 주장하지 않는다. 기존 map-key lint만 제외한
+변경 target clippy와 release build는 PASS다.
+
+두 군 종료 뒤 최초 study-report는 `Replica binary: value bounds`로 실패했다.
+기존5과제의 전체 token tree가 binary의100만 항목 상한을 넘은 보고용 집계 결함이다.
+각 bounded token row의 기존 native digest를 순서대로 묶도록 수정했으며 codec
+상한이나 저장 포맷은 변경하지 않았다. 학습 중 source를 바꾸거나 실패한 명령을
+고치지 않았다. 보고 전용 `--frozen-executable`은 실제 보존 실행물 hash·원 policy·
+native·raw·종료를 검증하고 현재 보고 source/binary identity도 별도로 출력한다.
+
+수정 후1,310,720 token 범위/순서/변조/binary roundtrip 회귀1개 PASS,
+새 process 실제 전체 study-report PASS(추가 model calls0), 다른 실행물 hash 및
+명시적 과거 실행물 없는 report2개는예상대로거부됐다. 다시 실행한 보고 bytes와
+실험 전체 파일 hash 목록도전후동일했다. 실패`study-report.log`, 성공
+`study-report-repaired.log`/`report-pure-read-repeat.log`, 최초잘못된0-test 필터,
+독립 보조검산의 물리 variant bytes 동일성 가정 실패도 보존했다. variant는변환
+timestamp 때문에 물리bytes가 다를 수 있으며 기존 native reader로내용을 비교했다.
+이 결함을 모델의 선택 능력 하락 원인으로 해석하지 않는다.
+
+CODE_VERDICT=PASS, FX04/FX05=VERIFIED, RAW_SCORE_AGREEMENT=VERIFIED.
+LEARNING=BOUNDED_STOP, MODEL_QUALITY_RECOVERED=false, DEVELOPMENT_GATE=FAIL.
+S의 미실행 최종 obligation과 Goal1 후속은 선행 품질 미달로 실행하지 않는다.
+
 ## 2026-09-19 Selector consistency — S0–S3 관측/등록 완료, 학습 전 동결
 
 EXECUTED_THIS_RUN: `fresh study-prepare --selector`로 같은 P6144 native weights,

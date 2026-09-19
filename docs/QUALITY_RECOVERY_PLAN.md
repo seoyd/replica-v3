@@ -2,6 +2,16 @@
 
 ## Active: selector consistency from the preserved P6144 parent
 
+Closed on2026-09-19. C-KEEP completed2048 new updates at8192 (primary420/512,
+transfer80/128). S-SELECT stopped after1024 at7168 (primary350/512, transfer67/128)
+with QUALITY_REGRESSION_PRIMARY:75 fewer primary answers than parent425. Both
+resume=false. STUDY_INCONCLUSIVE_UNEQUAL_BUDGET; no eligible candidate or budget
+extension. S's remaining1024 and final selector panel are NOT_RUN_QUALITY_STOP.
+Final200 remains unopened; Goal1 S4/S5/S6 are not accepted. The policy below records
+the closed run, not permission to restart. EXPERIMENT_STATUS gives the actual traces,
+raw recount and separate learning/report source identities. A report-only bounded
+exposure digest repair was verified after learning ended; it changes no run record.
+
 R3-SELECTOR-CONSISTENCY-1.0. Preserve P6144, its original/phrase training data,
 tokenizer, Adam and all closed C/P observations. No reinitialization or storage,
 SQLite, architecture, tokenizer or loss changes. The source reference is
