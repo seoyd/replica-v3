@@ -1,6 +1,17 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: user-authorized retention retry01 after the save-reason repair
+## Closed at8: user-authorized retention retry01 after the save-reason repair
+
+Retry01 ran from execution HEAD49f0e6e693f8dc6b43b6b85a458e5f0877ef924a with
+unchanged candidate source c2ce9c3ce1c456b54702ee6611f26157794836e1. Parent parity8,
+first1 save and fresh-process Adam/state resume passed. It reached8, saved24318,
+then completed the frozen224 screen: OLD9/64, CROSS7/64, QA18/32, NEW0/64,
+errors18. The OLD/CROSS immediate retention guard stopped the attempt. Final
+command remains Failed/QualityGuard, error=None, resume=false/candidate=false.
+Fresh pure report verified this outcome and preserved all89 attempt files.
+No16/32/64/128 or full1424 runs, no second automatic retry, no source changes
+while learning. New SMALL8, generation232, diagnostic forwards24/backwards0.
+The paragraph below records the user's authorization of this now-closed attempt.
 
 On 2026-09-19 the user explicitly requested another execution after correcting
 the error. This authorizes one separate retry01 from the same A75-R24310 parent,

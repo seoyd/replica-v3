@@ -6,9 +6,10 @@ The registered 2026-09-19 R-REPLAY is closed after an execution failure followin
 update1. Its failure checkpoint at24311 does not authorize resume. The commands
 below describe the interface; they do not authorize retry, replacement, or reuse
 of the unspent127 updates. See the final result in EXPERIMENT_STATUS.md.
-The subsequent explicit user request authorizes one separate retry01 from the
-original A75-R24310 parent; the active plan records its unchanged limits. The old
-failed root remains nonresumable. Use the new registered retry01 root only.
+The subsequent explicit user request authorized one separate retry01 from the
+original A75-R24310 parent. Retry01 is now also closed: first save/fresh resume
+passed, then the quality guard stopped it at8. Both roots are nonresumable; the
+commands below are interface documentation, not authorization for another attempt.
 
 `replica-train recovery native retention-inspect --screen OLD_T_SCREEN` performs
 pure T32/parent recount and native full-copy training provenance/coverage checks.

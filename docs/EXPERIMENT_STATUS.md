@@ -1,5 +1,157 @@
 # 진단 및 구현 상태
 
+## Retention retry01 최종 — 실제 저장·재개 PASS, 8회에서 보존 실패로 중단
+
+2026-09-19 / R3-RETENTION-FIRST-1.0의 사용자 명시 재실행 요청.
+**RESULT=PARTIAL: 실행 경계 수리 확인, 품질 개선 미달.** 이전 구현 오류는
+재발하지 않았다. 같은 A75-R24310에서 첫1회를 정상 native 저장하고 새 process가
+weights/Adam/step/objective binding을 복원했다. 총8회 뒤 저장한 동일 모델의
+고정224 평가에서 보존 한도를 넘어 **RETENTION_QUALITY_STOP**으로 종료했다.
+이는 새 저장/수치 오류가 아니다. command는 Failed/QualityGuard, error=None,
+resume=false/complete=false/candidate=false이며 pure report만 exit0으로 검산했다.
+
+| NORMAL_GREEDY 고정 screen | 부모 | retry01 업데이트8 |
+|---|---:|---:|
+| OLD |64/64|9/64|
+| CROSS |60/64|7/64|
+| ordinary QA subset |20/32|18/32|
+| NEW |0/64|0/64|
+| NEW base4 공동성공 |0/16|0/16|
+| 생성 오류 |0/224|18/224|
+
+전체224건을 실행했고 full34/224, entity46/context92/value109/event112,
+wrong-citation112, EOS220/224다. strict UTF-8 오류17건이며 이 중3건은 length
+종료와 겹친다. length 종료는 총4건이다. 기존 집계의 empty17은 실제 출력이
+없음(actual absent)을 뜻하며 zero-token/정상 decode 빈 문자열17건이라는 뜻이
+아니다. raw tokens는 남아 있다. 오류와 오답을 분모에서 제외하지 않았다.
+OLD55개/CROSS53개 상실로 즉시 중단 조건(12개 이상 상실)을 충족했다.
+QA 손실2개는 별도의 연속4개 상실 조건에 해당하지 않는다. 생성 오류 조건도
+충족하지만 terminal 대표 사유는 먼저 계산된 retention guard 그대로다.
+
+16/32/64/128, 전체1424, 동등한32회 historical paired 비교는 NOT_RUN_QUALITY_STOP.
+역사 T32의16/11/12/0과 retry01의9/7/18/0은 업데이트 수가 달라 우열 대조나
+회복 증거로 사용하지 않는다. T32/C512 및 첫 실패 R의 원본/종료 상태는 보존했다.
+
+### 실제 학습·고정 train probe·사용량
+
+새 SMALL **8/128** = 첫1 + 새 process7. step24310→24318,
+input20,163/target2,016 tokens. 같은 native Q/R/T pool, 같은 Q4/T2 tape,
+R2 source-order 순환, LR1e-4 bits4547007122018943789, default loss/first weight8,
+기존 Adam m/v·절대 clock·tokenizer801·TR++ F32/Accelerate threads1을 유지했다.
+
+| pool | 실제 draws | unique views / bases | input / target tokens |
+|---|---:|---:|---:|
+| Q |32|32/32|9902/945|
+| R |16|16/4|4281/476|
+| T |16|16/15|5980/595|
+
+R source 전체는512views/128bases이나 중단 전 실제 노출은4bases였다. 전체 pool을
+전부 학습했다고 하지 않는다. fixed train probe8의 target286은 n0/1/8에 동일하다.
+
+| 실제 update | fixed probe token-mean NLL | teacher argmax 첫 불일치 |
+|---|---:|---:|
+|0|0.0003067367875618484|0/8|
+|1|0.00030175398595789517|0/8|
+|8|0.2361068803993889|7/8, 모두 target index0|
+
+이는 gold prefix를 사용하는 동일 자체 모델의 읽기 전용 관측이며 자유생성 점수는
+위224 screen이다. probe gradient는 optimizer에 들어가지 않았다. 추가 diagnostic
+backward0; optional g_old dot delta는 SKIPPED_NOT_REQUIRED다.
+
+| update | batch CE | 실제 global gradient norm | 실제 Adam delta norm |
+|---|---:|---:|---:|
+|1|1.0097669|7.93250126303735|0.10187845539056552|
+|2|0.69000226|3.988080724914675|0.15196615552235695|
+|3|1.0632803|6.444760541094093|0.19696086019830011|
+|4|0.31918082|3.942492362606018|0.1974686745884048|
+|5|1.0271827|7.469119775708806|0.2221286960794575|
+|6|0.83580434|4.419314633536732|0.2544809994608821|
+|7|0.84097683|4.442205642074556|0.282410518723017|
+|8|1.3148707|9.889061689934326|0.27260470814156723|
+
+매 batch는 서로 다른 자료다. 이 CE 열을 동일 probe의 전후 NLL처럼 해석하지 않는다.
+모든 update에서 clipping이 적용됐고 coefficient는 n1 0.12606364207712392,
+n8 0.10112182847617972다. n8의 중복 없는 group theta/delta norm은
+FFN77.36167691942913/0.22843413346734873,
+Q-K-norm91.94637116266694/0.06626517978349562,
+V-O36.852495626055074/0.06388047757024293,
+shared embedding35.89124740970979/0.11687336780305964다.
+n1의 weights hash와 delta는 이전 실패의 실제 첫 update와 동일하며 새 fork의
+physical file hash는 새 run binding을 담아 다르다. LR/clip/Adam이 근본 원인이라고
+이 수치만으로 단정하지 않는다. n32 관측은 중단되어 없다.
+
+이번 normal generations **232 entered/232 returned** = 부모 parity8 + screen224,
+generated tokens8,268 =236+8,032(EOS 포함). 자체 diagnostic forwards24,
+추가 diagnostic backwards0, scalar0. 관련 quick 신규 TINY53; 이전61과 합쳐114/128.
+이전 실패 비용까지 따로 합치면 SMALL9, input22,726/target2,254,
+normal generations240, 자체 forwards32다. 실패 사용량을0으로 지우지 않았다.
+prepare elapsed11.570519209초, segment0 command14.58736425초,
+segment1 command54.495703875초: 모델 호출 명령 합80.653587334초.
+명령의 마지막 typed F64를 기존 reader 검증 후 확인했다. cleanup reservation은
+명령마다120초이며 실측 elapsed가 아니다. 컴파일17.82초와 quick은 모델 시간에
+합산하지 않는다. 실행/자료/수치 오류 또는 UNKNOWN 사용량은 이번 SMALL에 없었다.
+
+### 실행 코드와 원자료
+
+실행 HEAD `49f0e6e693f8dc6b43b6b85a458e5f0877ef924a`는 정상 push 후 full remote
+SHA 일치를 확인했다. Rust source candidate는
+`c2ce9c3ce1c456b54702ee6611f26157794836e1`과 동일하며 이번 turn의 소스 diff0이다.
+source digest `553bb13928d0334c0c054c49c8f36321f5e538f5b228fc1b2d4c358031d7d382`,
+실행 binary SHA256 `48b3731677e40244f950451a3f0a830b53602c1eb17f432695878a0319ab7b96`,
+input binding `270e23fd0bed028e7a9e7b4c6ac9b2e380705a493522a83808940d336d187ae1`.
+Rust1.98.1, 기존 Cargo.lock, offline accelerate release를 사용했다.
+
+허용된 로컬 증거 root: `artifacts/retention-first-retry01-20260919/`.
+`prepare.log`, `first.log`, `resume.log`, `final-report.log`, `model-inspect.log`가
+실제 명령/순수 재검산 기록이다. `quick.log`/`quick/`는19명령25테스트 PASS,
+`release-build.log`는 실제 빌드다. `executed-replica-train`을 보존했다.
+`retention-plan/r-replay-registration.r3er`가 이 시도 하나를 고정한다.
+`R-REPLAY/inputs.r3er`, `parent-parity/`, `retention-probe-0000/`,
+`retention-probe-0001/`, `retention-probe-0008/`, `segment-00/`와 `segment-01/`의
+native/terminal/command/raw가 원 binary 증거다. 실제 명령은 기존
+`retention-prepare --screen artifacts/quality-recovery-bounded-bridge-20260919/T-SCREEN
+--output artifacts/retention-first-retry01-20260919/R-REPLAY`, 이어서 같은 root의
+`run`, 새 process `run --resume segment-00/terminal.r3er`, 최종 읽기 전용
+`screen-report --terminal segment-01/terminal.r3er`다. 모두
+`replica-train recovery native` 아래 명령이며 전체 root를 명시했다.
+
+마지막 durable checkpoint는
+`R-REPLAY/segment-01/step-0008.r3m`,115,285,632 bytes, step24318,
+physical `b6e9c4b543da19ae6d774de3c73ef3ea8082525c89ab6a0b7273cb029af52b42`,
+actual weights `46639c2ad80f500a20b25a3eff43855c1527e2a2e1c92ace34d981a2da493519`.
+state consumed43,333,422/target3,320,739/sampler6741870243436089021이다.
+첫 정상 저장 `segment-00/step-0001.r3m`은 같은 크기, step24311,
+physical `8c5644cb6688b528e28037a4845969a7eaae524f6bafa86d6be032d6a3fad600`,
+actual weights `7b1b9b96bc10f60c646ae6f11ab32c6687e696ee207b4fc940879a3867929292`.
+새 process의 학습 재개와 최종 pure report가 실제 Adam/state와 계보를 검증했다.
+
+`frozen-source.sha256`37개 source/lock/binary 모두 종료 후 동일,
+`closed-attempt.sha256`89개 파일 모두 pure report 후 동일.
+이전1191개 원본과 첫 실패46개 파일도 전후 SHA256가 모두 같았다.
+새 모델/원문/raw/임시 지시문/DB는 Git에 올리지 않았다. 새 영구 파일0,
+운영 모델 pointer 변경0, 최종 owned 학습/검증 process0이다.
+
+### 해석과 종료 판정
+
+실제로 관측된 것은 첫8회에서 기존 copy 능력과 fixed train probe가 악화됐고,
+새 선택 능력은 아직0이라는 결과다. 이 Q4/R2/T2 순서의 보존 효과는 지지되지
+않았다. 저장 수리나 binary 형식 변경이 품질 회복을 만들었다고 하지 않는다.
+첫 응답 분포가 변한 경계는 관측했지만 학습 부진의 근본 원인은 UNRESOLVED다.
+다음 단일 가설 후보는 초기 R 노출의 base 집중이다: 같은 pool/16draw에서
+4base 반복과 base 분산 순서만 비교해야 검증할 수 있다. 현재 관측만으로 이
+가설을 확정하지 않으며, 새 LR/loss/tokenizer/비율 순회를 시작하지 않는다.
+후속 비교 실행0이며 별도 인가가 필요하다. 이번 remaining120은 새 시도권이 아니다.
+
+CODE_REPAIR/AUDIT_PUBLICATION/SCREEN_ANCESTRY=PASS_DIRECT_SCOPE;
+NATIVE_EXISTING_SCOPE=UNCHANGED_BINARY; H3_SEAL=NOT_OPENED;
+FIRST_SAVE_FRESH_RESUME=PASS_ACTUAL_SMALL;
+EXPERIMENT=QUALITY_STOP_CLOSED_AT8;
+RETENTION_OLD/CROSS=FAILED; RETENTION_QA=18/32(loss2);
+NEW_SKILL=NOT_IMPROVED(base4=0); REPLAY_HYPOTHESIS=NOT_SUPPORTED_IN_THIS_RUN;
+HISTORICAL_EQUAL32_COMPARISON=NOT_RUN;
+H3_JOINT=NOT_PASSED; S4/S5/S6=NOT_RUN_NOT_PASSED;
+GOAL1_READY=false; GOAL1_ACCEPTED=false; INDEPENDENT_REVIEW=NOT_RUN.
+
 ## Retention retry01 사전 검증 — 사용자 요청에 따른 별도 재실행
 
 2026-09-19 사용자가 오류 수정 후 재실행을 명시적으로 요청했다. 저장 사유를
