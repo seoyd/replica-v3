@@ -1,5 +1,79 @@
 # 진단 및 구현 상태
 
+## 2026-09-19 Existing path stabilization — source 수리 검증
+
+R3-EXISTING-PATH-STABILIZATION-1.0. 시작 HEAD는
+`0edf0327e2aadaa0e1e0e39af58c03c3b7746804`, 기준 source는
+`b0e38e18cb66b87bdaf1f657b8e74332723cb996`다. main/origin을 확인했고
+기존 untracked `.DS_Store`와 모든 연구 artifact를 보존했다.
+Rust1.98.1, locked/offline, Accelerate, compute thread1을 사용했다.
+
+### 코드 범위와 실제 검증
+
+CODE_SCOPE=VERIFIED, FX06=PASS, CALL_LIFECYCLE=PASS. 정상 생성 알고리즘,
+tensor/저장 형식, native 가중치, tokenizer, loss, Adam, SQLite는 변경하지 않았다.
+`observe_generation`은 호출 전 원래/실제 timeout 및 cap source를 기록하고,
+정확한 native timeout만 command/request로 구분한다. command cap의 반환 오류는
+TIME_BUDGET만 추가한다. 다른 관측 사유를 지우지 않으며 혼합 오류·UNKNOWN과
+request timeout은 계속 차단한다. 기존 비-timeout 진단 정책은 유지했다.
+`fresh::run`의 pure-time 조건이나 `study_usage_bound`의 실패 차단을 완화하지 않았다.
+`test-support`의 TINY clock은 실제 native timeout 검사 시간만 제어한다.
+부분-token fixture의 숫자 가중치는 실제 argmax를 사용하며 SMALL에 적용되지 않는다.
+
+| 경계 | 이번 실행 증거 |
+| --- | --- |
+| T01/T02/T03/T04 | 실제 zero/partial/마지막-row timeout 3가지, writer→reader→scorer→새 process, 실패 행 유지·중복0·재개 optimizer0 |
+| T05 | 실제 EOS 반환 후 시간 종료 및 final sync 실패 process 회귀 |
+| T06 | case_started / prompt_prepared / teacher_forward 미호출의 확정·같은 cursor 재개 |
+| T07 | optimizer 반환/최종 checkpoint 전/후 시간 종료3가지, EvaluationPending 유지 |
+| T08/T09 | 실제 timeout+취소/NaN/I/O, resolution sync 실패, 잘못된 call binding, native 진입 후 exit86의 UNKNOWN 차단 |
+| T10 | request cap과 command cap, teacher 자동 여부, 실제 length/UTF-8 오류 구분 |
+| T11/T12 | 연속2와1+1 weights/Adam/clock 일치; raw 절단/추가 byte/누락, teacher 누락, 다른 native checkpoint, policy 변경 거부 |
+| 연구 사용량 | native timeout 뒤 arm의 평가만 재개하며 shared usage 검사 통과; 미완료 peer의 close와 혼합 저장 실패 뒤 실행/보고 거부 |
+
+고유 직접 테스트14개가 최종 PASS다. 테스트 runner 명령19회 중 첫 exact 필터1회는
+0-test여서 PASS에서 제외했다. 실제 테스트 실행19건=PASS16/FAIL3이다.
+FAIL은 수정 전 FX06 native 재현1건과, 미실행/미완료 peer를 정상 보고로 기대했던
+시험 assertion2건이다. 후자는 제품의 기존 차단이 맞았으므로 시험 기대값을 고쳤다.
+이 실패들의 실제 사용량도 아래에 포함했다. 소스 변경과 무관한 전체 테스트,
+전체 quick, QA32 암기, 추가 SMALL 학습은 실행하지 않았다.
+
+| 구분 | 실제 합계 |
+| --- | ---: |
+| SMALL optimizer/backward/update | 0/0/0 |
+| SMALL generation/teacher | 0/0 (source 검증 단계) |
+| TINY optimizer | 55 |
+| TINY generation 진입 / 반환 확인 | 507 / 506 |
+| TINY teacher 진입 / 반환 확인 | 482 / 481 |
+| scalar optimizer | 0 |
+| native returned timeout | 22 (unit 관측15 + process raw7) |
+
+process timeout raw7건 중6건은 RETURNED 해소가 확정됐고,1건은 의도한 resolution
+sync 실패로 차단됐다. 재개 과정의 실패 행 재생성0. 강제 종료2건은 generation1과
+teacher1의 실제 진입을 exit86으로 확인했지만 반환·최종 token/시간은 UNKNOWN이다.
+이를0 사용량으로 채우거나 자동 재시도하지 않았다. 각 호출 상한512 안에서 종료했다.
+실험용 TINY의 마지막 durable step은2 또는4이며 실제 SMALL endpoint가 아니다.
+
+`cargo check`와 production `cargo build --release`는 통과했다. strict clippy는
+기준 source에도 있는 `quality_recovery.rs`의 `for_kv_map` 경고1건으로 실패했다.
+해당 기존 경고만 명시적으로 제외한 `-D warnings -A clippy::for_kv_map` 검사는 PASS다.
+전체 fmt는 작업 전부터 여러 파일에서 실패했다. 전체 재포맷은 하지 않았고,
+새 테스트 블록은 rustfmt, transformer 파일 fmt와 `git diff --check`는 PASS다.
+
+실행 로그는 로컬 `artifacts/existing-path-stabilization-20260919-evidence/`에 보존했다.
+주요 파일: `red-executed.log`, `green-process-1.log`, `study-process*.log`,
+`fresh_fx*.log`, `unit-*.log`, `check.log`, `clippy*.log`, `release.log`, `fmt-*.log`.
+전역 fmt/strict lint 실패를 소스 경계 회귀 실패나 품질 실패와 혼합하지 않는다.
+
+### 다음 의무와 품질 판정
+
+이 source 단계에서는 기존 C/S 재검산과 고정 P6144 parity16을 아직 실행하지 않았다.
+source commit/push 후 동결 코드로 읽기 전용 관측하고 별도 보고 commit으로 기록한다.
+추가 SMALL 학습0; 모델 품질 향상은 NOT_CLAIMED다. 원래 C8192/S7168의 서로 다른
+예산, S의 품질 중단/resume=false, final200 NOT_OPENED는 유지한다.
+S4=NOT_PASSED, S5/S6=NOT_RUN_PREREQUISITE, GOAL1_READY=false,
+GOAL1_ACCEPTED=false, INDEPENDENT_REVIEW=NOT_RUN. 추적 새 파일0.
+
 ## 2026-09-19 Selector consistency — 실행 종료, S 품질 회귀로 중단
 
 EXECUTED_THIS_RUN / DERIVED_EXISTING_RAW. C-KEEP는 신규2048회, S-SELECT는 신규1024회를

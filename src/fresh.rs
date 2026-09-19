@@ -861,8 +861,13 @@ fn prepare(root: &Path, tiny: bool) -> Result<()> {
     let source = source_digest()?;
     let model = Transformer::init(architecture.clone(), 17, Device::Cpu)?;
     #[cfg(feature = "test-support")]
-    if tiny && std::env::var("R3_FRESH_FIXTURE_EOS").as_deref() == Ok("1") {
-        // Numerical tensor fixture only. EOS is selected by real logits/greedy,
+    if tiny
+        && matches!(
+            std::env::var("R3_FRESH_FIXTURE_EOS").as_deref(),
+            Ok("1" | "token")
+        )
+    {
+        // Numerical tensor fixture only. The token is selected by real logits/greedy,
         // not by a decoder override; ordinary SMALL preparation cannot enter it.
         for (name, v) in &model.vars {
             let mut data = vec![
@@ -875,7 +880,12 @@ fn prepare(root: &Path, tiny: bool) -> Result<()> {
             ];
             if name == "embedding" {
                 let h = model.config.hidden;
-                data[EOS as usize * h..(EOS as usize + 1) * h].fill(2.);
+                let id = if std::env::var("R3_FRESH_FIXTURE_EOS").as_deref() == Ok("token") {
+                    tok.encode(b"x")?[0] as usize
+                } else {
+                    EOS as usize
+                };
+                data[id * h..(id + 1) * h].fill(2.);
             }
             v.set(&Tensor::from_vec(data, v.dims(), &Device::Cpu)?)?;
         }
@@ -1674,6 +1684,14 @@ fn call_fixture(
             s.strip_prefix(&format!("{prefix}/{kind}/{ordinal}/"))
                 .map(str::to_owned)
         });
+        if let Some(tokens) = control
+            .fixture_boundary
+            .as_deref()
+            .and_then(|s| s.strip_prefix("native-timeout-"))
+            .and_then(|s| s.parse().ok())
+        {
+            control.fixture_native_timeout(tokens);
+        }
     }
 }
 fn teacher_prefix(
@@ -3795,6 +3813,113 @@ mod tests {
         println!(
             "SELECTOR_NATIVE_REQUEST_INVOLUTION=3072 INVALID_CASES=6 OPTIMIZER=0 GENERATION=0"
         );
+    }
+    #[test]
+    #[ignore = "explicit preserved parent/output paths; at most 16 SMALL generations, no teacher or training"]
+    fn stabilization_fixed_parent_parity() -> Result<()> {
+        let parent = PathBuf::from(
+            std::env::var("R3_PARITY_PARENT")
+                .map_err(|_| bad("explicit parity parent required"))?,
+        );
+        let output = PathBuf::from(
+            std::env::var("R3_PARITY_OUTPUT")
+                .map_err(|_| bad("explicit new parity output required"))?,
+        );
+        std::fs::create_dir(&output)?;
+        let before = inventory(&parent)?;
+        let p: Plan = read(&parent.join("plan.r3b"))?;
+        let dev = verified_corpus(&parent.join("corpus.r3cor"), &p.corpus)?.validation;
+        let (_, dm, _) = verified_metadata(&parent, &p)?;
+        let (es, _) = subset(&dev, &dm, 2);
+        if es.len() != 16 || p.tiny {
+            return Err(bad("parity fixed panel"));
+        }
+        // Freeze metadata-selected IDs before history/audit reads any old output.
+        let selection = binary::record!({"ids":es.iter().map(|e|&e.id).collect::<Vec<_>>(),"cases":digest(&es)?,"policy":digest(&p)?,"step":p.config.max_steps,"tokenizer":p.tokenizer,"source":source_digest()?,"binary":file_hash(&std::env::current_exe()?)?,"generation_limit":16,"teacher_limit":0});
+        write(&output.join("selection.r3b"), &selection)?;
+        let h = history(&parent, &p)?;
+        let last = h.last().ok_or_else(|| bad("missing parent endpoint"))?;
+        if last.step != p.config.max_steps || last.resume {
+            return Err(bad("parity requires a closed final parent"));
+        }
+        let checkpoint = parent.join(&last.checkpoint);
+        let l = checkpoint::load(&checkpoint, Device::Cpu, false)?;
+        if l.tokenizer.id() != p.tokenizer {
+            return Err(bad("parity tokenizer"));
+        }
+        let old_panel = audit_panel(&parent, &p, last.step, "dev512", &dev, &dm, &l.tokenizer)?;
+        if old_panel.model != l.model.weight_hash()? {
+            return Err(bad("parity endpoint model"));
+        }
+        let original = binary::read_value_records(
+            &parent.join(format!("eval-{:04}-dev512.r3rows", last.step)),
+        )?;
+        let mut raw = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(output.join("parity.r3rows"))?;
+        append_row(
+            &mut raw,
+            &binary::record!({"selection":file_hash(&output.join("selection.r3b"))?,"checkpoint":checkpoint,"physical":file_hash(&checkpoint)?,"model":l.model.weight_hash()?}),
+        )?;
+        let mut control = recovery::RunControl::command(false)?;
+        control.set_call_limits(16, 0);
+        let mut matched = 0;
+        let mut tokens = 0;
+        let result = (|| -> Result<()> {
+            for e in &es {
+                let row = match recovery::observe_generation(&l, e, &e.request, &mut control, false)
+                {
+                    recovery::ObservedCall::Returned(row) => row,
+                    recovery::ObservedCall::NotInvoked(_) => {
+                        control.stop_result()?;
+                        return Err(bad("parity call not invoked"));
+                    }
+                };
+                append_row(&mut raw, &row)?;
+                control.stop_result()?;
+                verify_generated(&row, &l.tokenizer)?;
+                let old = original[1..]
+                    .iter()
+                    .find(|r| r["id"] == e.id)
+                    .ok_or_else(|| bad("parity ID absent"))?;
+                for field in [
+                    "raw_tokens",
+                    "actual",
+                    "error",
+                    "finish_reason",
+                    "eos_index",
+                    "native_prompt_digest",
+                ] {
+                    if old[field] != row[field] {
+                        return Err(bad("normal output parity changed"));
+                    }
+                }
+                tokens += row["raw_tokens"]
+                    .as_array()
+                    .ok_or_else(|| bad("parity tokens"))?
+                    .len();
+                matched += 1;
+            }
+            Ok(())
+        })();
+        if let Err(error) = &result {
+            control.classify_error(error);
+        }
+        let _ = control.seal_terminal();
+        let same = before == inventory(&parent)?;
+        publish_confirmed(
+            &output.join("result.r3b"),
+            &binary::record!({"selection":file_hash(&output.join("selection.r3b"))?,"raw":file_hash(&output.join("parity.r3rows"))?,"control":control.receipt(),"matched":matched,"tokens":tokens,"originals_unchanged":same,"error":result.as_ref().err().map(ToString::to_string),"quality_improvement":"NOT_CLAIMED"}),
+        )?;
+        result?;
+        if !same {
+            return Err(bad("parity parent changed"));
+        }
+        println!(
+            "PARENT_PARITY matched={matched}/16 raw_tokens={tokens} SMALL_OPTIMIZER=0 SMALL_TEACHER=0 ORIGINALS_UNCHANGED={same}"
+        );
+        Ok(())
     }
     #[test]
     fn fresh_strict_rows_roundtrip_command_stop_and_errors() {

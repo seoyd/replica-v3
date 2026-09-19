@@ -80,6 +80,11 @@ pub(super) struct RunControl {
 impl RunControl {
     #[cfg(feature="test-support")]
     pub(super) fn fixture_deadline(&mut self){self.deadline=Instant::now();}
+    #[cfg(feature = "test-support")]
+    pub(super) fn fixture_native_timeout(&mut self, tokens: usize) {
+        self.deadline = Instant::now() + Duration::from_secs(30);
+        neural::transformer::fixture_timeout_after(tokens);
+    }
     pub(super) fn set_call_limits(&mut self, generation: usize, teacher: usize) {
         self.generation_limit = generation;
         self.teacher_limit = teacher;
@@ -1153,6 +1158,8 @@ pub(super) fn observe_generation(
         let effective_timeout = control.effective_timeout(request.limits.timeout_ms)?;
         row["effective_timeout_ms"] = record!(effective_timeout);
         row["original_timeout_ms"] = record!(request.limits.timeout_ms);
+        let command_capped = effective_timeout < request.limits.timeout_ms;
+        row["timeout_cap_source"] = record!(if command_capped { "command" } else { "request" });
         row["generation_started"] = record!(true);
         control.generation_calls += 1;
         let cancel = control.cancel.clone();
@@ -1183,28 +1190,24 @@ pub(super) fn observe_generation(
                 }
             },
         );
-        if matches!(&result, Err(Error::Cancelled)) {
-            control.observe(StopReason::Cancelled);
-        }
-        if result
-            .as_ref()
-            .err()
-            .is_some_and(|e| e.to_string().contains("timeout"))
-            && effective_timeout < request.limits.timeout_ms
-        {
-            control.observe(StopReason::TimeBudget);
-        }
-        if result
-            .as_ref()
-            .err()
-            .is_some_and(|e| e.to_string().contains("nonfinite"))
-        {
-            control.observe(StopReason::IntegrityFail);
+        if let Err(error) = &result {
+            if matches!(error, Error::Cancelled) {
+                control.observe(StopReason::Cancelled);
+            }
+            // Only this native error and the cap chosen before entry qualify.
+            // Teacher scheduling cannot change the meaning of a generation error.
+            if matches!(error, Error::Model(message) if message == "native generation timeout") {
+                control.observe(if command_capped {
+                    StopReason::TimeBudget
+                } else {
+                    StopReason::IntegrityFail
+                });
+            } else if !automatic_teacher || error.to_string().contains("nonfinite") {
+                // Preserve the existing non-timeout diagnostic/quality policy.
+                control.observe(StopReason::IntegrityFail);
+            }
         }
         let returned = result.is_ok();
-        if !automatic_teacher && result.is_err() {
-            control.observe(StopReason::IntegrityFail);
-        }
         let after_generation = control.check("generation_returned");
         let (text, generated, error) = decode_generated(&loaded.tokenizer, result);
         let bytes_ids: Vec<_> = raw
@@ -10250,6 +10253,98 @@ mod tests {
         assert_eq!(row["finish_reason"], "stop");
         assert_eq!(row["command_stop"], "TIME_BUDGET");
         assert_eq!(c.teacher_calls, 0);
+    }
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn fresh_fx06_native_command_timeout_is_returned_failure() {
+        let l = repair_loaded();
+        let mut e = repair_episode("native-timeout");
+        e.request.limits.timeout_ms = 120000;
+        let mut c = repair_control();
+        neural::transformer::fixture_timeout_after(0);
+        let ObservedCall::Returned(row) = observe_generation(&l, &e, &e.request, &mut c, false)
+        else {
+            panic!("native entry must be returned, not NotInvoked")
+        };
+        assert_eq!(c.generation_calls, 1);
+        assert_eq!(row["raw_tokens"], record!([]));
+        assert_eq!(row["generation_completed"], false);
+        assert_eq!(row["error_class"], "timeout");
+        assert_eq!(c.observed, vec![StopReason::TimeBudget]);
+        println!("TINY_GENERATIONS=1 TEACHERS=0 OPTIMIZER=0 native_timeout=RETURNED");
+    }
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn fresh_fx06_request_timeout_and_mixed_causes_stay_blocked() {
+        let l = repair_loaded();
+        for automatic in [false, true] {
+            for request_cap in [false, true] {
+                let mut e = repair_episode("cap-classification");
+                e.request.limits.timeout_ms = if request_cap { 1 } else { 120000 };
+                let mut c = repair_control();
+                neural::transformer::fixture_timeout_after(0);
+                let ObservedCall::Returned(row) =
+                    observe_generation(&l, &e, &e.request, &mut c, automatic)
+                else {
+                    panic!("native timeout must return")
+                };
+                assert_eq!(
+                    row["timeout_cap_source"],
+                    if request_cap { "request" } else { "command" }
+                );
+                assert_eq!(
+                    c.observed,
+                    vec![if request_cap {
+                        StopReason::IntegrityFail
+                    } else {
+                        StopReason::TimeBudget
+                    }]
+                );
+                assert_eq!((c.generation_calls, c.teacher_calls), (1, 0));
+            }
+        }
+        let mut e = repair_episode("mixed-timeout");
+        e.request.limits.timeout_ms = 120000;
+        for mixed in ["cancel", "io", "nonfinite"] {
+            let mut c = repair_control();
+            if mixed == "cancel" {
+                c.hook = Some(Box::new(|boundary, cancel| {
+                    if boundary == "generation_returned" {
+                        cancel.store(true, Ordering::Relaxed);
+                    }
+                }));
+            }
+            if mixed == "nonfinite" {
+                let v = &l.model.vars["embedding"];
+                v.set(
+                    &Tensor::from_vec(vec![f32::NAN; v.elem_count()], v.dims(), &Device::Cpu)
+                        .unwrap(),
+                )
+                .unwrap();
+                c.time_boundary = Some("generation_returned");
+            } else {
+                neural::transformer::fixture_timeout_after(0);
+            }
+            let ObservedCall::Returned(row) = observe_generation(&l, &e, &e.request, &mut c, false)
+            else {
+                panic!("native error must return")
+            };
+            if mixed == "io" {
+                let d = tempfile::tempdir().unwrap();
+                let error = std::fs::File::open(d.path().join("absent")).unwrap_err();
+                c.classify_error(&Error::Io(error));
+            }
+            assert_eq!(row["generation_completed"], false);
+            assert!(c.observed.contains(&StopReason::TimeBudget));
+            assert!(c.observed.contains(&if mixed == "cancel" {
+                StopReason::Cancelled
+            } else {
+                StopReason::IntegrityFail
+            }));
+        }
+        println!(
+            "TINY_GENERATIONS=7 TEACHERS=0 OPTIMIZER=0 request_vs_command_and_teacher_independence=VERIFIED mixed_causes=BLOCKED"
+        );
     }
     #[test]
     fn fresh_fx05_actual_returned_zero_length_and_utf8_are_not_no_call() {

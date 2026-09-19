@@ -8,6 +8,15 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
     time::Instant,
 };
+#[cfg(feature = "test-support")]
+thread_local! {
+    static FIXTURE_TIMEOUT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+/// One native TINY call's clock only; neither logits nor token selection changes.
+#[cfg(feature = "test-support")]
+pub fn fixture_timeout_after(tokens: usize) {
+    FIXTURE_TIMEOUT.with(|clock| clock.set(Some(tokens)));
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -759,10 +768,25 @@ impl Transformer {
         let start = Instant::now();
         let mut cache = self.cache(scope);
         let mut logits = None;
+        #[cfg(feature = "test-support")]
+        let timeout_after = FIXTURE_TIMEOUT.with(|clock| clock.take());
+        #[cfg(feature = "test-support")]
+        if timeout_after.is_some() {
+            assert_eq!((self.config.hidden, self.config.layers), (32, 2));
+        }
+        #[cfg(feature = "test-support")]
+        let observed_tokens = std::cell::Cell::new(0usize);
         let check = || -> Result<()> {
+            let elapsed = start.elapsed().as_millis();
+            #[cfg(feature = "test-support")]
+            let elapsed = if timeout_after.is_some_and(|n| observed_tokens.get() >= n) {
+                u128::from(timeout_ms) + 1
+            } else {
+                elapsed
+            };
             if cancel.load(Ordering::Relaxed) {
                 Err(Error::Cancelled)
-            } else if start.elapsed().as_millis() > u128::from(timeout_ms) {
+            } else if elapsed > u128::from(timeout_ms) {
                 Err(Error::Model("native generation timeout".into()))
             } else {
                 Ok(())
@@ -787,6 +811,8 @@ impl Transformer {
             }
             let id = row.argmax(0)?.to_scalar::<u32>()?;
             observe(id);
+            #[cfg(feature = "test-support")]
+            observed_tokens.set(observed_tokens.get() + 1);
             generated += 1;
             first_token_ms.get_or_insert(start.elapsed().as_millis() as u64);
             if id == EOS {

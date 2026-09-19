@@ -2679,6 +2679,28 @@ fn fresh_balanced_two_updates_match_fresh_process_resume_and_reject_unbound() {
     let raw=split.join("eval-0002-fixture.r3rows");let before=std::fs::read(&raw).unwrap();
     call(&["fresh","fixture-eval","--root",split.to_str().unwrap()],true);
     assert_eq!(before,std::fs::read(&raw).unwrap());
+    // Reuse this completed disposable run for raw corruption/missing-obligation checks.
+    let raw = split.join("eval-0002-dev512.r3rows");
+    let original = std::fs::read(&raw).unwrap();
+    for fault in ["truncated", "trailing", "missing"] {
+        match fault {
+            "truncated" => std::fs::write(&raw, &original[..original.len()-1]).unwrap(),
+            "trailing" => { let mut bytes=original.clone(); bytes.push(0); std::fs::write(&raw, bytes).unwrap(); }
+            _ => std::fs::remove_file(&raw).unwrap(),
+        }
+        call(&["fresh","report","--root",split.to_str().unwrap()],false);
+        std::fs::write(&raw,&original).unwrap();
+    }
+    let teacher = split.join("eval-0002-transfer128-teachers.r3rows");
+    let original = std::fs::read(&teacher).unwrap();
+    std::fs::remove_file(&teacher).unwrap();
+    call(&["fresh","report","--root",split.to_str().unwrap()],false);
+    std::fs::write(teacher, original).unwrap();
+    let checkpoint = split.join("segment-0001/final");
+    let original = std::fs::read(&checkpoint).unwrap();
+    std::fs::copy(split.join("initial.r3m"), &checkpoint).unwrap();
+    call(&["fresh","report","--root",split.to_str().unwrap()],false);
+    std::fs::write(checkpoint, original).unwrap();
     call(&["fresh","run","--root",split.to_str().unwrap()],false);
     let p=split.join("plan.r3b");let mut policy:replica_v3::binary::Value=replica_v3::binary::from_slice(&std::fs::read(&p).unwrap()).unwrap();
     policy["config"]["seed"]=replica_v3::binary::record!(30);
@@ -2989,6 +3011,268 @@ fn fresh_eos_deadline_process_and_sync_failure_stay_distinct() {
 }
 
 #[test]
+fn fresh_fx06_native_timeout_process_resume_preserves_failed_rows() {
+    use candle_core::Device;
+    use replica_v3::{binary, neural::checkpoint};
+    for (panel, ordinal, tokens) in [("train64", 0, 0), ("train64", 0, 1), ("transfer128", 7, 1)] {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("run");
+        let call = |action: &str, stop: bool| {
+            let mut c = Command::new(env!("CARGO_BIN_EXE_replica-train"));
+            c.args([
+                "fresh",
+                action,
+                if action == "fixture" {
+                    "--output"
+                } else {
+                    "--root"
+                },
+                root.to_str().unwrap(),
+            ])
+            .env("VECLIB_MAXIMUM_THREADS", "1")
+            .env("RAYON_NUM_THREADS", "1")
+            .env(
+                "R3_FRESH_FIXTURE_EOS",
+                if tokens == 0 { "1" } else { "token" },
+            );
+            if stop {
+                c.env(
+                    "R3_FRESH_CALL_STOP",
+                    format!("eval-0002-{panel}/generation/{ordinal}/native-timeout-{tokens}"),
+                );
+            }
+            let out = c.output().unwrap();
+            assert!(
+                out.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        call("fixture", false);
+        call("fixture-full", true);
+        let read = |p: &std::path::Path| -> binary::Value {
+            binary::from_slice(&std::fs::read(p).unwrap()).unwrap()
+        };
+        let control = |segment| read(&root.join(format!("segment-{segment:04}/train-control.r3b")));
+        let a = control(0);
+        assert_eq!(a["observed_conditions"], binary::record!(["TIME_BUDGET"]));
+        assert_eq!(a["final_evaluation_complete"], false);
+        let terminal = read(&root.join("segment-0000-finished.r3b"));
+        assert_eq!(terminal["phase"], "EvaluationPending");
+        assert_eq!(terminal["resume"], true);
+        let raw = root.join(format!("eval-0002-{panel}.r3rows"));
+        let prefix = std::fs::read(&raw).unwrap();
+        let rows = binary::read_value_records(&raw).unwrap();
+        assert_eq!(rows.len(), ordinal + 2); // header and completed failed call
+        let row = rows.last().unwrap();
+        assert_eq!(row["generation_started"], true);
+        assert_eq!(row["generation_completed"], false);
+        assert_eq!(row["exact_match"], false);
+        assert_eq!(row["eos"], false);
+        assert_eq!(row["error_class"], "timeout");
+        assert_eq!(row["timeout_cap_source"], "command");
+        assert!(
+            row["effective_timeout_ms"].as_u64().unwrap()
+                < row["original_timeout_ms"].as_u64().unwrap()
+        );
+        let ids = row["raw_tokens"].as_array().unwrap();
+        assert_eq!(ids.len(), tokens);
+        assert!(
+            ids.iter()
+                .all(|id| id.as_u64().unwrap() >= replica_v3::neural::SPECIALS as u64)
+        );
+        let resolved = read(&root.join(format!(
+            "eval-0002-{panel}-generation-{ordinal:04}-000-resolved.r3b"
+        )));
+        assert_eq!(resolved["state"], "RETURNED");
+        assert_eq!(resolved["calls"], 1);
+        let before = checkpoint::load(&root.join("segment-0000/final"), Device::Cpu, true).unwrap();
+        call("run", false); // separate process; no optimizer is permitted here
+        let after = checkpoint::load(&root.join("segment-0001/final"), Device::Cpu, true).unwrap();
+        assert_eq!(
+            before.model.weight_hash().unwrap(),
+            after.model.weight_hash().unwrap()
+        );
+        assert_eq!(before.manifest.training, after.manifest.training);
+        for (k, t) in &before.optimizer {
+            assert_eq!(
+                t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+                after.optimizer[k]
+                    .flatten_all()
+                    .unwrap()
+                    .to_vec1::<f32>()
+                    .unwrap()
+            );
+        }
+        assert!(std::fs::read(raw).unwrap().starts_with(&prefix));
+        let b = control(1);
+        assert_eq!(b["optimizer_calls"], 0);
+        assert_eq!(b["final_evaluation_complete"], true);
+        assert_eq!(
+            a["generation_calls"].as_u64().unwrap() + b["generation_calls"].as_u64().unwrap(),
+            24
+        );
+        assert_eq!(
+            a["teacher_calls"].as_u64().unwrap() + b["teacher_calls"].as_u64().unwrap(),
+            24
+        );
+        if panel == "transfer128" {
+            assert_eq!(b["generation_calls"], 0);
+            assert_eq!(b["teacher_calls"], 1);
+        }
+        let summary = read(&root.join(format!("eval-0002-{panel}.r3b")));
+        assert_eq!(summary["total"], 8);
+        assert!(summary["exact"].as_u64().unwrap() < 8);
+        assert!(summary["errors"].as_u64().unwrap() >= 1);
+        assert!(
+            !root
+                .join(format!(
+                    "eval-0002-{panel}-generation-{ordinal:04}-001-prepared.r3b"
+                ))
+                .exists()
+        );
+        println!(
+            "NATIVE_TIMEOUT panel={panel} ordinal={ordinal} prefix_tokens={tokens} generation_entries=24 teacher_entries=24 optimizer=2 resume_optimizer=0 duplicates=0"
+        );
+    }
+}
+
+#[test]
+fn fresh_fx06_timeout_study_usage_and_mixed_failure_process() {
+    use replica_v3::binary;
+    let d = tempfile::tempdir().unwrap();
+    let parent = d.path().join("parent");
+    let study = d.path().join("study");
+    let call = |args: &[&str], fault: Option<bool>, success: bool| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_replica-train"));
+        c.args(args)
+            .env("VECLIB_MAXIMUM_THREADS", "1")
+            .env("RAYON_NUM_THREADS", "1")
+            .env("R3_FRESH_FIXTURE_EOS", "1");
+        if let Some(mixed) = fault {
+            c.env(
+                "R3_FRESH_CALL_STOP",
+                "eval-0004-train64/generation/0/native-timeout-0",
+            );
+            if mixed {
+                c.env("R3_FRESH_RESOLUTION_FAIL", "1");
+            }
+        }
+        let o = c.output().unwrap();
+        assert_eq!(
+            o.status.success(),
+            success,
+            "{}\n{}",
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8(o.stdout).unwrap()
+    };
+    call(
+        &["fresh", "fixture", "--output", parent.to_str().unwrap()],
+        None,
+        true,
+    );
+    call(
+        &["fresh", "fixture-full", "--root", parent.to_str().unwrap()],
+        None,
+        true,
+    );
+    call(
+        &[
+            "fresh",
+            "study-prepare",
+            "--parent",
+            parent.to_str().unwrap(),
+            "--output",
+            study.to_str().unwrap(),
+        ],
+        None,
+        true,
+    );
+    call(
+        &["fresh", "study-observe", "--root", study.to_str().unwrap()],
+        None,
+        true,
+    );
+    let arm = study.join("C-REPEAT");
+    call(
+        &["fresh", "fixture-full", "--root", arm.to_str().unwrap()],
+        Some(false),
+        true,
+    );
+    call(
+        &["fresh", "run", "--root", arm.to_str().unwrap()],
+        None,
+        true,
+    );
+    let other = study.join("P-PHRASE");
+    // A report requires each arm to have started; one saved update has no due panel.
+    call(
+        &["fresh", "run", "--root", other.to_str().unwrap()],
+        None,
+        true,
+    );
+    // Usage validation ran on the resumed arm; close still refuses an incomplete peer.
+    call(
+        &["fresh", "study-report", "--root", study.to_str().unwrap()],
+        None,
+        false,
+    );
+    let read = |p: &std::path::Path| -> binary::Value {
+        binary::from_slice(&std::fs::read(p).unwrap()).unwrap()
+    };
+    let a = read(&arm.join("segment-0000-finished.r3b"));
+    let b = read(&arm.join("segment-0001-finished.r3b"));
+    assert_eq!(a["phase"], "EvaluationPending");
+    assert_eq!(
+        a["generations"].as_u64().unwrap() + b["generations"].as_u64().unwrap(),
+        24
+    );
+    assert_eq!(
+        a["teachers"].as_u64().unwrap() + b["teachers"].as_u64().unwrap(),
+        24
+    );
+    assert_eq!(
+        read(&arm.join("segment-0001/train-control.r3b"))["optimizer_calls"],
+        0
+    );
+    // A real returned timeout plus failed resolution must block the other arm's history.
+    call(
+        &["fresh", "fixture-full", "--root", other.to_str().unwrap()],
+        Some(true),
+        false,
+    );
+    let failed = read(&other.join("segment-0001/train-control.r3b"));
+    assert!(
+        failed["observed_conditions"]
+            .as_array()
+            .unwrap()
+            .contains(&binary::record!("TIME_BUDGET"))
+    );
+    assert!(
+        failed["observed_conditions"]
+            .as_array()
+            .unwrap()
+            .contains(&binary::record!("INTEGRITY_FAIL"))
+    );
+    call(
+        &["fresh", "run", "--root", other.to_str().unwrap()],
+        None,
+        false,
+    );
+    call(
+        &["fresh", "study-report", "--root", study.to_str().unwrap()],
+        None,
+        false,
+    );
+    assert!(!other.join("segment-0002").exists());
+    println!(
+        "TINY_OPTIMIZER=6 GENERATION_ENTRIES=65 RETURNED=65 TEACHERS=64 timeout_study_accounting=VERIFIED mixed_resolution_failure=BLOCKED"
+    );
+}
+#[test]
 fn fresh_fx05_not_invoked_and_unknown_process_boundaries() {
     use candle_core::Device;
     use replica_v3::{binary, neural::checkpoint};
@@ -3001,7 +3285,13 @@ fn fresh_fx05_not_invoked_and_unknown_process_boundaries() {
         ("teacher", 7, "teacher_forward"),
     ];
     let kill_only=std::env::var("R3_FRESH_TEST_KILL_ONLY").as_deref()==Ok("1");
-    for (kind, ordinal, boundary) in cases.into_iter().filter(|_|!kill_only) {
+    // The bounded stabilization run covers all boundary kinds without repeating
+    // the first/middle/last positions of every pre-call hook.
+    let compact = std::env::var("R3_FRESH_TEST_COMPACT").as_deref() == Ok("1");
+    for (kind, ordinal, boundary) in cases.into_iter().filter(|&(kind, ordinal, boundary)| {
+        !kill_only && (!compact || (kind == "generation" && ordinal == 0)
+            || boundary == "prompt_prepared" || (kind == "teacher" && ordinal == 7))
+    }) {
         let d = tempfile::tempdir().unwrap();
         let root = d.path().join("run");
         let call = |action: &str, stop: bool| {
@@ -3095,7 +3385,7 @@ fn fresh_fx05_not_invoked_and_unknown_process_boundaries() {
         "cancel-time",
         "identity",
         "required-teacher",
-    ].into_iter().filter(|fault|!kill_only || fault.starts_with("kill-")) {
+    ].into_iter().filter(|fault|(!kill_only || fault.starts_with("kill-")) && (!compact || *fault != "required-teacher")) {
         let d = tempfile::tempdir().unwrap();
         let root = d.path().join("run");
         let call = |action: &str, inject: bool| {
@@ -3163,5 +3453,5 @@ fn fresh_fx05_not_invoked_and_unknown_process_boundaries() {
             "{fault}"
         );
     }
-    println!("TINY_OPTIMIZER_CALLS={} successful_no_call_resumes={} zero_optimizer_resume=true kill_entry_exit86=VERIFIED",if kill_only{4}else{24},if kill_only{0}else{6});
+    println!("TINY_OPTIMIZER_CALLS={} successful_no_call_resumes={} zero_optimizer_resume=true kill_entry_exit86=VERIFIED",if kill_only{4}else if compact{16}else{24},if kill_only{0}else if compact{3}else{6});
 }

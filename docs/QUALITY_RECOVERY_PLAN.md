@@ -1,6 +1,28 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: selector consistency from the preserved P6144 parent
+## Active: existing execution path stabilization
+
+R3-EXISTING-PATH-STABILIZATION-1.0, source reference
+`b0e38e18cb66b87bdaf1f657b8e74332723cb996`. Freeze features and learning.
+Fix only native command-capped timeout classification, preserving returned failure
+rows, strict denominators, pending evaluation and mixed-error/UNKNOWN interlocks.
+Reuse the current native evaluator, confirmed publisher, call resolutions and scorer.
+The original and effective timeout and cap source are captured before entry. Only
+the exact native timeout with a shorter command cap adds TIME_BUDGET alone; request
+timeout remains a failure. A returned failure consumes its ordinal even with zero
+tokens. Remaining teacher/evaluation can finish without another optimizer update.
+
+S0 preservation → S1 narrow repair → S2 direct native/process lifecycle regressions
+→ S3 read-only C/S recount and fixed P6144 parity16 → S4 source/report publication.
+SMALL optimizer/backward/updates0, generation≤16, teacher0. TINY optimizer≤128,
+generation/teacher≤512 each; count failed tests and known entries, not just receipts.
+Missing post-kill work is UNKNOWN and blocks retry. Use explicitly scoped existing
+tests, not the entire quick suite. No C/S continuation, corpus changes or new study.
+Preserve the closed S stop, unequal-budget C/S result and unopened final200.
+Stabilization acceptance cannot promote S4/S5/S6 or Goal1. Stop after the contracted
+lifecycle matrix, parity and original-preserving recount are verified.
+
+## Historical: selector consistency from the preserved P6144 parent
 
 Closed on2026-09-19. C-KEEP completed2048 new updates at8192 (primary420/512,
 transfer80/128). S-SELECT stopped after1024 at7168 (primary350/512, transfer67/128)

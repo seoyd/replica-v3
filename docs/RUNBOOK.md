@@ -1,5 +1,28 @@
 # Replica v3 B0 runbook
 
+## Existing path stabilization
+
+A native timeout is a resumable command stop only when the command's remaining
+time shortened the request timeout. A returned timeout (including zero tokens) is
+a failed row in the fixed denominator, never NotInvoked. Its RETURNED resolution
+prevents regeneration; the next process completes remaining teachers/rows with
+optimizer0 at the last step. Request timeout, cancellation, nonfinite values,
+failed publication/resolution and UNKNOWN still block automatic continuation.
+The optional `timeout_cap_source` row field records `command` or `request`; existing
+rows remain unchanged and are not retrospectively assigned a cause.
+
+Direct tests are `fresh_fx06_` in the training executable and integration tests,
+plus FX04/FX05, EOS deadline and continuous/split native-state regressions.
+They are also connected to the existing `quick --fresh` filter; that wider filter
+is not the bounded stabilization command. `R3_FRESH_TEST_COMPACT=1` selects three
+pre-call positions and five negative cases in the existing FX05 process test;
+completed-raw/missing-teacher corruption is checked using the balanced-resume fixture.
+The ignored `stabilization_fixed_parent_parity` test requires explicit
+`R3_PARITY_PARENT` and a new `R3_PARITY_OUTPUT`; it freezes metadata-selected IDs,
+uses normal native generation16/teacher0, and preserves both old and partial new raw.
+It grants no training or candidate-selection permission. For closed C/S recounts,
+use the existing `fresh study-report --frozen-executable` read-only command below.
+
 ## Selector consistency study
 
 The2026-09-19 study is closed: C-KEEP completed2048 updates; S-SELECT stopped at1024

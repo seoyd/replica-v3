@@ -447,6 +447,18 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                 if *fresh_selector {
                     r.cargo("test", &["--bin","replica-train","selector_involution_labels_balance_and_negative_cases","--","--nocapture"],true)?;
                 }
+                if *fresh {
+                    for filter in [
+                        "fresh_fx04_checkpoint_timeouts_keep_final_evaluation_pending",
+                        "fresh_fx05_not_invoked_and_unknown_process_boundaries",
+                        "fresh_eos_deadline_process_and_sync_failure_stay_distinct",
+                        "fresh_fx06_native_timeout_process_resume_preserves_failed_rows",
+                        "fresh_fx06_timeout_study_usage_and_mixed_failure_process",
+                    ] {
+                        r.cargo("test", &["--test", "training", filter, "--", "--exact", "--nocapture"], true)?;
+                    }
+                    r.cargo("test", &["--bin", "replica-train", "fresh_fx06_", "--", "--nocapture"], true)?;
+                }
                 return Ok(());
             }
             r.run(
