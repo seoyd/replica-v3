@@ -1026,6 +1026,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
     let mut rng = Rng::new(state.sampler_state);
     let mut reason = "BUDGET_REACHED";
     let mut last_validated = None;
+    let mut fresh_evaluated = None;
     let mut executed_input_tokens = 0u64;
     let mut executed_target_tokens=0u64;
     let mut executed_padding_tokens=0u64;
@@ -1066,7 +1067,9 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
         control.check("training_start_checkpoint_saved")?;
         if let Some((plan, root)) = fresh {
             fresh_stop = fresh::evaluate_boundary(plan, root, &run.output.join("start"), state.step, control)?;
-            if plan.evaluation_due(state.step) {last_validated=Some(state.step);}
+            if plan.evaluation_due(state.step) {
+                fresh_evaluated = Some(state.step);
+            }
         }
         while state.step < config.max_steps {
             if fresh_stop.is_some() { reason = "TRAINING"; break; }
@@ -1175,6 +1178,10 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                 trace.flush()?;
                 if state.step==config.budget_start_step+1||state.step.is_multiple_of(32){trace.sync_all()?;}
             }
+            #[cfg(feature = "test-support")]
+            if fresh.is_some_and(|(p, _)| p.is_tiny()) && state.step == config.max_steps {
+                control.fixture_boundary = std::env::var("R3_FRESH_TRAIN_STOP").ok();
+            }
             control.check("training_optimizer_returned")?;
             let rss = control.last_rss_kib;
             peak = peak.max(rss);
@@ -1197,8 +1204,8 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
             }
             if state.step.is_multiple_of(config.validate_every) || state.step == config.max_steps || fresh.is_some_and(|(p,_)|p.evaluation_due(state.step)) {
                 let value = if fresh.is_some() { state.train_loss.unwrap() } else { validation_loss(&loaded.model, &validation, control)? };
-                last_validated = Some(state.step);
                 if fresh.is_none() {
+                    last_validated = Some(state.step);
                     state.validation_loss = Some(value);
                     println!(
                     "validation step={} loss={value:.8} samples={} selection=VALIDATION_ONLY",
@@ -1223,9 +1230,10 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                 )?;
                 control.check("training_checkpoint_saved")?;
                 if let Some((plan, root)) = fresh {
-                    last_validated=None;
                     fresh_stop = fresh::evaluate_boundary(plan, root, &path, state.step, control)?;
-                    last_validated=Some(state.step);
+                    if plan.evaluation_due(state.step) {
+                        fresh_evaluated = Some(state.step);
+                    }
                 }
                 println!(
                     "checkpoint={} sha256={} best_validation={improved}",
@@ -1290,7 +1298,11 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
     receipt["trace_error"]=replica_v3::binary::record!(trace_saved.as_ref().err().map(ToString::to_string));
     receipt["work_elapsed_seconds"] = replica_v3::binary::record!(work_elapsed);
     receipt["cleanup_elapsed_seconds"] = replica_v3::binary::record!(cleanup.elapsed().as_secs_f64());
-    receipt["final_evaluation_complete"] = replica_v3::binary::record!(last_validated == Some(state.step));
+    receipt["final_evaluation_complete"] = replica_v3::binary::record!(if fresh.is_some() {
+        fresh_evaluated == Some(state.step)
+    } else {
+        last_validated == Some(state.step)
+    });
     receipt["executed_input_tokens_including_uncommitted"] =
         replica_v3::binary::record!(executed_input_tokens);
     receipt["executed_target_tokens_including_uncommitted"]=replica_v3::binary::record!(executed_target_tokens);

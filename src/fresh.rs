@@ -610,6 +610,10 @@ fn corpus(train: Vec<Episode>, dev: Vec<Episode>, seed: u64) -> Result<data::nat
     data::native::from_episodes(m, train, dev)
 }
 impl Plan {
+    #[cfg(feature = "test-support")]
+    pub(super) fn is_tiny(&self) -> bool {
+        self.tiny
+    }
     pub(super) fn training_corpus(
         &self,
         path: &Path,
@@ -1123,6 +1127,15 @@ fn history(root: &Path, p: &Plan) -> Result<Vec<Segment>> {
         {
             return Err(bad("segment native/counter/chain mismatch"));
         }
+        if c["final_evaluation_complete"] == true && p.evaluation_due(s.step) {
+            audit_panels_range(root, p, s.step, s.step)?;
+        }
+        if s.phase.as_deref() == Some("Finished")
+            && p.evaluation_due(s.step)
+            && c["final_evaluation_complete"] != true
+        {
+            return Err(bad("Finished with outstanding evaluation"));
+        }
         out.push(s);
     }
     Err(bad("segment count bound"))
@@ -1476,6 +1489,130 @@ fn append_row(f: &mut std::fs::File, row: &binary::Value) -> Result<()> {
     f.sync_all()?;
     Ok(())
 }
+// Immutable prepared/resolved pairs: absence of a resolution is never evidence
+// that a native call did not happen. Reuse is permitted only for proven no-call timeouts.
+fn call_attempt(
+    root: &Path,
+    prefix: &str,
+    kind: &str,
+    binding: &binary::Value,
+    e: &Episode,
+    ordinal: usize,
+    returned: Option<&binary::Value>,
+) -> Result<Option<PathBuf>> {
+    for attempt in 0..128 {
+        let path = root.join(format!(
+            "{prefix}-{kind}-{ordinal:04}-{attempt:03}-prepared.r3b"
+        ));
+        let identity = binary::record!({"schema":1,"binding":binding,"kind":kind,"case":digest(e)?,"ordinal":ordinal,"attempt":attempt});
+        if !path.exists() {
+            if returned.is_some() {
+                return Err(bad("returned row without call resolution"));
+            }
+            return Ok(Some(path));
+        }
+        let old: binary::Value = read(&path)?;
+        if old != identity {
+            return Err(bad("call attempt identity mismatch"));
+        }
+        let resolved = path.with_file_name(
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .replace("-prepared", "-resolved"),
+        );
+        if !resolved.exists() || pending_path(&resolved).exists() {
+            return Err(bad(
+                "entered or unreturned call usage UNKNOWN; retry blocked",
+            ));
+        }
+        let r: binary::Value = read_confirmed(&resolved)?;
+        if r["prepared"] != file_hash(&path)? {
+            return Err(bad("call resolution binding"));
+        }
+        if r["state"] == "RETURNED" {
+            let row = returned.ok_or_else(|| bad("returned call missing durable row"))?;
+            if row["attempt"] != path.file_name().unwrap().to_string_lossy().as_ref()
+                || r["row"] != digest(row)?
+            {
+                return Err(bad("returned call/raw mismatch"));
+            }
+            if root
+                .join(format!(
+                    "{prefix}-{kind}-{ordinal:04}-{:03}-prepared.r3b",
+                    attempt + 1
+                ))
+                .exists()
+            {
+                return Err(bad("attempt after returned observation"));
+            }
+            return Ok(None);
+        }
+        if r["state"] != "NOT_INVOKED" || r["resumable"] != true || r["calls"] != 0 {
+            return Err(bad("non-resumable call attempt"));
+        }
+    }
+    Err(bad("call attempt limit"))
+}
+fn prepare_call(
+    root: &Path,
+    prefix: &str,
+    kind: &str,
+    binding: &binary::Value,
+    e: &Episode,
+    ordinal: usize,
+) -> Result<PathBuf> {
+    let path = call_attempt(root, prefix, kind, binding, e, ordinal, None)?
+        .ok_or_else(|| bad("call already returned"))?;
+    let name = path.file_name().unwrap().to_string_lossy();
+    let attempt: usize = name
+        .rsplit('-')
+        .nth(1)
+        .ok_or_else(|| bad("attempt name"))?
+        .parse()
+        .map_err(|_| bad("attempt number"))?;
+    write(
+        &path,
+        &binary::record!({"schema":1,"binding":binding,"kind":kind,"case":digest(e)?,"ordinal":ordinal,"attempt":attempt}),
+    )?;
+    Ok(path)
+}
+fn resolve_call(
+    path: &Path,
+    row: Option<&binary::Value>,
+    control: &recovery::RunControl,
+) -> Result<()> {
+    let c = control.receipt();
+    let pure_time = c["observed_conditions"] == binary::record!(["TIME_BUDGET"]);
+    let dest = path.with_file_name(
+        path.file_name()
+            .unwrap()
+            .to_string_lossy()
+            .replace("-prepared", "-resolved"),
+    );
+    let value = binary::record!({"prepared":file_hash(path)?,"state":if row.is_some(){"RETURNED"}else{"NOT_INVOKED"},"row":row.map(digest).transpose()?,"calls":usize::from(row.is_some()),"resumable":row.is_none()&&pure_time,"control":c});
+    #[cfg(feature = "test-support")]
+    if std::env::var("R3_FRESH_RESOLUTION_FAIL").as_deref() == Ok("1") {
+        write(&pending_path(&dest), &value)?;
+        return Err(std::io::Error::other("injected resolution sync failure").into());
+    }
+    publish_confirmed(&dest, &value)
+}
+#[cfg(feature="test-support")]
+fn call_fixture(
+    l: &checkpoint::Loaded,
+    control: &mut recovery::RunControl,
+    prefix: &str,
+    kind: &str,
+    ordinal: usize,
+) {
+    if l.model.config.hidden == 32 && l.model.config.layers == 2 {
+        control.fixture_boundary = std::env::var("R3_FRESH_CALL_STOP").ok().and_then(|s| {
+            s.strip_prefix(&format!("{prefix}/{kind}/{ordinal}/"))
+                .map(str::to_owned)
+        });
+    }
+}
 fn teacher_prefix(
     root: &Path,
     prefix: &str,
@@ -1506,6 +1643,9 @@ fn teacher_prefix(
         return Err(bad("teacher cursor beyond completed prefix"));
     }
     for (i, (r, e)) in rows.iter().zip(episodes).enumerate() {
+        if binding["call_protocol"] == 1 || !r["attempt"].is_null() {
+            call_attempt(root, prefix, "teacher", binding, e, i, Some(r))?;
+        }
         if r["ordinal"] != i
             || r["id"] != e.id
             || r["case"] != digest(e)?
@@ -1530,14 +1670,28 @@ fn teacher_prefix(
     let mut rows = rows;
     for (i, e) in episodes.iter().enumerate().skip(rows.len()) {
         control.check("fresh_teacher_next")?;
-        write(
-            &pending,
-            &binary::record!({"binding":binding,"ordinal":i,"case":digest(e)?}),
-        )?;
-        let t = recovery::fresh_teacher(l, e, control)?;
-        let row = binary::record!({"ordinal":i,"id":e.id,"case":digest(e)?,"teacher":t});
+        let attempt = prepare_call(root, prefix, "teacher", binding, e, i)?;
+        #[cfg(feature = "test-support")]
+        call_fixture(l, control, prefix, "teacher", i);
+        let t = match recovery::fresh_teacher(l, e, control) {
+            recovery::ObservedCall::NotInvoked(result) => {
+                if let Err(ref error) = result {
+                    control.classify_error(error);
+                }
+                resolve_call(&attempt, None, control)?;
+                result?;
+                return Err(bad("teacher not invoked without failure"));
+            }
+            recovery::ObservedCall::Returned(result) => result,
+        };
+        let value = match &t {
+            Ok(v) => v.clone(),
+            Err(error) => binary::record!({"error":error.to_string()}),
+        };
+        let row = binary::record!({"ordinal":i,"id":e.id,"case":digest(e)?,"teacher":value,"attempt":attempt.file_name().unwrap().to_string_lossy()});
         append_row(&mut f, &row)?;
-        std::fs::remove_file(&pending)?;
+        resolve_call(&attempt, Some(&row), control)?;
+        t?;
         rows.push(row);
         control.check("fresh_teacher_durable")?;
     }
@@ -1581,7 +1735,7 @@ fn evaluate_panel(
     }) {
         return Err(bad("evaluation checkpoint step/policy"));
     }
-    let binding = binary::record!({"policy":digest(p)?,"step":step,"model":model,"dataset":dataset,"tokenizer":l.tokenizer.id(),"panel":name,"planned":episodes.len(),"decoding":"normal-greedy-strict-utf8-eos"});
+    let binding = binary::record!({"call_protocol":1,"policy":digest(p)?,"step":step,"model":model,"dataset":dataset,"tokenizer":l.tokenizer.id(),"panel":name,"planned":episodes.len(),"decoding":"normal-greedy-strict-utf8-eos"});
     let header = binary::record!({"binding":binding,"checkpoint":path,"physical":file_hash(path)?});
     let mut existing = if raw.exists() {
         binary::read_value_records(&raw)?
@@ -1610,7 +1764,18 @@ fn evaluate_panel(
     if rows.len() > episodes.len() {
         return Err(bad("extra rows"));
     }
-    for row in &rows {
+    for (i, row) in rows.iter().enumerate() {
+        if binding["call_protocol"] == 1 || !row["attempt"].is_null() {
+            call_attempt(
+                root,
+                &prefix,
+                "generation",
+                &binding,
+                &episodes[i],
+                i,
+                Some(row),
+            )?;
+        }
         verify_generated(row, &l.tokenizer)?;
     }
     score(&rows, &episodes[..rows.len()], &meta[..rows.len()])?;
@@ -1640,10 +1805,9 @@ fn evaluate_panel(
     )?;
     for e in episodes.iter().skip(rows.len()) {
         control.check("fresh_panel_next")?;
-        write(
-            &pending,
-            &binary::record!({"model":model,"case":e.id,"row":rows.len()}),
-        )?;
+        let attempt = prepare_call(root, &prefix, "generation", &binding, e, rows.len())?;
+        #[cfg(feature = "test-support")]
+        call_fixture(&l, control, &prefix, "generation", rows.len());
         #[cfg(feature = "test-support")]
         {
             control.fixture_post_generation_deadline = p.tiny
@@ -1656,9 +1820,17 @@ fn evaluate_panel(
                 && std::env::var("R3_FRESH_TEST_STOP")
                     .is_ok_and(|v| v == format!("final-{name}-row-{}", rows.len() + 1));
         }
-        let row = recovery::evaluate_one_policy(&l, e, &e.request, control, false);
+        let mut row = match recovery::observe_generation(&l, e, &e.request, control, false) {
+            recovery::ObservedCall::Returned(row) => row,
+            recovery::ObservedCall::NotInvoked(row) => {
+                resolve_call(&attempt, None, control)?;
+                control.stop_result()?;
+                return Err(bad(&format!("generation not invoked: {}", row["error"])));
+            }
+        };
+        row["attempt"] = binary::record!(attempt.file_name().unwrap().to_string_lossy());
         append_row(&mut f, &row)?;
-        std::fs::remove_file(&pending)?;
+        resolve_call(&attempt, Some(&row), control)?;
         verify_generated(&row, &l.tokenizer)?;
         rows.push(row);
         control.check("fresh_panel_row_durable")?;
@@ -1744,7 +1916,7 @@ pub(super) fn evaluate_boundary(
     if p.evaluation.teacher_steps.contains(&step) {
         let l = checkpoint::load(path, Device::Cpu, false)?;
         let teacher = root.join(format!("teacher-{step:04}.r3b"));
-        let binding = binary::record!({"policy":digest(p)?,"step":step,"model":l.model.weight_hash()?,"dataset":digest(&probe)?});
+        let binding = binary::record!({"call_protocol":1,"policy":digest(p)?,"step":step,"model":l.model.weight_hash()?,"dataset":digest(&probe)?});
         if teacher.exists() {
             let old: binary::Value = read_confirmed(&teacher)?;
             if old["binding"] != binding {
@@ -2070,6 +2242,14 @@ fn audit_panels_through(
     p: &Plan,
     last: usize,
 ) -> Result<(usize, BTreeMap<String, PanelResult>)> {
+    audit_panels_range(root, p, 0, last)
+}
+fn audit_panels_range(
+    root: &Path,
+    p: &Plan,
+    first: usize,
+    last: usize,
+) -> Result<(usize, BTreeMap<String, PanelResult>)> {
     let (_, tr, dv) = data::load(&root.join("corpus.r3cor"))?;
     let (_, _, tx) = data::load(&root.join("transfer.r3cor"))?;
     let (tm, dm, xm): (Vec<Meta>, Vec<Meta>, Vec<Meta>) = read(&root.join("metadata.r3b"))?;
@@ -2096,7 +2276,7 @@ fn audit_panels_through(
         } else {
             (es.clone(), ms.clone())
         };
-        for &step in steps.iter().filter(|&&step| step <= last) {
+        for &step in steps.iter().filter(|&&step| step >= first && step <= last) {
             let key = format!("eval-{step:04}-{name}");
             let raw = root.join(format!("{key}.r3rows"));
             let rows = binary::read_value_records(&raw)?;
@@ -2123,7 +2303,10 @@ fn audit_panels_through(
             {
                 return Err(bad("raw lineage/dataset mismatch"));
             }
-            for (r, e) in rows[1..].iter().zip(&es) {
+            for (i, (r, e)) in rows[1..].iter().zip(&es).enumerate() {
+                if header["binding"]["call_protocol"] == 1 || !r["attempt"].is_null() {
+                    call_attempt(root, &key, "generation", &header["binding"], e, i, Some(r))?;
+                }
                 verify_generated(r, &tok)?;
                 let prompt = tok.prepare(
                     &e.request,
@@ -2146,6 +2329,9 @@ fn audit_panels_through(
                     return Err(bad("teacher complete binding"));
                 }
                 for (i, (r, e)) in t[1..].iter().zip(&es).enumerate() {
+                    if header["binding"]["call_protocol"] == 1 || !r["attempt"].is_null() {
+                        call_attempt(root, &key, "teacher", &header["binding"], e, i, Some(r))?;
+                    }
                     if r["id"] != e.id || r["ordinal"] != i || r["case"] != digest(e)? {
                         return Err(bad("teacher case"));
                     }
@@ -2166,6 +2352,47 @@ fn audit_panels_through(
             }
             count += es.len();
             results.insert(key, s);
+        }
+    }
+    if p.schema == Some(2) {
+        for &step in p
+            .evaluation
+            .teacher_steps
+            .iter()
+            .filter(|&&s| s >= first && s <= last)
+        {
+            let key = format!("teacher-{step:04}");
+            let summary: binary::Value = read_confirmed(&root.join(format!("{key}.r3b")))?;
+            let (probe, _) = subset(&tr, &tm, p.evaluation.fixture_per_bucket.unwrap_or(8));
+            if summary["binding"]["policy"] != digest(p)?
+                || summary["binding"]["step"] != step
+                || summary["binding"]["dataset"] != digest(&probe)?
+            {
+                return Err(bad("teacher obligation binding"));
+            }
+            let ce = if p.evaluation.train_steps.contains(&step) {
+                results
+                    .get(&format!("eval-{step:04}-train64"))
+                    .and_then(|s| s.ce)
+                    .ok_or_else(|| bad("missing required panel teacher"))?
+            } else {
+                let ts = binary::read_value_records(&root.join(format!("{key}-teachers.r3rows")))?;
+                if ts.len() != probe.len() + 1 || ts[0] != summary["binding"] {
+                    return Err(bad("incomplete fixed teacher"));
+                }
+                for (i, (r, e)) in ts[1..].iter().zip(&probe).enumerate() {
+                    if r["ordinal"] != i || r["id"] != e.id || r["case"] != digest(e)? {
+                        return Err(bad("fixed teacher case"));
+                    }
+                    if !r["attempt"].is_null() {
+                        call_attempt(root, &key, "teacher", &ts[0], e, i, Some(r))?;
+                    }
+                }
+                teacher_ce(&ts[1..])?
+            };
+            if summary["ce"] != binary::record!(ce) {
+                return Err(bad("required teacher summary"));
+            }
         }
     }
     Ok((count, results))

@@ -67,6 +67,8 @@ pub(super) struct RunControl {
     pub(super) teacher_limit: usize,
     #[cfg(feature = "test-support")]
     pub(super) fixture_post_generation_deadline: bool,
+    #[cfg(feature = "test-support")]
+    pub(super) fixture_boundary: Option<String>,
     #[cfg(test)]
     elapsed_override: Option<Duration>,
     #[cfg(test)]
@@ -119,6 +121,8 @@ impl RunControl {
             teacher_limit: usize::MAX,
             #[cfg(feature = "test-support")]
             fixture_post_generation_deadline: false,
+            #[cfg(feature = "test-support")]
+            fixture_boundary: None,
             #[cfg(test)]
             elapsed_override: None,
             #[cfg(test)]
@@ -185,6 +189,13 @@ impl RunControl {
         self.stop_result()
     }
     pub(super) fn check(&mut self, boundary: &str) -> Result<()> {
+        #[cfg(feature = "test-support")]
+        if self.fixture_boundary.as_deref() == Some(boundary) {
+            self.deadline = Instant::now();
+            if std::env::var("R3_FRESH_CALL_CANCEL").as_deref() == Ok("1") {
+                self.cancel.store(true, Ordering::Relaxed);
+            }
+        }
         #[cfg(feature = "test-support")]
         if boundary == "generation_returned" && self.fixture_post_generation_deadline {
             self.deadline = Instant::now();
@@ -1104,9 +1115,27 @@ pub(super) fn evaluate_one(
     evaluate_one_policy(loaded, e, request, control, true)
 }
 pub(super) fn evaluate_one_policy(
-    loaded: &Loaded, e: &Episode, request: &ModelRequest, control: &mut RunControl,
+    loaded: &Loaded,
+    e: &Episode,
+    request: &ModelRequest,
+    control: &mut RunControl,
     automatic_teacher: bool,
 ) -> Value {
+    match observe_generation(loaded, e, request, control, automatic_teacher) {
+        ObservedCall::NotInvoked(row) | ObservedCall::Returned(row) => row,
+    }
+}
+// Prepared without a returned observation is UNKNOWN after a crash. Only this
+// synchronous boundary can prove NotInvoked; token count is never entry evidence.
+pub(super) enum ObservedCall<T> { NotInvoked(T), Returned(T) }
+pub(super) fn observe_generation(
+    loaded: &Loaded,
+    e: &Episode,
+    request: &ModelRequest,
+    control: &mut RunControl,
+    automatic_teacher: bool,
+) -> ObservedCall<Value> {
+    let mut entered = false;
     let mut row = record!({"id":e.id,"scene":scene(e),"category":e.category,"family":e.family,"question":e.request.input,"generated_question":request.input,
         "evidence":e.request.evidence,"generated_evidence":request.evidence,"expected":e.answer,"exact_match":false,"actual":null,"error":null,"generation_started":false,"generation_completed":false,"interruption":null});
     row["row_version"] = record!(2);
@@ -1128,6 +1157,11 @@ pub(super) fn evaluate_one_policy(
         control.generation_calls += 1;
         let cancel = control.cancel.clone();
         let mut raw = Vec::new();
+        entered = true;
+        #[cfg(test)]
+        if let Some(hook) = &mut control.hook {
+            hook("native_generation_entered", &cancel);
+        }
         let result = loaded.model.generate_observed(
             &prompt.token_ids,
             request.limits.max_tokens as usize,
@@ -1136,6 +1170,13 @@ pub(super) fn evaluate_one_policy(
             &e.id,
             |id| {
                 raw.push(id);
+                #[cfg(feature = "test-support")]
+                if loaded.model.config.hidden == 32
+                    && loaded.model.config.layers == 2
+                    && std::env::var("R3_FRESH_KILL_ENTERED").as_deref() == Ok("generation")
+                {
+                    std::process::exit(86);
+                }
                 #[cfg(test)]
                 if let Some(hook) = &mut control.hook {
                     hook("token_generated", &cancel);
@@ -1161,6 +1202,9 @@ pub(super) fn evaluate_one_policy(
             control.observe(StopReason::IntegrityFail);
         }
         let returned = result.is_ok();
+        if !automatic_teacher && result.is_err() {
+            control.observe(StopReason::IntegrityFail);
+        }
         let after_generation = control.check("generation_returned");
         let (text, generated, error) = decode_generated(&loaded.tokenizer, result);
         let bytes_ids: Vec<_> = raw
@@ -1187,8 +1231,8 @@ pub(super) fn evaluate_one_policy(
         row["actual"] = record!(text);
         row["generation"] = record!(generated);
         row["error"] = record!(error);
-        row["generation_error"] = record!(if returned {None}else{error.clone()});
-        row["decode_error"] = record!(if returned {error.clone()}else{None});
+        row["generation_error"] = record!(if returned { None } else { error.clone() });
+        row["decode_error"] = record!(if returned { error.clone() } else { None });
         row["error_class"] = record!(error.as_ref().map(|e| if e.contains("UTF-8") {
             "strict_utf8"
         } else if e.contains("control token") {
@@ -1205,7 +1249,9 @@ pub(super) fn evaluate_one_policy(
             .map_or_else(|| row["error_class"].clone(), |g| record!(g.finish));
         row["raw_generated_count"] = record!(raw.len());
         row["generation_completed"] = record!(returned);
-        row["eos"] = record!(raw.last()==Some(&EOS) && generated.as_ref().is_some_and(|g|g.finish=="stop"));
+        row["eos"] = record!(
+            raw.last() == Some(&EOS) && generated.as_ref().is_some_and(|g| g.finish == "stop")
+        );
         control.completed_generation_count += usize::from(returned);
         row["whitespace_only"] = record!(
             text.as_ref()
@@ -1213,7 +1259,9 @@ pub(super) fn evaluate_one_policy(
         );
         // Keep the actual generation receipt before propagating a command stop.
         after_generation?;
-        if !automatic_teacher { return Ok(()); }
+        if !automatic_teacher {
+            return Ok(());
+        }
         control.check("before_teacher")?;
         // Gold enters only after free generation has completed, including failures.
         row["teacher_forced_diagnostic_after_generation"] =
@@ -1240,15 +1288,46 @@ pub(super) fn evaluate_one_policy(
         row["command_stop"] = record!(stop);
         row["interruption"] = record!(stop);
         if row["teacher_forced_diagnostic_after_generation"]["status"] == "NOT_RUN" {
-            row["teacher_forced_diagnostic_after_generation"] = record!({"status":format!("NOT_RUN_{}",stop.name())});
+            row["teacher_forced_diagnostic_after_generation"] =
+                record!({"status":format!("NOT_RUN_{}",stop.name())});
         }
         control.interrupted_case_id = Some(e.id.clone());
     }
-    row
+    if entered {
+        ObservedCall::Returned(row)
+    } else {
+        ObservedCall::NotInvoked(row)
+    }
 }
-pub(super) fn fresh_teacher(l: &Loaded, e: &Episode, control: &mut RunControl) -> Result<Value> {
-    let p = l.tokenizer.prepare(&e.request,l.model.config.context as u32,&l.model.config.id()?)?;
-    teacher_observation(l,e,&p.token_ids,&[],control,None,false,true)
+pub(super) fn fresh_teacher(
+    l: &Loaded,
+    e: &Episode,
+    control: &mut RunControl,
+) -> ObservedCall<Result<Value>> {
+    let mut entered = false;
+    let result = (|| {
+        let p = l.tokenizer.prepare(
+            &e.request,
+            l.model.config.context as u32,
+            &l.model.config.id()?,
+        )?;
+        teacher_observation(
+            l,
+            e,
+            &p.token_ids,
+            &[],
+            control,
+            None,
+            false,
+            true,
+            &mut entered,
+        )
+    })();
+    if entered {
+        ObservedCall::Returned(result)
+    } else {
+        ObservedCall::NotInvoked(result)
+    }
 }
 fn teacher(
     l: &Loaded,
@@ -1267,7 +1346,7 @@ fn teacher_with_foil(
     control: &mut RunControl,
     foil: Option<&str>,
 ) -> Result<Value> {
-    teacher_observation(l, e, prompt, raw, control, foil, false, false)
+    teacher_observation(l, e, prompt, raw, control, foil, false, false, &mut false)
 }
 
 // Read-only train probe: mismatch is teacher argmax versus gold, never free output.
@@ -1277,7 +1356,7 @@ fn teacher_probe(
     prompt: &[u32],
     control: &mut RunControl,
 ) -> Result<Value> {
-    teacher_observation(l, e, prompt, &[], control, None, true, false)
+    teacher_observation(l, e, prompt, &[], control, None, true, false, &mut false)
 }
 #[allow(clippy::too_many_arguments)] // Existing diagnostic inputs plus durable returned-result semantics.
 fn teacher_observation(
@@ -1289,9 +1368,9 @@ fn teacher_observation(
     foil: Option<&str>,
     probe: bool,
     preserve_returned: bool,
+    entered: &mut bool,
 ) -> Result<Value> {
     control.check("teacher_started")?;
-    control.begin_teacher()?;
     let mut gold = l.tokenizer.encode(e.answer.as_bytes())?;
     gold.push(EOS);
     let mut sequence = prompt.to_vec();
@@ -1299,15 +1378,22 @@ fn teacher_observation(
     if sequence.len() > l.model.config.context {
         return Err(Error::ContextTooSmall);
     }
+    let input = Tensor::new(&sequence[..sequence.len() - 1], &Device::Cpu)?.unsqueeze(0)?;
     control.check("teacher_forward")?;
+    control.begin_teacher()?;
+    *entered = true;
     let logits = l
         .model
-        .forward(
-            &Tensor::new(&sequence[..sequence.len() - 1], &Device::Cpu)?.unsqueeze(0)?,
-            None,
-        )?
+        .forward(&input, None)?
         .narrow(1, prompt.len() - 1, gold.len())?
         .squeeze(0)?;
+    #[cfg(feature = "test-support")]
+    if l.model.config.hidden == 32
+        && l.model.config.layers == 2
+        && std::env::var("R3_FRESH_KILL_ENTERED").as_deref() == Ok("teacher")
+    {
+        std::process::exit(86);
+    }
     #[cfg(feature = "test-support")]
     if l.model.config.profile == "TINY_NUMERIC_TEST_ONLY"
         && std::env::var("R3ER_TEST_STOP").as_deref() == Ok("conditional-teacher-error")
@@ -1317,7 +1403,9 @@ fn teacher_observation(
         ));
     }
     let returned_stop = control.check("teacher_returned");
-    if !preserve_returned { returned_stop?; }
+    if !preserve_returned {
+        returned_stop?;
+    }
     let lp = candle_nn::ops::log_softmax(&logits, 1)?.to_vec2::<f32>()?;
     if lp.iter().flatten().any(|x| !x.is_finite()) {
         return Err(Error::Model("nonfinite diagnostic logits".into()));
@@ -1381,7 +1469,9 @@ fn teacher_observation(
         Ok(record!({"index":i,"gold":gold[i],"foil":other[i],"margin":lp[i][gold[i] as usize]-lp[i][other[i] as usize],"prefix":"identical gold/foil token prefix; one full gold teacher forward"}))
     }).transpose()?;
     let complete_stop = control.check("teacher_completed");
-    if !preserve_returned { complete_stop?; }
+    if !preserve_returned {
+        complete_stop?;
+    }
     Ok(
         record!({"conditional_foil":foil_difference,"target_tokens_including_eos":gold.len(),"mean_nll":nll.iter().sum::<f64>()/gold.len() as f64,"first_target_nll":nll[0],
         "remaining_mean_nll":nll.iter().skip(1).sum::<f64>()/(gold.len()-1).max(1) as f64,"objective":(nll.iter().sum::<f64>()+(w-1.)*nll[0])/gold.len() as f64,"first_target_weight":w,
@@ -10160,6 +10250,58 @@ mod tests {
         assert_eq!(row["finish_reason"], "stop");
         assert_eq!(row["command_stop"], "TIME_BUDGET");
         assert_eq!(c.teacher_calls, 0);
+    }
+    #[test]
+    fn fresh_fx05_actual_returned_zero_length_and_utf8_are_not_no_call() {
+        let l = repair_loaded();
+        for (token, limit) in [(b'x', 0), (b'x', 1), (0xff, 1)] {
+            let id = l.tokenizer.encode(&[token]).unwrap()[0] as usize;
+            for (name, v) in &l.model.vars {
+                let mut data = vec![
+                    if name.ends_with("norm") || name == "embedding" {
+                        1f32
+                    } else {
+                        0f32
+                    };
+                    v.elem_count()
+                ];
+                if name == "embedding" {
+                    let h = l.model.config.hidden;
+                    data[id * h..(id + 1) * h].fill(2.);
+                }
+                v.set(&Tensor::from_vec(data, v.dims(), &Device::Cpu).unwrap())
+                    .unwrap();
+            }
+            let mut e = repair_episode("returned-failure");
+            e.request.limits.max_tokens = 1;
+            let mut c = repair_control();
+            if limit == 0 {
+                c.hook = Some(Box::new(|boundary, flag| {
+                    if boundary == "native_generation_entered" {
+                        flag.store(true, Ordering::Relaxed);
+                    }
+                }));
+            }
+            let ObservedCall::Returned(row) = observe_generation(&l, &e, &e.request, &mut c, false)
+            else {
+                panic!("actual model call misclassified")
+            };
+            assert_eq!(c.generation_calls, 1);
+            assert_eq!(c.teacher_calls, 0);
+            assert_eq!(row["exact_match"], false);
+            assert_eq!(row["raw_tokens"].as_array().unwrap().len(), limit as usize);
+            if limit == 0 {
+                assert_eq!(row["generation_completed"], false);
+                assert!(!row["generation_error"].is_null());
+            } else if token == 0xff {
+                assert_eq!(row["generation_completed"], true);
+                assert_eq!(row["error_class"], "strict_utf8");
+            } else {
+                assert_eq!(row["finish_reason"], "length");
+                assert!(row["error"].is_null());
+            }
+        }
+        println!("ACTUAL_TINY_GENERATIONS=3 TEACHERS=0 OPTIMIZER=0");
     }
     #[test]
     fn repair_rf03_actual_token_cancel_preserves_partial_and_skips_followup() {

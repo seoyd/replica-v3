@@ -2711,6 +2711,76 @@ fn fresh_fx01_post_publication_failure_blocks_new_process() {
 }
 
 #[test]
+fn fresh_fx04_checkpoint_timeouts_keep_final_evaluation_pending() {
+    use candle_core::Device;
+    use replica_v3::{binary, neural::checkpoint};
+    for fault in [
+        "before_training_checkpoint",
+        "training_checkpoint_saved",
+        "training_optimizer_returned",
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("run");
+        let call = |args: &[&str], stop: bool| {
+            let mut c = Command::new(env!("CARGO_BIN_EXE_replica-train"));
+            c.args(args)
+                .env("VECLIB_MAXIMUM_THREADS", "1")
+                .env("RAYON_NUM_THREADS", "1")
+                .env("R3_FRESH_FIXTURE_EOS", "1");
+            if stop {
+                c.env("R3_FRESH_TRAIN_STOP", fault);
+            }
+            let o = c.output().unwrap();
+            assert!(
+                o.status.success(),
+                "{} {}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+        };
+        call(
+            &["fresh", "fixture", "--output", root.to_str().unwrap()],
+            false,
+        );
+        call(
+            &["fresh", "fixture-full", "--root", root.to_str().unwrap()],
+            true,
+        );
+        let s: binary::Value =
+            binary::from_slice(&std::fs::read(root.join("segment-0000-finished.r3b")).unwrap())
+                .unwrap();
+        assert_eq!(s["phase"], "EvaluationPending", "{fault}");
+        assert_eq!(s["resume"], true);
+        let before = checkpoint::load(&root.join("segment-0000/final"), Device::Cpu, true).unwrap();
+        call(&["fresh", "run", "--root", root.to_str().unwrap()], false);
+        let after = checkpoint::load(&root.join("segment-0001/final"), Device::Cpu, true).unwrap();
+        assert_eq!(
+            before.model.weight_hash().unwrap(),
+            after.model.weight_hash().unwrap()
+        );
+        assert_eq!(before.manifest.training, after.manifest.training);
+        for (k, t) in &before.optimizer {
+            assert_eq!(
+                t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+                after.optimizer[k]
+                    .flatten_all()
+                    .unwrap()
+                    .to_vec1::<f32>()
+                    .unwrap()
+            );
+        }
+        let c: binary::Value = binary::from_slice(
+            &std::fs::read(root.join("segment-0001/train-control.r3b")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(c["optimizer_calls"], 0);
+        assert_eq!(c["generation_calls"], 24);
+        assert_eq!(c["teacher_calls"], 24);
+    }
+    println!("TINY_UPDATES=6 GENERATION=72 TEACHER=72 FX04_PROCESS_CASES=3");
+}
+
+#[test]
 fn fresh_fx03_final_step_resumes_only_remaining_evaluation() {
     let d=tempfile::tempdir().unwrap();let root=d.path().join("run");
     let call=|args:&[&str],fault:Option<&str>| {let mut c=Command::new(env!("CARGO_BIN_EXE_replica-train"));c.args(args).env("VECLIB_MAXIMUM_THREADS","1").env("RAYON_NUM_THREADS","1");if let Some(f)=fault{c.env("R3_FRESH_TEST_STOP",f);}let o=c.output().unwrap();assert!(o.status.success(),"{}\n{}",String::from_utf8_lossy(&o.stdout),String::from_utf8_lossy(&o.stderr));};
@@ -2803,4 +2873,182 @@ fn fresh_eos_deadline_process_and_sync_failure_stay_distinct() {
             let a:binary::Value=binary::from_slice(&std::fs::read(root.join("segment-0000/train-control.r3b")).unwrap()).unwrap();let b:binary::Value=binary::from_slice(&std::fs::read(root.join("segment-0001/train-control.r3b")).unwrap()).unwrap();assert_eq!(a["generation_calls"],1);assert_eq!(a["teacher_calls"],0);assert_eq!(b["generation_calls"],23);assert_eq!(b["optimizer_calls"],0);}
     }
     println!("TINY_OPTIMIZER_CALLS=4 actual_EOS_deadline_resume=PASS TIME_PLUS_SYNC_FAILURE=BLOCKED GENERATIONS=25 TEACHERS=24");
+}
+
+#[test]
+fn fresh_fx05_not_invoked_and_unknown_process_boundaries() {
+    use candle_core::Device;
+    use replica_v3::{binary, neural::checkpoint};
+    let cases = [
+        ("generation", 0, "case_started"),
+        ("generation", 3, "prompt_prepared"),
+        ("generation", 7, "case_started"),
+        ("teacher", 0, "teacher_started"),
+        ("teacher", 3, "teacher_forward"),
+        ("teacher", 7, "teacher_forward"),
+    ];
+    for (kind, ordinal, boundary) in cases {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("run");
+        let call = |action: &str, stop: bool| {
+            let mut c = Command::new(env!("CARGO_BIN_EXE_replica-train"));
+            c.args([
+                "fresh",
+                action,
+                if action == "fixture" {
+                    "--output"
+                } else {
+                    "--root"
+                },
+                root.to_str().unwrap(),
+            ])
+            .env("VECLIB_MAXIMUM_THREADS", "1")
+            .env("RAYON_NUM_THREADS", "1")
+            .env("R3_FRESH_FIXTURE_EOS", "1");
+            if stop {
+                c.env(
+                    "R3_FRESH_CALL_STOP",
+                    format!("eval-0002-train64/{kind}/{ordinal}/{boundary}"),
+                );
+            }
+            let o = c.output().unwrap();
+            assert!(
+                o.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+        };
+        call("fixture", false);
+        call("fixture-full", true);
+        let receipt = |n| -> binary::Value {
+            binary::from_slice(
+                &std::fs::read(root.join(format!("segment-{n:04}/train-control.r3b"))).unwrap(),
+            )
+            .unwrap()
+        };
+        let a = receipt(0);
+        assert_eq!(a["final_evaluation_complete"], false);
+        assert_eq!(
+            a["generation_calls"],
+            ordinal + usize::from(kind == "teacher")
+        );
+        assert_eq!(a["teacher_calls"], ordinal);
+        let raw = root.join("eval-0002-train64.r3rows");
+        let prefix = std::fs::read(&raw).unwrap();
+        let resolution = root.join(format!(
+            "eval-0002-train64-{kind}-{ordinal:04}-000-resolved.r3b"
+        ));
+        let r: binary::Value = binary::from_slice(&std::fs::read(&resolution).unwrap()).unwrap();
+        assert_eq!(r["state"], "NOT_INVOKED");
+        assert_eq!(r["resumable"], true);
+        assert_eq!(r["calls"], 0);
+        let before = checkpoint::load(&root.join("segment-0000/final"), Device::Cpu, true).unwrap();
+        call("run", false);
+        let after = checkpoint::load(&root.join("segment-0001/final"), Device::Cpu, true).unwrap();
+        assert_eq!(
+            before.model.weight_hash().unwrap(),
+            after.model.weight_hash().unwrap()
+        );
+        assert_eq!(before.manifest.training, after.manifest.training);
+        for (k, t) in &before.optimizer {
+            assert_eq!(
+                t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+                after.optimizer[k]
+                    .flatten_all()
+                    .unwrap()
+                    .to_vec1::<f32>()
+                    .unwrap()
+            );
+        }
+        let b = receipt(1);
+        assert_eq!(b["optimizer_calls"], 0);
+        assert_eq!(b["final_evaluation_complete"], true);
+        assert_eq!(
+            a["generation_calls"].as_u64().unwrap() + b["generation_calls"].as_u64().unwrap(),
+            24
+        );
+        assert_eq!(
+            a["teacher_calls"].as_u64().unwrap() + b["teacher_calls"].as_u64().unwrap(),
+            24
+        );
+        assert!(std::fs::read(raw).unwrap().starts_with(&prefix));
+    }
+    for fault in [
+        "kill-generation",
+        "kill-teacher",
+        "resolution-sync",
+        "cancel-time",
+        "identity",
+        "required-teacher",
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("run");
+        let call = |action: &str, inject: bool| {
+            let mut c = Command::new(env!("CARGO_BIN_EXE_replica-train"));
+            c.args([
+                "fresh",
+                action,
+                if action == "fixture" {
+                    "--output"
+                } else {
+                    "--root"
+                },
+                root.to_str().unwrap(),
+            ])
+            .env("VECLIB_MAXIMUM_THREADS", "1")
+            .env("RAYON_NUM_THREADS", "1")
+            .env("R3_FRESH_FIXTURE_EOS", "1");
+            if inject {
+                match fault {
+                    "kill-generation" => {
+                        c.env("R3_FRESH_KILL_ENTERED", "generation");
+                    }
+                    "kill-teacher" => {
+                        c.env("R3_FRESH_KILL_ENTERED", "teacher");
+                    }
+                    "required-teacher" => {}
+                    _ => {
+                        c.env(
+                            "R3_FRESH_CALL_STOP",
+                            "eval-0002-train64/generation/0/case_started",
+                        );
+                    }
+                }
+                if fault == "resolution-sync" {
+                    c.env("R3_FRESH_RESOLUTION_FAIL", "1");
+                }
+                if fault == "cancel-time" {
+                    c.env("R3_FRESH_CALL_CANCEL", "1");
+                }
+            }
+            c.output().unwrap()
+        };
+        assert!(call("fixture", false).status.success());
+        let first = call("fixture-full", true);
+        assert_eq!(
+            first.status.success(),
+            matches!(fault, "identity" | "required-teacher"),
+            "fault={fault} {}",
+            String::from_utf8_lossy(&first.stderr)
+        );
+        if fault == "identity" {
+            let path = root.join("eval-0002-train64-generation-0000-000-prepared.r3b");
+            let mut v: binary::Value = binary::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            v["ordinal"] = binary::record!(1);
+            std::fs::write(path, binary::to_storage_vec(&v).unwrap()).unwrap();
+        }
+        if fault == "required-teacher" {
+            std::fs::remove_file(root.join("eval-0002-transfer128-teachers.r3rows")).unwrap();
+        }
+        let o = call("run", false);
+        assert!(!o.status.success(), "{fault}");
+        assert!(
+            !String::from_utf8_lossy(&o.stdout).contains("TRAIN_START"),
+            "{fault}"
+        );
+    }
+    println!(
+        "TINY_OPTIMIZER_CALLS=24 successful_no_call_resumes=6 zero_optimizer_resume=true UNKNOWN_CANCEL_IO_BINDING_MISSING_TEACHER=BLOCKED"
+    );
 }

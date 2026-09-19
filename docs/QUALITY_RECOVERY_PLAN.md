@@ -1,6 +1,53 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: exposure and question-phrasing comparison
+## Active: selector consistency from the preserved P6144 parent
+
+R3-SELECTOR-CONSISTENCY-1.0. Preserve P6144, its original/phrase training data,
+tokenizer, Adam and all closed C/P observations. No reinitialization or storage,
+SQLite, architecture, tokenizer or loss changes. The source reference is
+e97e2c665c5de29a1a6a84b85864016406f92cf3; prior report is e9645747a54a45cb864394840ff8c4a21ccf0ae9.
+
+S0 parent/input verification → S1 evaluation obligation and actual call boundaries
+→ S2 direct TINY processes and parent parity16 → S3 selector diagnostic192 and
+training registration → S4 C-KEEP/S-SELECT → S5 endpoint recount. Only a joint
+development pass authorizes fixed-candidate parity64, final200 and existing S5/S6.
+
+Checkpoint completion is separate from due evaluation completion. Optimizer-returned,
+pre-checkpoint and post-checkpoint timeout preserve EvaluationPending. Evaluation-only
+continuation changes no weights/Adam/clock/counters. Consumers require complete raw,
+required teacher rows and summaries. Prepared call records and immutable resolutions
+bind model/policy/panel/case/cursor/attempt; only confirmed NotInvoked plus pure
+TIME_BUDGET permits another attempt at the same cursor. Returned rows remain intact,
+including known errors. Missing resolution is UNKNOWN, never zero usage. Cancellation,
+I/O and identity errors block. Publication uses the existing confirmed publisher;
+cooperative checks cannot preempt a synchronous tensor call or infer crash usage.
+
+Both arms retain P's original/phrase1:1 exposure and sampler epochs6/7. C keeps the
+selection relation; S flips C/D/E once per case over two exposures. C changes only
+query entity, D only query context, E only the two observed_at values. Request-only
+labels, independent field/time checks and involution are training/diagnostic tooling,
+never product inference. Flip assignment balances bucket/epoch/phrase/view; A/B/F/G/H
+remain byte/token-identical. S has3072 flipped draws among16384 total.
+
+Same P6144 weights/Adam/tokenizer, first-target1 CE, fixed LR3e-5. Each arm2048 updates
+ends8192; total4096 SMALL, input9M/target1M per arm including discarded work. Shared
+generation4608/teacher6000/active14400s, segment900s plus cleanup120s. TINY update128,
+generation768/teacher768 and scalar32 are separate limits. First1 save/process restart
+is inside the learning budget. No automatic extension, third arm or source mutation.
+
+Reuse parent endpoint raw704 and historical C704; parity16 plus selector192 new calls.
+At+256/512/1536 screen64, +1024/2048 train64+primary512+transfer128 with fixed teacher64;
+screen is reused from full primary when present. Final also measures selector192 per
+arm. Screen loss24/errors8 is severe; loss12 and CE×1.2 twice stops. Primary loss64
+from425 or errors8 stops. Quality stop of one arm permits the unchanged other arm;
+cancel/data/numeric/I/O/usage failure blocks the study. Intermediate best is not a winner.
+
+Same final endpoint must achieve primary487/512, every bucket58/64, transfer116/128,
+generation errors0. Selector pairs are diagnostic, never a replacement gate. Failure
+closes with no candidate/final200. Tie-break lowest bucket, primary, transfer, then C.
+Final200/S4 and S5/S6 criteria below remain unchanged; independent acceptance is external.
+
+## Historical: exposure and question-phrasing comparison
 
 Closed at each2048 new updates on2026-09-19. C primary425/512, transfer44/128;
 P primary425/512, transfer79/128, both generation errors0. Development gate FAILED,

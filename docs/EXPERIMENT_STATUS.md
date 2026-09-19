@@ -1,5 +1,46 @@
 # 진단 및 구현 상태
 
+## 2026-09-19 Selector consistency — 호출/평가 경계 수리
+
+기준 source `e97e2c665c5de29a1a6a84b85864016406f92cf3`, 시작 HEAD
+`e9645747a54a45cb864394840ff8c4a21ccf0ae9`, main/origin은 지정 저장소다.
+시작 시 기존 untracked `.DS_Store`를 보존했다. stable Rust/Cargo1.98.1,
+기존 lock/offline/accelerate/compute1을 사용했다. 이전 run은 변경하지 않았다.
+
+EXECUTED_THIS_RUN: FX04 수정 전 실제 마지막 TINY optimizer 뒤 checkpoint 전
+timeout이 Finished로 기록되는 실패를 재현했다. 수정 후 optimizer-returned,
+checkpoint 전/후 세 경로 모두 EvaluationPending→새 process 평가 완료를 확인했다.
+추가 optimizer0, weights/Adam/학습 counter 불변, 각24 generation/24 teacher다.
+FX05는 generation 첫/중간/마지막의 case_started/prompt_prepared와 teacher의
+teacher_started/forward 직전 미호출6개를 새 process로 이어갔다. 실제 미호출은
+raw에 추가되지 않고 확정된 시도만 같은 cursor에서 계속됐다. 진입 후 process
+종료, 해소 sync 실패, 취소+time, identity 손상, teacher 누락은 차단했다.
+실제 TINY native call의0token 취소 반환·length·invalid UTF-8도 Returned이며
+NotInvoked로 오인하지 않는 단위 회귀를 실행했다. 합성 logits fixture는 TINY
+테스트에만 사용하며 품질모델/SMALL parent로 사용하지 않는다.
+
+직접 명령은 `cargo test --locked --offline --features accelerate,test-support
+--test training fresh_fx04_checkpoint_timeouts_keep_final_evaluation_pending --
+--exact --nocapture` 및 같은 target의
+`fresh_fx05_not_invoked_and_unknown_process_boundaries`다. Returned 회귀는
+`--bin replica-train fresh_fx05_actual_returned_zero_length_and_utf8_are_not_no_call`.
+원본 실행 로그는 로컬 `artifacts/selector-consistency-20260919-evidence/`에 보존한다.
+초기 fixture hook의 profile 차이와 입력준비에서 거부된0token fixture 실패도
+삭제하지 않았다. 이는 모델 품질 실패/성공으로 합산하지 않는다.
+
+엄격 clippy는 기존 `quality_recovery`의 map key 순회 lint로 실패했다.
+해당 기존 lint만 허용한 변경 target clippy는 통과했다. 전체 fmt는 기존 차이가
+남아 PASS가 아니다. 새 함수/수정 평가 경계는 국소 포맷했다. SMALL 업데이트는
+수리 단계0이며 parity/선택 진단/공동학습 품질은 아직 NOT_RUN이다.
+
+P6144 실제 final SHA256는
+`c4d6989fbcaad60516053dda206caf43abc08c4b388c3f765e4c446864f60e20`,
+동일 단계 step 파일은 `65cf6a2f6012ee2aa1b806ddc4b0bda4423a24e70ee5bded7962d379ef7ce58d`.
+경로는 `artifacts/fresh-exposure-phrase-20260919/P-PHRASE/segment-0003/`다.
+물리 hash 차이를 semantic weights/Adam 차이로 해석하지 않는다. 새 연구 등록은
+실제 state/Adam/tokenizer와 이전 policy를 별도로 검증해야 한다.
+코드 수리는 H3/S4/Goal1 PASS가 아니며 GOAL1_ACCEPTED=false다.
+
 ## 2026-09-19 Exposure/phrase study — G4/G5 완료, 개발 품질 미달
 
 **EXECUTED_THIS_RUN / DERIVED_CURRENT_RAW:** C-REPEAT와 P-PHRASE를 각각2048회
