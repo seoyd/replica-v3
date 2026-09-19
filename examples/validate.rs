@@ -22,6 +22,76 @@ fn stats(label: &str, mut values: Vec<f64>) {
 fn elapsed(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0
 }
+// Bounded synthetic codec measurement; no original data, model or optimizer access.
+fn binary_measure() -> Result<()> {
+    use replica_v3::{binary::{self, Value}, neural::{hash, transformer::Rng}};
+    use std::{hint::black_box, io::Write};
+    if cfg!(debug_assertions) {
+        return Err(Error::Invalid("binary-measure requires --release".into()));
+    }
+    let mut rng = Rng::new(7183);
+    let mut rows = Vec::new();
+    for i in 0..256 {
+        rows.push(binary::record!({"id":format!("SYNTHETIC_STORAGE_ONLY/{i}"),
+            "question":format!("합성 저장 측정 항목 {i}의 원문과 기록 순서를 보존한다."),
+            "raw_tokens":(0..64).map(|_| rng.next_u64()%4096).collect::<Vec<_>>(),
+            "expected":format!("합성 값 {} [event:{}]",rng.next_u64(),i+1),
+            "actual":null,"error":null,"generation_started":false,"generation_completed":false,
+            "teacher_loss":f64::from_bits(0x3fd3333333333334),"model_hash":hash(b"SYNTHETIC_NO_MODEL"),
+            "evidence":[{"event_id":i+1,"source":"synthetic storage benchmark","original_excerpt":format!("합성 원문 {i}: 원문·버전·관계를 보존한다. {}", "저장 형식 확인용 문장. ".repeat(8)),"relation_path":[],"version_status":"current"}]}));
+    }
+    let cases = [
+        ("small", binary::record!({"ready":true,"request_id":"synthetic-storage","step":u64::MAX})),
+        ("panel256", Value::Array(rows)),
+        ("entropy64k", Value::Bytes((0..65536).map(|_|rng.next_u64()as u8).collect())),
+    ];
+    let directory = tempfile::tempdir()?;
+    println!("BINARY_MEASURE synthetic=true warmup=3 repetitions=12 durable_repetitions=5 OS_cache=NOT_FLUSHED NEW_SMALL_UPDATES=0 NEW_TINY_UPDATES=0 MODEL_CALLS=0");
+    for (name,value) in cases {
+        let canonical = binary::to_vec(&value)?;
+        let mut stored = Vec::new();
+        binary::write_value_record(&mut stored,&value)?;
+        assert_eq!(binary::value_from_slice(&stored)?,value);
+        println!("CASE={name} logical_sha256={} canonical_bytes={} stored_bytes={}",hash(&canonical),canonical.len(),stored.len());
+        for operation in ["value_copy","encode","decode"] {
+            let mut times=Vec::new();
+            for i in 0..15 {
+                let start=Instant::now();
+                match operation {
+                    "value_copy"=>{black_box(binary::to_value(&value)?);},
+                    "encode"=>{let mut bytes=Vec::new();binary::write_value_record(&mut bytes,&value)?;black_box(bytes);},
+                    _=>{black_box(binary::value_from_slice(&stored)?);},
+                }
+                if i>=3 {times.push(elapsed(start));}
+            }
+            stats(&format!("{name} {operation}"),times);
+        }
+        let mut durable=Vec::new();
+        for i in 0..7 {
+            let path=directory.path().join(format!("{name}-{i}.r3b"));
+            let start=Instant::now();
+            let mut f=std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+            binary::write_value_record(&mut f,&value)?;
+            f.flush()?;f.sync_all()?;
+            std::fs::File::open(directory.path())?.sync_all()?;
+            let raw=std::fs::read(&path)?;
+            let restored=binary::value_from_slice(&raw)?;
+            let ms=elapsed(start);
+            assert_eq!(restored,value);
+            if i>=2 {durable.push(ms);}
+            if i==0 {
+                let child=Command::new(std::env::current_exe()?)
+                    .arg("binary-read-probe").arg(&path).arg(hash(&canonical)).output()?;
+                if !child.status.success() {
+                    return Err(Error::Corrupt(format!("fresh binary read: {}",String::from_utf8_lossy(&child.stderr))));
+                }
+                println!("CASE={name} FRESH_PROCESS_READ=PASS");
+            }
+        }
+        stats(&format!("{name} durable_write_readback"),durable);
+    }
+    Ok(())
+}
 fn native_load_audit(path: &std::path::Path, mode: &str) -> Result<()> {
     let resume = match mode {
         "inference" => false,
@@ -1177,6 +1247,13 @@ fn smoke(checkpoint: &str, cli: &str, output: &str) -> Result<()> {
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("binary-measure") if args.len()==1 => binary_measure(),
+        Some("binary-read-probe") if args.len()==3 => {
+            let bytes=replica_v3::neural::read_bounded(std::path::Path::new(&args[1]),replica_v3::binary::MAX_FRAME_BYTES)?;
+            let v=replica_v3::binary::value_from_slice(&bytes)?;
+            if replica_v3::neural::hash(&v.to_vec()?)!=args[2] {return Err(Error::Corrupt("fresh binary canonical hash".into()));}
+            Ok(())
+        },
         Some("journal-measure") if args.len()==3 => journal_measure(std::path::Path::new(&args[1]),args[2].parse().map_err(|_|Error::Invalid("journal measure count".into()))?),
         Some("journal-read-probe") if args.len()==3 => {
             let start=Instant::now();let j=replica_v3::journal::Journal::open(std::path::Path::new(&args[1]),std::path::Path::new(&args[2]),false)?;
@@ -2099,7 +2176,7 @@ fn evaluate_native(
         .write(true)
         .create_new(true)
         .open(output)?;
-    replica_v3::binary::write_record(&mut log, &replica_v3::binary::record!({"header":true,"mode":mode,"fixture_sha256":neural::hash(&raw),"checkpoint_sha256":loaded.manifest.weights_sha256,"tokenizer_sha256":loaded.tokenizer.id(),"architecture":loaded.model.config,"training":loaded.manifest.training,"trained_steps":loaded.manifest.trained_steps,"diagnostic_only":loaded.manifest.diagnostic_only,"load_ms":load_ms,"backend":neural::cpu_backend(),"dtype":"F32","rubric":"independent_core_value_time_citations_v2","semantic_review":"separate"}))?;
+    replica_v3::binary::write_value_record(&mut log, &replica_v3::binary::record!({"header":true,"mode":mode,"fixture_sha256":neural::hash(&raw),"checkpoint_sha256":loaded.manifest.weights_sha256,"tokenizer_sha256":loaded.tokenizer.id(),"architecture":loaded.model.config,"training":loaded.manifest.training,"trained_steps":loaded.manifest.trained_steps,"diagnostic_only":loaded.manifest.diagnostic_only,"load_ms":load_ms,"backend":neural::cpu_backend(),"dtype":"F32","rubric":"independent_core_value_time_citations_v2","semantic_review":"separate"}))?;
     let cases = if mode == "value-swap" {
         fixture.value_pairs
     } else {
@@ -2189,7 +2266,7 @@ fn evaluate_native(
             generation_ms.push(actual.generation_ms as f64);
             generated_tokens += actual.generated;
         }
-        replica_v3::binary::write_record(&mut log, &replica_v3::binary::record!({"case":case.id,"category":case.category,"question":request.input,"evidence":request.evidence,"expected_core_value":case.required,"expected_citations":case.citations,"actual_citations":actual_citations,"provided":provided,"excluded":excluded,"input_tokens":tokens,"input_digest":token_digest,"actual_text":text,"actual_generation":generated,"passed":passed,"reason":reason,"elapsed_ms":elapsed(start)}))?;
+        replica_v3::binary::write_value_record(&mut log, &replica_v3::binary::record!({"case":case.id,"category":case.category,"question":request.input,"evidence":request.evidence,"expected_core_value":case.required,"expected_citations":case.citations,"actual_citations":actual_citations,"provided":provided,"excluded":excluded,"input_tokens":tokens,"input_digest":token_digest,"actual_text":text,"actual_generation":generated,"passed":passed,"reason":reason,"elapsed_ms":elapsed(start)}))?;
         log.flush()?;
         println!(
             "mode={mode} case={} category={} passed={passed} reason={reason} text={text:?}",
@@ -2203,7 +2280,7 @@ fn evaluate_native(
     let quality =
         success >= 190 && correct.iter().all(|&n| n >= 36) && accepted_invalid_citations == 0;
     let summary = replica_v3::binary::record!({"summary":true,"mode":mode,"correct":correct,"total":total,"success":success,"denominator":total.iter().sum::<usize>(),"task_target_pass":quality,"generation_or_validation_failures":failures,"rejected_invalid_citations":invalid_citations,"accepted_invalid_citations":accepted_invalid_citations});
-    replica_v3::binary::write_record(&mut log, &summary)?;
+    replica_v3::binary::write_value_record(&mut log, &summary)?;
     log.sync_all()?;
     println!("{summary}");
     if !generation_ms.is_empty() {
@@ -2256,9 +2333,9 @@ fn retrieval_baseline(fixture: &std::path::Path, output: &std::path::Path) -> Re
             known += 1;
             matched += usize::from(hit);
         }
-        replica_v3::binary::write_record(&mut log, &replica_v3::binary::record!({"case":case.id,"category":case.category,"query":case.request.input,"bundle":bundle,"required":case.required,"top1_value_hit":hit,"neural_generation":false}))?;
+        replica_v3::binary::write_value_record(&mut log, &replica_v3::binary::record!({"case":case.id,"category":case.category,"query":case.request.input,"bundle":bundle,"required":case.required,"top1_value_hit":hit,"neural_generation":false}))?;
     }
-    replica_v3::binary::write_record(&mut log, &replica_v3::binary::record!({"summary":true,"top1_value_hits":matched,"known_value_cases":known,"metric":"retrieval-only raw evidence, not answer accuracy"}))?;
+    replica_v3::binary::write_value_record(&mut log, &replica_v3::binary::record!({"summary":true,"top1_value_hits":matched,"known_value_cases":known,"metric":"retrieval-only raw evidence, not answer accuracy"}))?;
     log.sync_all()?;
     println!("retrieval_only_top1_value_hits={matched}/{known}; not neural answer accuracy");
     Ok(())

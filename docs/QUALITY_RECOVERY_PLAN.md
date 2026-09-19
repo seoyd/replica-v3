@@ -22,6 +22,15 @@ Focused TINY serialization/process tests are allowed; no SMALL quality training
 or experiment restart is part of this migration. Storage verification cannot
 establish model quality or Goal1 readiness.
 
+The follow-up storage optimization rechecked that artifacts/logs/default memory
+remain absent and uses only temporary synthetic records for measurement. Owned
+R3BIN records avoid redundant tree copies. Large metadata/row storage can use
+bounded lossless Zstd, while canonical hashes, IPC and tokenizer bytes stay raw.
+The common panel publisher binds the actual stored bytes. Stream expansion/item
+budgets are cumulative; legacy raw storage is still readable. Benchmark and
+integrity results are separate from learning; no optimizer update is authorized
+or performed for this optimization. Build caches are not learned/user data.
+
 ## Closed at8: user-authorized retention retry01 after the save-reason repair
 
 Retry01 ran from execution HEAD49f0e6e693f8dc6b43b6b85a458e5f0877ef924a with

@@ -14,6 +14,7 @@ use std::{
 const MAGIC: &[u8; 8] = b"R3BIN\0\0\0";
 const HEADER: usize = 52;
 pub const MAX_BYTES: usize = 128 * 1024 * 1024;
+pub const MAX_FRAME_BYTES: usize = MAX_BYTES + HEADER;
 const MAX_ITEMS: usize = 1_000_000;
 const MAX_DEPTH: usize = 64;
 #[derive(Debug, thiserror::Error)]
@@ -59,6 +60,29 @@ pub enum Value {
     Object(BTreeMap<String, Value>),
 }
 impl Value {
+    /// Canonical uncompressed bytes, without rebuilding an already owned value tree.
+    pub fn to_vec(&self) -> Result<Vec<u8>> {
+        encode_frame(self)
+    }
+    /// Storage representation; canonical hashing and IPC continue to use `to_vec`.
+    pub fn to_storage_vec(&self) -> Result<Vec<u8>> {
+        let raw = self.to_vec()?;
+        if raw.len() < 4096 || !matches!(self, Self::Array(_) | Self::Object(_)) {
+            return Ok(raw);
+        }
+        let body = &raw[HEADER..];
+        let compressed = zstd::bulk::compress(body, 1)?;
+        if compressed.len() + 8 > body.len() - body.len() / 8 {
+            return Ok(raw);
+        }
+        let mut out = Vec::with_capacity(HEADER + 8 + compressed.len());
+        out.extend_from_slice(&raw[..HEADER]);
+        out[10..12].copy_from_slice(&1u16.to_le_bytes());
+        out[12..20].copy_from_slice(&((8 + compressed.len()) as u64).to_le_bytes());
+        out.extend_from_slice(&(body.len() as u64).to_le_bytes());
+        out.extend_from_slice(&compressed);
+        Ok(out)
+    }
     pub fn is_null(&self) -> bool {
         matches!(self, Self::Null)
     }
@@ -761,7 +785,7 @@ impl<'de> de::VariantAccess<'de> for Value {
 
 fn encode(v: &Value, b: &mut Vec<u8>, depth: usize, items: &mut usize) -> Result<()> {
     *items += 1;
-    if depth > MAX_DEPTH || *items > MAX_ITEMS || b.len() > MAX_BYTES {
+    if depth > MAX_DEPTH || *items > MAX_ITEMS || b.len() > MAX_FRAME_BYTES {
         return Err(bad("value bounds"));
     }
     match v {
@@ -771,6 +795,10 @@ fn encode(v: &Value, b: &mut Vec<u8>, depth: usize, items: &mut usize) -> Result
         Value::U64(n) => {
             b.push(3);
             put_varint(b, *n)
+        }
+        Value::I64(n) if *n >= 0 => {
+            b.push(3);
+            put_varint(b, *n as u64)
         }
         Value::I64(n) => {
             b.push(4);
@@ -808,7 +836,7 @@ fn encode(v: &Value, b: &mut Vec<u8>, depth: usize, items: &mut usize) -> Result
             }
         }
     }
-    if b.len() > MAX_BYTES {
+    if b.len() > MAX_FRAME_BYTES {
         return Err(bad("record byte bound"));
     }
     Ok(())
@@ -868,18 +896,28 @@ fn decode(r: &mut Reader<'_>, depth: usize, items: &mut usize) -> Result<Value> 
     })
 }
 pub fn to_vec<T: Serialize + ?Sized>(v: &T) -> Result<Vec<u8>> {
-    let mut body = Vec::new();
-    encode(&to_value(v)?, &mut body, 0, &mut 0)?;
-    let mut out = MAGIC.to_vec();
-    out.extend(1u16.to_le_bytes());
-    out.extend(0u16.to_le_bytes());
-    out.extend((body.len() as u64).to_le_bytes());
-    out.extend(Sha256::digest(&body));
-    out.extend(body);
+    encode_frame(&to_value(v)?)
+}
+pub fn to_storage_vec<T: Serialize + ?Sized>(v: &T) -> Result<Vec<u8>> {
+    to_value(v)?.to_storage_vec()
+}
+fn encode_frame(v: &Value) -> Result<Vec<u8>> {
+    let mut out = vec![0; HEADER];
+    encode(v, &mut out, 0, &mut 0)?;
+    let len = out.len() - HEADER;
+    out[..8].copy_from_slice(MAGIC);
+    out[8..10].copy_from_slice(&1u16.to_le_bytes());
+    out[12..20].copy_from_slice(&(len as u64).to_le_bytes());
+    let digest = Sha256::digest(&out[HEADER..]);
+    out[20..HEADER].copy_from_slice(&digest);
     Ok(out)
 }
 fn frame_size(b: &[u8]) -> Result<usize> {
-    if b.len() < HEADER || &b[..8] != MAGIC || b[8..12] != [1, 0, 0, 0] {
+    if b.len() < HEADER
+        || &b[..8] != MAGIC
+        || b[8..10] != [1, 0]
+        || !matches!(b[10..12], [0, 0] | [1, 0])
+    {
         return Err(bad("magic/version/header"));
     }
     let n = u64::from_le_bytes(b[12..20].try_into().unwrap());
@@ -889,38 +927,93 @@ fn frame_size(b: &[u8]) -> Result<usize> {
     Ok(HEADER + n as usize)
 }
 pub fn from_slice<T: de::DeserializeOwned>(b: &[u8]) -> Result<T> {
+    from_value(value_from_slice(b)?)
+}
+/// IPC and standalone tokenizer identity use raw canonical frames, never storage compression.
+pub fn from_canonical_slice<T: de::DeserializeOwned>(b: &[u8]) -> Result<T> {
+    frame_size(b)?;
+    if b[10] != 0 {
+        return Err(bad("storage compression is not canonical transport"));
+    }
+    from_slice(b)
+}
+pub fn value_from_slice(b: &[u8]) -> Result<Value> {
+    decode_frame(b, &mut 0, &mut 0)
+}
+fn decode_frame(b: &[u8], items: &mut usize, expanded: &mut usize) -> Result<Value> {
     let n = frame_size(b)?;
-    if n != b.len() || Sha256::digest(&b[HEADER..])[..] != b[20..HEADER] {
+    if n != b.len() {
         return Err(bad("length/checksum"));
     }
-    let mut r = Reader::new(&b[HEADER..]);
-    let v = decode(&mut r, 0, &mut 0)?;
+    let packed = &b[HEADER..];
+    let decompressed;
+    let body = if b[10] == 1 {
+        if packed.len() < 8 {
+            return Err(bad("compressed length"));
+        }
+        let raw_len = u64::from_le_bytes(packed[..8].try_into().unwrap());
+        if raw_len > MAX_BYTES as u64 || raw_len > (MAX_BYTES - *expanded) as u64 {
+            return Err(bad("expanded stream bound"));
+        }
+        let z = &packed[8..];
+        if zstd::zstd_safe::find_frame_compressed_size(z).map_err(|_| bad("compressed frame"))?
+            != z.len()
+        {
+            return Err(bad("compressed trailing bytes"));
+        }
+        decompressed = zstd::bulk::decompress(z, raw_len as usize)?;
+        if decompressed.len() != raw_len as usize {
+            return Err(bad("expanded length"));
+        }
+        decompressed.as_slice()
+    } else {
+        packed
+    };
+    *expanded = expanded
+        .checked_add(body.len())
+        .filter(|n| *n <= MAX_BYTES)
+        .ok_or_else(|| bad("expanded stream bound"))?;
+    if Sha256::digest(body)[..] != b[20..HEADER] {
+        return Err(bad("length/checksum"));
+    }
+    let mut r = Reader::new(body);
+    let v = decode(&mut r, 0, items)?;
     if !r.finished() {
         return Err(bad("trailing payload"));
     }
-    from_value(v)
+    Ok(v)
 }
 pub fn write_record<W: Write, T: Serialize + ?Sized>(w: &mut W, v: &T) -> Result<()> {
-    w.write_all(&to_vec(v)?)?;
+    write_value_record(w, &to_value(v)?)
+}
+pub fn write_value_record<W: Write>(w: &mut W, v: &Value) -> Result<()> {
+    w.write_all(&v.to_storage_vec()?)?;
     Ok(())
 }
 pub fn print_record<T: Serialize + ?Sized>(v: &T) -> Result<()> {
     let mut out = std::io::stdout().lock();
-    write_record(&mut out, v)?;
+    out.write_all(&to_vec(v)?)?;
     out.flush()?;
     Ok(())
 }
-pub fn records_from_slice<T: de::DeserializeOwned>(mut b: &[u8]) -> Result<Vec<T>> {
-    if b.len() > MAX_BYTES {
+pub fn records_from_slice<T: de::DeserializeOwned>(b: &[u8]) -> Result<Vec<T>> {
+    records_with(b, from_value)
+}
+pub fn value_records_from_slice(b: &[u8]) -> Result<Vec<Value>> {
+    records_with(b, Ok)
+}
+fn records_with<T>(mut b: &[u8], convert: impl Fn(Value) -> Result<T>) -> Result<Vec<T>> {
+    if b.len() > MAX_FRAME_BYTES {
         return Err(bad("stream bound"));
     }
     let mut out = Vec::new();
+    let (mut items, mut expanded) = (0, 0);
     while !b.is_empty() {
         let n = frame_size(b)?;
         if n > b.len() {
             return Err(bad("partial record"));
         }
-        out.push(from_slice(&b[..n])?);
+        out.push(convert(decode_frame(&b[..n], &mut items, &mut expanded)?)?);
         if out.len() > MAX_ITEMS {
             return Err(bad("record count"));
         }
@@ -929,10 +1022,16 @@ pub fn records_from_slice<T: de::DeserializeOwned>(mut b: &[u8]) -> Result<Vec<T
     Ok(out)
 }
 pub fn read_records<T: de::DeserializeOwned>(path: &std::path::Path) -> Result<Vec<T>> {
+    records_from_slice(&read_record_file(path)?)
+}
+pub fn read_value_records(path: &std::path::Path) -> Result<Vec<Value>> {
+    value_records_from_slice(&read_record_file(path)?)
+}
+fn read_record_file(path: &std::path::Path) -> Result<Vec<u8>> {
     let f = std::fs::File::open(path)?;
     let mut b = Vec::new();
-    f.take(MAX_BYTES as u64 + 1).read_to_end(&mut b)?;
-    records_from_slice(&b)
+    f.take(MAX_FRAME_BYTES as u64 + 1).read_to_end(&mut b)?;
+    Ok(b)
 }
 
 // Construction of native record values for the existing diagnostic/scoring code.
@@ -1104,5 +1203,76 @@ mod tests {
         let mut body = Vec::new();
         // Writer and reader count nested nodes alike, even when each container is small.
         assert!(encode(&record!([null]), &mut body, 0, &mut (MAX_ITEMS - 1)).is_err());
+    }
+    #[test]
+    fn storage_compression_preserves_canonical_bits_and_mixed_records() {
+        let value = record!({"original":"원문\0\n".repeat(4096),"step":u64::MAX,
+            "loss":f64::from_bits(0x3fd3333333333334),"negative_zero":-0.0f64});
+        let raw = to_vec(&value).unwrap();
+        assert_eq!(value.to_vec().unwrap(), raw);
+        let packed = value.to_storage_vec().unwrap();
+        assert_eq!(packed[10], 1);
+        assert!(packed.len() * 8 < raw.len());
+        assert_eq!(&packed[20..HEADER], &raw[20..HEADER]);
+        assert_eq!(value_from_slice(&packed).unwrap().to_vec().unwrap(), raw);
+        assert_eq!(from_slice::<Value>(&packed).unwrap(), value);
+        assert!(from_canonical_slice::<Value>(&packed).is_err());
+        assert_eq!(from_canonical_slice::<Value>(&raw).unwrap(), value);
+        let mut ipc = (packed.len() as u32).to_le_bytes().to_vec();
+        ipc.extend(&packed);
+        assert!(crate::model::read_frame::<Value>(&mut ipc.as_slice(), MAX_FRAME_BYTES).is_err());
+        let signed = Value::I64(3);
+        assert_eq!(signed.to_vec().unwrap(), to_vec(&signed).unwrap());
+        let small = record!({"terminal":true,"complete":false});
+        assert_eq!(small.to_storage_vec().unwrap(), to_vec(&small).unwrap());
+        let mut stream = packed.clone();
+        stream.extend(small.to_vec().unwrap());
+        stream.extend(&raw);
+        let expected = vec![value.clone(), small, value];
+        assert_eq!(value_records_from_slice(&stream).unwrap(), expected);
+        assert_eq!(records_from_slice::<Value>(&stream).unwrap(), expected);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mixed.r3rows");
+        std::fs::write(&path, &stream).unwrap();
+        assert_eq!(read_value_records(&path).unwrap(), expected);
+        assert_eq!(read_records::<Value>(&path).unwrap(), expected);
+        stream.pop();
+        assert!(value_records_from_slice(&stream).is_err());
+    }
+    #[test]
+    fn compressed_frames_reject_corruption_and_share_expansion_and_item_budgets() {
+        let v = record!({"text":"repeat".repeat(2048)});
+        let raw = v.to_vec().unwrap();
+        let packed = v.to_storage_vec().unwrap();
+        for at in [8, 10, 12, 20, HEADER, HEADER + 8, packed.len() - 1] {
+            let mut broken = packed.clone();
+            broken[at] ^= 2;
+            assert!(value_from_slice(&broken).is_err(), "offset {at}");
+        }
+        for n in [0, 8, HEADER, HEADER + 7, packed.len() - 1] {
+            assert!(value_from_slice(&packed[..n]).is_err());
+        }
+        let mut bomb = packed.clone();
+        bomb[HEADER..HEADER + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(value_from_slice(&bomb).is_err());
+        let mut extra = packed.clone();
+        extra.extend_from_slice(&packed[HEADER + 8..]);
+        let size = extra.len() - HEADER;
+        extra[12..20].copy_from_slice(&(size as u64).to_le_bytes());
+        assert!(value_from_slice(&extra).is_err());
+        let mut items = MAX_ITEMS - 2;
+        let mut expanded = 0;
+        decode_frame(&packed, &mut items, &mut expanded).unwrap();
+        assert!(decode_frame(&raw, &mut items, &mut expanded).is_err());
+        let mut items = 0;
+        let mut expanded = MAX_BYTES - (raw.len() - HEADER);
+        decode_frame(&packed, &mut items, &mut expanded).unwrap();
+        assert!(decode_frame(&packed, &mut items, &mut expanded).is_err());
+        // The physical frame budget includes its header; the payload limit remains unchanged.
+        let mut header = raw[..HEADER].to_vec();
+        header[12..20].copy_from_slice(&(MAX_BYTES as u64).to_le_bytes());
+        assert_eq!(frame_size(&header).unwrap(), MAX_FRAME_BYTES);
+        let bytes = Value::Bytes((0..65536).map(|i| (i % 251) as u8).collect());
+        assert_eq!(bytes.to_storage_vec().unwrap(), bytes.to_vec().unwrap());
     }
 }

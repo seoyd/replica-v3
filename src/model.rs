@@ -116,7 +116,7 @@ pub fn read_frame<T: DeserializeOwned>(reader: &mut impl Read, max: usize) -> Re
     }
     let mut bytes = vec![0; len];
     reader.read_exact(&mut bytes)?;
-    Ok(crate::binary::from_slice(&bytes)?)
+    Ok(crate::binary::from_canonical_slice(&bytes)?)
 }
 struct OwnedChild {
     child: Child,

@@ -1,5 +1,80 @@
 # 진단 및 구현 상태
 
+## 2026-09-19 R3BIN 후속 점검·저장 최적화
+
+기준 source `e2684bd3957a491959c44f4e6ae7df05ea58951b`를 이어서 수정했다.
+학습/기억 데이터 초기화 상태를 다시 확인했다. `artifacts/`, `docs/logs/`, 기본
+`~/Library/Application Support/Replica-v3/`가 없고, Git/target을 제외한 작업 트리에
+DB/corpus/checkpoint/raw record 파일도 없었다. 추가 삭제 대상은 없었다. Rust 소스,
+Git 이력과 기존 `.DS_Store`는 보존했다. Cargo build cache는 학습 데이터가 아니다.
+벤치마크/회귀의 합성 파일은 각 임시 디렉터리에서 생성하고 정상 종료 시 제거했다.
+
+직접 JSON parser/writer나 text fallback은 재발견되지 않았다. checker의 deny-pattern,
+테스트의 거부용 JSON fixture, 허용된 generic library 내부 의존은 구분했다.
+점검 중 R3BIN payload128MiB와 stream128MiB 한도가 header52바이트만큼 어긋나던
+경계를 맞췄다. 압축 도입과 함께 stream 전체의 확장 bytes/항목 수를 누적 제한한다.
+IPC/standalone tokenizer에는 압축 storage frame을 허용하지 않아 기존 byte 한도를
+유지한다. 모델/Adam tensor, tokenizer mapping, loss/LR, SQLite는 변경하지 않았다.
+
+이미 소유한 Value의 저장/읽기에서 중복 tree 복사를 제거하고 frame buffer를 하나로
+합쳤다. 큰 map/array 저장에만 기존 Zstd level1을 적용하며 약12.5% 이상의 저장
+이득이 있을 때 채택한다. 작은 frame과 bare bytes는 raw를 유지한다. 공통 metadata,
+panel publisher, 실제 평가 row/checker 경로에 연결했다. generic API도 유지한다.
+내용 hash/IPC의 raw canonical bytes는 그대로이며 receipt는 실제 저장 bytes를 묶는다.
+구형 raw R3BIN과 새 compressed frame의 혼합 stream을 읽을 수 있다.
+
+### 실행과 측정
+
+Rust/Cargo1.98.1, `--locked --offline --release --features accelerate`,
+`VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1`, M4에서 `validate binary-measure`를
+실행했다. 합성 small/panel256/entropy64k의 동일 원자료를 사용한다. 최종 코드 비교는
+before→after, after→before, before→after 순서의3쌍이다. 각 process의 encode/decode는
+warmup3+12측정, durable은 warmup2+5측정이다. 아래는 세 process 중앙값들의 중앙값이며
+pooled median이 아니다. OS cache는 비우지 않았다. 컴파일 시간은 측정에서 제외했다.
+
+| 합성 입력 | 저장 bytes 전→후 | encode ms 전→후 | decode ms 전→후 | sync+readback ms 전→후 |
+| --- | ---: | ---: | ---: | ---: |
+| small |107→107|0.0006→0.0003|0.0004→0.0004|3.9731→3.9935|
+| panel256 |247143→44843|0.9380→0.8407|1.1814→1.0503|5.8834→5.7047|
+| entropy64k |65592→65592|0.1192→0.1145|0.1156→0.1148|3.1577→3.8540|
+
+panel 저장81.9% 감소. 최종 표의 CPU 중앙값은 encode10.4%/decode11.1% 감소를
+관측했다. timing 변동은 있고 특히 fsync 속도는 모든 입력에서 개선되지 않았다.
+실제 기존 학습자료는 삭제됐으므로 그 용량/성능이나 모델 생성 속도의 추정치가 아니다.
+초기 탐색 및 중간 코드의3쌍 비교는 별도 기록이고 유리한 수치로 최종 표를 바꾸지 않았다.
+
+panel raw canonical SHA256은 전후 모두
+`e550ba2fb61cc14244d261c4f2cd785b0418de8ea2da2ae78f619aaea50f21e7`이다.
+모든3종 입력에서 내용 hash/복원 값이 일치했다. 최종 after3개 process 각각3종을
+별도 child로 다시 읽어9/9 통과했다. sync 계측은 create-new/write/flush/file sync/
+directory sync/read/검증을 동일하게 포함하며 전원 차단 내구성 실험은 아니다.
+
+측정 실행파일 SHA256:
+
+- before `471de6155e710b61fc656a834644d2b95153c43bb0009264e2617de40f3cbe3a`
+- after `e4df3645137adab249af40390328cfed03abecc060c41674a04347c0337ec782`
+
+원 로그: 로컬 `/tmp/r3-storage-final-{before,after}-{1,2,3}.log`.
+기준 실행파일: `/tmp/replica-storage-baseline`; 측정 source는 기존
+`examples/validate.rs::binary_measure`. 모델/원문/원 로그는 commit하지 않는다.
+
+관련 회귀10개 PASS: codec4, worker IPC1, tokenizer1, checker EOS/error1,
+실제 TINY 평가 파일 생성/재독1, frozen 자료 변경 거부1, 정상 close 및10가지 raw 변조1.
+명령은 `cargo test --locked --offline --features accelerate,test-support`에 각각
+`--lib binary::tests`, `--test runtime rust_child_protocol_failures_timeouts_stderr_and_cancellation`,
+`--test native own_byte_bpe_roundtrip_no_control_promotion_or_truncation`,
+`--bin replica-check harness_model_rows_require_actual_eos_and_keep_failures`,
+`--test training ordinary_qa_ablation_cli_keeps_gold_and_distinguishes_question_from_record`,
+`--bin replica-train repair_rf01_changed_validation_rejected_before_model_or_output`,
+`--bin replica-train state_data_complete_close_and_raw_negative_fixtures`를 지정했다.
+압축/구형 혼합, f64 bits, 부분 frame, 변조, trailing compressed frame 및 누적 확장
+한도를 검증했다. close의 step512는 합성 라벨이며 optimizer/generation0이다.
+관련 all-targets 컴파일도 통과했다. 전체 테스트/품질 평가/추가 학습은 수행하지 않았다.
+
+**STORAGE=PASS; DATA_RESET=EMPTY_CONFIRMED; NEW_SMALL_UPDATES=0;
+NEW_TINY_UPDATES=0; MODEL_QUALITY=NOT_EVALUATED; GOAL1_READY=false.**
+새 파일 없이 기존 Rust codec/하네스/문서를 수정했다.
+
 ## 2026-09-19 프로젝트 JSON 사용 제거 — native serialization
 
 기준 HEAD `ed357919355d170c9130b889acaaefa03809bc3a`의 Rust 소스를 이어서

@@ -164,7 +164,7 @@ impl ByteBpe {
         if bytes.len() > MAX_TOKENIZER_BYTES {
             return Err(token_error("oversized metadata"));
         }
-        let file: TokenizerFile = crate::binary::from_slice(bytes)?;
+        let file: TokenizerFile = crate::binary::from_canonical_slice(bytes)?;
         Self::from_file(file, bytes.to_vec(), hash(bytes))
     }
     fn from_file(file: TokenizerFile, bytes: Vec<u8>, wire_id: String) -> Result<Self> {

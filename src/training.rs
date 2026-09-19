@@ -549,7 +549,7 @@ pub fn evaluate_corpus(
         .write(true)
         .create_new(true)
         .open(output)?;
-    replica_v3::binary::write_record(&mut log, &replica_v3::binary::record!({"header":true,"split":split,"checkpoint_sha256":loaded.manifest.weights_sha256,"split_sha256":split_hash,"limit":limit,"final_heldout":false,"oracle_question_ablation":rephrase || rephrase_field,"oracle_field_task_label":rephrase_field || (single_record && !qa_record),"oracle_record_selection":single_record,"eligible_episodes":episodes.len()}))?;
+    replica_v3::binary::write_value_record(&mut log, &replica_v3::binary::record!({"header":true,"split":split,"checkpoint_sha256":loaded.manifest.weights_sha256,"split_sha256":split_hash,"limit":limit,"final_heldout":false,"oracle_question_ablation":rephrase || rephrase_field,"oracle_field_task_label":rephrase_field || (single_record && !qa_record),"oracle_record_selection":single_record,"eligible_episodes":episodes.len()}))?;
     let mut exact = 0;
     let mut failed = 0;
     let mut groups: BTreeMap<String, [usize; 2]> = BTreeMap::new();
@@ -570,7 +570,7 @@ pub fn evaluate_corpus(
         let count = groups.entry(group).or_default();
         count[0] += usize::from(matched);
         count[1] += 1;
-        replica_v3::binary::write_record(&mut log, &row)?;
+        replica_v3::binary::write_value_record(&mut log, &row)?;
         log.flush()?;
         println!(
             "{split} id={} exact={matched} error={}",
@@ -585,12 +585,12 @@ pub fn evaluate_corpus(
     let mut summary = replica_v3::binary::record!({"summary":true,"split":split,"exact_matches":exact,"denominator":evaluated.len(),"generation_failures":failed,"groups_correct_total":groups,"final_heldout":false,"oracle_question_ablation":rephrase || rephrase_field,"oracle_field_task_label":rephrase_field || (single_record && !qa_record),"oracle_record_selection":single_record});
     summary["diagnostic_score"] = recovery::summarize(&evaluated)?;
     recovery::add_partial_counts(&mut summary, &evaluated, limit, &control);
-    replica_v3::binary::write_record(&mut log, &summary)?;
+    replica_v3::binary::write_value_record(&mut log, &summary)?;
     log.sync_all()?;
     let _ = control.seal_terminal();
     let mut terminal = replica_v3::binary::record!({"terminal":true});
     recovery::add_partial_counts(&mut terminal, &evaluated, limit, &control);
-    replica_v3::binary::write_record(&mut log, &terminal)?;
+    replica_v3::binary::write_value_record(&mut log, &terminal)?;
     log.sync_all()?;
     println!("{summary}");
     control.stop_result()

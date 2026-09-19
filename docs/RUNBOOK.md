@@ -2,6 +2,14 @@
 
 ## Current binary interfaces after the data reset
 
+For a bounded synthetic storage check, build
+`cargo build --locked --offline --release --features accelerate --example validate`
+and run `target/release/examples/validate binary-measure`. It uses temporary files,
+three synthetic record shapes, exact canonical hashes, normal sync/readback and
+fresh-process reads. No model, optimizer, original corpus or user DB is opened.
+Reported CPU timings and physical sync timings are separate; the OS cache is not
+flushed. Temporary benchmark records are removed on normal completion.
+
 Old models, corpora and execution logs were deleted by user instruction. Commands
 below describing old experiment roots are historical and cannot resume them.
 SQLite memory storage remains enabled. Source corpus generation uses R3CORP;

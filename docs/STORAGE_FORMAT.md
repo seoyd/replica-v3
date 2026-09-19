@@ -17,10 +17,10 @@ Serde only maps Rust types to typed values, with no JSON parser or text body.
 | --- | ---: | --- |
 | 0 | 8 | `R3BIN` followed by three zero bytes |
 | 8 | 2 | version1, little endian |
-| 10 | 2 | flags0 |
-| 12 | 8 | payload byte count, little endian |
-| 20 | 32 | SHA256 of typed payload |
-| 52 | variable | typed payload |
+| 10 | 2 | flags0 raw / flags1 lossless Zstd storage |
+| 12 | 8 | stored payload byte count, little endian |
+| 20 | 32 | SHA256 of uncompressed typed payload |
+| 52 | variable | raw typed payload, or raw length u64LE + one Zstd frame |
 
 Tags: null0, false1, true2, unsigned varint3, negative zigzag-varint4,
 IEEE-f32 little-endian bits5, IEEE-f64 bits6, length-prefixed strict UTF-8 string7,
@@ -29,7 +29,29 @@ each map key is length-prefixed UTF-8. Unknown tags/version/flags, noncanonical
 integers, duplicate/unordered keys, invalid UTF-8, truncation, checksum failure,
 trailing bytes, excessive nesting/count/size are rejected. f64 bits including
 negative zero remain exact; model/domain validators still reject nonfinite values
-where required. Limits: payload128MiB, total items1,000,000, nesting64.
+where required. Limits: uncompressed payload128MiB, physical frame128MiB+52,
+total items1,000,000, nesting64. Stream readers enforce the decoded byte and item
+budgets across all records, including compressed records. Extra Zstd frames/tails,
+invalid declared expansion lengths and expansion beyond the budget are rejected.
+
+`to_vec` and `Value::to_vec` retain the original raw canonical encoding byte for
+byte; request/policy/corpus content hashing and worker IPC still use it. IPC and
+standalone tokenizer readers reject storage compression, retaining their existing
+physical byte limits and canonical identity. Storage writers may use flags1:
+array/map frames at least4096 bytes are trial-compressed
+with existing Zstd level1, keeping it only when the stored payload (including its
+8-byte raw-length field) saves approximately12.5% or more. Small values and bare
+bytes stay raw. `to_storage_vec` and `write_record` support generic Rust DTOs;
+`Value::to_storage_vec` and `write_value_record` avoid cloning an already owned
+record. `value_from_slice`/`read_value_records` avoid rebuilding a parsed Value.
+Generic typed readers remain available and apply the same codec validation.
+
+The common diagnostic metadata/panel writers, evaluation row streams and checker
+use these paths. A panel receipt hashes the actual stored bytes; its logical
+content digest remains the raw canonical digest. No checkpoint/tensor, tokenizer
+mapping, SQL schema or domain-specific corpus/cache/control codec was changed.
+Readers from before this storage extension reject flags1; new readers accept both.
+No existing file is silently rewritten and no JSON fallback is introduced.
 
 Single metadata files use `.r3b`; record streams use `.r3rows` and concatenate
 complete frames with no newline separator. Worker transport retains its outer

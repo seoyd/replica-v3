@@ -68,7 +68,7 @@ fn file_hash(path: &Path) -> Result<String> {
 }
 fn write_new(path: &Path, value: &Value) -> Result<()> {
     let mut f = OpenOptions::new().write(true).create_new(true).open(path)?;
-    replica_v3::binary::write_record(&mut f, value)?;
+    replica_v3::binary::write_value_record(&mut f, value)?;
     f.sync_all()?;
     Ok(())
 }
@@ -291,7 +291,7 @@ fn boundaries(files: &[PathBuf]) -> Result<Value> {
     )
 }
 fn evaluation_rows(path: &Path) -> Result<Vec<Value>> {
-    let all: Vec<Value> = replica_v3::binary::read_records(path)?;
+    let all = replica_v3::binary::read_value_records(path)?;
     let terminal = all.last().ok_or("empty evaluation")?;
     if terminal["terminal"] != true
         || terminal["final_evaluation_complete"] != true
@@ -874,7 +874,7 @@ mod tests {
         let write = |row: &Value| {
             let mut bytes = Vec::new();
             for value in [&header, row, &terminal] {
-                replica_v3::binary::write_record(&mut bytes, value).unwrap();
+                replica_v3::binary::write_value_record(&mut bytes, value).unwrap();
             }
             fs::write(&path, bytes).unwrap();
         };

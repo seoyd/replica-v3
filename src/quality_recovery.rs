@@ -524,7 +524,7 @@ fn source_commit() -> Result<String> {
         .to_string())
 }
 fn save(path: &Path, value: &impl Serialize) -> Result<()> {
-    neural::write_new(path, &replica_v3::binary::to_vec(value)?)
+    neural::write_new(path, &replica_v3::binary::to_storage_vec(value)?)
 }
 fn load(path: &Path) -> Result<Frozen> {
     let f: Frozen = replica_v3::binary::from_slice(&neural::read_bounded(path, 16 * 1024 * 1024)?)?;
@@ -542,7 +542,7 @@ fn scene(e: &Episode) -> &str {
 }
 fn rows(path: &Path) -> Result<(Value, Vec<Value>)> {
     let bytes = neural::read_bounded(path, 16 * 1024 * 1024)?;
-    let values: Vec<Value> = replica_v3::binary::records_from_slice(&bytes)?;
+    let values = replica_v3::binary::value_records_from_slice(&bytes)?;
     let header = values
         .first()
         .filter(|v| v["header"] == true)
@@ -1433,14 +1433,14 @@ fn replay(
     ledger["working_source_manifest_hash"] = record!(source_id);
     ledger["model_tensor_content_digest"] = record!(l.model.weights_content_id()?);
     ledger["reference_raw_hash"] = record!(reference.map(file_hash).transpose()?);
-    replica_v3::binary::write_record(&mut out, &ledger)?;
+    replica_v3::binary::write_value_record(&mut out, &ledger)?;
     let mut rows = Vec::new();
     for e in &cases {
         if control.check("panel_next_case").is_err() {
             break;
         }
         let row = evaluate_one(&l, e, &e.request, control);
-        replica_v3::binary::write_record(&mut out, &row)?;
+        replica_v3::binary::write_value_record(&mut out, &row)?;
         out.flush()?;
         rows.push(row);
         if control.check("case_recorded").is_err() {
@@ -1520,7 +1520,7 @@ fn replay(
     summary["aba_equal"] = record!(aba_equal);
     let _ = control.check("before_evaluation_record");
     add_partial_counts(&mut summary, &rows, cases.len(), control);
-    replica_v3::binary::write_record(&mut out, &summary)?;
+    replica_v3::binary::write_value_record(&mut out, &summary)?;
     out.sync_all()?;
     let _ = control.check("evaluation_recorded");
     if command_terminal {
@@ -1529,7 +1529,7 @@ fn replay(
     let mut terminal = record!({"terminal":true,"control":control.receipt()});
     terminal["command_terminal"] = record!(command_terminal);
     add_partial_counts(&mut terminal, &rows, cases.len(), control);
-    replica_v3::binary::write_record(&mut out, &terminal)?;
+    replica_v3::binary::write_value_record(&mut out, &terminal)?;
     out.sync_all()?;
     println!("{summary}");
     if differences > 0 {
@@ -3491,7 +3491,7 @@ fn skill_run(
                 "ids":indices.iter().map(|i|&episodes[*i].id).collect::<Vec<_>>(),"pools":["anchor","anchor","anchor","anchor","focus","focus","focus","focus"],
                 "input_tokens":batch.tokens,"target_tokens":targets,"consumed_input_tokens":state.consumed_tokens-start_input,"consumed_target_tokens":state.target_tokens-start_target,
                 "ce":ce,"objective":objective,"first_target_weight":c.first_target_weight,"gradient_norm":norm,"update_norm":delta,"rss_kib":control.last_rss_kib,"elapsed_seconds":elapsed_before+control.start.elapsed().as_secs_f64()});
-            replica_v3::binary::write_record(&mut log, &row)?;
+            replica_v3::binary::write_value_record(&mut log, &row)?;
             log.flush()?;
             if (n + 1).is_multiple_of(32) {
                 println!(
@@ -4597,7 +4597,7 @@ fn progress_arm(
                 "sampler_state":sampler,"indices":indices,"ids":indices.iter().map(|i|&episodes[*i].id).collect::<Vec<_>>(),
                 "input_tokens":b.tokens,"target_tokens":targets,"consumed_input_tokens":state.consumed_tokens-start_input,"consumed_target_tokens":state.target_tokens-start_target,
                 "ce":ce,"objective":objective,"gradient_norm":norm,"update_norm":delta,"rss_kib":control.last_rss_kib,"elapsed_seconds":control.start.elapsed().as_secs_f64()});
-            replica_v3::binary::write_record(&mut log, &row)?;
+            replica_v3::binary::write_value_record(&mut log, &row)?;
             log.flush()?;
             if (n + 1).is_multiple_of(32) {
                 println!(
@@ -4924,7 +4924,7 @@ fn verify_score(recorded: &Value, derived: &Value) -> Result<()> {
     Ok(())
 }
 fn record_bound_panel(path: &Path, value: &Value, receipts: &mut Value) -> Result<()> {
-    let bytes = replica_v3::binary::to_vec(value)?;
+    let bytes = value.to_storage_vec()?;
     neural::write_new(path, &bytes)?;
     receipts[path.file_name().unwrap().to_str().unwrap()] =
         record!({"sha256":neural::hash(&bytes),"bindings":value["bindings"]});
@@ -5243,7 +5243,7 @@ fn progress_close_to(
                 return Err(Error::Corrupt("actual draw trace changed".into()));
             }
             let before = trace.len();
-            for row in replica_v3::binary::read_records::<Value>(&segment.join("trace.r3rows"))? {
+            for row in replica_v3::binary::read_value_records(&segment.join("trace.r3rows"))? {
                 let n = trace.len();
                 let ids: Vec<usize> = replica_v3::binary::from_value(p["tape"][n][0].clone())?;
                 if row["new_update"] != n + 1
@@ -5929,7 +5929,7 @@ fn progress_exposure(
         {
             return Err(Error::Corrupt("progress trace provenance".into()));
         }
-        for row in replica_v3::binary::read_records::<Value>(&path.join("trace.r3rows"))? {
+        for row in replica_v3::binary::read_value_records(&path.join("trace.r3rows"))? {
             let n = row["new_update"]
                 .as_u64()
                 .filter(|n| *n > 0 && *n <= 1024)
@@ -6407,7 +6407,7 @@ fn skill_diagnose(
         ));
     }
     let tape: Vec<(Vec<usize>, u64)> = replica_v3::binary::from_value(policy["tape"].clone())?;
-    let trace: Vec<Value> = replica_v3::binary::read_records(&run.join("trace.r3rows"))?;
+    let trace = replica_v3::binary::read_value_records(&run.join("trace.r3rows"))?;
     let framed = samples(&train, &l.tokenizer, 512)?;
     let mut seen = BTreeSet::new();
     let (mut inputs, mut targets) = (0u64, 0u64);
@@ -6784,7 +6784,7 @@ fn schedule_config(
     Ok(c)
 }
 fn read_metadata(path: &Path) -> Result<Value> {
-    Ok(replica_v3::binary::from_slice(&neural::read_bounded(
+    Ok(replica_v3::binary::value_from_slice(&neural::read_bounded(
         path,
         16 * 1024 * 1024,
     )?)?)
@@ -7017,7 +7017,7 @@ fn schedule_report(
     Ok(())
 }
 fn trace(path: &Path) -> Result<Vec<Value>> {
-    Ok(replica_v3::binary::records_from_slice(&neural::read_bounded(path, 16 * 1024 * 1024)?)?)
+    Ok(replica_v3::binary::value_records_from_slice(&neural::read_bounded(path, 16 * 1024 * 1024)?)?)
 }
 fn worker_receipt(
     binary: &Path,
@@ -8033,7 +8033,7 @@ fn arm_run(
             }
             let stats: BTreeMap<_,_>=groups.into_iter().map(|(k,v)|(k,record!({"gradient_norm":v[0].sqrt(),"update_norm":v[1].sqrt(),"weight_norm":v[2].sqrt(),"update_to_weight":v[1].sqrt()/v[2].sqrt().max(1e-30)}))).collect();
             let row = record!({"arm":arm,"new_update":n+1,"cumulative_model_step":state.step,"optimizer_step":state.step,"schedule_step":state.step-c.budget_start_step,"lr":c.learning_rate(state.step),"indices":indices,"ids":indices.iter().map(|&i|&episodes[i].id).collect::<Vec<_>>(),"sampler_state":sampler,"input_tokens":b.tokens,"target_tokens":targets,"ce":ce,"objective":objective,"first_target_weight":c.first_target_weight,"grad_norm":norm,"update_norm":delta,"parameter_groups":stats,"elapsed_seconds":control.start.elapsed().as_secs_f64(),"rss_kib":control.last_rss_kib});
-            replica_v3::binary::write_record(&mut log, &row)?;
+            replica_v3::binary::write_value_record(&mut log, &row)?;
             log.flush()?;
             control.stop_result()?;
             if n + 1 == 20 && arm == "C" {
@@ -8240,7 +8240,7 @@ mod tests {
             }
             let mut trace = Vec::new();
             for n in 0..512 {
-                replica_v3::binary::write_record(&mut trace,&record!({"new_update":n+1,"indices":[0],"sampler_state":17,"input_tokens":1,"target_tokens":1,
+                replica_v3::binary::write_value_record(&mut trace,&record!({"new_update":n+1,"indices":[0],"sampler_state":17,"input_tokens":1,"target_tokens":1,
                 "ids":["train/0"],"optimizer_step":n+1,"lr_bits":progress_lr(arm,n+1).unwrap().to_bits(),"ce":0.,"objective":0.,"gradient_norm":0.,"update_norm":0.})).unwrap();
             }
             std::fs::write(segment.join("trace.r3rows"), trace).unwrap();
