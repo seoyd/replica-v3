@@ -1,5 +1,22 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: data reset completed; source migration pending
+
+On 2026-09-19 the user authorized deleting all learned artifacts, corpora, raw
+user data, long-term memory and execution logs, retaining Rust source and Git
+history. The local artifacts, logs and build output directories have been removed.
+No default operating memory directory existed. The protocols below are historical
+and do not authorize restoring their deleted inputs or starting another old arm.
+No new training or quality improvement occurred during this reset.
+
+The user also requested removal of JSON use in product, training and tools, and
+direct JSON/SQLite dependencies, permitting internal transitive JSON dependencies
+of generic libraries. That source migration is still pending; existing Rust/Cargo
+files remain unchanged. Reuse the current native implementation when implementing
+it. Previous storage-freeze instructions do not override the new authorization.
+Data reset, dependency removal, fresh training and model quality require separate
+verification. Do not describe deletion alone as a completed binary-only product.
+
 ## Closed at8: user-authorized retention retry01 after the save-reason repair
 
 Retry01 ran from execution HEAD49f0e6e693f8dc6b43b6b85a458e5f0877ef924a with

@@ -7,5 +7,6 @@ __pycache__/
 /imsi1.md
 /imsi2.md
 /artifacts/
+/docs/logs/
 *.safetensors
 *.inference.lock

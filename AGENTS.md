@@ -4,6 +4,15 @@
 
 Continue the existing repository; preserve user changes and original artifacts.
 The user's current instructions take precedence over this map.
+On 2026-09-19 the user explicitly authorized deletion of all local learned data,
+corpus, checkpoints, original user data, long-term memory and execution logs,
+while retaining Rust source and Git history. That data reset is complete.
+Historical artifact paths below and in linked documents are no longer available.
+Do not resume an old experiment, reconstruct its receipts or restore deleted data
+from Git as part of ordinary work. The requested removal of product/training/tool
+JSON use and direct JSON/SQLite dependencies remains pending implementation;
+transitive JSON dependencies inside generic libraries are permitted.
+The earlier storage freeze does not restrict that explicitly requested removal.
 Permanent acceptance criteria: `docs/GOAL1_CONTRACT.md`.
 Active stages, budgets and stop conditions: `docs/QUALITY_RECOVERY_PLAN.md`.
 Observed results and historical failures: `docs/EXPERIMENT_STATUS.md`.

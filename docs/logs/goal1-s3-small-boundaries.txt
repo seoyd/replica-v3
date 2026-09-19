@@ -1,7 +1,0 @@
-NUMERIC_ONLY profile=NATIVE_TRPP_G1_SMALL parameters=9546432 tokenizer=c4af60f51bdd980d6a82b7de35edf3ed15cee9824a5338311fc0bfdd41730dad checkpoint=6888e5990dfa93504bf250ba169f4a95361555f4b20d7d81a55493bcd4dd9e21 backend=CPU dtype=F32
-tokens=255 max_logit_error=0 retained=[255, 255, 255, 255, 255, 255] kv_bytes=1175040 max_attention_tensor_bytes=1036320 elapsed_s=0.110
-tokens=256 max_logit_error=0 retained=[256, 256, 256, 256, 256, 256] kv_bytes=1179648 max_attention_tensor_bytes=1048576 elapsed_s=0.219
-tokens=257 max_logit_error=0.0000012516975 retained=[256, 256, 256, 256, 256, 257] kv_bytes=1180416 max_attention_tensor_bytes=1048576 elapsed_s=0.330
-tokens=513 max_logit_error=0.0000011920929 retained=[256, 256, 256, 256, 256, 513] kv_bytes=1377024 max_attention_tensor_bytes=2097152 elapsed_s=0.585
-tokens=1024 max_logit_error=0 retained=[256, 256, 256, 256, 256, 1024] kv_bytes=1769472 max_attention_tensor_bytes=4194304 elapsed_s=1.329
-tokens=2048 max_logit_error=0 retained=[256, 256, 256, 256, 256, 2048] kv_bytes=2555904 max_attention_tensor_bytes=8388608 elapsed_s=3.962

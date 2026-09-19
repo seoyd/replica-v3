@@ -1,8 +1,0 @@
-   Compiling replica-v3 v0.1.0 (/Users/seo/Projects/Replica-v3)
-    Finished `release` profile [optimized] target(s) in 0.38s
-     Running `target/release/examples/query_plan`
-CROSS JOIN: SCAN record_fts VIRTUAL TABLE INDEX 32:M1
-CROSS JOIN: SEARCH m USING INTEGER PRIMARY KEY (rowid=?)
-CROSS JOIN: CORRELATED SCALAR SUBQUERY 1
-CROSS JOIN: SEARCH v USING INDEX meta_slot (slot=? AND id<?)
-CROSS JOIN: returned=65 ms=5.954584
