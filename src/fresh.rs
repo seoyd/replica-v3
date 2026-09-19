@@ -33,6 +33,10 @@ pub enum Command {
     StudyReport {
         #[arg(long)]
         root: PathBuf,
+        /// Read a closed study using its exact retained executable identity.
+        /// This grants no permission to resume training or observations.
+        #[arg(long)]
+        frozen_executable: Option<PathBuf>,
     },
     Prepare {
         #[arg(long)]
@@ -965,7 +969,10 @@ pub fn execute(command: Command) -> Result<()> {
     match command {
         Command::StudyPrepare { parent, output, selector } => study_prepare(&parent, &output, selector),
         Command::StudyObserve { root } => study_observe(&root),
-        Command::StudyReport { root } => study_report(&root),
+        Command::StudyReport {
+            root,
+            frozen_executable,
+        } => study_report(&root, frozen_executable.as_deref()),
         Command::Prepare { output } => prepare(&output, false),
         Command::Run { root } => run(&root, false),
         Command::Report { root } => report(&root),
@@ -1024,10 +1031,17 @@ struct Segment {
     stop: String,
 }
 fn plan_read(root: &Path) -> Result<Plan> {
+    plan_read_bound(
+        root,
+        &source_digest()?,
+        &file_hash(&std::env::current_exe()?)?,
+    )
+}
+fn plan_read_bound(root: &Path, source: &str, executable: &str) -> Result<Plan> {
     let p: Plan = read(&root.join("plan.r3b"))?;
     if p.revision != REVISION
-        || p.source != source_digest()?
-        || p.binary != file_hash(&std::env::current_exe()?)?
+        || p.source != source
+        || p.binary != executable
         || p.sampler != "bucket-base-permutation-v1"
         || p.order.len() != 8
         || p.train_order != digest(&p.order)?
@@ -3133,6 +3147,9 @@ fn study_prepare(parent: &Path, output: &Path, selector: bool) -> Result<()> {
     Ok(())
 }
 fn study_read(root: &Path) -> Result<Study> {
+    study_read_bound(root, None)
+}
+fn study_read_bound(root: &Path, frozen_executable: Option<&Path>) -> Result<Study> {
     let s: Study = read(&root.join("study.r3b"))?;
     let names = match s.schema {
         2 => ["C-REPEAT", "P-PHRASE"],
@@ -3149,9 +3166,10 @@ fn study_read(root: &Path) -> Result<Study> {
     {
         return Err(bad("study registration incomplete/changed"));
     }
+    let executable = frozen_executable.map_or_else(std::env::current_exe, |p| Ok(p.to_path_buf()))?;
     if ![2, 3].contains(&s.schema)
-        || s.source != source_digest()?
-        || s.binary != file_hash(&std::env::current_exe()?)?
+        || (frozen_executable.is_none() && s.source != source_digest()?)
+        || s.binary != file_hash(&executable)?
         || s.parent_plan != file_hash(&s.parent.join("plan.r3b"))?
         || s.parent_file != file_hash(&s.parent_checkpoint)?
         || s.diagnostic_hash != file_hash(&root.join("diagnostic.r3b"))?
@@ -3414,6 +3432,13 @@ fn study_observe(root: &Path) -> Result<()> {
 }
 fn study_usage(root: &Path, require_observation: bool) -> Result<(f64, usize, usize)> {
     let s = study_read(root)?;
+    study_usage_bound(root, require_observation, &s)
+}
+fn study_usage_bound(
+    root: &Path,
+    require_observation: bool,
+    s: &Study,
+) -> Result<(f64, usize, usize)> {
     let ready: binary::Value = read_confirmed(&root.join("study-ready.r3b"))?;
     let mut elapsed = ready["elapsed_seconds"]
         .as_f64()
@@ -3466,7 +3491,7 @@ fn study_usage(root: &Path, require_observation: bool) -> Result<(f64, usize, us
     }
     for arm in &s.tie_break {
         let a = root.join(arm);
-        let p = plan_read(&a)?;
+        let p = plan_read_bound(&a, &s.source, &s.binary)?;
         for segment in history(&a, &p)? {
             if require_observation && segment.phase.as_deref() == Some("Failed") {
                 return Err(bad("study arm command failed; study blocked"));
@@ -3478,15 +3503,15 @@ fn study_usage(root: &Path, require_observation: bool) -> Result<(f64, usize, us
     }
     Ok((elapsed, generation, teacher))
 }
-fn study_report(root: &Path) -> Result<()> {
-    let s = study_read(root)?;
-    let (elapsed, generation, teacher) = study_usage(root, false)?;
+fn study_report(root: &Path, frozen_executable: Option<&Path>) -> Result<()> {
+    let s = study_read_bound(root, frozen_executable)?;
+    let (elapsed, generation, teacher) = study_usage_bound(root, false, &s)?;
     let mut results = BTreeMap::new();
     let mut eligible = vec![];
     let mut all_endpoints = true;
     for arm in &s.tie_break {
         let a = root.join(arm);
-        let p = plan_read(&a)?;
+        let p = plan_read_bound(&a, &s.source, &s.binary)?;
         let h = history(&a, &p)?;
         let last = h.last().ok_or_else(|| bad("arm has not run"))?;
         if last.resume || last.phase.as_deref() != Some("Finished") {
@@ -3571,7 +3596,7 @@ fn study_report(root: &Path) -> Result<()> {
     });
     println!(
         "STUDY_REPORT {}",
-        binary::record!({"results":results,"paired":comparisons,"selector":selector_comparison,"arm_order":s.tie_break,"candidate":eligible.first().map(|x|&x.0),"generation":generation,"teacher":teacher,"active_seconds":elapsed,"result":if !all_endpoints{"STUDY_INCONCLUSIVE_UNEQUAL_BUDGET"}else if eligible.is_empty(){"STUDY_COMPLETE_QUALITY_FAIL"}else{"DEVELOPMENT_PASS_FINAL_NOT_RUN"},"FINAL200":"NOT_OPENED","GOAL1_READY":false})
+        binary::record!({"execution_source":s.source,"execution_binary":s.binary,"report_source":source_digest()?,"report_binary":file_hash(&std::env::current_exe()?)?,"read_only_frozen_execution":frozen_executable.is_some(),"results":results,"paired":comparisons,"selector":selector_comparison,"arm_order":s.tie_break,"candidate":eligible.first().map(|x|&x.0),"generation":generation,"teacher":teacher,"active_seconds":elapsed,"result":if !all_endpoints{"STUDY_INCONCLUSIVE_UNEQUAL_BUDGET"}else if eligible.is_empty(){"STUDY_COMPLETE_QUALITY_FAIL"}else{"DEVELOPMENT_PASS_FINAL_NOT_RUN"},"FINAL200":"NOT_OPENED","GOAL1_READY":false})
     );
     if inventory(&s.parent)? != s.inventory {
         return Err(bad("parent preservation inventory mismatch"));
@@ -3629,7 +3654,7 @@ fn audit_updates(root: &Path, p: &Plan, h: &[Segment]) -> Result<binary::Value> 
                     phrase_order.push(phrase);
                     flips += usize::from(selected >= 2 * episodes.len());
                     if !(2..=4).contains(&bucket) {
-                        unchanged.push(framed[selected].tokens.clone());
+                        unchanged.push(digest(&framed[selected].tokens)?);
                     }
                     target_order
                         .push(framed[selected].tokens[framed[selected].response_start..].to_vec());
@@ -3675,7 +3700,7 @@ fn audit_updates(root: &Path, p: &Plan, h: &[Segment]) -> Result<binary::Value> 
         return Err(bad("actual selector exposures"));
     }
     Ok(
-        binary::record!({"updates":steps,"case_order":digest(&order)?,"target_order":digest(&target_order)?,"phrase_order":digest(&phrase_order)?,"unchanged_five_tasks":digest(&unchanged)?,"selector_draws":flips,"committed_input":input,"committed_target":target,
+        binary::record!({"updates":steps,"case_order":digest(&order)?,"target_order":digest(&target_order)?,"phrase_order":digest(&phrase_order)?,"unchanged_five_tasks":digest(&unchanged)?,"unchanged_digest_kind":"ordered-native-token-row-sha256-v1","selector_draws":flips,"committed_input":input,"committed_target":target,
         "actual_input":actual_input,"actual_target":actual_target,"discarded_input":actual_input-input,"discarded_target":actual_target-target,"padding":padding,
         "case_count":counts.len(),"case_exposure_hash":digest(&counts)?,"original_draws":counts.iter().map(|x|x[0]).sum::<usize>(),"variant_draws":counts.iter().map(|x|x[1]).sum::<usize>()}),
     )
@@ -3684,6 +3709,25 @@ fn audit_updates(root: &Path, p: &Plan, h: &[Segment]) -> Result<binary::Value> 
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+    #[test]
+    fn fresh_exposure_digest_preserves_order_above_aggregate_codec_limit() {
+        // The actual two-epoch five-task report contains more than one million
+        // tokens. Keep the codec limit and bind each bounded native row first.
+        let rows: Vec<Vec<u32>> = (0..10_240).map(|n| vec![n as u32; 128]).collect();
+        assert!(digest(&rows).is_err());
+        let mut hashes: Vec<_> = rows.iter().map(digest).collect::<Result<_>>().unwrap();
+        let bound = digest(&hashes).unwrap();
+        let record = binary::record!({"unchanged_five_tasks":bound,"rows":rows.len()});
+        let bytes = binary::to_storage_vec(&record).unwrap();
+        assert_eq!(binary::from_slice::<binary::Value>(&bytes).unwrap(), record);
+        hashes.swap(0, 1);
+        assert_ne!(digest(&hashes).unwrap(), bound);
+        hashes.swap(0, 1);
+        let mut changed = rows[0].clone();
+        changed[0] += 1;
+        hashes[0] = digest(&changed).unwrap();
+        assert_ne!(digest(&hashes).unwrap(), bound);
+    }
     #[test]
     fn selector_involution_labels_balance_and_negative_cases() {
         let (train, ms) = generate(256, 0, 20260919).unwrap();

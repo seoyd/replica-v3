@@ -2,6 +2,10 @@
 
 ## Selector consistency study
 
+The2026-09-19 study is closed: C-KEEP completed2048 updates; S-SELECT stopped at1024
+with QUALITY_REGRESSION_PRIMARY. Both have resume=false. These commands document
+that execution and do not authorize another arm, resume or use of the unspent budget.
+
 Use the preserved completed P-PHRASE6144 root as an explicit parent; never change its
 plan, completion records or resume=false. Build with the installed stable toolchain,
 locked/offline/accelerate and one compute thread. Run the directly budgeted FX04/FX05
@@ -25,6 +29,16 @@ blocked. Last-step EvaluationPending resumes evaluation with optimizer0. Reports
 read the original records and do not create missing evidence. `fresh study-report
 --root NEW_STUDY` recounts panels, selector pairs, actual exposure and cumulative usage.
 Only a qualifying final endpoint permits the existing independent final200/S5/S6 flow.
+
+After an explicitly separate report-only source repair, use `fresh study-report
+--root STUDY --frozen-executable RETAINED_LEARNING_EXECUTABLE`. It hashes the retained
+binary against the immutable study registration and verifies the original plan,
+native checkpoints, raw and command chain. Both arms must already be closed. The
+output distinguishes execution and reporting identities; nothing is rewritten.
+The option exists only on study-report and grants no training/observation permission.
+The current-source default still rejects mismatched source/binary. Five-task exposure
+hashing uses ordered bounded native token-row digests, preserving codec limits even
+when the full token stream exceeds the aggregate metadata item bound.
 
 ## Exposure and phrasing study
 
