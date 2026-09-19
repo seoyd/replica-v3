@@ -1,5 +1,22 @@
 # 진단 및 구현 상태
 
+## Retention retry01 사전 검증 — 사용자 요청에 따른 별도 재실행
+
+2026-09-19 사용자가 오류 수정 후 재실행을 명시적으로 요청했다. 저장 사유를
+고친 source c2ce9c3ce1c456b54702ee6611f26157794836e1을 유지한다. 기존 실패의
+1회와 step24311은 그대로 보존하고 A75-R24310에서 새 등록 한 번만 진행한다.
+새 root는 `artifacts/retention-first-retry01-20260919/`이며 원래 Q4/R2/T2,
+최대128회,8/16/32 보존 검사와64/128 연장·중단 기준은 그대로다.
+
+현재 source의 관련 quick19명령/25테스트가 모두 PASS했다. 저장 사유의 실제
+native writer→새 process loader, 발행 sync 실패와 모든 조상 command, 부분 평가
+재개가 포함된다. 로그는 새 root의 `quick.log`와 `quick/`에 있다. 신규 TINY53,
+지난 실행61과 합쳐114/128; 신규 SMALL0. 원본1191파일과 기존 실패46파일의
+SHA256 일치를 재확인했다. 원본 T32/C512·실패 run의 재학습/재개는 하지 않는다.
+
+이 절은 실행 전 사전 검증이다. 실제 SMALL 결과·사용량은 종료 후 따로 기록하며
+코드 PASS가 보존/새 능력/H3/S4/Goal1 PASS라는 뜻은 아니다.
+
 ## P5 최종 — 경계 수리 PASS, R-REPLAY는 첫1회 후 실행 결함으로 종료
 
 R3-RETENTION-FIRST-1.0 / 2026-09-19. **RESULT=PARTIAL.**

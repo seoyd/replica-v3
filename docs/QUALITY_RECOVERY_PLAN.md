@@ -1,5 +1,24 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: user-authorized retention retry01 after the save-reason repair
+
+On 2026-09-19 the user explicitly requested another execution after correcting
+the error. This authorizes one separate retry01 from the same A75-R24310 parent,
+not resume of the failed step24311 run. The original terminal, command, checkpoint,
+raw and consumed update1 remain immutable. Use the corrected candidate
+c2ce9c3ce1c456b54702ee6611f26157794836e1 and a new registered root under
+artifacts/retention-first-retry01-20260919/. No model/trainer change accompanies it.
+
+The retry keeps Q4/R2/T2, the exact native pools/tape, LR1e-4, loss/first-target8,
+Adam/clock, tokenizer, F32/backend and all retention gates specified below.
+The new attempt has at most128 SMALL updates including first1/fresh resume,
+generations4096, diagnostic forwards256/backwards8, command1800s/model wall7200s
+and cleanup120s reservations. Keep prior costs separate; related TINY reruns plus
+the previous61 remain below the original128 limit. No further automatic attempt
+or budget extension follows a new failure. Verify corrected-source direct checks
+before freezing the source/binary and registering the attempt. Record actual
+counts, saved native identities and quality stops independently from code PASS.
+
 ## Closed after execution failure at1: R3-RETENTION-FIRST-1.0
 
 The single R-REPLAY used source56f3f0eb3029dc549eee4cfd3bd052ffc4cb6243.
