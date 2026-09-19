@@ -1,6 +1,11 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: bounded learning-rate intervention from P6144
+## Closed: bounded learning-rate intervention from P6144
+
+Completed1280 updates at7424: primary330/512, transfer60/128, flipped35/192,
+both0/192, generation errors0. The matched LR3e-5 control was366/73/33/2.
+Stop NO_FURTHER_PROGRESS and exhausted optimizer budget; resume=false. LR9e-5
+is not adopted. The native endpoint, original raw and failed decisions are preserved.
 
 The user's continuing one-variable authorization permits this new experiment;
 the old paired/follow-through/first-target4 failures remain closed and read-only.

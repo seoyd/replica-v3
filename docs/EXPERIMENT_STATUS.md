@@ -1,5 +1,55 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Fixed LR9e-5 completed; no joint progress
+
+EXECUTED_THIS_RUN on source `58a8a3bd98174b56bc05372a9cad8193995bfa3f`.
+All1280 registered SMALL updates completed from P6144 to7424 with the same native
+parent/Adam/data/tape and coefficient1; constant LR3e-5→9e-5 was the sole learning
+intervention. The first step had identical CE0.3104520440 and gradient norm2.01995113
+to control, while actual delta0.04843216 versus0.01614407 confirmed the LR path.
+
+| Absolute step | New updates | Train64 | Primary512 | Transfer128 | Flipped192 | Both192 |
+|---|---:|---:|---:|---:|---:|---:|
+| 6400 | 256 | 43 | 342 | 63 | 13 | 0 |
+| 7424 | 1280 | 45 | 330 | 60 | 35 | 0 |
+
+At matched7424 the retained LR3e-5 control was primary366/512, transfer73/128,
+flip33/192, both2/192. LR9e-5 original51/192, same output172/192, every C/D/E
+both0; primary buckets `[57,60,24,17,10,53,45,64]`, transfer
+`[7,7,1,0,3,14,12,16]`. Screens at32/64/128/768 were45/42/47/44 out of64;
+flip24 scores0/2/1/0. All2144 new generation rows had EOS and errors0.
+This LR is not adopted. It reduced retention and did not improve joint selection;
+the underlying cause remains unresolved. No further LR sweep is registered.
+
+Actual input2,195,433/target157,500, discarded0/0, padding892,783;
+10,240 draws,1280 per task,5120 each familiar/P phrase. New generation2160
+including P16, teacher2144, active accounting1562.780943332s. A real900s deadline
+left step6912 in EvaluationPending, native saved, TIME_BUDGET only,1183
+generations/1182 teachers in that segment. A fresh process completed the pending
+evaluation before512 remaining updates; final segment961 generations/962 teachers.
+Pure `paired-report` exit0 verified raw/native/teachers/cursors/LR and usage.
+Final state Finished, stop NO_FURTHER_PROGRESS, resume=false; the training receipt
+also records BUDGET_REACHED. Both reasons are retained. No UNKNOWN/cancel/numeric
+or storage failure. Peak sampled RSS1,489,200KiB is not an S6 benchmark.
+Direct TINY29/399/399 and scalar optimizer0 are separate.
+
+Retained executable `artifacts/lr9e5-20260920-executable`, SHA256
+`5ec8c779b1eabc8495aae63248e180254eccbc41bd0eda90791af97daa1fbe28`;
+code digest `7ffa0ff8a1a266c1261f3d81bb79b3f9c99a178b12c2f9b5f350ef00c5283e85`;
+policy `917cb8155feba14c0db8408ff0a2e4f89827600284cf1ab05dc38a913e18c9e7`.
+Final native `artifacts/lr9e5-20260920/ADJACENT/segment-0002/final`, physical
+SHA256 `3f7bdd1191cd851722a63c6088d527df4dc4b5111bd9a1d7c26b6e305fdfbb25`,
+model hash `5d6d8d29ce3ab4199875d2a4aa79c78bc5d1e7fe029c0ace5318ff29334ad434`.
+Its arm contains bound raw/teachers/decisions; input equality proof, test/source/
+binary hashes, candidate.patch, command logs and final recount are in
+`artifacts/lr9e5-20260920-evidence/`. Originals remain unchanged and unpublished.
+
+CODE_VERDICT=IMPLEMENTER_TESTED_PASS; LEARNING_EXECUTION=COMPLETE;
+DEVELOPMENT_JOINT_PASS=false; FINAL200=NOT_CREATED/NOT_OPENED;
+S4/S5/S6=NOT_RUN_PRECONDITION_FAILED; GOAL1_READY=false; GOAL1_ACCEPTED=false.
+Independent current review remains pending. The continuing user authorization
+permits the next evidence-based single-variable experiment; no closed run resumes.
+
 ## 2026-09-20 LR-only research — direct verification before SMALL
 
 The next bounded intervention uses the same P6144 parent/Adam/native data/tape
