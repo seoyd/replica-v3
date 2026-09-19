@@ -3,6 +3,10 @@
 ## Exposure and phrasing study
 
 Use a frozen `replica-train` built with locked/offline Accelerate and thread1.
+The2026-09-19 C/P study is closed at each2048 updates, with development gate failure.
+Use its read-only report commands; do not resume either closed arm or register an
+unapproved replacement. The command descriptions below document the executed path.
+
 `fresh study-prepare --parent PARENT_ROOT --output NEW_STUDY` verifies native
 weights/Adam/policy and all historical raw, records preservation hashes, creates
 question-only diagnostic data and registers C-REPEAT/P-PHRASE. It never reopens

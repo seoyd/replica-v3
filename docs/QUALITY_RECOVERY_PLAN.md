@@ -2,6 +2,15 @@
 
 ## Active: exposure and question-phrasing comparison
 
+Closed at each2048 new updates on2026-09-19. C primary425/512, transfer44/128;
+P primary425/512, transfer79/128, both generation errors0. Development gate FAILED,
+candidate=null, final200 NOT_OPENED; S5/S6 NOT_RUN_PREREQUISITE. Both arms end at
+absolute6144 with BUDGET_REACHED/resume=false. The policy below records the completed
+comparison and authorizes no further learning or replacement arm. Last durable is
+each arm's `segment-0003/final` under `artifacts/fresh-exposure-phrase-20260919/`.
+Source e97e2c665c5de29a1a6a84b85864016406f92cf3; EXPERIMENT_STATUS records raw recount,
+actual exposure/token/call usage, parameter updates and endpoint hashes.
+
 R3-FRESH-EXPOSURE-PHRASE-1.0, source reference d126aff35d85cebd1bf2b40bc6bc0a5943a3084b,
 baseline report a8376ff03ced939710f946609170d2fb6b798452. Preserve the completed
 fresh4096 run, all native source data, Adam/tokenizer and original raw observations.

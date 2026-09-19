@@ -1,5 +1,188 @@
 # 진단 및 구현 상태
 
+## 2026-09-19 Exposure/phrase study — G4/G5 완료, 개발 품질 미달
+
+**EXECUTED_THIS_RUN / DERIVED_CURRENT_RAW:** C-REPEAT와 P-PHRASE를 각각2048회
+실제로 학습했다. 두 군 모두 absolute6144에서 BUDGET_REACHED/resume=false로 닫혔다.
+판정은 **STUDY_COMPLETE_QUALITY_FAIL**이다. source 수리와 bounded 비교 실행은
+완료됐지만 개발 공동 gate는 실패했다. final200 NOT_OPENED, S4 미통과,
+S5/S6 NOT_RUN_PREREQUISITE, GOAL1_READY=false, GOAL1_ACCEPTED=false다.
+자동 연장·세 번째 군·재초기화·추가 자료·추가 LR 탐색은 실행하지 않았다.
+
+SOURCE_SHA=`e97e2c665c5de29a1a6a84b85864016406f92cf3`.
+이 commit을 origin/main에 정상 push하고 remote 전체 SHA 일치 확인 후 학습했다.
+candidate diff는 `git diff a8376ff03ced939710f946609170d2fb6b798452 e97e2c665c5de29a1a6a84b85864016406f92cf3`.
+실행 source digest와 고정 binary는 아래 G0–G3 identity 그대로이며 학습 도중
+source/test/binary/tokenizer/data/policy 변경0이다. source 변경은 기존 fresh/trainer/
+RunControl/publisher와 직접 tests/checker에 한정했다. 이 절은 별도 report-only commit이다.
+독립 수용 검토는 NOT_RUN이며 구현자의 검산을 독립 승인으로 부르지 않는다.
+
+### 같은 endpoint의 정상 생성 결과
+
+normal logits→greedy→EOS→strict UTF-8, 전체 답변과 인용 exact다.
+각 모델의 train/primary/transfer가 같은 step·weights에 묶였고 raw 재채점이 일치했다.
+본문/인용 지표는 보조 지표이며 전체 정답을 대체하지 않는다. generation errors0은
+EOS/생성/strict decode 오류0이라는 뜻이다. 틀린 본문·잘못된 인용은 오답에 포함한다.
+
+| model / panel | full | body | citation | base4 | EOS | errors | teacher CE |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| parent4096 train64 |55|56|58|9/16|64|0|.074903241|
+| C6144 train64 |58|59|62|11/16|64|0|.038898884|
+| P6144 train64 |58|59|61|12/16|64|0|.035539381|
+| parent4096 primary512 |392|419|439|65/128|512|0|.081706510|
+| C6144 primary512 |425|440|454|74/128|512|0|.051300537|
+| P6144 primary512 |425|444|455|81/128|512|0|.050290101|
+| parent4096 transfer128 |40|73|51|6/32|128|0|.744842450|
+| C6144 transfer128 |44|71|57|7/32|128|0|.828831871|
+| P6144 transfer128 |79|103|81|15/32|128|0|.639897667|
+
+| bucket A–H | parent primary /64 | C primary /64 | P primary /64 | parent transfer /16 | C transfer /16 | P transfer /16 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| A full copy |43|58|51|4|1|7|
+| B requested field |60|64|62|0|5|8|
+| C entity selection |36|42|42|5|5|4|
+| D context selection |46|51|52|4|5|4|
+| E current/valid time |34|42|37|8|8|9|
+| F past/correction/restore |60|58|63|8|9|16|
+| G missing/ambiguous |49|46|54|11|11|15|
+| H causal uncertainty |64|64|64|0|0|16|
+
+각view를 독립base로 재해석하지 않았다. 최종 gate는 primary>=487/512,
+각bucket>=58/64, transfer>=116/128이므로 두 군 모두 FAIL, candidate=null이다.
+중간+1024의 높은 transfer나 익숙한 질문 진단80/128을 최종 점수로 대체하지 않았다.
+
+| 새 update | C screen /64 | P screen /64 | C train/primary/transfer | P train/primary/transfer |
+| --- | ---: | ---: | --- | --- |
+|256|50|51|NOT_RUN|NOT_RUN|
+|512|54|52|NOT_RUN|NOT_RUN|
+|1024|50|47|56/64,409/512,54/128|58/64,415/512,76/128|
+|1536|48|48|NOT_RUN|NOT_RUN|
+|2048|47|48|58/64,425/512,44/128|58/64,425/512,79/128|
+
+모든 screen 생성 오류0이고 필수 teacher64가 완료됐다. 고정 train64 CE 곡선
+256/512/1024/1536/2048은 C .080706/.054336/.049303/.065665/.038899,
+P .069046/.049696/.034915/.078305/.035539다. 서로 다른 panel의 CE를 섞지 않았다.
+계약의 연속/급격한 screen 회귀 중단은 발동하지 않았다.
+
+### paired 변화와 범위
+
+| panel / metric | parent→C gain/loss | parent→P gain/loss | C→P gain/loss |
+| --- | --- | --- | --- |
+| train full |4/1|4/1|1/1|
+| primary full |58/25|56/23|18/18|
+| primary body |41/20|38/13|19/15|
+| primary citation |40/25|45/29|13/12|
+| primary base4 |16/7|20/4|9/2|
+| transfer full |10/6|41/2|39/4|
+| transfer body |7/9|31/1|35/3|
+| transfer citation |12/6|33/3|28/4|
+| transfer base4 |3/2|9/0|9/1|
+
+최종 parent/C/P의 primary evidence0/1/2/3별 full은
+24/24,115/148,193/276,60/64 → 24/24,134/148,209/276,58/64 →
+24/24,126/148,212/276,63/64다. transfer는
+8/8,4/20,15/60,13/40 → 8/8,5/20,17/60,14/40 → 8/8,19/20,32/60,20/40이다.
+transfer full/current/past/cause 표현별 parent는4/16,28/88,8/8,0/16;
+C는1/16,38/88,5/8,0/16; P는7/16,48/88,8/8,16/16이다.
+ID길이·prompt길이·task·기록수·wording별 분모와 full/body/citation paired 통계는
+아래 익명 accounting 로그에 전부 보존했다. 같은 frozen 입력/정답/근거와 실제 tokens를
+다시 확인했으며 새 model/teacher/optimizer 호출0이다.
+
+관측 결론: 원래 질문 반복만으로 primary는+33이나 transfer는+4에 그쳤다.
+질문 표현을 늘린 P는 C와 primary 총점이 같고 transfer가+35였다. 이는 이 고정
+조건에서의 표현 범위 개입 효과이며 범용 한국어 일반화·tokenizer 원인 증명이 아니다.
+P의 한 기록 transfer19/20에 비해 두 기록32/60, 세 기록20/40과 낮은 C/D bucket이
+남아 있다. 길이·기록조합 등의 결합이 있으므로 기록수 단독 인과로 단정하지 않는다.
+다음 한 질문은 **질문 표현을 익숙하게 고정해도 두 근거의 대상·맥락·현재 관계가
+바뀔 때 선택 결과가 정확히 따라 바뀌는가**다. 새 실험은 실행하지 않았다.
+
+### 실제 사용량·저장·재시작
+
+동일한 명령을 arm마다4개 새 process로 순차 실행했다:
+`VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 artifacts/fresh-exposure-phrase-20260919-executable fresh run --root artifacts/fresh-exposure-phrase-20260919/C-REPEAT`
+및 같은 명령의 P-PHRASE 경로다. 각군 첫1회 저장 후 재개와 순수 TIME_BUDGET2회를
+포함하며 실패 재시도는 없다. 이번 SMALL의 시간 종료는 학습 경계에서 발생했다.
+마지막-step 평가전용 continuation 자체는 G1의 실제 TINY process 회귀에서 검증했다.
+
+| arm/segment | durable absolute step | gen | teacher | command seconds | stop |
+| --- | ---: | ---: | ---: | ---: | --- |
+|C/0000|4097|0|0|3.973067833|first update saved|
+|C/0001|5084|128|256|901.917712708|TIME_BUDGET|
+|C/0002|6005|768|832|901.570672584|TIME_BUDGET|
+|C/0003|6144|704|704|195.641551208|BUDGET_REACHED|
+|P/0000|4097|0|0|4.393697959|first update saved|
+|P/0001|5058|128|256|901.032136084|TIME_BUDGET|
+|P/0002|5956|768|832|901.265654166|TIME_BUDGET|
+|P/0003|6144|704|704|238.290653000|BUDGET_REACHED|
+
+| new usage | C | P |
+| --- | ---: | ---: |
+| optimizer updates |2048|2048|
+| committed input |3384520|3511224|
+| discarded input |3434|1780|
+| actual input |3387954|3513004|
+| committed target |252312|252312|
+| discarded target |270|130|
+| actual target |252582|252442|
+| actual padding |1467742|1429636|
+| original / variant draws |16384 / 0|8192 / 8192|
+| generation / own teacher |1600 / 1792|1600 / 1792|
+| arm command seconds |2003.103004333|2044.982141209|
+
+전체4,096 update의 실제 trace를 검증했다. 각 bucket2,048 draws이며 C 각case 원형2회,
+P 각case 원형1/새질문1회다. case order hash는 양군 동일
+`641eb71b161a8af5176ebfc66dc9cc5f7720ae8037589f241893376d0d79349e`,
+target order는 `875374ee96f2e1d0231896a6ff80c4b520e12dfef683e46447371ccf29ae5e8d`다.
+모든 actual LR bits는4539475662290099561(3e-5)이다. Adam은 부모 moments/clock4096을
+계승했다. P committed input은 C보다126704 많아 동일 FLOPs 비교라고 하지 않는다.
+global grad norm C .005020–8.798589/P .006667–10.342487, clip 적용378/600 updates,
+parameter delta L2 C .002419–.039797/P .002980–.036053이다.
+sampled peak RSS는 C2160544/P3079376KiB이며 순간 전체 peak 보장은 아니다.
+
+SMALL 합계 updates4096, committed input6895744/target504624,
+discarded input5214/target400, actual input6900958/target505024, padding2897378이다.
+부모의 과거 지출을 새 학습으로 합산하지 않는다. G2 포함 generation3344,
+자체 teacher3728, 등록 prepare/observation/segments 시간4086.935602001초다.
+컴파일과 사후 읽기 전용 집계 시간은 이 모델 실행 측정에 포함하지 않는다.
+G1 fixture generation704/teacher698까지 보수적으로 합하면4048/4426으로
+공통 상한4096/6000 안이다. TINY optimizer60/scalar1도 각128/32 안이다.
+UNKNOWN 호출0, 사용자 취소0, 새 수치/자료/저장 오류0. command overrun은 최대
+약1.92초로 cleanup120초 안이며 후속 optimizer 예산을 늘리지 않았다.
+
+### 최종 증거와 판정
+
+pure `fresh study-report --root artifacts/fresh-exposure-phrase-20260919`가 성공했다.
+현재 arm 평가 raw3200행의 원자료·token/EOS·점수·model/step/policy·teacher를
+재검산했고 요약/분모가 일치했다. 부모2496행 검증과 parent 파일 inventory 보존도
+확인했다. source/기존 dirty(.DS_Store)와 부모 모델·Adam·corpus·실패는 보존했다.
+
+| artifact | physical SHA256 / weights |
+| --- | --- |
+| C `segment-0003/final` bytes | `51dd03a676fcc739c1da10c3b273696fac48d6c62f8546ffe3bc98696a1603b4` |
+| C model weights | `3c16b4112379025bb13959ca10c3d3a0166e32c2fef5a2985d1ea802f112d568` |
+| P `segment-0003/final` bytes | `c4d6989fbcaad60516053dda206caf43abc08c4b388c3f765e4c446864f60e20` |
+| P model weights | `e759531432a9c954c2b50f7c4c434a87d6de01e1c9675a60d49025d3199158f2` |
+
+인가된 root `/Users/seo/Projects/Replica-v3/artifacts/fresh-exposure-phrase-20260919/`의
+C-REPEAT/P-PHRASE 하위 `segment-0003/final`, `step-006144`, `updates.r3rows`,
+`train-control.r3b`, 각segment 시작/종료, `eval-*.r3rows/.r3b`, `teacher-*.r3b`,
+원 corpus/tokenizer/plan 및 G2 raw를 읽기 전용 검토할 수 있다. old parent root는 그대로다.
+콘솔 실행 근거 `/tmp/r3-phrase-C-segment-0000.log`~`0003.log`,
+`/tmp/r3-phrase-P-segment-0000.log`~`0003.log`, `/tmp/r3-phrase-study-report.log`.
+세부 계층/paired 집계 `/tmp/r3-phrase-accounting-v2.log`, Rust 읽기 도구
+`/tmp/r3_phrase_summary.rs`(SHA359e753f29047b76e3244bb081e5171fc96fcb8f412780e08503601720410f71).
+이 보조 집계의 첫 실행은 malformed citation을 오답 대신 오류로 반환해 중단됐고,
+기존 scorer와 같이 오답으로 집계한 두 번째 읽기가 완료됐다. 첫 로그도 보존했다.
+모델 실행/점수/raw를 바꾼 것이 아니며 추가 generation/teacher/optimizer0이다.
+
+CODE_VERDICT=PASS_BOUNDARIES, FX01/02/03=PASS, RAW_RESCORE=VERIFIED,
+SAME_WEIGHT_PARITY=16/16, WORDING_DIAGNOSTIC=80/128,
+STUDY_EFFECT=OBSERVED_TRANSFER_GAIN_WITH_PRIMARY_TIE, DEV_JOINT=FAIL,
+FINAL200=NOT_OPENED, S4=NOT_PASSED, S5/S6=NOT_RUN_PREREQUISITE,
+GOAL1_READY=false, GOAL1_ACCEPTED=false, INDEPENDENT_REVIEW=NOT_RUN.
+고유 직접tests17 PASS와 fmt/Clippy의 기존 범위 제한은 아래 G0–G3 기록과 같다.
+새 영구 source/test/doc 파일0; ignored native 실험 산출물과 로컬 분석 도구만 생성했다.
+
 ## 2026-09-19 Exposure/phrase study — G0–G3 검증, 학습 전 기록
 
 R3-FRESH-EXPOSURE-PHRASE-1.0. 기준 source d126aff35d85cebd1bf2b40bc6bc0a5943a3084b,
