@@ -1,6 +1,6 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: equal-step posthoc selector observation
+## Closed implementation: equal-step posthoc selector observation; R3 pending
 
 R3-ACCEPTANCE-AND-QUALITY-CLOSURE-1.0. R0–R2 independently accepted source
 `abd967980645a878f22069708daa9fbfce70bf87`; report commit
@@ -21,6 +21,19 @@ failures and resume only remaining observations after a confirmed pure time stop
 unknown entry, cancellation or storage failure blocks. Q2 verifies raw/decode/labels,
 both-correct and paired gain/loss. R3 independently checks these new observations.
 No training, candidate promotion, old run resume or final200 opening is authorized.
+
+Q1/Q2 completed on2026-09-20 using frozen candidate
+`e71345e66e18d221db2e5cb43fb67569c6eace8e`. Parity16/16 each;416 total generations,
+5,998 raw tokens, EOS416/errors0/UNKNOWN0, teacher/backward/optimizer0. C7168 versus
+S7168 original/flipped full155/8 versus70/28, both-correct0/0. Flipped gain/loss24/4,
+both gain/loss0/0. Original and flipped native prompts differ on every pair; all
+retain both evidence records. These results support a limited change in answer
+preference with retention cost, not joint selection or a proven underlying cause.
+The4,129 bound inputs are unchanged; raw and failed historical study remain intact.
+No more implementation-side generations are authorized by this completed observation.
+The separate R3 reviewer has at most32 generations and must review the test-only diff
+and pure recount. One proposed future ordering/spacing comparison is documented in
+EXPERIMENT_STATUS; it is not authorized or executed. H3/S4/Goal1 remain false.
 
 ## Closed: existing execution path stabilization
 

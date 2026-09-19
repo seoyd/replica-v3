@@ -1,5 +1,166 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Equal-step selector — Q0–Q2 completed, quality not passed
+
+MODE=IMPLEMENT_AND_MEASURE / EXECUTED_THIS_RUN + DERIVED_EXISTING_RAW.
+R3-ACCEPTANCE-AND-QUALITY-CLOSURE-1.0 implementation scope is complete.
+STABILIZATION_ACCEPTED=true (separate R2 report), EQUAL_STEP_SELECTOR_OBSERVED=true,
+NEW_SMALL_UPDATES=0, H3/S4/GOAL1=false. New adapter/results await independent R3;
+the implementation has not self-granted independent acceptance or Goal1 approval.
+
+### Actual result and its limit
+
+Both native7168 models passed the same metadata-fixed16-case output parity against
+their own historical primary raw: tokens/text/error/EOS/prompt matched16/16 each.
+Their answers were13/16 and6/16 correct; parity is not a correctness score.
+Each then generated the frozen selector192 exactly once. All416 calls returned,
+EOS416, errors0, UNKNOWN0, raw tokens5,998 (parity153+153, selector2,851+2,841).
+No teacher, backward, Adam, SMALL/TINY/scalar updates or new training occurred.
+
+| model | original full /192 | flipped full /192 | both | original-only | flip-only | neither | same valid output | errors |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| C7168 | 155 | 8 | 0 | 155 | 8 | 29 | 184 | 0 |
+| S7168 | 70 | 28 | 0 | 70 | 28 | 94 | 180 | 0 |
+
+The192 rows represent48 bases×4view, not192 independent scenes.
+The original primary counts were revalidated from full512 rows and their native,
+policy, teacher and call receipts: C436, S350; C/D/E155 versus70, other tasks281 versus280.
+Primary originals were reused, not regenerated except the explicitly allowed parity16.
+
+| bucket /64 | C original / flipped / both | S original / flipped / both |
+| --- | --- | --- |
+| C: entity selection | 46 /0 /0 | 20 /14 /0 |
+| D: context selection | 56 /0 /0 | 27 /6 /0 |
+| E: observation time | 53 /8 /0 | 23 /8 /0 |
+
+| metric | C7168 | S7168 |
+| --- | ---: | ---: |
+| original base4 /48 | 23 | 7 |
+| flipped base4 /48 | 0 | 0 |
+| both base4 /48 | 0 | 0 |
+| original body / citation exact | 170 /164 | 135 /87 |
+| flipped body / citation exact | 15 /21 | 45 /94 |
+| flipped citation: selected / other provided / absent / none | 21 /165 /4 /2 | 94 /84 /8 /6 |
+| multiple distinct citations / malformed citation syntax | 0 /0 | 0 /0 |
+
+Every pair's full flags, both, same-valid-output, bucket/base/view and citation IDs/
+classes are present in the pure report output; raw tokens remain in native row files.
+The fixture explicitly checks mixed citations, and the report retains multiple
+classes instead of collapsing such a row into a misleading exclusive category.
+C→S flipped full gain/loss=24/4, net+20; both-correct gain/loss=0/0.
+
+Interpretation: RULE_SWITCH_WITHOUT_JOINT_SUCCESS is consistent with the observed
+outputs. S answered more flipped cases but lost85 original C/D/E answers, and neither
+model solved both sides of even one pair. This is not evidence of reliable selection.
+Both models received distinct prepared prompt digests for all192 flips; both original
+and flipped prompts retained both supplied records in all192 pairs, with no exclusions.
+Despite those changed inputs, outputs stayed identical184/192 and180/192. This rules
+out identical framed inputs or dropped evidence as the explanation for these pairs;
+it does not establish an optimizer/architecture/attention cause. The model's field
+and citation failures remain separate observations. No tokenizer/LR/binary-format
+cause is inferred. New training0 means MODEL_QUALITY_IMPROVED_THIS_RUN=false.
+
+### Source, execution, preservation and commands
+
+SOURCE_COMMIT / CODE_SHA: `e71345e66e18d221db2e5cb43fb67569c6eace8e`.
+It was normally pushed and actual origin/main matched before observation.
+[Candidate diff](https://github.com/seoyd/replica-v3/compare/abd967980645a878f22069708daa9fbfce70bf87...e71345e66e18d221db2e5cb43fb67569c6eace8e).
+Code-only diff is411 test-module lines in `src/fresh.rs`; product generation,
+checkpoint, training, tokenizer, timeout and storage implementations are unchanged.
+Patch SHA256: `19ad3941dd99b9bc1c8cc79ef325ea62677e150612d2ce91d9c99543d7bf893c`.
+Compiled source digest and observer hash are in the Q0 identity section below.
+The observer file was retained before registering or executing observations.
+
+NEW_SMALL_GENERATIONS/TEACHERS=416/0; NEW_TINY_UPDATES/GENERATIONS/TEACHERS=0/0/0;
+scalar0. Separate prior R1 used16 SMALL generations; contract total observed so far432,
+with32 reserved for independent R3, not borrowed by this implementation.
+Command reason=COMPLETED, observed_conditions=[], resume=false, command segments1,
+no retry. RunControl39.093786292s, complete test/OS command44.12s, maximum command RSS
+1,450,409,984 bytes. These include verification/load/I/O, not an inference benchmark.
+Last durable output: `observation/command-0000-finished.r3b`; no new checkpoint exists.
+Terminal SHA256 `99ef6c2f30f10e4351fc5c9dac20b892b4e987109fee1f0789eaae0cba19778f`.
+
+Final unique test functions4 passed: the three directly relevant fixtures below and
+the explicit ignored observer in register/observe/report modes. Actual test command
+invocations8:7 PASS,1 initial fixture assertion FAIL preserved. No zero-test PASS.
+The model-free modes registered inputs and independently reread results in separate
+processes; only observe invoked generation. Existing R1 tests were not rerun or counted
+as new implementation-side tests. Broad clippy failure and its limits are recorded below.
+
+```sh
+VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 cargo test --locked --offline \
+  --release --features accelerate --bin replica-train \
+  training::fresh::tests::posthoc_mapping_and_binary_pair_counts \
+  -- --exact --nocapture --test-threads=1
+
+# The frozen observer is a copy of that production-feature test executable.
+# Actual modes were register, then observe, then report, once each.
+VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 \
+R3_POSTHOC_STUDY=artifacts/selector-consistency-20260919 \
+R3_POSTHOC_EXECUTABLE=artifacts/selector-consistency-20260919-executable \
+R3_POSTHOC_OUTPUT=artifacts/acceptance-quality-closure-20260920/observation \
+R3_POSTHOC_MODE=observe \
+  /usr/bin/time -l artifacts/acceptance-quality-closure-20260920/observer \
+  training::fresh::tests::posthoc_equal_step_selector \
+  --exact --ignored --nocapture --test-threads=1
+```
+
+READ_ONLY_INPUTS_UNCHANGED=true:4,129 bound files agreed at registration, observation
+completion and pure reporting. This includes actual native bytes (weights and Adam),
+tokenizer, data, policies, step7168 primary/teacher rows and their call receipts.
+Only the new observation directory was written. Old C/S outcomes, failures, raw and
+resume flags remain intact. Existing `.DS_Store` is preserved; no reset/stash/clean.
+Strict score is independently rebuilt from frozen labels, decoded tokens and EOS;
+self-reported flags must agree. Expected/metadata never enter native logits: existing
+tokenizer preparation receives only ModelRequest, and native generation receives its
+prepared token IDs and generation limits. Source is unchanged after the frozen commit.
+
+Allowed local evidence root: `artifacts/acceptance-quality-closure-20260920/`.
+`register.log`, `observe.log`, `report.log`, `input-identities.log`, `final-counts.log`,
+`input-response-check.log`, fixture logs, frozen `observer`, `candidate-code.patch` and
+`observation/` are retained locally, not uploaded. The small local Rust reader only
+summarizes existing binary records; it makes no model calls and is not an independent review.
+Observe log SHA256 `d5e9e3024d6ababd080c06e1224f04822b43c616622627a4f3b2f69069f77792`;
+pure report log SHA256 `918c373f166656e98791c20d094efa9ba19c0af9482eda90b1ca62f2d22805dd`.
+
+| observation raw | SHA256 |
+| --- | --- |
+| `arm-0-parity.r3rows` | `a83ad7ea8f74dbd493c26757af4400eb49925d236957e8af50f4834a17917781` |
+| `arm-1-parity.r3rows` | `1a5d9bc9c054d43e1e75042f5609b64d3e8bfa12683a04c48568d702d9d5076d` |
+| `arm-0-selector.r3rows` | `ba744a2bacc0fc804788b567d652e3e28e2a99a649ce3326d823f896448c1be7` |
+| `arm-1-selector.r3rows` | `2d91cd5ec8b1d9aac9761da3199521d2d277dfd3d6eb29149c93bd1f405d63d3` |
+
+The two source raw panels remain `C-KEEP/eval-7168-dev512.r3rows` and
+`S-SELECT/eval-7168-dev512.r3rows` under the existing selector study. Their hashes are
+`8470f320f9b3a4e469a2a5d84068c306d1730a7435d99d1a7c11ecac623c65f2` and
+`66790e61eef433c46fe67ea77427158ad8bcfaca5a744d02a0ab1dc86c1dae40`.
+The original192 are bound by the verified full primary dataset digest plus the ordered
+selector source-ID mapping; no later re-selection of cases was performed.
+
+### Next single hypothesis — proposal only, execution0
+
+Question: can shorter separation between a scene's original and counterfactual training
+exposures improve joint correctness instead of replacing one answer preference with another?
+Propose comparing the preserved selector ordering with an ordering that places matched
+original/flip exposures in consecutive updates. Change only that spacing/order; retain
+the same P6144 parent, same total examples/wording/flip share, batch size, tokenizer,
+Adam, CE and LR. Do not change to selector25% or add new training text. Proposed cap256
+updates per arm, total512, with matched32/64/128/256 checks and no automatic extension.
+Require both-correct gains together with no primary/transfer loss against the control;
+stop on execution/numerical/storage errors or the preregistered retention boundary.
+An independent reviewer must freeze the exact training tape, unseen acceptance data
+and numeric stop rules before approval. The now-exposed192 remain development data;
+they cannot be renamed sealed evaluation. This is a hypothesis, not a proven cause or
+authorization to train. R3 raw verification comes first.
+
+PRIMARY_GATE=FAIL (487/512 and bucket58/64 unmet); TRANSFER_GATE=FAIL on historical
+same-step68/128 and67/128, not regenerated here. FINAL200=NOT_OPENED.
+H3/S4=NOT_PASSED, S5/S6=NOT_RUN_PREREQUISITE, GOAL1_READY/GOAL1_ACCEPTED=false/false.
+STABILIZATION_SCOPE_VERIFIED_INDEPENDENT=true applies to accepted abd967 source
+boundaries only. INDEPENDENT_DYNAMIC_ACCEPTANCE of this new diagnostic diff/results
+is PENDING_R3. Q2 publication changes these status/plan docs only; report commit and
+actual remote SHA are recorded in the final handoff and local publication log.
+
 ## 2026-09-20 Acceptance / equal-step selector — Q0 complete
 
 MODE=IMPLEMENT_AND_MEASURE; R3-ACCEPTANCE-AND-QUALITY-CLOSURE-1.0.
