@@ -1,6 +1,49 @@
 # Diagnostic repair and bounded quality recovery
 
-## Closed implementation: equal-step posthoc selector observation; R3 pending
+## Active: paired exposure from the preserved P6144 parent
+
+R3-PAIRED-LEARNING-TO-GOAL1-1.0 reuses independently accepted R2/R3 evidence.
+Compare only SPACED128 versus ADJACENT1, each256 updates from the same P6144
+weights/Adam/tokenizer and eight-task train pool. LR3e-5, first-target1 CE,
+batch8 and F32/CPU/Accelerate/thread1 stay fixed. Each256 block contains128
+distinct training bases per C/D/E bucket, both sides once,64 original-first/64
+flipped-first and64 familiar/64 P phrase forms. Other five tasks are identical
+update by update; full-block multisets match. The native policy binds the finite
+3840-step tape and request/target index table; absolute Adam clock is preserved.
+
+G0 parent/provenance/current-source P16; G1 tape and TINY continuous2 versus1+1
+per policy, plus the retained final-step evaluation-only regression; G2 actual
+sequential training. Screen64+flip24 at +32/64/128; train64+primary512+transfer128
++selector192 at +256. Pair originals reuse the same endpoint's primary raw.
+Strict generation failures remain in denominators; required teachers are retained.
+
+Safe quality stop: screen errors>=8 or parent screen loss>=16; loss>=8 at two
+consecutive checkpoints. The peer may continue its original budget. Cancellation,
+unknown usage, storage/numeric/integrity failure blocks both. Pure time stops use
+accepted cursor semantics. Read-only report recounts raw before ranking.
+
+G3 entry requires completed256, primary>=417, transfer>=75, all full panels
+error-free, both>=12/192, each C/D/E both>=1 and at least4 independent bases.
+Rank both, primary, transfer, then arm name (ADJACENT before SPACED). If neither
+qualifies, close without extension. Otherwise register continuation from6400 for
+at most3584 further updates using the frozen pool/tape. Screen checkpoints are
++512/1536/2560/3072; full checkpoints +1024/2048/3584. Stop on joint pass,
+retention guard, or two full checkpoints with no improvement in any best
+primary/transfer/both score.
+
+Total caps: SMALL4096 optimizer calls, actual input12M/target1M including discarded
+work, generation12000/teacher10000, active21600s, command900s plus cleanup120s.
+TINY counters are separate: updates128, generation/teacher768 each. Joint gate:
+primary487/512, each task58/64, transfer116/128, both173/192, each C/D/E56/64,
+generation errors0. Fix the first passing candidate and check fresh32 parity.
+Independent final200/S4, actual product memory/correction/restart/S5 and grouped
+INT4/M4/S6 are conditional authorized successors. Goal1 independent acceptance
+cannot be self-granted. G0/G1 verification completed on2026-09-20; G2 is next.
+New SMALL updates0, production P16 matched16/16 with160 raw tokens and no teacher.
+Direct TINY/process, finite tape, accumulation/mask/causal and evaluation-only
+resume checks passed. Failed test attempts remain in the local evidence ledger.
+
+## Closed implementation: equal-step posthoc selector observation; R3 accepted
 
 R3-ACCEPTANCE-AND-QUALITY-CLOSURE-1.0. R0–R2 independently accepted source
 `abd967980645a878f22069708daa9fbfce70bf87`; report commit

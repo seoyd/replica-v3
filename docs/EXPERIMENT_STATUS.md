@@ -1,5 +1,72 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Paired exposure — G0/G1 verified, G2 pending
+
+R3-PAIRED-LEARNING-TO-GOAL1-1.0 / IMPLEMENT_AND_EXECUTE.
+Accepted stabilization R2 and posthoc R3 are reused from reports
+`898f57d7dd8109386f23549d391618c558097774` and
+`da4d3dc29a092c13f5875182d0e5d45596aa53a7`. No repeat of the15-test acceptance or
+384-row posthoc generation. Existing parent/corpus/failures and `.DS_Store` remain.
+
+The retained parent is
+`artifacts/fresh-exposure-phrase-20260919/P-PHRASE/segment-0003/final`, physical
+`c4d6989fbcaad60516053dda206caf43abc08c4b388c3f765e4c446864f60e20`.
+Train inputs are the original/phrase/selector native files under
+`artifacts/selector-consistency-20260919/S-SELECT/`; physical hashes respectively
+`108171c2ffad62afc9b0f09a52070871a4d3287017676208e9f43a88631fe04f`,
+`14eb2cc2b5fd1f599510e49f7cda97a0d34673d651547e685f84c6aaab3b6fa9`,
+`6e0c0cbdb669e62f0d005d075ff30f14cb1d37d228b45bec7e39676dbadd270b`.
+Original file hashes and owned episode contents are verified separately: two
+files can hold identical P phrase cases but different provenance metadata.
+
+New production policy uses the existing Plan/Fork, native checkpoint, sampler,
+RunControl, evaluator, teacher receipts, confirmed publisher and pure scorer.
+It binds3840 finite tape rows, matching train request/target indexes, absolute
+Adam clock and explicit local cursor. Only pair spacing differs. Actual optimizer
+entries and combined input/target use include unsuccessful work. Quality stops
+permit the peer budget; command/storage/unknown failures block the study.
+
+Direct executed tests (all nonzero counts):
+
+- `paired_tape_full_writer_reader_bounds_and_balance`: full3840-row publisher/read,
+  gap128/1, balanced sides/phrases, matching multisets, unchanged five tasks,
+  duplicate/missing/unknown cases and continuation bounds; optimizer/generation0.
+- `fresh_paired_policies_match_continuous_and_split_processes`: both policies'
+  actual TINY continuous2 versus1+1 match weights/Adam/clock; pure reports preserve
+  file hashes; safe quality stop permits peer, failed sync blocks it in a new process.
+- `fresh_accumulation_and_metadata_boundary`: batch-independent gradient equality,
+  native metadata/trace boundary; optimizer0, backward3, synthetic trace is not training.
+- `fresh_fx03_final_step_resumes_only_remaining_evaluation`: existing EOS tensor
+  fixture, actual new-process evaluation-only continuation; no extra optimizer step.
+- `first_target_objective_matches_scalar_ce_and_gradients_without_mask_leakage`.
+- `native_numeric_references_and_causal_padding_gradients`.
+- Production `stabilization_fixed_parent_parity`:16/16 identical raw output,
+ 160 tokens, original inventory unchanged, teacher/optimizer0;265.81s total test wall.
+
+Earlier test failures are retained: phrase file-hash versus content comparison,
+missing optimizer-entry field, and a random TINY mixed integrity/time stop before
+the final-row EOS fixture was configured. The latter remained blocked; the intended
+normal-return/time boundary passed with the existing EOS fixture. One short-name
+exact filter ran0 tests and is excluded from PASS. Across all attempts TINY actual
+optimizer49, generation676, teacher675; no unknown model usage. SMALL optimizer0,
+generation16, teacher0. The reported fixture scores are not model-quality results.
+
+Rust/Cargo1.98.1, locked/offline, Accelerate, one compute thread. Production build
+and clippy exit0; one pre-existing `quality_recovery.rs` map-key warning remains,
+no new warning. No whole test suite or unrelated formatting migration was run.
+Production trainer SHA256:
+`19c8acd49f9d9fd3f7c4fc0d4f9516a700b4d719302cde4de1d6d7992b82aaa7`.
+Local evidence: `artifacts/paired-learning-20260920-evidence/`, including named
+test logs, failure logs, executable hashes, P16 raw/selection/result, and Rust
+read-only metadata/count helpers. These artifacts are not uploaded.
+
+G2 registration/execution is next under the active quality plan. S4 final200 was
+not found in the authorized fresh-study roots: NOT_CREATED, answers not opened.
+CODE_VERDICT=IMPLEMENTER_TESTED; ACCEPTED_STABILIZATION_REUSED=true;
+PAIR_EXPOSURE_EFFECT=NOT_RUN; DEVELOPMENT_JOINT_PASS=false; FINAL200/S4, S5,
+S6/QUANT_ADOPTION=NOT_RUN; deployment remains unaccepted F32 research;
+GOAL1_READY=false; GOAL1_ACCEPTED=false. Source and report publication are distinct.
+
 ## 2026-09-20 Equal-step selector — Q0–Q2 completed, quality not passed
 
 MODE=IMPLEMENT_AND_MEASURE / EXECUTED_THIS_RUN + DERIVED_EXISTING_RAW.

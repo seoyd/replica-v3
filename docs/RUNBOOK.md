@@ -1,5 +1,26 @@
 # Replica v3 B0 runbook
 
+## Paired exposure study
+
+Use the production executable built with `cargo build --locked --offline
+--features accelerate --bin replica-train`; retain its SHA256 and source commit.
+Set `VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1` for every model command.
+The existing ignored `training::fresh::tests::stabilization_fixed_parent_parity`
+test accepts `R3_PARITY_PARENT` and a new `R3_PARITY_OUTPUT`, with production
+features only. It runs16 normal generations, no teacher or optimizer calls.
+
+`replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT
+--parity NEW_PARITY_ROOT --output NEW_STUDY_ROOT` verifies the retained native
+parent, original/phrase/selector train contents, existing evaluation raw and P16.
+It registers finite tapes and both256-update policies without training.
+`replica-train fresh run --root NEW_STUDY_ROOT/SPACED` saves the first update;
+repeat only while its confirmed terminal permits resume. Then execute ADJACENT
+the same way. Safe quality stops permit the peer's original budget; execution
+failures block it. Never alter historical completion or resume records.
+`replica-train fresh paired-report --root NEW_STUDY_ROOT` is a pure read/recount
+and reports the preregistered continuation gate. It cannot create missing evidence
+or start further learning. See the active quality plan for budgets and successors.
+
 ## Existing path stabilization
 
 A native timeout is a resumable command stop only when the command's remaining

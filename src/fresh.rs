@@ -14,6 +14,15 @@ const REVISION: &str = "joint-educational-v1";
 const SYSTEM: &str = "제공된 기록과 질문만으로 답하세요. 요구한 원문 또는 값을 쓰고 근거를 [event:번호]로 인용하세요. 근거가 없거나 모호하면 구별해서 유보하세요. 순서만으로 원인을 단정하지 마세요.";
 #[derive(Subcommand)]
 pub enum Command {
+    /// Register the bounded pair-spacing comparison from preserved native train pools.
+    PairedPrepare {
+        #[arg(long)] parent: PathBuf,
+        #[arg(long)] source_data: PathBuf,
+        #[arg(long)] output: PathBuf,
+        #[arg(long)] parity: Option<PathBuf>,
+    },
+    /// Pure recount and the preregistered continuation gate; never starts training.
+    PairedReport { #[arg(long)] root: PathBuf },
     /// Register an explicit exposure/wording study from a verified completed parent.
     StudyPrepare {
         #[arg(long)]
@@ -146,6 +155,8 @@ pub struct Plan {
     schema: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fork: Option<Fork>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    paired: Option<PairTape>,
     revision: String,
     source: String,
     binary: String,
@@ -165,6 +176,21 @@ pub struct Plan {
     tiny: bool,
     metadata: String,
     evaluation: EvaluationPolicy,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct PairTape {
+    mode: String,
+    first_step: usize,
+    block: usize,
+    samples: String,
+    rows: Vec<[usize; 8]>,
+}
+impl PairTape {
+    fn at(&self, absolute: usize) -> Result<[usize; 8]> {
+        absolute.checked_sub(self.first_step).and_then(|i| self.rows.get(i)).copied()
+            .ok_or_else(|| bad("finite pair tape cursor outside registered range"))
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -645,6 +671,10 @@ impl Plan {
     }
     pub(super) fn remaining_targets(&self, root: &Path) -> Result<Option<u64>> {
         let Some(f) = &self.fork else { return Ok(None) };
+        if self.paired.is_some() {
+            return Ok(Some(1_000_000u64.checked_sub(paired_work(&f.study)?.1)
+                .ok_or_else(|| bad("paired target budget exhausted"))?));
+        }
         let mut used = 0u64;
         // run() already validated history before publishing this command's start.
         for i in 0..128 {
@@ -668,6 +698,11 @@ impl Plan {
                 .ok_or_else(|| bad("target budget exhausted"))?,
         ))
     }
+    pub(super) fn remaining_input(&self) -> Result<Option<u64>> {
+        if self.paired.is_none() { return Ok(None); }
+        Ok(Some(12_000_000u64.checked_sub(paired_work(&self.fork.as_ref().unwrap().study)?.0)
+            .ok_or_else(|| bad("paired input budget exhausted"))?))
+    }
     pub(super) fn learning_rate(&self, step: usize) -> f64 {
         self.fork
             .as_ref()
@@ -675,6 +710,11 @@ impl Plan {
     }
     pub(super) fn origin_step(&self) -> usize {
         self.fork.as_ref().map_or(0, |f| f.origin_step)
+    }
+    pub(super) fn pair_position(&self, absolute: usize) -> Option<binary::Value> {
+        self.paired.as_ref().map(|t| binary::record!({"absolute":absolute,
+            "local":absolute-t.first_step,"block":(absolute-t.first_step)/t.block,
+            "within_block":(absolute-t.first_step)%t.block,"tape":self.train_order}))
     }
     pub(super) fn additional_samples(&self, root: &Path, tok: &ByteBpe) -> Result<Vec<Sample>> {
         let Some(f) = &self.fork else {
@@ -692,6 +732,9 @@ impl Plan {
         Ok(out)
     }
     pub(super) fn training_draw(&self, step: usize) -> Vec<usize> {
+        if let Some(tape) = &self.paired {
+            return tape.at(step).expect("validated finite pair tape cursor").to_vec();
+        }
         let mut ids = self.draw(step);
         if let Some(f) = &self.fork
             && f.variants.is_some()
@@ -764,6 +807,10 @@ impl Plan {
         Ok(b)
     }
     pub(super) fn draw(&self, step: usize) -> Vec<usize> {
+        if let Some(tape) = &self.paired {
+            let n = self.order.iter().map(Vec::len).sum::<usize>();
+            return tape.at(step).expect("validated finite pair tape cursor").iter().map(|i| i % n).collect();
+        }
         let epoch = step / self.order[0].len();
         let position = step % self.order[0].len();
         (0..8)
@@ -903,6 +950,7 @@ fn prepare(root: &Path, tiny: bool) -> Result<()> {
     let plan = Plan {
         schema: Some(2),
         fork: None,
+        paired: None,
         revision: REVISION.into(),
         source,
         binary: file_hash(&std::env::current_exe()?)?,
@@ -977,6 +1025,8 @@ fn source_digest() -> Result<String> {
 }
 pub fn execute(command: Command) -> Result<()> {
     match command {
+        Command::PairedPrepare { parent, source_data, output, parity } => paired_prepare(&parent, &source_data, &output, parity.as_deref()),
+        Command::PairedReport { root } => paired_report(&root).map(|r| println!("PAIRED_REPORT {r}")),
         Command::StudyPrepare { parent, output, selector } => study_prepare(&parent, &output, selector),
         Command::StudyObserve { root } => study_observe(&root),
         Command::StudyReport {
@@ -1054,7 +1104,7 @@ fn plan_read_bound(root: &Path, source: &str, executable: &str) -> Result<Plan> 
         || p.binary != executable
         || p.sampler != "bucket-base-permutation-v1"
         || p.order.len() != 8
-        || p.train_order != digest(&p.order)?
+        || p.train_order != if let Some(tape) = &p.paired { digest(&tape.rows)? } else { digest(&p.order)? }
     {
         return Err(bad("source/binary/sampler plan mismatch"));
     }
@@ -1100,6 +1150,20 @@ fn plan_read_bound(root: &Path, source: &str, executable: &str) -> Result<Plan> 
         {
             return Err(bad("frozen variant metadata changed"));
         }
+        if let Some(tape) = &p.paired {
+            let n = p.order.iter().map(Vec::len).sum::<usize>();
+            if study.schema != 4 || !["SPACED", "ADJACENT"].contains(&tape.mode.as_str())
+                || tape.mode != f.arm || tape.first_step != f.origin_step
+                || tape.block != if p.tiny { 2 } else { 256 }
+                || tape.rows.len() != if p.tiny { 2 } else { 3840 }
+                || f.origin_step + study.updates > tape.first_step + tape.rows.len()
+                || tape.samples != file_hash(&root.join("paired-samples.r3rows"))?
+                || tape.rows.iter().any(|r| r.iter().enumerate().any(|(b, i)| *i >= 4*n || !p.order[b].contains(&(i%n))))
+            { return Err(bad("paired policy/tape boundary")); }
+            let parent: Plan = read(&study.parent.join("plan.r3b"))?;
+            let (tm, _, _) = verified_metadata(root, &p)?;
+            verify_pair_tape(&parent, &tm, tape)?;
+        } else if study.schema == 4 { return Err(bad("paired study missing finite tape")); }
         for (name, h) in [
             ("selectors.r3cor", &f.selector),
             ("selector-metadata.r3b", &f.selector_metadata),
@@ -1110,7 +1174,8 @@ fn plan_read_bound(root: &Path, source: &str, executable: &str) -> Result<Plan> 
                 return Err(bad("frozen selector data changed"));
             }
         }
-        let mut e = fork_evaluation(f.origin_step, study.updates, p.tiny);
+        let mut e = if p.paired.is_some() { paired_evaluation(f.origin_step, study.updates, p.tiny) }
+            else { fork_evaluation(f.origin_step, study.updates, p.tiny) };
         if study.schema == 3 {
             e.generation_limit = 4608;
         }
@@ -1219,7 +1284,7 @@ fn run(root: &Path, uninterrupted_fixture: bool) -> Result<()> {
         return Err(bad("closed run cannot resume"));
     }
     let (elapsed, generations, teachers) = if let Some(f) = &p.fork {
-        study_usage(&f.study, true)?
+        if p.paired.is_some() { paired_usage(&f.study)? } else { study_usage(&f.study, true)? }
     } else {
         (
             previous.iter().map(|s| s.elapsed).sum(),
@@ -1964,6 +2029,9 @@ pub(super) fn evaluate_boundary(
     if !p.evaluation_due(step) {
         return Ok(None);
     }
+    if p.paired.is_some() {
+        return paired_evaluate(p, root, path, step, control);
+    }
     let (_, train, dev) = p.training_corpus(&root.join("corpus.r3cor"))?;
     let transfer = verified_corpus(&root.join("transfer.r3cor"), &p.transfer)?.validation;
     let (tm, dm, xm) = verified_metadata(root, p)?;
@@ -2528,6 +2596,15 @@ fn audit_panels_range(
         count += es.len();
         results.insert(format!("eval-{:04}-selector192", p.config.max_steps), s);
     }
+    if p.paired.is_some() {
+        for &step in p.evaluation.screen_steps.iter().chain(&p.evaluation.primary_steps)
+            .filter(|&&n| n >= first && n <= last) {
+            let (name, es, ms) = paired_flip_panel(p, root, step, &dv, &dm)?;
+            let s = audit_panel(root, p, step, name, &es, &ms, &tok)?;
+            count += es.len();
+            results.insert(format!("eval-{step:04}-{name}"), s);
+        }
+    }
     Ok((count, results))
 }
 fn changed_question(e: &Episode, suffix: &str) -> Result<Episode> {
@@ -2695,6 +2772,453 @@ fn selector_panel(es: &[Episode], ms: &[Meta], tiny: bool) -> Result<(Vec<Episod
         metadata.push(fm);
     }
     Ok((out, metadata))
+}
+fn paired_evaluation(origin: usize, updates: usize, tiny: bool) -> EvaluationPolicy {
+    let (screen, full) = if tiny { (vec![], vec![updates]) }
+        else if updates == 256 { (vec![32, 64, 128], vec![256]) }
+        else { (vec![512, 1536, 2560, 3072], vec![1024, 2048, 3584]) };
+    let full: Vec<_> = full.into_iter().map(|n| origin+n).collect();
+    EvaluationPolicy {
+        screen_steps: screen.into_iter().map(|n| origin+n).collect(),
+        primary_steps: full.clone(), train_steps: full.clone(), transfer_steps: full,
+        teacher_steps: vec![], fixture_per_bucket: tiny.then_some(1),
+        generation_limit: 12_000, teacher_limit: 10_000, active_seconds: 21_600,
+        ..EvaluationPolicy::default()
+    }
+}
+fn paired_flip_panel(p: &Plan, root: &Path, step: usize, dev: &[Episode], dm: &[Meta])
+    -> Result<(&'static str, Vec<Episode>, Vec<Meta>)> {
+    let f = p.fork.as_ref().ok_or_else(|| bad("paired fork missing"))?;
+    let s: Study = read(&f.study.join("study.r3b"))?;
+    let path = f.study.join("diagnostic.r3b");
+    if file_hash(&path)? != s.diagnostic_hash { return Err(bad("paired frozen flip panel")); }
+    let (es, ms): (Vec<Episode>, Vec<Meta>) = read(&path)?;
+    if p.evaluation.primary_steps.contains(&step) { return Ok(("selector192", es, ms)); }
+    if !p.evaluation.screen_steps.contains(&step) { return Err(bad("unregistered paired evaluation")); }
+    let (screen, _) = subset(dev, dm, p.evaluation.fixture_per_bucket.unwrap_or(8));
+    let mut selected = (vec![], vec![]);
+    for (e, m) in es.into_iter().zip(ms) {
+        if screen.iter().any(|x| Some(&x.id) == m.source_id.as_ref()) {
+            selected.0.push(e); selected.1.push(m);
+        }
+    }
+    let _ = root;
+    if selected.0.len() != 3 * p.evaluation.fixture_per_bucket.unwrap_or(8) {
+        return Err(bad("paired screen/flip coverage"));
+    }
+    Ok(("flip24", selected.0, selected.1))
+}
+fn paired_screen(p: &Plan, root: &Path, step: usize) -> Result<PanelResult> {
+    let (_, _, dev) = p.training_corpus(&root.join("corpus.r3cor"))?;
+    let (_, dm, _) = verified_metadata(root, p)?;
+    let (es, ms) = subset(&dev, &dm, p.evaluation.fixture_per_bucket.unwrap_or(8));
+    let tok = ByteBpe::load(&root.join("tokenizer.r3b"))?;
+    if !p.evaluation.primary_steps.contains(&step) {
+        return audit_panel(root, p, step, "screen64", &es, &ms, &tok);
+    }
+    let (all, am) = if p.tiny { (es.clone(), ms.clone()) } else { (dev, dm) };
+    let full = audit_panel(root, p, step, "dev512", &all, &am, &tok)?;
+    let prefix = format!("eval-{step:04}-dev512");
+    let rows = binary::read_value_records(&root.join(format!("{prefix}.r3rows")))?;
+    let teachers = binary::read_value_records(&root.join(format!("{prefix}-teachers.r3rows")))?;
+    let mut selected = vec![]; let mut ts = vec![];
+    for e in &es {
+        let i = rows[1..].iter().position(|r| r["id"] == e.id).ok_or_else(|| bad("paired original missing"))? + 1;
+        selected.push(rows[i].clone()); ts.push(teachers[i].clone());
+    }
+    let mut r = score(&selected, &es, &ms)?;
+    r.step = step; r.panel = "screen64".into(); r.model = full.model;
+    r.dataset = digest(&es)?; r.raw_hash = full.raw_hash;
+    r.ce = Some(teacher_ce(&ts)?); r.teachers_completed = Some(ts.len());
+    Ok(r)
+}
+// Pure decision: all outcomes are reconstructed from the same endpoint's raw panels.
+fn paired_decision(p: &Plan, root: &Path, step: usize) -> Result<binary::Value> {
+    let f = p.fork.as_ref().ok_or_else(|| bad("paired fork missing"))?;
+    let (_, _, dev) = p.training_corpus(&root.join("corpus.r3cor"))?;
+    let (_, dm, _) = verified_metadata(root, p)?;
+    let (name, es, ms) = paired_flip_panel(p, root, step, &dev, &dm)?;
+    let tok = ByteBpe::load(&root.join("tokenizer.r3b"))?;
+    let flip = audit_panel(root, p, step, name, &es, &ms, &tok)?;
+    let full = p.evaluation.primary_steps.contains(&step);
+    let original_name = if full { "dev512" } else { "screen64" };
+    let original = binary::read_value_records(&root.join(format!("eval-{step:04}-{original_name}.r3rows")))?;
+    let flipped = binary::read_value_records(&root.join(format!("eval-{step:04}-{name}.r3rows")))?;
+    if ["model", "step", "policy", "tokenizer"].iter()
+        .any(|key| original[0]["binding"][*key] != flipped[0]["binding"][*key]) {
+        return Err(bad("paired endpoints differ"));
+    }
+    let mut pairs = selector_pairs(&original[1..], &flipped[1..], &es, &ms)?;
+    let mut bases = std::collections::BTreeSet::new();
+    let mut same = 0;
+    for ((row, _), m) in flipped[1..].iter().zip(&es).zip(&ms) {
+        let old = original[1..].iter().find(|r| Some(r["id"].as_str().unwrap_or("")) == m.source_id.as_deref())
+            .ok_or_else(|| bad("paired source row missing"))?;
+        if old["exact_match"] == true && row["exact_match"] == true { bases.insert(&m.base); }
+        let normal = |r: &binary::Value| r["generation_completed"] == true && r["finish_reason"] == "stop" && r["error"].is_null();
+        same += usize::from(normal(old) && normal(row) && old["actual"] == row["actual"]);
+    }
+    pairs["both_bases"] = binary::record!(bases.len()); pairs["same_output"] = binary::record!(same);
+    let screen = paired_screen(p, root, step)?;
+    if screen.model != flip.model { return Err(bad("paired model mismatch")); }
+    let parent: binary::Value = read(&f.study.join("parent-audit.r3b"))?;
+    let baseline: PanelResult = binary::from_value(parent["baseline_screen"].clone())?;
+    let mut streak = 0; let mut stop = None;
+    let mut steps = p.evaluation.screen_steps.clone(); steps.extend(&p.evaluation.primary_steps); steps.sort(); steps.dedup();
+    for n in steps.into_iter().filter(|&n| n <= step) {
+        let r = if n == step { screen.clone() } else { paired_screen(p, root, n)? };
+        if !p.tiny {
+            if r.exact + 16 <= baseline.exact || r.errors >= 8 { stop = Some("QUALITY_REGRESSION_SEVERE"); }
+            if r.exact + 8 <= baseline.exact { streak += 1; } else { streak = 0; }
+            if streak >= 2 { stop = Some("QUALITY_REGRESSION_SCREEN"); }
+        }
+    }
+    #[cfg(feature = "test-support")]
+    if p.tiny && std::env::var("R3_FRESH_TEST_STOP").as_deref() == Ok("paired-quality") {
+        stop = Some("QUALITY_REGRESSION_FIXTURE");
+    }
+    let mut primary = None; let mut transfer = None; let mut admissible = false; let mut joint = false;
+    if full {
+        let (ds, dms) = if p.tiny { subset(&dev, &dm, 1) } else { (dev, dm) };
+        let a = audit_panel(root, p, step, "dev512", &ds, &dms, &tok)?;
+        let tx = verified_corpus(&root.join("transfer.r3cor"), &p.transfer)?.validation;
+        let (_, _, xm) = verified_metadata(root, p)?;
+        let (tx, xm) = if p.tiny { subset(&tx, &xm, 1) } else { (tx, xm) };
+        let b = audit_panel(root, p, step, "transfer128", &tx, &xm, &tok)?;
+        if a.model != b.model || a.model != flip.model { return Err(bad("paired full model mismatch")); }
+        let both = pairs["pairs"][0].as_u64().ok_or_else(|| bad("paired both count"))?;
+        let each = |limit| (2..=4).all(|bucket| pairs["bucket_pairs"][bucket.to_string().as_str()][0].as_u64().is_some_and(|n| n >= limit));
+        let normal = a.errors == 0 && b.errors == 0 && flip.errors == 0 && stop.is_none();
+        admissible = normal && a.exact >= 417 && b.exact >= 75 && both >= 12 && each(1) && bases.len() >= 4;
+        joint = normal && a.exact >= 487 && a.buckets.iter().all(|&n| n >= 58) && b.exact >= 116 && both >= 173 && each(56);
+        primary = Some(a.exact); transfer = Some(b.exact);
+        if joint { stop = Some("DEVELOPMENT_JOINT_PASS_FINAL_NOT_RUN"); }
+    }
+    Ok(binary::record!({"policy":digest(p)?,"step":step,"local_step":step-f.origin_step,"model":flip.model,
+        "original_raw":file_hash(&root.join(format!("eval-{step:04}-{original_name}.r3rows")))?,"flip_raw":flip.raw_hash,
+        "screen":screen,"pairs":pairs,"primary":primary,"transfer":transfer,"admissible":admissible,
+        "development_joint_pass":joint,"guard_streak":streak,"stop":stop}))
+}
+fn paired_evaluate(p: &Plan, root: &Path, path: &Path, step: usize, control: &mut recovery::RunControl) -> Result<Option<String>> {
+    let (_, train, dev) = p.training_corpus(&root.join("corpus.r3cor"))?;
+    let (tm, dm, xm) = verified_metadata(root, p)?;
+    let count = p.evaluation.fixture_per_bucket.unwrap_or(8);
+    if p.evaluation.primary_steps.contains(&step) {
+        let (es, ms) = subset(&train, &tm, count);
+        evaluate_panel(p, root, path, step, "train64", &es, &ms, control)?;
+        let (es, ms) = if p.tiny { subset(&dev, &dm, count) } else { (dev.clone(), dm.clone()) };
+        evaluate_panel(p, root, path, step, "dev512", &es, &ms, control)?;
+        let tx = verified_corpus(&root.join("transfer.r3cor"), &p.transfer)?.validation;
+        let (es, ms) = if p.tiny { subset(&tx, &xm, count) } else { (tx, xm) };
+        evaluate_panel(p, root, path, step, "transfer128", &es, &ms, control)?;
+    } else {
+        let (es, ms) = subset(&dev, &dm, count);
+        evaluate_panel(p, root, path, step, "screen64", &es, &ms, control)?;
+    }
+    let (name, es, ms) = paired_flip_panel(p, root, step, &dev, &dm)?;
+    evaluate_panel(p, root, path, step, name, &es, &ms, control)?;
+    let result = paired_decision(p, root, step)?;
+    let dest = root.join(format!("paired-{step:04}.r3b"));
+    if dest.exists() {
+        let saved: binary::Value = read_confirmed(&dest)?;
+        if saved != result { return Err(bad("paired decision mismatch")); }
+    } else { publish_confirmed(&dest, &result)?; }
+    println!("PAIRED_EVALUATION {result}");
+    Ok(result["stop"].as_str().map(str::to_owned))
+}
+fn pair_tapes(parent: &Plan, tm: &[Meta], block: usize, steps: usize) -> Result<[Vec<[usize;8]>;2]> {
+    if block < 2 || !block.is_multiple_of(2) || !steps.is_multiple_of(block) || steps > 3840 {
+        return Err(bad("pair block/maximum length"));
+    }
+    let n = tm.len();
+    let pairs = block/2;
+    let mut rows: Vec<[usize;8]> = (0..steps).map(|i| parent.training_draw(parent.config.max_steps+i)
+        .try_into().map_err(|_| bad("pair effective batch must be eight"))).collect::<Result<_>>()?;
+    let mut out = [rows.clone(), std::mem::take(&mut rows)];
+    for bucket in [2, 3, 4] {
+        let mut bases: BTreeMap<&str, [Option<usize>;4]> = BTreeMap::new();
+        for (i, m) in tm.iter().enumerate().filter(|(_,m)|m.bucket==bucket) {
+            if m.id.is_empty() || m.view>3 || bases.entry(&m.base).or_default()[m.view].replace(i).is_some() {
+                return Err(bad("duplicate/invalid train base view"));
+            }
+        }
+        if bases.len()<pairs || !bases.len().is_multiple_of(pairs) || bases.values().any(|v|v.contains(&None)) {
+            return Err(bad("insufficient distinct train bases / missing view"));
+        }
+        let mut bases: Vec<_> = bases.into_iter().collect();
+        bases.sort_by_key(|(name,_)| neural::hash(format!("pair/{}/{bucket}/{name}",parent.config.seed).as_bytes()));
+        for b in 0..steps/block {
+            let view = (b*pairs/bases.len())%4;
+            let start = (b*pairs)%bases.len();
+            let mut group: Vec<_> = bases[start..start+pairs].iter().map(|(id,v)|(*id,v[view].unwrap())).collect();
+            group.sort_by_key(|(id,_)| neural::hash(format!("pair-order/{}/{bucket}/{b}/{id}",parent.config.seed).as_bytes()));
+            let mut first: Vec<_> = (0..pairs).map(|j|j%2).collect();
+            let mut phrase: Vec<_> = (0..pairs).map(|j|(j+b)%2).collect();
+            let mut rng = Rng::new(parent.config.seed ^ ((bucket+1) as u64*31) ^ (b as u64*977));
+            for v in [&mut first, &mut phrase] {
+                for j in (1..v.len()).rev() { let k = rng.next_u64() as usize%(j+1); v.swap(j,k); }
+            }
+            for (j,(_,id)) in group.iter().enumerate() {
+                for side in 0..2 {
+                    let sample = id+phrase[j]*n+(first[j]^side)*2*n;
+                    out[0][b*block+j+side*pairs][bucket]=sample;
+                    out[1][b*block+2*j+side][bucket]=sample;
+                }
+            }
+        }
+    }
+    for b in 0..steps/block {
+        let mut a: Vec<_> = out[0][b*block..(b+1)*block].iter().flat_map(|r|r.iter().copied().enumerate()).collect();
+        let mut c: Vec<_> = out[1][b*block..(b+1)*block].iter().flat_map(|r|r.iter().copied().enumerate()).collect();
+        a.sort();c.sort();if a!=c {return Err(bad("pair block multiset differs"));}
+    }
+    Ok(out)
+}
+fn verify_pair_tape(parent: &Plan, tm: &[Meta], tape: &PairTape) -> Result<()> {
+    let arm = match tape.mode.as_str() { "SPACED" => 0, "ADJACENT" => 1, _ => return Err(bad("unknown pair policy")) };
+    let expected = pair_tapes(parent, tm, tape.block, tape.rows.len())?;
+    if expected[arm] != tape.rows { return Err(bad("pair tape duplicate/missing/unknown case or altered order")); }
+    Ok(())
+}
+fn paired_prepare(parent: &Path, source_data: &Path, output: &Path, parity: Option<&Path>) -> Result<()> {
+    let started=Instant::now();
+    let parent=parent.canonicalize()?;
+    let pp: Plan=read(&parent.join("plan.r3b"))?;
+    let h=history(&parent,&pp)?;
+    let end=h.last().ok_or_else(||bad("paired parent missing durable endpoint"))?;
+    if end.resume || end.step!=pp.config.max_steps || (!pp.tiny && end.step!=6144) {
+        return Err(bad("paired requires closed P6144 parent"));
+    }
+    let cp=parent.join(&end.checkpoint);
+    let l=checkpoint::load(&cp,Device::Cpu,true)?;
+    let state=l.manifest.training.as_ref().ok_or_else(||bad("paired parent missing Adam"))?;
+    if state.step!=end.step || state.resume_binding.as_ref()!=Some(&pp.binding(state,&l.tokenizer)?)
+        || l.tokenizer.id()!=pp.tokenizer || state.config.first_target_weight!=1. {
+        return Err(bad("paired parent objective/native binding"));
+    }
+    let dp: Plan=read(&source_data.join("plan.r3b"))?;
+    let f=dp.fork.as_ref().ok_or_else(||bad("pair data provenance missing"))?;
+    if f.arm!="S-SELECT" || dp.corpus!=pp.corpus || dp.tokenizer!=pp.tokenizer {
+        return Err(bad("paired training pool differs from P wording/original"));
+    }
+    let (_, train, dev)=pp.training_corpus(&parent.join("corpus.r3cor"))?;
+    let (tm,dm,_)=verified_metadata(&parent,&pp)?;
+    let variants=verified_corpus(&source_data.join("variants.r3cor"),f.variants.as_ref().ok_or_else(||bad("missing phrases"))?)?.train;
+    let parent_variants = verified_corpus(&parent.join("variants.r3cor"), pp.fork.as_ref()
+        .and_then(|p|p.variants.as_ref()).ok_or_else(||bad("P phrase provenance missing"))?)?.train;
+    if digest(&variants)? != digest(&parent_variants)? { return Err(bad("P phrase content changed")); }
+    let flips=verified_corpus(&source_data.join("selectors.r3cor"),f.selector.as_ref().ok_or_else(||bad("missing train selectors"))?)?.train;
+    let sm: Vec<Meta>=read(&source_data.join("selector-metadata.r3b"))?;
+    if Some(file_hash(&source_data.join("selector-metadata.r3b"))?)!=f.selector_metadata
+        || train.len()!=variants.len() || flips.len()!=train.len()*2 || sm.len()!=flips.len() {
+        return Err(bad("paired owned train pool shape/hash"));
+    }
+    let n=train.len();
+    for (style,es) in [&train,&variants].iter().enumerate() {
+        for (i,(e,m)) in es.iter().zip(&tm).enumerate() {
+            let other=&flips[style*n+i];
+            if (2..=4).contains(&m.bucket) {
+                let (expected,_) = flip_selection(e,m)?;
+                if digest(&expected.request)?!=digest(&other.request)? || expected.answer!=other.answer
+                    || other.answer==e.answer || sm[style*n+i].source_id.as_deref()!=Some(train[i].id.as_str()) {
+                    return Err(bad("paired train annotation mismatch"));
+                }
+            } else if digest(&e.request)?!=digest(&other.request)? || e.answer!=other.answer {
+                return Err(bad("nonselector train content changed"));
+            }
+        }
+    }
+    let mut all=train.clone();all.extend(variants);all.extend(flips);
+    validate_framed(&all,&l.tokenizer)?;
+    let framed=samples(&all,&l.tokenizer,pp.config.seq_len)?;
+    let block=if pp.tiny {2}else{256};
+    let tapes=pair_tapes(&pp,&tm,block,if pp.tiny {2}else{3840})?;
+    let totals: Vec<_>=tapes.iter().map(|t| t.iter().map(|r| r.iter().fold((0u64,0u64),|(i,v),&j|
+        (i+(framed[j].tokens.len()-1) as u64,v+(framed[j].tokens.len()-framed[j].response_start) as u64))).collect::<Vec<_>>()).collect();
+    for arm in 0..2 {
+        let work: Vec<_>=totals[arm].iter().chain(totals[1-arm][..block].iter()).collect();
+        if work.iter().map(|x|x.0).sum::<u64>()>12_000_000 || work.iter().map(|x|x.1).sum::<u64>()>1_000_000 {
+            return Err(bad("registered full study token budget insufficient"));
+        }
+    }
+    let mut parity_receipt=binary::Value::Null;
+    if !pp.tiny {
+        let parity=parity.ok_or_else(||bad("production P16 parity required"))?;
+        let proof: binary::Value=read_confirmed(&parity.join("result.r3b"))?;
+        let selection: binary::Value=read(&parity.join("selection.r3b"))?;
+        let rows=binary::read_value_records(&parity.join("parity.r3rows"))?;
+        if proof["matched"]!=16 || proof["originals_unchanged"]!=true || !proof["error"].is_null()
+            || proof["control"]["terminal_reason"]!="COMPLETED" || proof["control"]["generation_calls"]!=16
+            || proof["control"]["teacher_calls"]!=0 || selection["source"]!=source_digest()?
+            || selection["policy"]!=digest(&pp)? || proof["selection"]!=file_hash(&parity.join("selection.r3b"))?
+            || proof["raw"]!=file_hash(&parity.join("parity.r3rows"))? || rows.len()!=17
+            || rows[0]["physical"]!=file_hash(&cp)? {
+            return Err(bad("paired P16 binding/parity incomplete"));
+        }
+        parity_receipt=proof;
+    }
+    let (_,mut panels)=audit_panels_range(&parent,&pp,end.step,end.step)?;
+    let raw=binary::read_value_records(&parent.join(format!("eval-{:04}-dev512.r3rows",end.step)))?;
+    let (screen,ms)=subset(&dev,&dm,if pp.tiny {1}else{8});
+    let selected: Vec<_>=screen.iter().map(|e|raw[1..].iter().find(|r|r["id"]==e.id).cloned().ok_or_else(||bad("parent screen source missing"))).collect::<Result<_>>()?;
+    let baseline=score(&selected,&screen,&ms)?;
+    panels.insert(format!("eval-{:04}-screen64",end.step),baseline.clone());
+    let (diagnostic,metadata): (Vec<Episode>,Vec<Meta>)=read(&f.study.join("diagnostic.r3b"))?;
+    if digest(&(diagnostic.clone(),metadata.clone()))? != digest(&selector_panel(&dev,&dm,pp.tiny)?)? {
+        return Err(bad("paired frozen development mapping"));
+    }
+    let parent_selector=audit_panel(&f.study,&pp,end.step,"selector192",&diagnostic,&metadata,&l.tokenizer)?;
+    let flip_raw=binary::read_value_records(&f.study.join(format!("eval-{:04}-selector192.r3rows",end.step)))?;
+    let parent_pairs=selector_pairs(&raw[1..],&flip_raw[1..],&diagnostic,&metadata)?;
+    println!("PAIRED_PARENT step={} weights={} adam={} primary={} transfer={} selector={} both={}",end.step,
+        l.model.weight_hash()?,optimizer_hash(&l.optimizer)?,panels[&format!("eval-{:04}-dev512",end.step)].exact,
+        panels[&format!("eval-{:04}-transfer128",end.step)].exact,parent_selector.exact,parent_pairs["pairs"][0]);
+    std::fs::create_dir(output)?;
+    let output=output.canonicalize()?;
+    write(&output.join("diagnostic.r3b"),&(diagnostic,metadata))?;
+    write(&output.join("parent-audit.r3b"),&binary::record!({"panels":panels,"baseline_screen":baseline,"selector":parent_selector,"pairs":parent_pairs,"parity":parity_receipt,
+        "global_optimizer_limit":4096,"global_input_limit":12_000_000,"global_target_limit":1_000_000,
+        "G2_per_arm":256,"G3_additional":3584,"G3_gate":{"primary":417,"transfer":75,"both":12,"both_each":1,"both_bases":4},
+        "joint_gate":{"primary":487,"bucket":58,"transfer":116,"both":173,"both_bucket":56},
+        "planned_tokens":totals.iter().map(|t|binary::record!({"first_block":t[..block].iter().fold((0u64,0u64),|a,b|(a.0+b.0,a.1+b.1)),"all":t.iter().fold((0u64,0u64),|a,b|(a.0+b.0,a.1+b.1))})).collect::<Vec<_>>()}))?;
+    let study=Study {schema:4,source:source_digest()?,binary:file_hash(&std::env::current_exe()?)?,parent:parent.clone(),
+        parent_plan:file_hash(&parent.join("plan.r3b"))?,parent_checkpoint:cp.clone(),parent_file:file_hash(&cp)?,
+        parent_model:l.model.weight_hash()?,parent_adam:optimizer_hash(&l.optimizer)?,parent_state:digest(state)?,
+        parent_step:state.step,tokenizer:pp.tokenizer.clone(),updates:block,tiny:pp.tiny,inventory:vec![],
+        diagnostic_hash:file_hash(&output.join("diagnostic.r3b"))?,parent_audit_hash:file_hash(&output.join("parent-audit.r3b"))?,
+        tie_break:vec!["SPACED".into(),"ADJACENT".into()]};
+    write(&output.join("study.r3b"),&study)?;
+    for (arm,tape) in study.tie_break.iter().zip(tapes) {
+        let root=output.join(arm);std::fs::create_dir(&root)?;
+        for name in ["corpus.r3cor","transfer.r3cor","metadata.r3b","tokenizer.r3b"] {
+            neural::write_new(&root.join(name),&std::fs::read(parent.join(name))?)?;
+        }
+        for name in ["variants.r3cor","question-variants.r3b","selectors.r3cor","selector-metadata.r3b"] {
+            neural::write_new(&root.join(name),&std::fs::read(source_data.join(name))?)?;
+        }
+        neural::write_new(&root.join("initial.r3m"),&std::fs::read(&cp)?)?;
+        let mut table=std::fs::OpenOptions::new().write(true).create_new(true).open(root.join("paired-samples.r3rows"))?;
+        for (i,(e,s)) in all.iter().zip(&framed).enumerate() {
+            let m=&tm[i%n];
+            binary::write_value_record(&mut table,&binary::record!({"index":i,"source":train[i%n].id,"bucket":m.bucket,"base":m.base,"view":m.view,
+                "phrase":(i/n)%2,"side":i/(2*n),"request":digest(&e.request)?,"target":digest(&&s.tokens[s.response_start..])?,
+                "prompt":digest(&&s.tokens[..s.response_start])?}))?;
+        }
+        table.flush()?;
+        table.sync_all()?;
+        let mut plan=pp.clone();plan.source=study.source.clone();plan.binary=study.binary.clone();
+        plan.initial=study.parent_file.clone();plan.initial_weights=study.parent_model.clone();
+        plan.config.budget_start_step=state.step;plan.config.budget_start_tokens=state.consumed_tokens;
+        plan.config.max_steps=state.step+block;plan.config.max_tokens=state.consumed_tokens+12_000_000;
+        plan.config.lr=3e-5;plan.config.warmup=0;plan.config.validate_every=block;
+        plan.evaluation=paired_evaluation(state.step,block,pp.tiny);
+        plan.train_order=digest(&tape)?;
+        plan.paired=Some(PairTape {mode:arm.clone(),first_step:state.step,block,samples:file_hash(&root.join("paired-samples.r3rows"))?,rows:tape});
+        plan.fork=Some(Fork {study:output.clone(),study_hash:file_hash(&output.join("study.r3b"))?,arm:arm.clone(),
+            parent_policy:digest(&pp)?,parent_state:digest(state)?,parent_adam:study.parent_adam.clone(),
+            origin_step:state.step,origin_input:state.consumed_tokens,origin_target:state.target_tokens,
+            original_corpus:pp.corpus.clone(),tokenizer_training_hash:l.tokenizer.train_hash.clone(),
+            variants:f.variants.clone(),variant_metadata:f.variant_metadata.clone(),alternate_first:vec![],
+            selector:f.selector.clone(),selector_metadata:f.selector_metadata.clone(),flip_first:vec![],constant_lr:3e-5,target_limit:1_000_000});
+        write(&root.join("plan.r3b"),&plan)?;
+        let back:Plan=read(&root.join("plan.r3b"))?;if back!=plan {return Err(bad("paired max tape readback"));}
+        let initial=checkpoint::load(&root.join("initial.r3m"),Device::Cpu,true)?;
+        if !plan.parent_entry(&root.join("initial.r3m"),&initial)? {return Err(bad("paired initial native readback"));}
+        println!("PAIRED_REGISTERED arm={arm} parent={} policy={} tape_steps={} actual_updates=0",state.step,digest(&plan)?,plan.paired.as_ref().unwrap().rows.len());
+    }
+    publish_confirmed(&output.join("study-ready.r3b"),&binary::record!({"study":file_hash(&output.join("study.r3b"))?,
+        "C":file_hash(&output.join("SPACED/plan.r3b"))?,"P":file_hash(&output.join("ADJACENT/plan.r3b"))?,"elapsed_seconds":started.elapsed().as_secs_f64()}))?;
+    Ok(())
+}
+fn paired_work(root:&Path)->Result<(u64,u64,u64)> {
+    let mut used=(0u64,0u64,0u64);
+    for arm in ["SPACED","ADJACENT"] {
+        let a=root.join(arm);
+        for i in 0..128 {
+            let path=a.join(format!("segment-{i:04}-finished.r3b"));if !path.exists(){break;}
+            let _:Segment=read_confirmed(&path)?;
+            let r:binary::Value=read(&a.join(format!("segment-{i:04}/train-control.r3b")))?;
+            used.0+=r["executed_input_tokens_including_uncommitted"].as_u64().ok_or_else(||bad("paired input UNKNOWN"))?;
+            used.1+=r["executed_target_tokens_including_uncommitted"].as_u64().ok_or_else(||bad("paired target UNKNOWN"))?;
+            used.2+=r["optimizer_calls"].as_u64().ok_or_else(||bad("paired updates UNKNOWN"))?;
+        }
+    }
+    if used.0>12_000_000||used.1>1_000_000||used.2>4096{return Err(bad("paired global learning budget"));}
+    Ok(used)
+}
+fn paired_usage(root:&Path)->Result<(f64,usize,usize)> {
+    let s=study_read(root)?;if s.schema!=4{return Err(bad("paired study schema"));}
+    let (mut elapsed,mut generation,teacher)=study_usage_bound(root,false,&s)?;
+    for arm in &s.tie_break {
+        let a=root.join(arm);let p=plan_read(&a)?;
+        for h in history(&a,&p)? {
+            // A completed, safe quality stop is permitted; execution failures are sticky.
+            if h.phase.as_deref()==Some("Failed"){return Err(bad("paired execution failure blocks all arms"));}
+            let c:binary::Value=read(&a.join(h.checkpoint).parent().unwrap().join("train-control.r3b"))?;
+            let conditions=c["observed_conditions"].as_array().ok_or_else(||bad("paired stop conditions UNKNOWN"))?;
+            if conditions.iter().any(|x|x!="TIME_BUDGET"){return Err(bad("paired unsafe command blocks all arms"));}
+        }
+    }
+    let baseline:binary::Value=read(&root.join("parent-audit.r3b"))?;
+    if !s.tiny {
+        generation+=16;
+        elapsed+=baseline["parity"]["control"]["elapsed_seconds"].as_f64().ok_or_else(||bad("parity time UNKNOWN"))?;
+    }
+    paired_work(root)?;
+    Ok((elapsed,generation,teacher))
+}
+fn paired_report(root:&Path)->Result<binary::Value> {
+    let s=study_read(root)?;let usage=paired_usage(root)?;
+    let mut results=BTreeMap::new();let mut eligible=vec![];let mut endpoints=true;let mut endpoint_steps=vec![];
+    for arm in &s.tie_break {
+        let a=root.join(arm);let p=plan_read(&a)?;let h=history(&a,&p)?;
+        let end=h.last().ok_or_else(||bad("paired arm NOT_RUN"))?;
+        if end.resume||end.phase.as_deref()!=Some("Finished"){return Err(bad("paired arm incomplete"));}
+        endpoints&=end.step==p.config.max_steps;
+        endpoint_steps.push(end.step);
+        let (_,panels)=audit_panels_through(&a,&p,end.step)?;
+        let exposure=audit_updates(&a,&p,&h)?;
+        let r = paired_decision(&p, &a, end.step)?;
+        let saved:binary::Value=read_confirmed(&a.join(format!("paired-{:04}.r3b",end.step)))?;
+        if r != saved { return Err(bad("paired decision differs from raw recount")); }
+        if r["admissible"]==true && end.step==p.config.max_steps {
+            eligible.push((arm.clone(),r["pairs"]["pairs"][0].as_u64().unwrap(),
+                r["primary"].as_u64().unwrap(),r["transfer"].as_u64().unwrap()));
+        }
+        results.insert(arm.clone(),binary::record!({"end":end,"panels":panels,"endpoint":r,"exposure":exposure}));
+    }
+    eligible.sort_by(|a,b|b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(b.3.cmp(&a.3)).then(a.0.cmp(&b.0)));
+    let mut comparisons = BTreeMap::new();
+    let mut both_gain_loss = None;
+    if endpoints {
+        for name in ["train64", "dev512", "transfer128", "selector192"] {
+            let step=s.parent_step+s.updates;
+            let a=binary::read_value_records(&root.join("SPACED").join(format!("eval-{step:04}-{name}.r3rows")))?;
+            let b=binary::read_value_records(&root.join("ADJACENT").join(format!("eval-{step:04}-{name}.r3rows")))?;
+            comparisons.insert(name,paired(&a[1..],&b[1..])?);
+        }
+        if results["SPACED"]["exposure"]["unchanged_five_tasks"] != results["ADJACENT"]["exposure"]["unchanged_five_tasks"]
+            || results["SPACED"]["exposure"]["actual_multiset"] != results["ADJACENT"]["exposure"]["actual_multiset"] {
+            return Err(bad("paired actual exposure mismatch"));
+        }
+        let (_, metadata): (Vec<Episode>, Vec<Meta>) = read(&root.join("diagnostic.r3b"))?;
+        let mut outcomes = vec![];
+        for arm in ["SPACED", "ADJACENT"] {
+            let step=s.parent_step+s.updates;
+            let originals=binary::read_value_records(&root.join(arm).join(format!("eval-{step:04}-dev512.r3rows")))?;
+            let flips=binary::read_value_records(&root.join(arm).join(format!("eval-{step:04}-selector192.r3rows")))?;
+            let bits: Vec<_> = metadata.iter().zip(&flips[1..]).map(|(m,r)| {
+                originals[1..].iter().any(|o| o["id"].as_str()==m.source_id.as_deref() && o["exact_match"]==true) && r["exact_match"]==true
+            }).collect();
+            outcomes.push(bits);
+        }
+        both_gain_loss=Some(binary::record!({"gain":outcomes[0].iter().zip(&outcomes[1]).filter(|(a,b)| !**a && **b).count(),
+            "loss":outcomes[0].iter().zip(&outcomes[1]).filter(|(a,b)| **a && !**b).count()}));
+    }
+    Ok(binary::record!({"source":s.source,"binary":s.binary,"results":results,"same_budget":endpoints,
+        "paired_gain_loss":comparisons,"both_gain_loss":both_gain_loss,"effect":if endpoints {"EQUAL_BUDGET"}else if endpoint_steps[0]==endpoint_steps[1]{"EARLY_STOPS_NO_256_COMPARISON"}else{"UNEQUAL_BUDGET_NOT_ESTABLISHED"},
+        "selected_for_continuation":eligible.first().map(|v|&v.0),"usage":usage,"training_usage":paired_work(root)?,
+        "result":if eligible.is_empty(){"STUDY_COMPLETE_NO_ADMISSIBLE_LEARNER"}else{"G3_ENTRY_PASS"},"GOAL1_READY":false}))
 }
 fn study_prepare(parent: &Path, output: &Path, selector: bool) -> Result<()> {
     let started = Instant::now();
@@ -3172,6 +3696,7 @@ fn study_read_bound(root: &Path, frozen_executable: Option<&Path>) -> Result<Stu
     let names = match s.schema {
         2 => ["C-REPEAT", "P-PHRASE"],
         3 => ["C-KEEP", "S-SELECT"],
+        4 => ["SPACED", "ADJACENT"],
         _ => return Err(bad("study schema")),
     };
     if s.tie_break != names {
@@ -3185,7 +3710,7 @@ fn study_read_bound(root: &Path, frozen_executable: Option<&Path>) -> Result<Stu
         return Err(bad("study registration incomplete/changed"));
     }
     let executable = frozen_executable.map_or_else(std::env::current_exe, |p| Ok(p.to_path_buf()))?;
-    if ![2, 3].contains(&s.schema)
+    if ![2, 3, 4].contains(&s.schema)
         || (frozen_executable.is_none() && s.source != source_digest()?)
         || s.binary != file_hash(&executable)?
         || s.parent_plan != file_hash(&s.parent.join("plan.r3b"))?
@@ -3640,6 +4165,8 @@ fn audit_updates(root: &Path, p: &Plan, h: &[Segment]) -> Result<binary::Value> 
     let mut target_order = vec![];
     let mut phrase_order = vec![];
     let mut unchanged = vec![];
+    let mut actual_multiset = vec![];
+    let mut bucket_side_phrase = [[[0usize;2];2];8];
     let mut flips = 0usize;
     let mut counts = vec![[0usize; 2]; episodes.len()];
     for (i, segment) in h.iter().enumerate() {
@@ -3670,6 +4197,8 @@ fn audit_updates(root: &Path, p: &Plan, h: &[Segment]) -> Result<binary::Value> 
                     let phrase = (selected / episodes.len()) % 2;
                     counts[j][phrase] += 1;
                     phrase_order.push(phrase);
+                    actual_multiset.push((bucket, selected));
+                    bucket_side_phrase[bucket][usize::from(selected >= 2 * episodes.len())][phrase] += 1;
                     flips += usize::from(selected >= 2 * episodes.len());
                     if !(2..=4).contains(&bucket) {
                         unchanged.push(digest(&framed[selected].tokens)?);
@@ -3702,7 +4231,7 @@ fn audit_updates(root: &Path, p: &Plan, h: &[Segment]) -> Result<binary::Value> 
             return Err(bad("native counter/trace disagreement"));
         }
     }
-    if !p.tiny
+    if !p.tiny && p.paired.is_none()
         && f.origin_step + steps == p.config.max_steps
         && counts
             .iter()
@@ -3717,8 +4246,9 @@ fn audit_updates(root: &Path, p: &Plan, h: &[Segment]) -> Result<binary::Value> 
     {
         return Err(bad("actual selector exposures"));
     }
+    actual_multiset.sort();
     Ok(
-        binary::record!({"updates":steps,"case_order":digest(&order)?,"target_order":digest(&target_order)?,"phrase_order":digest(&phrase_order)?,"unchanged_five_tasks":digest(&unchanged)?,"unchanged_digest_kind":"ordered-native-token-row-sha256-v1","selector_draws":flips,"committed_input":input,"committed_target":target,
+        binary::record!({"updates":steps,"actual_multiset":digest(&actual_multiset)?,"bucket_side_phrase":bucket_side_phrase,"case_order":digest(&order)?,"target_order":digest(&target_order)?,"phrase_order":digest(&phrase_order)?,"unchanged_five_tasks":digest(&unchanged)?,"unchanged_digest_kind":"ordered-native-token-row-sha256-v1","selector_draws":flips,"committed_input":input,"committed_target":target,
         "actual_input":actual_input,"actual_target":actual_target,"discarded_input":actual_input-input,"discarded_target":actual_target-target,"padding":padding,
         "case_count":counts.len(),"case_exposure_hash":digest(&counts)?,"original_draws":counts.iter().map(|x|x[0]).sum::<usize>(),"variant_draws":counts.iter().map(|x|x[1]).sum::<usize>()}),
     )
@@ -3727,6 +4257,63 @@ fn audit_updates(root: &Path, p: &Plan, h: &[Segment]) -> Result<binary::Value> 
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn paired_tape_full_writer_reader_bounds_and_balance() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("parent");
+        prepare(&root, true).unwrap();
+        let mut p: Plan = read(&root.join("plan.r3b")).unwrap();
+        let (_, tm) = generate(256, 0, 20260919).unwrap();
+        let n = tm.len();
+        p.config.max_steps = 6144;
+        p.order = (0..8).map(|b| tm.iter().enumerate().filter(|(_,m)| m.bucket == b).map(|(i,_)|i).collect()).collect();
+        let tapes = pair_tapes(&p, &tm, 256, 3840).unwrap();
+        for (mode, rows) in ["SPACED", "ADJACENT"].into_iter().zip(&tapes) {
+            let tape = PairTape { mode: mode.into(), first_step: 6144, block: 256, samples: "fixture-explicit".into(), rows: rows.clone() };
+            let path = d.path().join(format!("{mode}.r3b"));
+            publish_confirmed(&path, &tape).unwrap();
+            let restored: PairTape = read_confirmed(&path).unwrap();
+            assert_eq!(tape, restored);
+            verify_pair_tape(&p,&tm,&restored).unwrap();
+            let mut wrong=restored.clone();wrong.rows[1]=wrong.rows[0];assert!(verify_pair_tape(&p,&tm,&wrong).is_err());
+            let mut wrong=restored.clone();wrong.rows[255][2]=4*n;assert!(verify_pair_tape(&p,&tm,&wrong).is_err());
+            let mut wrong=restored.clone();wrong.rows.pop();assert!(verify_pair_tape(&p,&tm,&wrong).is_err());
+            for i in [0, 1, 255, 256, 257, 3839] { assert_eq!(restored.at(6144+i).unwrap(), rows[i]); }
+            assert!(restored.at(6143).is_err()); assert!(restored.at(9984).is_err());
+            for block in rows.chunks_exact(256) {
+                for bucket in 2..=4 {
+                    let mut pairs: BTreeMap<usize, Vec<(usize,usize)>> = BTreeMap::new();
+                    let mut phrase = [0;2]; let mut first_side = [0;2]; let mut bases = BTreeSet::new();
+                    for (i,row) in block.iter().enumerate() {
+                        let j = row[bucket]; assert_eq!(tm[j%n].bucket,bucket);
+                        pairs.entry(j%(2*n)).or_default().push((i,j/(2*n)));
+                        phrase[(j/n)%2] += 1; bases.insert(&tm[j%n].base);
+                    }
+                    assert_eq!(pairs.len(),128); assert_eq!(bases.len(),128); assert_eq!(phrase,[128,128]);
+                    for entries in pairs.values() {
+                        assert_eq!(entries.len(),2); assert_eq!(entries[0].1+entries[1].1,1);
+                        assert_eq!(entries[1].0-entries[0].0,if mode=="SPACED" {128}else{1});
+                        first_side[entries[0].1]+=1;
+                    }
+                    assert_eq!(first_side,[64,64]);
+                }
+            }
+        }
+        for (a,b) in tapes[0].iter().zip(&tapes[1]) {
+            for bucket in [0,1,5,6,7] { assert_eq!(a[bucket],b[bucket]); }
+        }
+        for (a,b) in tapes[0].chunks_exact(256).zip(tapes[1].chunks_exact(256)) {
+            let mut a: Vec<_> = a.iter().flat_map(|r|r.iter().copied()).collect();
+            let mut b: Vec<_> = b.iter().flat_map(|r|r.iter().copied()).collect(); a.sort(); b.sort(); assert_eq!(a,b);
+        }
+        let mut duplicate = tm.clone(); duplicate.push(tm[2*1024].clone());
+        assert!(pair_tapes(&p,&duplicate,256,3840).is_err());
+        let mut missing=tm.clone(); missing.remove(2*1024); assert!(pair_tapes(&p,&missing,256,3840).is_err());
+        assert!(pair_tapes(&p,&tm,256,3841).is_err());
+        assert_eq!(paired_evaluation(6400,3584,false).primary_steps,vec![7424,8448,9984]);
+        println!("TAPE_STEPS=3840 MODEL_UPDATES=0 GENERATION=0 TEACHER=0 full_binary_readback=EXACT");
+    }
 
     // Explicit, training-free adapter for a closed study. It never calls run or
     // study_observe, and reporting cannot create observations or repair history.
@@ -4538,6 +5125,7 @@ mod tests {
         let p = Plan {
             schema: None,
             fork: None,
+            paired: None,
             revision: REVISION.into(),
             source: String::new(),
             binary: String::new(),

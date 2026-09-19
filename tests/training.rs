@@ -2989,6 +2989,75 @@ fn fresh_explicit_fork_matches_continuous_and_split_native_resume() {
 }
 
 #[test]
+fn fresh_paired_policies_match_continuous_and_split_processes() {
+    use replica_v3::{binary, neural::checkpoint};
+    use candle_core::Device;
+    let d = tempfile::tempdir().unwrap();
+    let call = |args: &[&str], fault: Option<&str>, success: bool| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_replica-train"));
+        c.args(args).env("VECLIB_MAXIMUM_THREADS", "1").env("RAYON_NUM_THREADS", "1").env("R3_FRESH_FIXTURE_EOS", "1");
+        if let Some(f) = fault { c.env("R3_FRESH_TEST_STOP", f); }
+        let out = c.output().unwrap();
+        println!("PAIRED_TEST_COMMAND {args:?} fault={fault:?} exit={}\n{}\n{}", out.status, String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert_eq!(out.status.success(),success,"{}\n{}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));
+        out
+    };
+    let parent=d.path().join("parent");let phrase=d.path().join("phrase");let selector=d.path().join("selector");
+    call(&["fresh","fixture","--output",parent.to_str().unwrap()],None,true);
+    call(&["fresh","fixture-full","--root",parent.to_str().unwrap()],None,true);
+    call(&["fresh","study-prepare","--parent",parent.to_str().unwrap(),"--output",phrase.to_str().unwrap()],None,true);
+    call(&["fresh","study-observe","--root",phrase.to_str().unwrap()],None,true);
+    let p=phrase.join("P-PHRASE");
+    call(&["fresh","fixture-full","--root",p.to_str().unwrap()],None,true);
+    call(&["fresh","study-prepare","--selector","--parent",p.to_str().unwrap(),"--output",selector.to_str().unwrap()],None,true);
+    call(&["fresh","study-observe","--root",selector.to_str().unwrap()],None,true);
+    let roots=[d.path().join("continuous"),d.path().join("split")];
+    for root in &roots {
+        call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),"--output",root.to_str().unwrap()],None,true);
+    }
+    for arm in ["SPACED","ADJACENT"] {
+        let a=roots[0].join(arm);let b=roots[1].join(arm);
+        call(&["fresh","fixture-full","--root",a.to_str().unwrap()],None,true);
+        call(&["fresh","run","--root",b.to_str().unwrap()],None,true);
+        call(&["fresh","run","--root",b.to_str().unwrap()],None,true);
+        let a=checkpoint::load(&a.join("segment-0000/final"),Device::Cpu,true).unwrap();
+        let b=checkpoint::load(&b.join("segment-0001/final"),Device::Cpu,true).unwrap();
+        assert_eq!(a.model.weight_hash().unwrap(),b.model.weight_hash().unwrap());
+        for (k,t) in &a.optimizer { assert_eq!(t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),b.optimizer[k].flatten_all().unwrap().to_vec1::<f32>().unwrap()); }
+        let x=a.manifest.training.unwrap();let y=b.manifest.training.unwrap();
+        assert_eq!((x.step,x.sampler_state,x.consumed_tokens,x.target_tokens),(y.step,y.sampler_state,y.consumed_tokens,y.target_tokens));
+        assert_eq!(x.step,6);
+    }
+    fn hashes(root:&std::path::Path)->std::collections::BTreeMap<std::path::PathBuf,String> {
+        let mut out=std::collections::BTreeMap::new();
+        for e in std::fs::read_dir(root).unwrap() { let p=e.unwrap().path(); if p.is_dir(){out.extend(hashes(&p));}else{out.insert(p.clone(),replica_v3::neural::hash(&std::fs::read(p).unwrap()));} }out
+    }
+    for root in &roots {
+        let before=hashes(root);
+        call(&["fresh","paired-report","--root",root.to_str().unwrap()],None,true);
+        assert_eq!(before,hashes(root));
+    }
+    // A saved quality stop permits the other preauthorized arm; failed publication does not.
+    let quality=d.path().join("quality");
+    call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),"--output",quality.to_str().unwrap()],None,true);
+    call(&["fresh","fixture-full","--root",quality.join("SPACED").to_str().unwrap()],Some("paired-quality"),true);
+    call(&["fresh","run","--root",quality.join("ADJACENT").to_str().unwrap()],None,true);
+    call(&["fresh","run","--root",quality.join("ADJACENT").to_str().unwrap()],None,true);
+    let failure=d.path().join("failure");
+    call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),"--output",failure.to_str().unwrap()],None,true);
+    call(&["fresh","run","--root",failure.join("SPACED").to_str().unwrap()],Some("finished-file-sync"),false);
+    let out=call(&["fresh","run","--root",failure.join("ADJACENT").to_str().unwrap()],None,false);
+    assert!(!failure.join("ADJACENT/segment-0000-started.r3b").exists());
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("TRAIN step="));
+    let mut counts=[0u64;3];
+    fn count(root:&std::path::Path,totals:&mut[u64;3]) {
+        for e in std::fs::read_dir(root).unwrap(){let p=e.unwrap().path();if p.is_dir(){count(&p,totals);}else if p.file_name().unwrap()=="train-control.r3b"{let r:binary::Value=binary::from_slice(&std::fs::read(&p).unwrap()).unwrap();for (i,k) in ["optimizer_calls","generation_calls","teacher_calls"].iter().enumerate(){totals[i]+=r[*k].as_u64().unwrap();}}}
+    }
+    count(d.path(),&mut counts);
+    println!("TINY_TRAIN_CONTROLS_UPDATES_GENERATIONS_TEACHERS={counts:?} observation_generations=27 observation_teachers=27 fresh_process_policy_parity=EXACT pure_report=UNCHANGED");
+}
+
+#[test]
 fn fresh_eos_deadline_process_and_sync_failure_stay_distinct() {
     use replica_v3::{binary,neural::{EOS,checkpoint}};use candle_core::Device;
     for sync_failure in [false,true]{

@@ -1028,9 +1028,11 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
     let mut last_validated = None;
     let mut fresh_evaluated = None;
     let mut executed_input_tokens = 0u64;
+    let mut executed_optimizer_calls = 0u64;
     let mut executed_target_tokens=0u64;
     let mut executed_padding_tokens=0u64;
     let target_allowance=match fresh {Some((p,root))=>p.remaining_targets(root)?,None=>None};
+    let input_allowance=match fresh {Some((p,_))=>p.remaining_input()?,None=>None};
     let mut token_budget_reached = false;
     let mut fresh_stop = None;
     let mut fresh_trace = if fresh.is_some() {
@@ -1105,6 +1107,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                     .checked_add(b.tokens as u64)
                     .is_none_or(|n| n > config.max_tokens)
                     || target_allowance.is_some_and(|n|executed_target_tokens+batch_targets>n)
+                    || input_allowance.is_some_and(|n|executed_input_tokens+b.tokens as u64>n)
                 {
                     aborted = true;
                     break;
@@ -1165,6 +1168,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
             }
             control.check("before_training_optimizer")?;
             let actual_lr=fresh.map_or_else(||config.learning_rate(state.step+1),|(p,_)|p.learning_rate(state.step+1));
+            executed_optimizer_calls += 1;
             let (grad_norm, delta) =
                 adam.step_constant(&loaded.model.vars, &gradients, &config, state.step + 1,actual_lr)?;
             state.step += 1;
@@ -1174,7 +1178,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
             state.validation_loss = None;
             if let Some(trace)=&mut fresh_trace {
                 use std::io::Write;
-                replica_v3::binary::write_value_record(trace,&replica_v3::binary::record!({"step":state.step,"sampler":state.sampler_state,"epoch":state.step/1024,"draw":fresh.map(|(p,_)|p.draw(state.step-1)),"sample_indices":balanced,"tasks":task_stats,"input":step_tokens,"target":targets,"ce":state.train_loss,"lr":actual_lr,"lr_bits":actual_lr.to_bits(),"grad_norm":grad_norm,"clip":(config.clip/(grad_norm+1e-12)).min(1.),"delta_norm":delta}))?;
+                replica_v3::binary::write_value_record(trace,&replica_v3::binary::record!({"step":state.step,"sampler":state.sampler_state,"epoch":state.step/1024,"paired_cursor":fresh.and_then(|(p,_)|p.pair_position(state.step-1)),"draw":fresh.map(|(p,_)|p.draw(state.step-1)),"sample_indices":balanced,"tasks":task_stats,"input":step_tokens,"target":targets,"ce":state.train_loss,"lr":actual_lr,"lr_bits":actual_lr.to_bits(),"grad_norm":grad_norm,"clip":(config.clip/(grad_norm+1e-12)).min(1.),"delta_norm":delta}))?;
                 trace.flush()?;
                 if state.step==config.budget_start_step+1||state.step.is_multiple_of(32){trace.sync_all()?;}
             }
@@ -1305,6 +1309,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
     });
     receipt["executed_input_tokens_including_uncommitted"] =
         replica_v3::binary::record!(executed_input_tokens);
+    receipt["optimizer_calls"] = replica_v3::binary::record!(executed_optimizer_calls);
     receipt["executed_target_tokens_including_uncommitted"]=replica_v3::binary::record!(executed_target_tokens);
     receipt["executed_padding_tokens"]=replica_v3::binary::record!(executed_padding_tokens);
     receipt["token_budget_reached"]=replica_v3::binary::record!(token_budget_reached);
