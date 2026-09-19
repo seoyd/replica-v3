@@ -2,6 +2,13 @@
 
 ## Active: fresh joint baseline after the complete data reset
 
+Closed at4096 updates on2026-09-19: primary392/512, transfer40/128, errors0
+at the final checkpoint. Development gates FAILED. Independent200 NOT_OPENED;
+S5/S6 NOT_RUN. The registered policy below records this completed attempt and
+does not authorize a retry, continuation or new initialization. Last durable
+`artifacts/fresh-joint-20260919/segment-0005/final`, BUDGET_REACHED, resume=false.
+See EXPERIMENT_STATUS for source identity, actual usage and independent raw recount.
+
 R3-FRESH-JOINT-BASELINE-1.0, reference1885626a4f84ec79137e4e79414269a019de7e3f.
 This replaces the old parent-dependent continuation instructions for new work.
 No deleted model/corpus/receipt is restored. No new storage/SQLite/kernel work.
@@ -47,7 +54,7 @@ generation<=1024, training0). No independent acceptance is self-granted.
 
 The data-reset and storage-only phases below are completed history.
 
-## Active: native project serialization after the data reset
+## Completed: native project serialization after the data reset
 
 On 2026-09-19 the user authorized deleting all learned artifacts, corpora, raw
 user data, long-term memory and execution logs, retaining Rust source and Git

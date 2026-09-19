@@ -1,5 +1,174 @@
 # 진단 및 구현 상태
 
+## 2026-09-19 Fresh joint baseline — F4/F5 예산 종료
+
+**EXECUTED_THIS_RUN:** 새 random-init SMALL을 4,096회 학습하고 정상 예산 종료했다.
+dev392/512(76.5625%), transfer40/128(31.25%)로 개발 기준에 미달했다.
+코드 검증과 학습 실행은 완료됐지만 모델 품질·S4·Goal1은 통과하지 않았다.
+최종200은 NOT_OPENED, S5/S6는 선행 품질 미달로 NOT_RUN이다. 추가 학습·재초기화·
+LR 탐색·기존 자료 복원은 하지 않았다. 아래 F0–F3는 학습 전 시점의 기록이다.
+
+CODE_SHA=`d126aff35d85cebd1bf2b40bc6bc0a5943a3084b`.
+reference1885626a4f84ec79137e4e79414269a019de7e3f에서 source/tests/계획을 구현했고,
+정상 push 및 원격 전체 SHA 일치를 확인한 뒤 고정 실행파일로 학습했다.
+이번 결과는 별도 report-only commit이다(REPORT_SHA는 이 절을 추가한 commit).
+실행 중 source/binary/data/config는 변경하지 않았다. 실행 source digest는
+`dc6b99f9c4542aa1ddfcc066e18fda7ae246c2715715d990284294122e22b849`다.
+
+### 실제 실행과 저장
+
+명령은 6개의 순차 새 process에서 동일했다.
+`VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 artifacts/fresh-joint-20260919-executable fresh run --root artifacts/fresh-joint-20260919`.
+첫1회 저장 후 새 process에서 재개했고, 이후 순수 시간 종료4회만 원래 예산 안에서
+재개했다. 중간 학습의 weights/Adam/LR clock/sampler를 유지했다. 마지막은
+BUDGET_REACHED, resume=false이며 실행 중인 학습 process는 없다.
+
+| segment | 마지막 durable step | 누적 실제 input | 누적 committed target | generation | 자체 teacher | command 초 | 종료 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+|0000|1|1727|124|128|192|43.728064250|첫1 저장|
+|0001|966|1598279|118959|128|192|901.237864625|TIME_BUDGET|
+|0002|1905|3151268|234813|640|768|901.629287459|TIME_BUDGET|
+|0003|2817|4660621|347065|768|896|901.765446459|TIME_BUDGET|
+|0004|3783|6259578|466048|64|192|901.624917542|TIME_BUDGET|
+|0005|4096|6775700|504624|768|832|348.059778000|BUDGET_REACHED|
+
+SMALL optimizer4096, generation2496, 자체 teacher3072. 앞서 실행한 TINY optimizer16,
+scalar Adam2, 추가 TINY generation2는 별도다. 전체 command 시간3998.045358335초는
+평가·저장·cleanup을 포함하며 순수 optimizer 속도가 아니다. 컴파일/fixture/준비 시간은
+여기에 합산하지 않았다. 관측 sampled peak RSS1,423,904KiB이며 전체 순간 peak의 보장은
+아니다. 각900초 경계의 약1.2–1.8초 초과는 허용 cleanup120초 안이었다.
+
+4096개의 raw update를 전수 확인했다. committed input6,769,040/target504,624,
+draw32,768, bucket별4,096 draws, bucket별256 base/1,024 view 각각4회 노출이다.
+시간 종료 직전 계산됐으나 optimizer에 반영되지 않은4개 microbatch(32 draws)를
+제외하지 않는다. 알려진 추가 input6,660과 동일한 재개 draw에서 유도한 target513을
+포함하면 실제 input6,775,700/target505,137이다. target513은
+DERIVED_FROM_CURRENT_RAW이며 checkpoint의 committed target와 구분한다.
+실제 forward draws32,800, bucket별4,100이다. 숨은 retry/5번째 epoch는 없다.
+첫 update CE6.39822626, LR0.00000234375, global grad15.15702471,
+parameter delta0.00721444; 마지막 batch CE0.007974374108016491, LR0.00003.
+committed padding2,932,744 tokens는 input 예산과 구분한다. global grad norm 범위
+0.01612817–15.38915748, clip 적용3,231 updates, 마지막 grad0.60919830,
+clip1.0/parameter delta0.01930301이다. task별 token 가중 누적 관측은 다음과 같다.
+각 step에서 실제 기록한 값의 집계이며 최종 모델의 heldout token 정확도가 아니다.
+
+| bucket | committed input | target | 정답 teacher tokens | 전체 학습 구간 token 가중 CE |
+| --- | ---: | ---: | ---: | ---: |
+|A|703552|119968|93219|.664097|
+|B|638864|61152|48194|.614655|
+|C|905312|61088|46534|.700182|
+|D|909920|60960|48129|.615994|
+|E|904880|61104|47587|.650369|
+|F|1212560|69408|55723|.582404|
+|G|610784|34080|32320|.190942|
+|H|883168|36864|36422|.067881|
+
+실제 tokenizer merges298; 단독 decode bytes가 유효 UTF-8이 아닌 piece230개다.
+고정 source의 준비된 prompt/answer에서 그 piece 출현 수는 train0/0, primary0/0,
+transfer2016/0이다. 새 표현의 byte fragment 사용과 낮은 전이 점수는 함께 관측됐지만
+인과 증명이 아니다. tokenizer/decoding 정책을 수정하거나 자료를 추가하지 않았다.
+
+### 동일 패널의 실제 품질
+
+모든 점수는 normal greedy→strict UTF-8→정상 EOS→전체 답변·인용 exact다.
+teacher 접두어나 정답 selector를 자유생성에 사용하지 않았다.
+
+| step | train64 | screen64 | primary512 | transfer128 |
+| --- | ---: | ---: | ---: | ---: |
+|0|0|0|NOT_RUN|NOT_RUN|
+|128|NOT_RUN|9|NOT_RUN|NOT_RUN|
+|512|NOT_RUN|11|NOT_RUN|NOT_RUN|
+|1024|17|13|96|NOT_RUN|
+|2048|28|20|117|16|
+|3072|NOT_RUN|45|NOT_RUN|NOT_RUN|
+|4096|55|47|392|40|
+
+초기 random 모델의128개 출력은 generation error/EOS 실패로 분모에 포함했다.
+128 이후 모든 측정 panel과 최종 동일 checkpoint의 출력은 오류0, 정상 EOS였다.
+accepted invalid citation0은 인용이 틀린 답을 exact로 인정하지 않았다는 뜻이다.
+인용 오류 자체가0이었다는 뜻은 아니다.
+
+| 4096 bucket | train /8 | screen /8 | primary /64 | transfer /16 |
+| --- | ---: | ---: | ---: | ---: |
+|A 전체 원문|7|7|43|4|
+|B 요청 필드|8|8|60|0|
+|C 대상 선택|6|2|36|5|
+|D 맥락 선택|7|6|46|4|
+|E 현재/유효시간|4|4|34|8|
+|F 과거/정정/복원|8|8|60|8|
+|G 근거 없음/모호함|7|4|49|11|
+|H 인과 유보|8|8|64|0|
+
+primary 기준487/512 및 각58/64, transfer 기준116/128을 모두 적용했고 미달했다.
+2048에서도 통과하지 않았다. train은55/64로 자기 자료의 선택/복사 오류도 남아 있다.
+최종 base4는 train9/16, screen9/16, primary65/128, transfer6/32다.
+primary의 본문 exact419/512·인용 exact439/512와 transfer의 본문73/128·인용51/128은
+보조 지표다. 본문 지표는 인용 suffix 앞 문자열 비교이며 독립 field/entity 완전 정답률로
+해석하지 않는다. strict 전체 정답392/40을 이 지표로 대체하지 않았다.
+primary 오답120개 중27개는 본문이 맞고 인용만 틀렸고93개는 본문/형식 오류를 포함한다.
+transfer 오답88개는 인용만33개, 본문/형식55개다.
+
+primary의 ID 길이1~8자리별 exact는 각각53/64,48/64,54/64,46/64,54/64,42/64,
+54/64,41/64다. transfer1~4자리는15/32,9/32,11/32,5/32다.
+primary의 evidence0/1/2/3개별24/24,115/148,193/276,60/64;
+transfer는8/8,4/20,15/60,13/40이다. prompt 길이64-token 구간1/2/3/4별
+primary24/24,148/193,168/239,52/56; transfer8/8,4/20,15/60,13/40이다.
+전이의 새 phrasing template별 full4/16, current28/88, past8/8, cause0/16이다.
+표현과 일부 record-count 조합이 함께 달라져 둘의 인과 효과를 분리한 대조는 아니다.
+
+고정 train64 teacher CE(step0/512/1024/1536/2048/2560/3072/3584/4096)는
+6.406142/.688201/.514079/.482159/.328692/.215014/.079570/.070271/.074903이다.
+최종 primary CE.081707 및 transfer CE.744842는 다른 패널로서 같은 곡선에 섞지 않는다.
+screen 연속 회귀·1024 무학습·2048 무전이 중단 조건은 발동하지 않았고 최종 예산으로 닫았다.
+
+다음 한 질문은 **같은 사실·선택 관계에서 질문 표현만 바꿀 때 응답과 인용이 얼마나
+달라지는가**다. transfer의 낮은 점수는 이를 조사할 근거지만 현재 자료는 표현/조합을
+완전히 분리하지 않는다. 추가 대조는 NOT_RUN, 추가 학습0이며 별도 승인이 필요하다.
+이번 baseline은 여러 조건을 새로 정한 것이므로 이전 실패 원인이나 저장 형식의 효과를
+증명하지 않는다. 학습 신호는 있지만 범용 지능·S4 수용 수준의 성능은 확인되지 않았다.
+
+### 검산·hash·인가된 로컬 원자료
+
+별도 Rust 읽기 도구가 native corpus의 ID/질문/evidence/정답과 raw2496개를 대조했다.
+실제 tokenizer의 tokens→text/EOS/error/exact 재계산은 저장 점수와 전부 일치했다.
+93개 파일의 길이/경로/hash inventory는 전후 동일:
+`23e225a69d977828c2ccbd5eb53578711f086dac9a7836b615c037812966f488`.
+검산 자체 model/optimizer 호출0이며, 외부 독립 검토 승인을 의미하지 않는다.
+
+기본 경로는 `/Users/seo/Projects/Replica-v3/artifacts/fresh-joint-20260919/`다.
+`eval-STEP-PANEL.r3rows`와 대응`.r3b`, `teacher-STEP.r3b`, `segment-000N/updates.r3rows`,
+`train-control.r3b` 및 checkpoint를 읽기 전용 검토에 사용할 수 있다.
+마지막 durable는 `segment-0005/final`, 최종 평가 checkpoint는
+`segment-0005/step-004096`이며 동일 step/weights다. 물리 파일 hash와 모델 hash는 다르다.
+
+| identity | SHA256 |
+| --- | --- |
+| 실행파일 | `c5cc6702cbd56c940e8ba00664575465bcd89272428aa2e6220fcbe8b58752ec` |
+| plan.r3b 실제 bytes | `17fcb4055f53a0c005411ff9322e29095c98ae75164544878acce7d64509f501` |
+| corpus.r3cor 실제 bytes | `108171c2ffad62afc9b0f09a52070871a4d3287017676208e9f43a88631fe04f` |
+| transfer.r3cor 실제 bytes | `e7878e78e19b55a42565e64af1107548651596303efe132e8b728cba32460c29` |
+| metadata.r3b | `adc193231e59774e97576dc5386b02024c1f4ea226cfa5c17e00515f776a96b3` |
+| sampler train-order | `d064f83d415dba3d6035d53606b36994574d6c82b4ab241ddc7b6251d1c2f1f8` |
+| train config canonical R3BIN | `f225c59c70696e9ab9e85012323ae5852c5172ed2e5ad3a98b60e5e5a6a68299` |
+| final 실제 bytes | `0478828fc2da96655f7ebc7ff34595132149b7f54e9ff1cc467bf031f5b6b512` |
+| step-004096 실제 bytes | `7dd7705bc07826c4c18bb4f4c31eeb769f3892cf40ff0328a4f68e7e90c3da81` |
+| 최종 모델 weights | `2da022b98bed607c1c6c54e4dd5482a3f631d1561fec87e965b3e6744a59cd98` |
+
+typed plan/tokenizer/initial weights/train semantic hash는 바로 아래 준비 기록과 같다.
+로컬 실행 로그 `/tmp/r3-fresh-segment-0000.log`~`0005.log`, pure report
+`/tmp/r3-fresh-report.log`, 별도 Rust 검산 `/tmp/r3-fresh-recount.log`를 보존했다.
+후속 token/gradient 집계는 `/tmp/r3-fresh-accounting.log`이며 다시 동일 파일 inventory를
+확인했다. 임시 Rust 집계기 재컴파일의 첫 명령은 외부 crate `--extern` 인자 누락으로
+실패했고 기존 locked rlib를 명시한 후 통과했다. 모델/optimizer 호출은0이었다.
+로그/모델/원자료는 Git에 게시하지 않는다. 새 영구 source 파일은 `src/fresh.rs` 하나다.
+
+RESET_STATE_SOURCE=locally_checked; CURRENT_MODEL_STATUS=EVALUATED;
+TRAINED_FROM_SCRATCH=true; CODE_VERDICT=PASS; TRAINING_EXECUTION=COMPLETE;
+MODEL_QUALITY_PASS=false; S4=NOT_ACCEPTED; S5/S6=NOT_RUN;
+GOAL1_READY=false; GOAL1_ACCEPTED=false; INDEPENDENT_REVIEW=PENDING.
+JSON_DIRECT_PATH=NONE; SQLITE_ACTUALLY_USED=NONE_IN_THIS_FRESH_TRAIN_EVAL;
+제품 기억 SQLite는 RETAINED이며 실행하지 않았다. 저장 형식 변경0.
+
 ## 2026-09-19 Fresh joint baseline — F0–F3
 
 R3-FRESH-JOINT-BASELINE-1.0. 시작 source1885626a4f84ec79137e4e79414269a019de7e3f,

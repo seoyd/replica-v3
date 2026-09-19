@@ -1,5 +1,14 @@
 # Native model implementation
 
+Current model on2026-09-19: the fresh joint baseline trained4096 updates from
+seed17/random weights and zero Adam. Own train-only tokenizer vocab562;
+SMALL parameters9,513,408; CPU F32 Accelerate thread1. Existing6-layer TR++
+(pre/QK RMSNorm, RoPE, GQA8/2, SwiGLU, tied embeddings, local5/global1) is unchanged.
+The bounded run ended with primary392/512 and transfer40/128, both below gates.
+The current native artifact is `artifacts/fresh-joint-20260919/segment-0005/final`.
+No accepted S4 candidate, S5/S6 result or Goal1 readiness follows. Source/weights/
+physical hashes and exact counts are recorded in EXPERIMENT_STATUS.
+
 2026-09-19 active storage update: the user deleted all local learned data and
 retained Rust source/Git history. The run results below are historical, not
 currently available artifacts. Project serialization now uses R3BIN for former
@@ -12,7 +21,7 @@ Contract: GOAL1-NATIVE-TRPP-1.0. Verified through S3; S4 learning remains under
 investigation after task-quality failures. No final acceptance has been declared.
 The following observations are scoped to their named phase, not overall task success.
 
-Current continuation record (all artifacts remain local; no new final test result):
+Historical continuation record (these artifacts were deleted by user instruction):
 
 | Run | Actual bounded training | Validation-only generation | Acceptance |
 |---|---|---|---|

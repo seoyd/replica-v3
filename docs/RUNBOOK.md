@@ -2,6 +2,10 @@
 
 ## Fresh joint baseline
 
+The authorized2026-09-19 run is closed at4096 with failed development gates.
+Its `fresh report` is read-only; `fresh run` must reject further learning.
+The commands below document the completed protocol, not a new run authorization.
+
 Build with installed Rust, `--locked --offline --features accelerate` and use
 `VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1` for model commands.
 `replica-check --output NEW_CHECK_DIRECTORY quick --fresh` exercises only the
