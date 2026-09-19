@@ -20,6 +20,9 @@ pub enum Command {
         parent: PathBuf,
         #[arg(long)]
         output: PathBuf,
+        /// Preserve the completed P wording policy and compare selector exposure.
+        #[arg(long)]
+        selector: bool,
     },
     /// Fixed same-weight parity and familiar-wording diagnostic, no optimizer calls.
     StudyObserve {
@@ -176,6 +179,12 @@ struct Fork {
     variants: Option<String>,
     variant_metadata: Option<String>,
     alternate_first: Vec<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    selector_metadata: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    flip_first: Vec<Option<bool>>,
     constant_lr: f64,
     target_limit: u64,
 }
@@ -232,6 +241,10 @@ struct Meta {
     view: usize,
     split: String,
     entities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    query_context: Option<String>,
 }
 fn digest<T: Serialize>(v: &T) -> Result<String> {
     Ok(neural::hash(&binary::to_vec(v)?))
@@ -589,6 +602,8 @@ fn generate(bases: usize, split: usize, seed: u64) -> Result<(Vec<Episode>, Vec<
                     view,
                     split: ["train", "primary", "transfer"][split].into(),
                     entities: vec![entity.clone(), other.clone()],
+                    source_id: None,
+                    query_context: None,
                 });
                 episodes.push(Episode {
                     id,
@@ -665,7 +680,12 @@ impl Plan {
             return Ok(vec![]);
         }
         let c = verified_corpus(&root.join("variants.r3cor"), f.variants.as_ref().unwrap())?;
-        samples(&c.train, tok, self.config.seq_len)
+        let mut out = samples(&c.train, tok, self.config.seq_len)?;
+        if let Some(h) = &f.selector {
+            let c = verified_corpus(&root.join("selectors.r3cor"), h)?;
+            out.extend(samples(&c.train, tok, self.config.seq_len)?);
+        }
+        Ok(out)
     }
     pub(super) fn training_draw(&self, step: usize) -> Vec<usize> {
         let mut ids = self.draw(step);
@@ -675,8 +695,14 @@ impl Plan {
             let n = self.order.iter().map(Vec::len).sum::<usize>();
             let epoch = (step - f.origin_step) / self.order[0].len();
             for i in &mut ids {
+                let original = *i;
                 if f.alternate_first[*i] ^ (epoch % 2 == 1) {
                     *i += n;
+                }
+                if f.selector.is_some()
+                    && f.flip_first[original].is_some_and(|bit| bit ^ (epoch % 2 == 1))
+                {
+                    *i += 2 * n;
                 }
             }
         }
@@ -937,7 +963,7 @@ fn source_digest() -> Result<String> {
 }
 pub fn execute(command: Command) -> Result<()> {
     match command {
-        Command::StudyPrepare { parent, output } => study_prepare(&parent, &output),
+        Command::StudyPrepare { parent, output, selector } => study_prepare(&parent, &output, selector),
         Command::StudyObserve { root } => study_observe(&root),
         Command::StudyReport { root } => study_report(&root),
         Command::Prepare { output } => prepare(&output, false),
@@ -1027,7 +1053,7 @@ fn plan_read(root: &Path) -> Result<Plan> {
             || study.parent_model != p.initial_weights
             || study.parent_file != p.initial
             || study.parent_adam != f.parent_adam
-            || !["C-REPEAT", "P-PHRASE"].contains(&f.arm.as_str())
+            || !study.tie_break.contains(&f.arm)
             || f.constant_lr.to_bits() != 3e-5f64.to_bits()
             || p.config.max_steps != f.origin_step + study.updates
             || p.config.budget_start_step != f.origin_step
@@ -1050,7 +1076,21 @@ fn plan_read(root: &Path) -> Result<Plan> {
         {
             return Err(bad("frozen variant metadata changed"));
         }
-        fork_evaluation(f.origin_step, study.updates, p.tiny)
+        for (name, h) in [
+            ("selectors.r3cor", &f.selector),
+            ("selector-metadata.r3b", &f.selector_metadata),
+        ] {
+            if let Some(h) = h
+                && &file_hash(&root.join(name))? != h
+            {
+                return Err(bad("frozen selector data changed"));
+            }
+        }
+        let mut e = fork_evaluation(f.origin_step, study.updates, p.tiny);
+        if study.schema == 3 {
+            e.generation_limit = 4608;
+        }
+        e
     } else if p.tiny {
         EvaluationPolicy {
             screen_steps: vec![],
@@ -1128,7 +1168,12 @@ fn history(root: &Path, p: &Plan) -> Result<Vec<Segment>> {
             return Err(bad("segment native/counter/chain mismatch"));
         }
         if c["final_evaluation_complete"] == true && p.evaluation_due(s.step) {
-            audit_panels_range(root, p, s.step, s.step)?;
+            let (_, panels) = audit_panels_range(root, p, s.step, s.step)?;
+            let native = checkpoint::load(&root.join(&s.checkpoint), Device::Cpu, false)?;
+            let model = native.model.weight_hash()?;
+            if panels.values().any(|panel| panel.model != model) {
+                return Err(bad("completed panel differs from segment checkpoint"));
+            }
         }
         if s.phase.as_deref() == Some("Finished")
             && p.evaluation_due(s.step)
@@ -1416,6 +1461,10 @@ fn score(rows: &[binary::Value], episodes: &[Episode], meta: &[Meta]) -> Result<
             let count = s.strata.entry(key).or_default();
             count[0] += usize::from(exact);
             count[1] += 1;
+        }
+        if let Some(context)=&m.query_context {
+            let count=s.strata.entry(format!("query_context:{context}")).or_default();
+            count[0]+=usize::from(exact);count[1]+=1;
         }
         let b = bases.entry(&m.base).or_default();
         b.0 += 1;
@@ -2005,6 +2054,14 @@ pub(super) fn evaluate_boundary(
         };
         let transfer = evaluate_panel(p, root, path, step, "transfer128", &transfer, &xm, control)?;
         let f = full.as_ref().unwrap();
+        if step == p.config.max_steps
+            && p.fork
+                .as_ref()
+                .is_some_and(|f| matches!(f.arm.as_str(), "C-KEEP" | "S-SELECT"))
+        {
+            let (es, ms) = selector_panel(&dev, &dm, p.tiny)?;
+            evaluate_panel(p, root, path, step, "selector192", &es, &ms, control)?;
+        }
         if (p.fork.is_none() || step == p.config.max_steps)
             && f.exact >= p.evaluation.primary_min
             && f.buckets.iter().all(|&x| x >= p.evaluation.bucket_min)
@@ -2016,6 +2073,14 @@ pub(super) fn evaluate_boundary(
         }
     }
     if let Some(f) = &p.fork {
+        if matches!(f.arm.as_str(), "C-KEEP" | "S-SELECT")
+            && !p.tiny
+            && full
+                .as_ref()
+                .is_some_and(|panel| panel.exact + 64 <= 425 || panel.errors >= 8)
+        {
+            return Ok(Some("QUALITY_REGRESSION_PRIMARY".into()));
+        }
         if let Some(current) = screen {
             let parent: binary::Value = read(&f.study.join("parent-audit.r3b"))?;
             let baseline: PanelResult = binary::from_value(
@@ -2244,15 +2309,104 @@ fn audit_panels_through(
 ) -> Result<(usize, BTreeMap<String, PanelResult>)> {
     audit_panels_range(root, p, 0, last)
 }
+#[allow(clippy::too_many_arguments)] // One existing panel identity and owned expected cases.
+fn audit_panel(
+    root: &Path,
+    p: &Plan,
+    step: usize,
+    name: &str,
+    es: &[Episode],
+    ms: &[Meta],
+    tok: &ByteBpe,
+) -> Result<PanelResult> {
+    let key = format!("eval-{step:04}-{name}");
+    let raw = root.join(format!("{key}.r3rows"));
+    let rows = binary::read_value_records(&raw)?;
+    let header = rows.first().ok_or_else(|| bad("empty raw"))?;
+    let cp = Path::new(
+        header["checkpoint"]
+            .as_str()
+            .ok_or_else(|| bad("raw checkpoint"))?,
+    );
+    let l = checkpoint::load(cp, Device::Cpu, false)?;
+    let state = l
+        .manifest
+        .training
+        .as_ref()
+        .ok_or_else(|| bad("raw state"))?;
+    if header["physical"] != file_hash(cp)?
+        || header["binding"]["policy"] != digest(p)?
+        || header["binding"]["dataset"] != digest(&es)?
+        || header["binding"]["step"] != step
+        || header["binding"]["planned"] != es.len()
+        || header["binding"]["model"] != l.model.weight_hash()?
+        || state.step != step
+        || state.resume_binding.as_ref() != Some(&p.binding(state, tok)?)
+    {
+        return Err(bad("raw lineage/dataset mismatch"));
+    }
+    for (i, (r, e)) in rows[1..].iter().zip(es).enumerate() {
+        if header["binding"]["call_protocol"] == 1 || !r["attempt"].is_null() {
+            call_attempt(root, &key, "generation", &header["binding"], e, i, Some(r))?;
+        }
+        verify_generated(r, tok)?;
+        let prompt = tok.prepare(
+            &e.request,
+            l.model.config.context as u32,
+            &l.model.config.id()?,
+        )?;
+        if r["native_prompt_digest"] != prompt.token_digest {
+            return Err(bad("raw actual framing mismatch"));
+        }
+    }
+    let mut s = score(&rows[1..], es, ms)?;
+    s.step = step;
+    s.panel = name.into();
+    s.model = l.model.weight_hash()?;
+    s.dataset = digest(&es)?;
+    s.raw_hash = file_hash(&raw)?;
+    let teacher_rows = if p.schema == Some(2) {
+        let t = binary::read_value_records(&root.join(format!("{key}-teachers.r3rows")))?;
+        if t.len() != es.len() + 1 || t[0] != header["binding"] {
+            return Err(bad("teacher complete binding"));
+        }
+        for (i, (r, e)) in t[1..].iter().zip(es).enumerate() {
+            if header["binding"]["call_protocol"] == 1 || !r["attempt"].is_null() {
+                call_attempt(root, &key, "teacher", &header["binding"], e, i, Some(r))?;
+            }
+            if r["id"] != e.id || r["ordinal"] != i || r["case"] != digest(e)? {
+                return Err(bad("teacher case"));
+            }
+        }
+        s.teachers_completed = Some(es.len());
+        t[1..].to_vec()
+    } else {
+        rows[1..]
+            .iter()
+            .map(|r| binary::record!({"teacher":r["teacher_forced_diagnostic_after_generation"]}))
+            .collect()
+    };
+    s.ce = Some(teacher_ce(&teacher_rows)?);
+    let saved: PanelResult = if p.schema == Some(2) {
+        read_confirmed(&root.join(format!("{key}.r3b")))?
+    } else {
+        read(&root.join(format!("{key}.r3b")))?
+    };
+    if s != saved {
+        return Err(bad("raw independently recomputed summary mismatch"));
+    }
+
+    Ok(s)
+}
 fn audit_panels_range(
     root: &Path,
     p: &Plan,
     first: usize,
     last: usize,
 ) -> Result<(usize, BTreeMap<String, PanelResult>)> {
-    let (_, tr, dv) = data::load(&root.join("corpus.r3cor"))?;
-    let (_, _, tx) = data::load(&root.join("transfer.r3cor"))?;
-    let (tm, dm, xm): (Vec<Meta>, Vec<Meta>, Vec<Meta>) = read(&root.join("metadata.r3b"))?;
+    let (_, tr, dv) = p.training_corpus(&root.join("corpus.r3cor"))?;
+    let tx = verified_corpus(&root.join("transfer.r3cor"), &p.transfer)?.validation;
+    let (tm, dm, xm) = verified_metadata(root, p)?;
     let tok = ByteBpe::load(&root.join("tokenizer.r3b"))?;
     if tok.id() != p.tokenizer {
         return Err(bad("parent tokenizer"));
@@ -2278,78 +2432,7 @@ fn audit_panels_range(
         };
         for &step in steps.iter().filter(|&&step| step >= first && step <= last) {
             let key = format!("eval-{step:04}-{name}");
-            let raw = root.join(format!("{key}.r3rows"));
-            let rows = binary::read_value_records(&raw)?;
-            let header = rows.first().ok_or_else(|| bad("empty raw"))?;
-            let cp = Path::new(
-                header["checkpoint"]
-                    .as_str()
-                    .ok_or_else(|| bad("raw checkpoint"))?,
-            );
-            let l = checkpoint::load(cp, Device::Cpu, false)?;
-            let state = l
-                .manifest
-                .training
-                .as_ref()
-                .ok_or_else(|| bad("raw state"))?;
-            if header["physical"] != file_hash(cp)?
-                || header["binding"]["policy"] != digest(p)?
-                || header["binding"]["dataset"] != digest(&es)?
-                || header["binding"]["step"] != step
-                || header["binding"]["planned"] != es.len()
-                || header["binding"]["model"] != l.model.weight_hash()?
-                || state.step != step
-                || state.resume_binding.as_ref() != Some(&p.binding(state, &tok)?)
-            {
-                return Err(bad("raw lineage/dataset mismatch"));
-            }
-            for (i, (r, e)) in rows[1..].iter().zip(&es).enumerate() {
-                if header["binding"]["call_protocol"] == 1 || !r["attempt"].is_null() {
-                    call_attempt(root, &key, "generation", &header["binding"], e, i, Some(r))?;
-                }
-                verify_generated(r, &tok)?;
-                let prompt = tok.prepare(
-                    &e.request,
-                    l.model.config.context as u32,
-                    &l.model.config.id()?,
-                )?;
-                if r["native_prompt_digest"] != prompt.token_digest {
-                    return Err(bad("raw actual framing mismatch"));
-                }
-            }
-            let mut s = score(&rows[1..], &es, &ms)?;
-            s.step = step;
-            s.panel = name.into();
-            s.model = l.model.weight_hash()?;
-            s.dataset = digest(&es)?;
-            s.raw_hash = file_hash(&raw)?;
-            let teacher_rows = if p.schema == Some(2) {
-                let t = binary::read_value_records(&root.join(format!("{key}-teachers.r3rows")))?;
-                if t.len() != es.len() + 1 || t[0] != header["binding"] {
-                    return Err(bad("teacher complete binding"));
-                }
-                for (i, (r, e)) in t[1..].iter().zip(&es).enumerate() {
-                    if header["binding"]["call_protocol"] == 1 || !r["attempt"].is_null() {
-                        call_attempt(root, &key, "teacher", &header["binding"], e, i, Some(r))?;
-                    }
-                    if r["id"] != e.id || r["ordinal"] != i || r["case"] != digest(e)? {
-                        return Err(bad("teacher case"));
-                    }
-                }
-                s.teachers_completed = Some(es.len());
-                t[1..].to_vec()
-            } else {
-                rows[1..].iter().map(|r|binary::record!({"teacher":r["teacher_forced_diagnostic_after_generation"]})).collect()
-            };
-            s.ce = Some(teacher_ce(&teacher_rows)?);
-            let saved: PanelResult = if p.schema == Some(2) {
-                read_confirmed(&root.join(format!("{key}.r3b")))?
-            } else {
-                read(&root.join(format!("{key}.r3b")))?
-            };
-            if s != saved {
-                return Err(bad("raw independently recomputed summary mismatch"));
-            }
+            let s = audit_panel(root, p, step, name, &es, &ms, &tok)?;
             count += es.len();
             results.insert(key, s);
         }
@@ -2370,6 +2453,13 @@ fn audit_panels_range(
             {
                 return Err(bad("teacher obligation binding"));
             }
+            if results
+                .values()
+                .filter(|r| r.step == step)
+                .any(|r| summary["binding"]["model"] != r.model)
+            {
+                return Err(bad("fixed teacher differs from panel model"));
+            }
             let ce = if p.evaluation.train_steps.contains(&step) {
                 results
                     .get(&format!("eval-{step:04}-train64"))
@@ -2384,7 +2474,7 @@ fn audit_panels_range(
                     if r["ordinal"] != i || r["id"] != e.id || r["case"] != digest(e)? {
                         return Err(bad("fixed teacher case"));
                     }
-                    if !r["attempt"].is_null() {
+                    if ts[0]["call_protocol"] == 1 || !r["attempt"].is_null() {
                         call_attempt(root, &key, "teacher", &ts[0], e, i, Some(r))?;
                     }
                 }
@@ -2394,6 +2484,17 @@ fn audit_panels_range(
                 return Err(bad("required teacher summary"));
             }
         }
+    }
+    if first <= p.config.max_steps
+        && last >= p.config.max_steps
+        && p.fork
+            .as_ref()
+            .is_some_and(|f| matches!(f.arm.as_str(), "C-KEEP" | "S-SELECT"))
+    {
+        let (es, ms) = selector_panel(&dv, &dm, p.tiny)?;
+        let s = audit_panel(root, p, p.config.max_steps, "selector192", &es, &ms, &tok)?;
+        count += es.len();
+        results.insert(format!("eval-{:04}-selector192", p.config.max_steps), s);
     }
     Ok((count, results))
 }
@@ -2434,7 +2535,136 @@ fn validate_framed(es: &[Episode], tok: &ByteBpe) -> Result<()> {
     }
     Ok(())
 }
-fn study_prepare(parent: &Path, output: &Path) -> Result<()> {
+fn flip_selection(e: &Episode, m: &Meta) -> Result<(Episode, Meta)> {
+    if !(2..=4).contains(&m.bucket) {
+        return Err(bad("selector bucket"));
+    }
+    let mut out = e.clone();
+    let mut meta = m.clone();
+    let (entity, context, intent) = question_intent(&e.request.input)?;
+    if intent != Intent::Current || e.request.evidence.items.len() != 2 {
+        return Err(bad("selector grammar/count"));
+    }
+    let items = &e.request.evidence.items;
+    if items[0].event_id == items[1].event_id
+        || items.iter().any(|r| {
+            r.version_status != "current"
+                || r.observed_at.is_none()
+                || r.observed_at.unwrap() > r.recorded_at
+        })
+    {
+        return Err(bad("selector status/id/time"));
+    }
+    let (a, b) = (parsed_record(&items[0])?, parsed_record(&items[1])?);
+    let suffix = e
+        .request
+        .input
+        .splitn(3, ' ')
+        .nth(2)
+        .ok_or_else(|| bad("selector suffix"))?;
+    match m.bucket {
+        2 => {
+            if a.0 == b.0 || a.1 != b.1 || a.1 != context {
+                return Err(bad("entity selector fields"));
+            }
+            let other = if a.0 == entity {
+                b.0
+            } else if b.0 == entity {
+                a.0
+            } else {
+                return Err(bad("query entity absent"));
+            };
+            out.request.input = format!("{other} {context} {suffix}");
+        }
+        3 => {
+            if a.0 != b.0 || a.0 != entity || a.1 == b.1 {
+                return Err(bad("context selector fields"));
+            }
+            let other = if a.1 == context {
+                b.1
+            } else if b.1 == context {
+                a.1
+            } else {
+                return Err(bad("query context absent"));
+            };
+            out.request.input = format!("{entity} {other} {suffix}");
+        }
+        4 => {
+            if a.0 != entity
+                || b.0 != entity
+                || a.1 != context
+                || b.1 != context
+                || items[0].observed_at == items[1].observed_at
+            {
+                return Err(bad("time selector fields"));
+            }
+            out.request.evidence.items[0].observed_at = items[1].observed_at;
+            out.request.evidence.items[1].observed_at = items[0].observed_at;
+            if out
+                .request
+                .evidence
+                .items
+                .iter()
+                .any(|r| r.observed_at.unwrap() > r.recorded_at)
+            {
+                return Err(bad("swapped observation in future"));
+            }
+        }
+        _ => unreachable!(),
+    }
+    // Request-only resolver supplies targets. An independent field/time selection
+    // verifies the chosen citation; original expected is never a selector input.
+    out.answer = resolve(&out.request)?;
+    let (q, c, _) = question_intent(&out.request.input)?;
+    let mut matching = out
+        .request
+        .evidence
+        .items
+        .iter()
+        .filter(|r| parsed_record(r).is_ok_and(|(n, ctx, _)| n == q && ctx == c))
+        .collect::<Vec<_>>();
+    matching.sort_by_key(|r| r.observed_at);
+    let selected = matching.last().ok_or_else(|| bad("no selected evidence"))?;
+    let expected = format!(
+        "{}입니다. [event:{}]",
+        parsed_record(selected)?.2,
+        selected.event_id
+    );
+    if out.answer != expected
+        || citations(&out.answer)? == citations(&resolve(&e.request)?)?
+        || resolve(&e.request)? != e.answer
+    {
+        return Err(bad("independent selector label"));
+    }
+    out.id = format!("{}/selector", e.id);
+    meta.source_id = Some(e.id.clone());
+    meta.id = out.id.clone();
+    meta.query_context = Some(c.into());
+    meta.entities[0] = q.into();
+    Ok((out, meta))
+}
+fn selector_panel(es: &[Episode], ms: &[Meta], tiny: bool) -> Result<(Vec<Episode>, Vec<Meta>)> {
+    let mut out = vec![];
+    let mut metadata = vec![];
+    for (e, m) in es
+        .iter()
+        .zip(ms)
+        .filter(|(_, m)| (2..=4).contains(&m.bucket))
+    {
+        if tiny && m.view != 0 {
+            continue;
+        }
+        let (f, fm) = flip_selection(e, m)?;
+        let (reverse, _) = flip_selection(&f, &fm)?;
+        if digest(&reverse.request)? != digest(&e.request)? || reverse.answer != e.answer {
+            return Err(bad("selector involution"));
+        }
+        out.push(f);
+        metadata.push(fm);
+    }
+    Ok((out, metadata))
+}
+fn study_prepare(parent: &Path, output: &Path, selector: bool) -> Result<()> {
     let started = Instant::now();
     let parent = parent.canonicalize()?;
     let p: Plan = read(&parent.join("plan.r3b"))?;
@@ -2448,7 +2678,16 @@ fn study_prepare(parent: &Path, output: &Path) -> Result<()> {
             return Err(bad("parent frozen input mismatch"));
         }
     }
-    if p.fork.is_some() {
+    if selector
+        && p.fork
+            .as_ref()
+            .is_none_or(|f| f.arm != "P-PHRASE" || f.variants.is_none())
+    {
+        return Err(bad(
+            "selector study requires the preserved P phrase endpoint",
+        ));
+    }
+    if !selector && p.fork.is_some() {
         return Err(bad(
             "study requires original joint parent, not another fork",
         ));
@@ -2491,7 +2730,20 @@ fn study_prepare(parent: &Path, output: &Path) -> Result<()> {
         return Err(bad("parent objective/sampler/tokenizer"));
     }
     let inv = inventory(&parent)?;
-    let (raw_count, panels) = audit_panels(&parent, &p)?;
+    let (raw_count, mut panels) = if selector {
+        audit_panels_range(&parent, &p, s.step, s.step)?
+    } else {
+        audit_panels(&parent, &p)?
+    };
+    if selector {
+        let full = &panels[&format!("eval-{:04}-dev512", s.step)];
+        let old: PanelResult =
+            read_confirmed(&parent.join(format!("eval-{:04}-screen64.r3b", s.step)))?;
+        if old.model != full.model || old.raw_hash != full.raw_hash {
+            return Err(bad("parent screen model/raw"));
+        }
+        panels.insert(format!("eval-{:04}-screen64", s.step), old);
+    }
     let eval = checkpoint::load(
         &parent
             .join(end.checkpoint)
@@ -2509,13 +2761,13 @@ fn study_prepare(parent: &Path, output: &Path) -> Result<()> {
     }
     let (manifest, train, dev) = data::load(&parent.join("corpus.r3cor"))?;
     let (_, _, transfer) = data::load(&parent.join("transfer.r3cor"))?;
-    let (tm, _dm, xm): (Vec<Meta>, Vec<Meta>, Vec<Meta>) = read(&parent.join("metadata.r3b"))?;
+    let (tm, dm, xm): (Vec<Meta>, Vec<Meta>, Vec<Meta>) = read(&parent.join("metadata.r3b"))?;
     let (diagnostic_source, diagnostic_meta) = if p.tiny {
         subset(&transfer, &xm, 1)
     } else {
         (transfer.clone(), xm.clone())
     };
-    let diagnostic = diagnostic_source
+    let mut diagnostic = diagnostic_source
         .iter()
         .map(|e| {
             let i = question_intent(&e.request.input)?.2;
@@ -2526,20 +2778,35 @@ fn study_prepare(parent: &Path, output: &Path) -> Result<()> {
         .iter()
         .map(|e| e.request.input.splitn(3, ' ').nth(2).unwrap().to_owned())
         .collect();
-    let variants = train
-        .iter()
-        .zip(&tm)
-        .map(|(e, m)| {
-            let i = question_intent(&e.request.input)?.2;
-            let h = u64::from_str_radix(&neural::hash(m.base.as_bytes())[..8], 16)
-                .map_err(|_| bad("base digest"))?;
-            let suffix = phrases(i)[h as usize % 2];
-            if held_suffixes.contains(suffix) {
-                return Err(bad("heldout suffix copied into train"));
-            }
-            changed_question(e, suffix)
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut diagnostic_meta = diagnostic_meta;
+    if selector {
+        (diagnostic, diagnostic_meta) = selector_panel(&dev, &dm, p.tiny)?;
+    }
+    let variants = if selector {
+        let f = p.fork.as_ref().unwrap();
+        if f.variant_metadata.as_ref() != Some(&file_hash(&parent.join("question-variants.r3b"))?) {
+            return Err(bad("parent phrase metadata"));
+        }
+        verified_corpus(&parent.join("variants.r3cor"), f.variants.as_ref().unwrap())?.train
+    } else {
+        train
+            .iter()
+            .zip(&tm)
+            .map(|(e, m)| {
+                let i = question_intent(&e.request.input)?.2;
+                let h = u64::from_str_radix(&neural::hash(m.base.as_bytes())[..8], 16)
+                    .map_err(|_| bad("base digest"))?;
+                let suffix = phrases(i)[h as usize % 2];
+                if held_suffixes.contains(suffix) {
+                    return Err(bad("heldout suffix copied into train"));
+                }
+                changed_question(e, suffix)
+            })
+            .collect::<Result<Vec<_>>>()?
+    };
+    if variants.len() != train.len() {
+        return Err(bad("unaligned P variants"));
+    }
     validate_framed(
         &train.iter().chain(&variants).cloned().collect::<Vec<_>>(),
         &l.tokenizer,
@@ -2560,18 +2827,101 @@ fn study_prepare(parent: &Path, output: &Path) -> Result<()> {
             alternate[i] = chosen.contains(&m.base);
         }
     }
+    if selector {
+        alternate = p.fork.as_ref().unwrap().alternate_first.clone();
+    }
+    let mut flip_first = vec![None; train.len()];
+    if selector {
+        for bucket in 2..=4 {
+            for style in [false, true] {
+                let mut bases = tm
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, m)| m.bucket == bucket && alternate[*i] == style)
+                    .map(|(_, m)| m.base.clone())
+                    .collect::<Vec<_>>();
+                bases.sort();
+                bases.dedup();
+                bases.sort_by_key(|b| neural::hash(format!("selector/29/{b}").as_bytes()));
+                let half = bases[..bases.len() / 2]
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>();
+                for (i, m) in tm
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, m)| m.bucket == bucket && alternate[*i] == style)
+                {
+                    flip_first[i] = Some(half.contains(&m.base));
+                }
+            }
+        }
+    }
+    let mut selector_rows = vec![];
+    let mut selector_meta = vec![];
+    if selector {
+        for (style, es) in [&train, &variants].into_iter().enumerate() {
+            for (e, m) in es.iter().zip(&tm) {
+                let (mut row, mut meta) = if (2..=4).contains(&m.bucket) {
+                    let pair = flip_selection(e, m)?;
+                    let (back, _) = flip_selection(&pair.0, &pair.1)?;
+                    if digest(&back.request)? != digest(&e.request)? || back.answer != e.answer {
+                        return Err(bad("train selector involution"));
+                    }
+                    pair
+                } else {
+                    (e.clone(), m.clone())
+                };
+                row.id = format!("{}/selector-style-{style}", e.id);
+                meta.id = row.id.clone();
+                meta.source_id = Some(e.id.clone());
+                selector_rows.push(row);
+                selector_meta.push(meta);
+            }
+        }
+        validate_framed(
+            &train
+                .iter()
+                .chain(&variants)
+                .chain(&selector_rows)
+                .cloned()
+                .collect::<Vec<_>>(),
+            &l.tokenizer,
+        )?;
+    }
     std::fs::create_dir(output)?;
     let output = output.canonicalize()?;
+    let peer = if selector && !p.tiny {
+        let path = parent
+            .parent()
+            .ok_or_else(|| bad("parent study directory"))?
+            .join("C-REPEAT");
+        let plan: Plan = read(&path.join("plan.r3b"))?;
+        if plan.corpus != p.corpus
+            || plan.transfer != p.transfer
+            || plan.tokenizer != p.tokenizer
+            || plan.config.max_steps != s.step
+        {
+            return Err(bad("historical C/P endpoint mismatch"));
+        }
+        let before = inventory(&path)?;
+        let (count, result) = audit_panels_range(&path, &plan, s.step, s.step)?;
+        if before != inventory(&path)? {
+            return Err(bad("historical peer changed"));
+        }
+        Some(binary::record!({"path":path,"raw_count":count,"panels":result,"inventory":before}))
+    } else {
+        None
+    };
     write(
         &output.join("parent-audit.r3b"),
-        &binary::record!({"raw_count":raw_count,"panels":panels,"parent_policy":digest(&p)?,"historical_receipts":"READ_ONLY_VERIFIED_NOT_REISSUED"}),
+        &binary::record!({"raw_count":raw_count,"panels":panels,"peer":peer,"parent_policy":digest(&p)?,"historical_receipts":"READ_ONLY_VERIFIED_NOT_REISSUED"}),
     )?;
     write(
         &output.join("diagnostic.r3b"),
         &(diagnostic.clone(), diagnostic_meta),
     )?;
     let study = Study {
-        schema: 2,
+        schema: if selector { 3 } else { 2 },
         source: source_digest()?,
         binary: file_hash(&std::env::current_exe()?)?,
         parent: parent.clone(),
@@ -2588,10 +2938,14 @@ fn study_prepare(parent: &Path, output: &Path) -> Result<()> {
         inventory: inv,
         diagnostic_hash: file_hash(&output.join("diagnostic.r3b"))?,
         parent_audit_hash: file_hash(&output.join("parent-audit.r3b"))?,
-        tie_break: vec!["C-REPEAT".into(), "P-PHRASE".into()],
+        tie_break: if selector {
+            vec!["C-KEEP".into(), "S-SELECT".into()]
+        } else {
+            vec!["C-REPEAT".into(), "P-PHRASE".into()]
+        },
     };
     write(&output.join("study.r3b"), &study)?;
-    for arm in ["C-REPEAT", "P-PHRASE"] {
+    for arm in study.tie_break.iter().map(String::as_str) {
         let root = output.join(arm);
         std::fs::create_dir(&root)?;
         for name in [
@@ -2604,7 +2958,7 @@ fn study_prepare(parent: &Path, output: &Path) -> Result<()> {
             neural::write_new(&root.join(name), &bytes)?;
         }
         neural::write_new(&root.join("initial.r3m"), &std::fs::read(&cp)?)?;
-        let variant_hash = if arm == "P-PHRASE" {
+        let variant_hash = if arm == "P-PHRASE" || selector {
             let c = data::native::from_episodes(manifest.clone(), variants.clone(), dev.clone())?;
             data::native::write(&root.join("variants.r3cor"), &c, true)?;
             let aligned=variants.iter().zip(&tm).enumerate().map(|(n,(e,m))|->Result<binary::Value>{let(_,_,i)=question_intent(&e.request.input)?;
@@ -2618,6 +2972,24 @@ fn study_prepare(parent: &Path, output: &Path) -> Result<()> {
             Some(file_hash(&root.join("question-variants.r3b"))?)
         } else {
             None
+        };
+        let (selector_hash, selector_metadata) = if arm == "S-SELECT" {
+            let c =
+                data::native::from_episodes(manifest.clone(), selector_rows.clone(), dev.clone())?;
+            data::native::write(&root.join("selectors.r3cor"), &c, true)?;
+            let owned = data::native::read(&root.join("selectors.r3cor"))?;
+            for e in &owned.train {
+                if resolve(&e.request)? != e.answer {
+                    return Err(bad("native selector label verification"));
+                }
+            }
+            write(&root.join("selector-metadata.r3b"), &selector_meta)?;
+            (
+                Some(file_hash(&root.join("selectors.r3cor"))?),
+                Some(file_hash(&root.join("selector-metadata.r3b"))?),
+            )
+        } else {
+            (None, None)
         };
         let mut plan = p.clone();
         plan.schema = Some(2);
@@ -2633,6 +3005,9 @@ fn study_prepare(parent: &Path, output: &Path) -> Result<()> {
         plan.config.warmup = 0;
         plan.config.validate_every = if p.tiny { 2 } else { 256 };
         plan.evaluation = fork_evaluation(s.step, study.updates, p.tiny);
+        if selector {
+            plan.evaluation.generation_limit = 4608;
+        }
         plan.fork = Some(Fork {
             study: output.clone(),
             study_hash: file_hash(&output.join("study.r3b"))?,
@@ -2648,20 +3023,41 @@ fn study_prepare(parent: &Path, output: &Path) -> Result<()> {
             variants: variant_hash,
             variant_metadata,
             alternate_first: alternate.clone(),
+            selector: selector_hash,
+            selector_metadata,
+            flip_first: if selector { flip_first.clone() } else { vec![] },
             constant_lr: 3e-5,
             target_limit: 1_000_000,
         });
         let original = samples(&train, &l.tokenizer, 512)?;
         let variant = samples(&variants, &l.tokenizer, 512)?;
+        let mut all = original.clone();
+        all.extend(plan.additional_samples(&root, &l.tokenizer)?);
         let mut counts = vec![[0usize; 2]; train.len()];
         let mut epoch_counts = [[[0usize; 2]; 8]; 2];
+        let mut flips = 0usize;
+        let mut flip_counts = vec![[0usize; 2]; train.len()];
+        let mut strata: BTreeMap<(usize, usize, bool, usize), [usize; 2]> = BTreeMap::new();
         let mut input = 0usize;
         let mut targets = 0usize;
         for step in s.step..plan.config.max_steps {
             let ids = plan.draw(step);
             let draw = plan.training_draw(step);
             for (bucket, (&i, &j)) in ids.iter().zip(&draw).enumerate() {
-                let selected = usize::from(j >= train.len());
+                let selected = (j / train.len()) % 2;
+                let flipped = usize::from(j >= 2 * train.len());
+                flips += flipped;
+                flip_counts[i][flipped] += 1;
+                if (2..=4).contains(&bucket) {
+                    strata
+                        .entry((
+                            (step - s.step) / plan.order[0].len(),
+                            bucket,
+                            selected == 1,
+                            tm[i].view,
+                        ))
+                        .or_default()[flipped] += 1;
+                }
                 counts[i][selected] += 1;
                 epoch_counts[(step - s.step) / plan.order[0].len()][bucket][selected] += 1;
                 let a = &original[i];
@@ -2669,21 +3065,25 @@ fn study_prepare(parent: &Path, output: &Path) -> Result<()> {
                 if a.tokens[a.response_start..] != b.tokens[b.response_start..] {
                     return Err(bad("variant changed target tokens"));
                 }
-                let row = if selected == 1 { b } else { a };
+                let row = &all[j];
                 input += row.tokens.len() - 1;
                 targets += row.tokens.len() - row.response_start;
             }
         }
         if !p.tiny
-            && counts
-                .iter()
-                .any(|c| *c != if arm == "P-PHRASE" { [1, 1] } else { [2, 0] })
+            && counts.iter().any(|c| {
+                *c != if arm == "P-PHRASE" || selector {
+                    [1, 1]
+                } else {
+                    [2, 0]
+                }
+            })
         {
             return Err(bad("two-epoch exposure contract"));
         }
         if !p.tiny
             && epoch_counts.iter().flatten().any(|c| {
-                *c != if arm == "P-PHRASE" {
+                *c != if arm == "P-PHRASE" || selector {
                     [512, 512]
                 } else {
                     [1024, 0]
@@ -2692,13 +3092,27 @@ fn study_prepare(parent: &Path, output: &Path) -> Result<()> {
         {
             return Err(bad("per-bucket epoch wording balance"));
         }
+        if !p.tiny
+            && arm == "S-SELECT"
+            && (flips != 3072
+                || strata.values().any(|x| x[0] != x[1])
+                || flip_counts.iter().zip(&tm).any(|(c, m)| {
+                    *c != if (2..=4).contains(&m.bucket) {
+                        [1, 1]
+                    } else {
+                        [2, 0]
+                    }
+                }))
+        {
+            return Err(bad("selector balanced exposure contract"));
+        }
         if input > 9_000_000 || targets > 1_000_000 {
             return Err(bad("registered token budget insufficient"));
         }
         write(&root.join("plan.r3b"), &plan)?;
         write(
             &root.join("registration.r3b"),
-            &binary::record!({"policy":digest(&plan)?,"counts":counts,"epoch_variant_counts":epoch_counts,"planned_input":input,"planned_target":targets,"origin_step":s.step,"end_step":plan.config.max_steps,"lr_bits":3e-5f64.to_bits(),"optimizer_calls":0}),
+            &binary::record!({"policy":digest(&plan)?,"counts":counts,"epoch_variant_counts":epoch_counts,"selector_draws":flips,"selector_counts":flip_counts,"selector_strata":strata.into_iter().collect::<Vec<_>>(),"planned_input":input,"planned_target":targets,"origin_step":s.step,"end_step":plan.config.max_steps,"lr_bits":3e-5f64.to_bits(),"optimizer_calls":0}),
         )?;
         println!(
             "FORK_REGISTERED arm={arm} origin={} end={} planned_input={input} planned_target={targets} parent={} optimizer=0",
@@ -2710,7 +3124,7 @@ fn study_prepare(parent: &Path, output: &Path) -> Result<()> {
     }
     publish_confirmed(
         &output.join("study-ready.r3b"),
-        &binary::record!({"study":file_hash(&output.join("study.r3b"))?,"C":file_hash(&output.join("C-REPEAT/plan.r3b"))?,"P":file_hash(&output.join("P-PHRASE/plan.r3b"))?,"elapsed_seconds":started.elapsed().as_secs_f64()}),
+        &binary::record!({"study":file_hash(&output.join("study.r3b"))?,"C":file_hash(&output.join(&study.tie_break[0]).join("plan.r3b"))?,"P":file_hash(&output.join(&study.tie_break[1]).join("plan.r3b"))?,"elapsed_seconds":started.elapsed().as_secs_f64()}),
     )?;
     println!(
         "PARENT_RAW_RESCORE={raw_count} VERIFIED initial_weights_Adam=SHARED new_updates=0 diagnostic_planned={}",
@@ -2720,14 +3134,22 @@ fn study_prepare(parent: &Path, output: &Path) -> Result<()> {
 }
 fn study_read(root: &Path) -> Result<Study> {
     let s: Study = read(&root.join("study.r3b"))?;
+    let names = match s.schema {
+        2 => ["C-REPEAT", "P-PHRASE"],
+        3 => ["C-KEEP", "S-SELECT"],
+        _ => return Err(bad("study schema")),
+    };
+    if s.tie_break != names {
+        return Err(bad("study arm identity"));
+    }
     let ready: binary::Value = read_confirmed(&root.join("study-ready.r3b"))?;
     if ready["study"] != file_hash(&root.join("study.r3b"))?
-        || ready["C"] != file_hash(&root.join("C-REPEAT/plan.r3b"))?
-        || ready["P"] != file_hash(&root.join("P-PHRASE/plan.r3b"))?
+        || ready["C"] != file_hash(&root.join(&s.tie_break[0]).join("plan.r3b"))?
+        || ready["P"] != file_hash(&root.join(&s.tie_break[1]).join("plan.r3b"))?
     {
         return Err(bad("study registration incomplete/changed"));
     }
-    if s.schema != 2
+    if ![2, 3].contains(&s.schema)
         || s.source != source_digest()?
         || s.binary != file_hash(&std::env::current_exe()?)?
         || s.parent_plan != file_hash(&s.parent.join("plan.r3b"))?
@@ -2744,6 +3166,8 @@ fn paired(a: &[binary::Value], b: &[binary::Value]) -> Result<binary::Value> {
         return Err(bad("paired denominator"));
     }
     let (mut gain, mut loss) = (0, 0);
+    let mut body = [0usize; 2];
+    let mut citation = [0usize; 2];
     for (a, b) in a.iter().zip(b) {
         if a["id"] != b["id"]
             || a["expected"] != b["expected"]
@@ -2753,8 +3177,114 @@ fn paired(a: &[binary::Value], b: &[binary::Value]) -> Result<binary::Value> {
         }
         gain += usize::from(a["exact_match"] != true && b["exact_match"] == true);
         loss += usize::from(a["exact_match"] == true && b["exact_match"] != true);
+        let body_ok = |r: &binary::Value| {
+            r["actual"]
+                .as_str()
+                .zip(r["expected"].as_str())
+                .is_some_and(|(x, y)| x.split(" [event:").next() == y.split(" [event:").next())
+        };
+        let citation_ok = |r: &binary::Value| {
+            r["actual"]
+                .as_str()
+                .zip(r["expected"].as_str())
+                .is_some_and(|(x, y)| citations(x).ok() == citations(y).ok())
+        };
+        body[0] += usize::from(!body_ok(a) && body_ok(b));
+        body[1] += usize::from(body_ok(a) && !body_ok(b));
+        citation[0] += usize::from(!citation_ok(a) && citation_ok(b));
+        citation[1] += usize::from(citation_ok(a) && !citation_ok(b));
     }
-    Ok(binary::record!({"paired":a.len(),"gain":gain,"loss":loss}))
+    Ok(
+        binary::record!({"paired":a.len(),"gain":gain,"loss":loss,"body_gain_loss":body,"citation_gain_loss":citation}),
+    )
+}
+fn selector_pairs(
+    original: &[binary::Value],
+    flipped: &[binary::Value],
+    es: &[Episode],
+    ms: &[Meta],
+) -> Result<binary::Value> {
+    if flipped.len() != es.len() || es.len() != ms.len() {
+        return Err(bad("selector pair denominator"));
+    }
+    let mut outcomes = [0usize; 4];
+    let mut same = 0;
+    let mut citation = [0usize; 4];
+    let mut by_bucket: BTreeMap<usize, [usize; 4]> = BTreeMap::new();
+    let mut base: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    let mut original_full = 0;
+    let mut flip_full = 0;
+    let mut original_body = 0;
+    let mut flip_body = 0;
+    let mut original_citation = 0;
+    for ((row, e), m) in flipped.iter().zip(es).zip(ms) {
+        let source = m
+            .source_id
+            .as_ref()
+            .ok_or_else(|| bad("selector source case"))?;
+        let old = original
+            .iter()
+            .find(|r| r["id"] == *source)
+            .ok_or_else(|| bad("selector original missing"))?;
+        if row["id"] != e.id || row["expected"] != e.answer {
+            return Err(bad("selector paired content"));
+        }
+        let a = old["exact_match"] == true;
+        let b = row["exact_match"] == true;
+        let index = match (a, b) {
+            (true, true) => 0,
+            (true, false) => 1,
+            (false, true) => 2,
+            (false, false) => 3,
+        };
+        outcomes[index] += 1;
+        by_bucket.entry(m.bucket).or_default()[index] += 1;
+        original_full += usize::from(a);
+        flip_full += usize::from(b);
+        same += usize::from(old["actual"].is_string() && old["actual"] == row["actual"]);
+        let fields = |v: &binary::Value| {
+            v.as_str()
+                .unwrap_or("")
+                .split_once(" [event:")
+                .map(|(b, _)| b.to_owned())
+        };
+        original_body += usize::from(
+            fields(&old["actual"]).is_some() && fields(&old["actual"]) == fields(&old["expected"]),
+        );
+        flip_body += usize::from(
+            fields(&row["actual"]).is_some() && fields(&row["actual"]) == fields(&row["expected"]),
+        );
+        original_citation += usize::from(
+            old["actual"].as_str().and_then(|s| citations(s).ok())
+                == old["expected"].as_str().and_then(|s| citations(s).ok()),
+        );
+        let got = row["actual"]
+            .as_str()
+            .and_then(|s| citations(s).ok())
+            .unwrap_or_default();
+        let expected = citations(&e.answer)?;
+        let c = if got.is_empty() {
+            3
+        } else if got == expected {
+            0
+        } else if got
+            .iter()
+            .all(|id| e.request.evidence.items.iter().any(|r| r.event_id == *id))
+        {
+            1
+        } else {
+            2
+        };
+        citation[c] += 1;
+        let x = base.entry(&m.base).or_default();
+        x.0 += 1;
+        x.1 += usize::from(a && b);
+    }
+    Ok(
+        binary::record!({"planned":es.len(),"pair_order":["both","original_only","flipped_only","neither"],"pairs":outcomes,"bucket_pairs":by_bucket,"same_output":same,
+        "original_full":original_full,"flipped_full":flip_full,"original_body":original_body,"flipped_body":flip_body,"original_citation":original_citation,
+        "flipped_citation_order":["selected","other_provided","invented","none"],"flipped_citations":citation,"both_base4":base.values().filter(|&&(n,k)|n==4&&k==4).count()}),
+    )
 }
 fn fragments(tok: &ByteBpe, es: &[Episode]) -> Result<binary::Value> {
     let ids: std::collections::BTreeSet<_> = (0..tok.vocab_size() as u32)
@@ -2792,10 +3322,10 @@ fn study_observe(root: &Path) -> Result<()> {
     let tok = ByteBpe::load(&s.parent.join("tokenizer.r3b"))?;
     let (probe, pm) = subset(&dev, &dm, if p.tiny { 1 } else { 2 });
     let mut control = recovery::RunControl::command(false)?;
-    control.set_call_limits(192, 6000);
+    control.set_call_limits(if s.schema == 3 { 208 } else { 192 }, 6000);
     write(
         &root.join("observation-started.r3b"),
-        &binary::record!({"study":file_hash(&root.join("study.r3b"))?,"parity_ids":probe.iter().map(|e|&e.id).collect::<Vec<_>>(),"generation_limit":192,"teacher_policy":"required per returned case; separate durable records"}),
+        &binary::record!({"study":file_hash(&root.join("study.r3b"))?,"parity_ids":probe.iter().map(|e|&e.id).collect::<Vec<_>>(),"generation_limit":if s.schema==3{208}else{192},"teacher_policy":"required per returned case; separate durable records"}),
     )?;
     let result = (|| -> Result<binary::Value> {
         let parity = evaluate_panel(
@@ -2832,26 +3362,41 @@ fn study_observe(root: &Path) -> Result<()> {
                 }
             }
         }
+        let diagnostic_name = if s.schema == 3 {
+            "selector192"
+        } else {
+            "familiar-wording"
+        };
         let diagnostic_result = evaluate_panel(
             &p,
             root,
             &s.parent_checkpoint,
             s.parent_step,
-            "familiar-wording",
+            diagnostic_name,
             &diagnostic,
             &xm,
             &mut control,
         )?;
-        let orig = binary::read_value_records(
-            &s.parent
-                .join(format!("eval-{:04}-transfer128.r3rows", s.parent_step)),
-        )?;
-        let altered = binary::read_value_records(
-            &root.join(format!("eval-{:04}-familiar-wording.r3rows", s.parent_step)),
-        )?;
-        let comparison = paired(&orig[1..], &altered[1..])?;
+        let orig = binary::read_value_records(&s.parent.join(format!(
+            "eval-{:04}-{}.r3rows",
+            s.parent_step,
+            if s.schema == 3 {
+                "dev512"
+            } else {
+                "transfer128"
+            }
+        )))?;
+        let altered = binary::read_value_records(&root.join(format!(
+            "eval-{:04}-{diagnostic_name}.r3rows",
+            s.parent_step
+        )))?;
+        let comparison = if s.schema == 3 {
+            selector_pairs(&orig[1..], &altered[1..], &diagnostic, &xm)?
+        } else {
+            paired(&orig[1..], &altered[1..])?
+        };
         Ok(
-            binary::record!({"parity":parity,"diagnostic_label":"FAMILIAR_WORDING_DIAGNOSTIC_NOT_PRODUCT_SCORE","diagnostic":diagnostic_result,"paired":comparison,
+            binary::record!({"parity":parity,"diagnostic_label":if s.schema==3{"SELECTOR_DEVELOPMENT_DIAGNOSTIC"}else{"FAMILIAR_WORDING_DIAGNOSTIC_NOT_PRODUCT_SCORE"},"diagnostic":diagnostic_result,"paired":comparison,
             "fragments":{"train":fragments(&tok,&train)?,"primary":fragments(&tok,&dev)?,"transfer":fragments(&tok,&transfer)?,"familiar":fragments(&tok,&diagnostic)?}}),
         )
     })();
@@ -2883,6 +3428,31 @@ fn study_usage(root: &Path, require_observation: bool) -> Result<(f64, usize, us
             || r["control"]["terminal_reason"] != "COMPLETED"
         {
             return Err(bad("study observation failed/incomplete; blocked"));
+        }
+        let parent: Plan = read(&s.parent.join("plan.r3b"))?;
+        let corpus = verified_corpus(&s.parent.join("corpus.r3cor"), &parent.corpus)?;
+        let (_, dm, _) = verified_metadata(&s.parent, &parent)?;
+        let tok = ByteBpe::load(&s.parent.join("tokenizer.r3b"))?;
+        let (es, ms) = subset(&corpus.validation, &dm, if s.tiny { 1 } else { 2 });
+        let parity = audit_panel(root, &parent, s.parent_step, "parity", &es, &ms, &tok)?;
+        let (es, ms): (Vec<Episode>, Vec<Meta>) = read(&root.join("diagnostic.r3b"))?;
+        let diag = audit_panel(
+            root,
+            &parent,
+            s.parent_step,
+            if s.schema == 3 {
+                "selector192"
+            } else {
+                "familiar-wording"
+            },
+            &es,
+            &ms,
+            &tok,
+        )?;
+        if r["result"]["parity"] != binary::to_value(parity)?
+            || r["result"]["diagnostic"] != binary::to_value(diag)?
+        {
+            return Err(bad("observation raw summary"));
         }
         elapsed += r["control"]["elapsed_seconds"]
             .as_f64()
@@ -2944,11 +3514,18 @@ fn study_report(root: &Path) -> Result<()> {
         results.insert(arm.clone(),binary::record!({"panels":panels,"raw_rows":rows,"exposure":exposure,"last_step":last.step,"new_updates":last.step-s.parent_step,"durable":last.checkpoint,"stop":last.stop}));
     }
     let mut comparisons = BTreeMap::new();
+    let c_arm = &s.tie_break[0];
+    let p_arm = &s.tie_break[1];
     if all_endpoints
-        && (results["C-REPEAT"]["exposure"]["case_order"]
-            != results["P-PHRASE"]["exposure"]["case_order"]
-            || results["C-REPEAT"]["exposure"]["target_order"]
-                != results["P-PHRASE"]["exposure"]["target_order"])
+        && (results[c_arm]["exposure"]["case_order"] != results[p_arm]["exposure"]["case_order"]
+            || (s.schema == 2
+                && results[c_arm]["exposure"]["target_order"]
+                    != results[p_arm]["exposure"]["target_order"])
+            || (s.schema == 3
+                && (results[c_arm]["exposure"]["phrase_order"]
+                    != results[p_arm]["exposure"]["phrase_order"]
+                    || results[c_arm]["exposure"]["unchanged_five_tasks"]
+                        != results[p_arm]["exposure"]["unchanged_five_tasks"])))
     {
         return Err(bad("actual C/P case/target exposures differ"));
     }
@@ -2960,15 +3537,31 @@ fn study_report(root: &Path) -> Result<()> {
             &s.parent
                 .join(format!("eval-{:04}-{panel}.r3rows", s.parent_step)),
         )?;
-        let c = binary::read_value_records(&root.join("C-REPEAT").join(format!(
+        let c = binary::read_value_records(&root.join(c_arm).join(format!(
             "eval-{:04}-{panel}.r3rows",
             s.parent_step + s.updates
         )))?;
-        let p = binary::read_value_records(&root.join("P-PHRASE").join(format!(
+        let p = binary::read_value_records(&root.join(p_arm).join(format!(
             "eval-{:04}-{panel}.r3rows",
             s.parent_step + s.updates
         )))?;
-        comparisons.insert(panel,binary::record!({"parent_to_C":paired(&parent[1..],&c[1..])?,"parent_to_P":paired(&parent[1..],&p[1..])?,"C_to_P":paired(&c[1..],&p[1..])?}));
+        comparisons.insert(panel,binary::record!({"control":c_arm,"treatment":p_arm,"parent_to_control":paired(&parent[1..],&c[1..])?,"parent_to_treatment":paired(&parent[1..],&p[1..])?,"control_to_treatment":paired(&c[1..],&p[1..])?}));
+    }
+    let mut selector_comparison = BTreeMap::new();
+    if s.schema == 3 && all_endpoints {
+        let (es, ms): (Vec<Episode>, Vec<Meta>) = read(&root.join("diagnostic.r3b"))?;
+        for arm in &s.tie_break {
+            let a = root.join(arm);
+            let step = s.parent_step + s.updates;
+            let original =
+                binary::read_value_records(&a.join(format!("eval-{step:04}-dev512.r3rows")))?;
+            let flipped =
+                binary::read_value_records(&a.join(format!("eval-{step:04}-selector192.r3rows")))?;
+            selector_comparison.insert(
+                arm,
+                selector_pairs(&original[1..], &flipped[1..], &es, &ms)?,
+            );
+        }
     }
     eligible.sort_by(|a, b| {
         b.1.cmp(&a.1)
@@ -2978,7 +3571,7 @@ fn study_report(root: &Path) -> Result<()> {
     });
     println!(
         "STUDY_REPORT {}",
-        binary::record!({"results":results,"paired":comparisons,"candidate":eligible.first().map(|x|&x.0),"generation":generation,"teacher":teacher,"active_seconds":elapsed,"result":if !all_endpoints{"STUDY_INCONCLUSIVE_UNEQUAL_BUDGET"}else if eligible.is_empty(){"STUDY_COMPLETE_QUALITY_FAIL"}else{"DEVELOPMENT_PASS_FINAL_NOT_RUN"},"FINAL200":"NOT_OPENED","GOAL1_READY":false})
+        binary::record!({"results":results,"paired":comparisons,"selector":selector_comparison,"arm_order":s.tie_break,"candidate":eligible.first().map(|x|&x.0),"generation":generation,"teacher":teacher,"active_seconds":elapsed,"result":if !all_endpoints{"STUDY_INCONCLUSIVE_UNEQUAL_BUDGET"}else if eligible.is_empty(){"STUDY_COMPLETE_QUALITY_FAIL"}else{"DEVELOPMENT_PASS_FINAL_NOT_RUN"},"FINAL200":"NOT_OPENED","GOAL1_READY":false})
     );
     if inventory(&s.parent)? != s.inventory {
         return Err(bad("parent preservation inventory mismatch"));
@@ -3002,6 +3595,9 @@ fn audit_updates(root: &Path, p: &Plan, h: &[Segment]) -> Result<binary::Value> 
     let mut padding = 0u64;
     let mut order = vec![];
     let mut target_order = vec![];
+    let mut phrase_order = vec![];
+    let mut unchanged = vec![];
+    let mut flips = 0usize;
     let mut counts = vec![[0usize; 2]; episodes.len()];
     for (i, segment) in h.iter().enumerate() {
         let path = root.join(format!("segment-{i:04}/updates.r3rows"));
@@ -3027,8 +3623,14 @@ fn audit_updates(root: &Path, p: &Plan, h: &[Segment]) -> Result<binary::Value> 
                 {
                     return Err(bad("actual sampler/target/LR trace mismatch"));
                 }
-                for (&j, &selected) in ids.iter().zip(&draw) {
-                    counts[j][usize::from(selected >= episodes.len())] += 1;
+                for (bucket, (&j, &selected)) in ids.iter().zip(&draw).enumerate() {
+                    let phrase = (selected / episodes.len()) % 2;
+                    counts[j][phrase] += 1;
+                    phrase_order.push(phrase);
+                    flips += usize::from(selected >= 2 * episodes.len());
+                    if !(2..=4).contains(&bucket) {
+                        unchanged.push(framed[selected].tokens.clone());
+                    }
                     target_order
                         .push(framed[selected].tokens[framed[selected].response_start..].to_vec());
                 }
@@ -3065,8 +3667,15 @@ fn audit_updates(root: &Path, p: &Plan, h: &[Segment]) -> Result<binary::Value> 
     {
         return Err(bad("completed study exposure contract"));
     }
+    if !p.tiny
+        && f.origin_step + steps == p.config.max_steps
+        && f.arm == "S-SELECT"
+        && flips != 3072
+    {
+        return Err(bad("actual selector exposures"));
+    }
     Ok(
-        binary::record!({"updates":steps,"case_order":digest(&order)?,"target_order":digest(&target_order)?,"committed_input":input,"committed_target":target,
+        binary::record!({"updates":steps,"case_order":digest(&order)?,"target_order":digest(&target_order)?,"phrase_order":digest(&phrase_order)?,"unchanged_five_tasks":digest(&unchanged)?,"selector_draws":flips,"committed_input":input,"committed_target":target,
         "actual_input":actual_input,"actual_target":actual_target,"discarded_input":actual_input-input,"discarded_target":actual_target-target,"padding":padding,
         "case_count":counts.len(),"case_exposure_hash":digest(&counts)?,"original_draws":counts.iter().map(|x|x[0]).sum::<usize>(),"variant_draws":counts.iter().map(|x|x[1]).sum::<usize>()}),
     )
@@ -3075,6 +3684,74 @@ fn audit_updates(root: &Path, p: &Plan, h: &[Segment]) -> Result<binary::Value> 
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+    #[test]
+    fn selector_involution_labels_balance_and_negative_cases() {
+        let (train, ms) = generate(256, 0, 20260919).unwrap();
+        let mut counts = [0usize; 8];
+        for (e, m) in train
+            .iter()
+            .zip(&ms)
+            .filter(|(_, m)| (2..=4).contains(&m.bucket))
+        {
+            let (flipped, fm) = flip_selection(e, m).unwrap();
+            let (back, _) = flip_selection(&flipped, &fm).unwrap();
+            assert_eq!(digest(&e.request).unwrap(), digest(&back.request).unwrap());
+            assert_eq!(e.answer, back.answer);
+            assert_eq!(flipped.answer, resolve(&flipped.request).unwrap());
+            assert_ne!(
+                citations(&e.answer).unwrap(),
+                citations(&flipped.answer).unwrap()
+            );
+            assert_eq!(fm.base, m.base);
+            assert_eq!(fm.view, m.view);
+            assert_eq!(
+                fm.entities[0],
+                question_intent(&flipped.request.input).unwrap().0
+            );
+            if m.bucket < 4 {
+                assert_eq!(
+                    digest(&e.request.evidence).unwrap(),
+                    digest(&flipped.request.evidence).unwrap()
+                );
+            } else {
+                assert_eq!(e.request.input, flipped.request.input);
+                let mut restored = flipped.request.evidence.clone();
+                for (r, o) in restored.items.iter_mut().zip(&e.request.evidence.items) {
+                    r.observed_at = o.observed_at;
+                }
+                assert_eq!(
+                    digest(&restored).unwrap(),
+                    digest(&e.request.evidence).unwrap()
+                );
+            }
+            counts[m.bucket] += 1;
+        }
+        assert_eq!(counts, [0, 0, 1024, 1024, 1024, 0, 0, 0]);
+        let index = ms.iter().position(|m| m.bucket == 4).unwrap();
+        let e = &train[index];
+        let m = &ms[index];
+        for fault in 0..6 {
+            let mut wrong = e.clone();
+            match fault {
+                0 => wrong.request.input.clear(),
+                1 => {
+                    wrong.request.evidence.items[1].event_id =
+                        wrong.request.evidence.items[0].event_id
+                }
+                2 => wrong.request.evidence.items[1].version_status = "superseded".into(),
+                3 => {
+                    wrong.request.evidence.items[1].observed_at =
+                        wrong.request.evidence.items[0].observed_at
+                }
+                4 => wrong.request.evidence.items[1].original_excerpt.clear(),
+                _ => wrong.request.evidence.items[1].observed_at = None,
+            };
+            assert!(flip_selection(&wrong, m).is_err(), "fault={fault}");
+        }
+        println!(
+            "SELECTOR_NATIVE_REQUEST_INVOLUTION=3072 INVALID_CASES=6 OPTIMIZER=0 GENERATION=0"
+        );
+    }
     #[test]
     fn fresh_strict_rows_roundtrip_command_stop_and_errors() {
         let (episodes, meta) = generate(1, 0, 20260919).unwrap();
@@ -3193,17 +3870,17 @@ mod tests {
             contrast16: false,
             parent_checkpoint_hash: None,
             config: TrainConfig {
-                max_steps: 6144,
-                budget_start_step: 4096,
+                max_steps: 8192,
+                budget_start_step: 6144,
                 warmup: 0,
                 seq_len: 64,
                 seed: 29,
                 ..Default::default()
             },
-            step: 6144,
+            step: 8192,
             consumed_tokens: 20_000_000,
             target_tokens: 1_000_000,
-            sampler_state: 6144,
+            sampler_state: 8192,
             corpus_hash: tok.train_hash.clone(),
             validation_hash: neural::hash(b"synthetic-dev"),
             previous_corpora: vec![],
@@ -3226,7 +3903,17 @@ mod tests {
         let loaded =
             checkpoint::load(&d.path().join("synthetic6144.r3m"), Device::Cpu, true).unwrap();
         assert_eq!(loaded.manifest.training.unwrap(), state);
-        println!("SYNTHETIC_METADATA_STEP=6144 OPTIMIZER_CALLS=0 backward_calls=3");
+        let path = d.path().join("trace.r3rows");
+        let expected=(6145..=8192).map(|step|binary::record!({"step":step,"sampler":step,"lr_bits":3e-5f64.to_bits(),"draw":[0,1,2,3,4,5,6,7],"input":1234,"target":128})).collect::<Vec<_>>();
+        replica_v3::codec::publish_new(&path, |f, _| {
+            for row in &expected {
+                binary::write_value_record(f, row)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(binary::read_value_records(&path).unwrap(), expected);
+        println!("SYNTHETIC_METADATA_STEP=8192 TRACE_ROWS=2048 OPTIMIZER_CALLS=0 backward_calls=3");
     }
     #[test]
     fn fresh_data_disjoint_resolver_and_balanced_epoch() {

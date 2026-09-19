@@ -24,6 +24,9 @@ Its two explicit forks used the same parent, constant LR3e-5,
 unchanged Adam/tokenizer/response CE and eight-bucket case order. P changes only
 one of two question exposures per case. Do not reinitialize or resume the old
 closed run. The active plan defines repair gates, budgets and conditional S4/S5/S6.
+The selector-consistency study is a new explicit P6144 fork: C-KEEP/S-SELECT retain
+P's wording policy and differ only in C/D/E selector exposure. Its own policy caps
+each arm at2048 updates and the pair at4096; old run permissions remain unchanged.
 Active stages, budgets and stop conditions: `docs/QUALITY_RECOVERY_PLAN.md`.
 Observed results and historical failures: `docs/EXPERIMENT_STATUS.md`.
 Architecture and artifact semantics: `docs/NATIVE_MODEL.md`.

@@ -1,5 +1,51 @@
 # 진단 및 구현 상태
 
+## 2026-09-19 Selector consistency — S0–S3 관측/등록 완료, 학습 전 동결
+
+EXECUTED_THIS_RUN: `fresh study-prepare --selector`로 같은 P6144 native weights,
+Adam, tokenizer와 원문/문구 변형을 검증했다. final과 step-006144의 물리 hash는
+다르지만 weights/Adam/state가 같았다. 이전 C/P endpoint를 각각704행 독립
+재채점해 C425/512·44/128, P425/512·79/128과 일치했다. 기존 원문·raw·종료
+기록·resume=false는 변경하지 않았다. 수리 source c7b5943fac96fa36ba2f00a887b1916b66d354a6는
+정상 push 후 remote SHA 일치를 확인했다.
+
+`fresh study-observe` 실제 SMALL generation208/teacher208, optimizer0,
+29.3016185초. parity16은 기존 raw tokens/EOS/error와 모두 동일했다(정답13/16).
+selector192는 정상 greedy full2/body13/citation26, EOS192/errors0, teacher CE
+1.3604393112425586이었다. 원본 대응192의 full131/body149/citation146과 비교하면
+both-correct0/original-only131/flipped-only2/neither59, 같은 출력184/192,
+뒤집은 답변의 인용은 selected26/other-provided143/invented4/none19다.
+이는 선택 변화에 대한 둔감성의 개발 관측이며 특정 수식/모델 능력의 원인 증명은 아니다.
+
+새 학습 자료는 기존 native original+aligned phrase+selector 변형으로 등록했다.
+S(S(e)) request/answer 동등성3072개, malformed6개 거부를 직접 검사했다.
+등록된 C/S 원사례 순서와 표현 선택은 같고, S의 selector 변형3072/16384회 및
+bucket/epoch/phrase/view 균형을 검산했다. A/B/F/G/H는 같은 token 노출이다.
+예정 input C3,511,224/S3,512,352, target 각252,312; 길이를 억지로 맞추지 않았다.
+실제 trace에서 committed/discarded token·표현/선택 노출을 다시 확인한다.
+
+고정 실행물: `artifacts/selector-consistency-20260919-executable`.
+binary SHA256 `40399be6f56f62864397f4d9c4ba2894e6209bb845a4128e1116e766b183b623`,
+source digest `6c01663cc979fb99072aa328210034ffa23bb6d57e10cf097e175afa6ba35575`.
+P Adam hash `3cb3c8843169d1b5d1f63c881dab48f648d8d6fa217b449264764dd72ad8732c`,
+state hash `53448189cbd091dae95ab6778e1bfe15c07ac3a1bd01861e6db9019349844d07`,
+tokenizer `ec945ee5f3cbd87992bdfa13f199de2a671b94b64337dff04d85e01d982ab9ef`.
+계획/변형/관측 원자료는 `artifacts/selector-consistency-20260919/`, 실행·검사 로그는
+`artifacts/selector-consistency-20260919-evidence/`에 로컬 보존한다. Git에는 올리지 않는다.
+
+`replica-check quick --fresh-selector`는14개 관련 검사와 cargo check를 통과했다.
+TINY 실제 P→C/S 등록/관측/생성/teacher/비교를 거쳤고 C 연속2 대분할1+1은
+weights/Adam/clock/tokens가 일치했다. future8192 native state와2048행 실제
+writer→publisher→reader도 optimizer0으로 검사했다. 최종 history reader의
+checkpoint/model 및 required teacher binding 후 FX04 process3개를 다시 통과했다.
+엄격 clippy의 기존 map-key lint만 제외한 변경 target clippy와 release build PASS.
+전체 fmt PASS는 주장하지 않는다. 최초 quick의 random TINY model 오류도 보존하며,
+정상 재개 fixture에 기존 EOS 수치 fixture를 사용했다. 오류 반환 차단은 별도 회귀다.
+
+이 절의 품질 학습은 아직0이다. 다음 단계는 등록된 두 군 각2048회뿐이며
+source/binary/data를 바꾸거나 자동 연장하지 않는다. 코드/등록 완료는 개발 품질,
+S4/S5/S6/Goal1 PASS가 아니다. final200 NOT_OPENED, GOAL1_ACCEPTED=false.
+
 ## 2026-09-19 Selector consistency — 호출/평가 경계 수리
 
 기준 source `e97e2c665c5de29a1a6a84b85864016406f92cf3`, 시작 HEAD

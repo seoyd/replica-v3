@@ -31,6 +31,9 @@ enum Checks {
         /// Only fresh joint corpus, numerical, native resume and runtime gates.
         #[arg(long, conflicts_with_all = ["native_corpus", "bridge_receipts"])]
         fresh: bool,
+        /// Selector data/numerical/fork checks; boundary process regressions are separately budgeted.
+        #[arg(long, conflicts_with_all = ["fresh", "native_corpus", "bridge_receipts"])]
+        fresh_selector: bool,
         /// Direct source-corpus/objective/resume regressions only; no unrelated storage suites.
         #[arg(long)]
         native_corpus: bool,
@@ -415,10 +418,11 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
     match &cli.command {
         Checks::Quick {
             fresh,
+            fresh_selector,
             native_corpus,
             bridge_receipts,
         } => {
-            if *fresh {
+            if *fresh || *fresh_selector {
                 r.cargo("check", &["--bin", "replica-train"], false)?;
                 for (target, filter) in [
                     ("native", "own_byte_bpe_roundtrip_no_control_promotion_or_truncation"),
@@ -431,10 +435,17 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
                     ("training", "fresh_explicit_fork_matches_continuous_and_split_native_resume"),
                     ("runtime", "rust_child_protocol_failures_timeouts_stderr_and_cancellation"),
                 ] {
+                    if *fresh_selector && matches!(filter,
+                        "fresh_fx01_post_publication_failure_blocks_new_process"|
+                        "fresh_fx03_final_step_resumes_only_remaining_evaluation"|
+                        "fresh_fx03_middle_last_summary_and_unknown_process_boundaries") {continue;}
                     r.cargo("test", &["--test", target, filter, "--", "--exact", "--nocapture"], true)?;
                 }
                 for filter in ["fresh_data_disjoint_resolver_and_balanced_epoch", "first_target_objective_matches_scalar_ce_and_gradients_without_mask_leakage", "adam_matches_independent_reference_and_teacher_forcing_masks", "fresh_accumulation_and_metadata_boundary", "fresh_fx02_returned_generation_survives_command_deadline", "fresh_strict_rows_roundtrip_command_stop_and_errors", "repair_rf03_actual_token_cancel_preserves_partial_and_skips_followup"] {
                     r.cargo("test", &["--bin", "replica-train", filter, "--", "--nocapture"], true)?;
+                }
+                if *fresh_selector {
+                    r.cargo("test", &["--bin","replica-train","selector_involution_labels_balance_and_negative_cases","--","--nocapture"],true)?;
                 }
                 return Ok(());
             }

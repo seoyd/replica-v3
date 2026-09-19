@@ -2657,7 +2657,7 @@ fn fresh_balanced_two_updates_match_fresh_process_resume_and_reject_unbound() {
     let d=tempfile::tempdir().unwrap();
     let call=|args:&[&str],success:bool| {
         let out=Command::new(env!("CARGO_BIN_EXE_replica-train")).args(args)
-            .env("VECLIB_MAXIMUM_THREADS","1").env("RAYON_NUM_THREADS","1").output().unwrap();
+            .env("VECLIB_MAXIMUM_THREADS","1").env("RAYON_NUM_THREADS","1").env("R3_FRESH_FIXTURE_EOS","1").output().unwrap();
         assert_eq!(out.status.success(),success,"{}\n{}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));
     };
     let full=d.path().join("full");let split=d.path().join("split");
@@ -2822,35 +2822,148 @@ fn fresh_fx03_middle_last_summary_and_unknown_process_boundaries() {
 
 #[test]
 fn fresh_explicit_fork_matches_continuous_and_split_native_resume() {
-    use candle_core::Device;use replica_v3::{binary,neural::checkpoint};
-    let d=tempfile::tempdir().unwrap();let parent=d.path().join("parent");let study=d.path().join("study");
-    let call=|args:&[&str]|{let out=Command::new(env!("CARGO_BIN_EXE_replica-train")).args(args).env("VECLIB_MAXIMUM_THREADS","1").env("RAYON_NUM_THREADS","1").output().unwrap();assert!(out.status.success(),"{}\n{}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));};
-    call(&["fresh","fixture","--output",parent.to_str().unwrap()]);
-    call(&["fresh","fixture-full","--root",parent.to_str().unwrap()]);
-    call(&["fresh","study-prepare","--parent",parent.to_str().unwrap(),"--output",study.to_str().unwrap()]);
-    call(&["fresh","study-observe","--root",study.to_str().unwrap()]);
-    let c=study.join("C-REPEAT");let p=study.join("P-PHRASE");
-    // C's first/second command exercises the explicit parent binding then normal bound resume.
-    call(&["fresh","run","--root",c.to_str().unwrap()]);
-    call(&["fresh","run","--root",c.to_str().unwrap()]);
-    call(&["fresh","fixture-full","--root",p.to_str().unwrap()]);
-    let initial=checkpoint::load(&c.join("initial.r3m"),Device::Cpu,true).unwrap();
-    let other=checkpoint::load(&p.join("initial.r3m"),Device::Cpu,true).unwrap();
-    assert_eq!(initial.model.weight_hash().unwrap(),other.model.weight_hash().unwrap());assert_eq!(initial.manifest.training,other.manifest.training);
-    for(k,t)in &initial.optimizer{assert_eq!(t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),other.optimizer[k].flatten_all().unwrap().to_vec1::<f32>().unwrap());}
-    for root in [&c,&p]{let plan:binary::Value=binary::from_slice(&std::fs::read(root.join("plan.r3b")).unwrap()).unwrap();assert_eq!(plan["config"]["max_steps"],4);
-        for n in 0..2{let path=root.join(format!("segment-{n:04}/updates.r3rows"));if !path.exists(){continue;}for row in binary::read_value_records(&path).unwrap(){assert_eq!(row["lr_bits"],3e-5f64.to_bits());}}
+    use candle_core::Device;
+    use replica_v3::{binary, neural::checkpoint};
+    let d = tempfile::tempdir().unwrap();
+    let parent = d.path().join("parent");
+    let study = d.path().join("study");
+    let call = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_replica-train"))
+            .args(args)
+            .env("VECLIB_MAXIMUM_THREADS", "1")
+            .env("RAYON_NUM_THREADS", "1")
+            .env("R3_FRESH_FIXTURE_EOS", "1")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    call(&["fresh", "fixture", "--output", parent.to_str().unwrap()]);
+    call(&["fresh", "fixture-full", "--root", parent.to_str().unwrap()]);
+    call(&[
+        "fresh",
+        "study-prepare",
+        "--parent",
+        parent.to_str().unwrap(),
+        "--output",
+        study.to_str().unwrap(),
+    ]);
+    call(&["fresh", "study-observe", "--root", study.to_str().unwrap()]);
+    let c = study.join("C-REPEAT");
+    let p = study.join("P-PHRASE");
+    call(&["fresh", "fixture-full", "--root", p.to_str().unwrap()]);
+    let initial = checkpoint::load(&c.join("initial.r3m"), Device::Cpu, true).unwrap();
+    let other = checkpoint::load(&p.join("initial.r3m"), Device::Cpu, true).unwrap();
+    assert_eq!(
+        initial.model.weight_hash().unwrap(),
+        other.model.weight_hash().unwrap()
+    );
+    assert_eq!(initial.manifest.training, other.manifest.training);
+    for (k, t) in &initial.optimizer {
+        assert_eq!(
+            t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+            other.optimizer[k]
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap()
+        );
     }
+    for root in [&c, &p] {
+        let plan: binary::Value =
+            binary::from_slice(&std::fs::read(root.join("plan.r3b")).unwrap()).unwrap();
+        assert_eq!(plan["config"]["max_steps"], 4);
+        for n in 0..2 {
+            let path = root.join(format!("segment-{n:04}/updates.r3rows"));
+            if !path.exists() {
+                continue;
+            }
+            for row in binary::read_value_records(&path).unwrap() {
+                assert_eq!(row["lr_bits"], 3e-5f64.to_bits());
+            }
+        }
+    }
+    // P is a real completed parent. Exercise both selector arms through the same native path.
+    let selector = d.path().join("selector");
+    call(&[
+        "fresh",
+        "study-prepare",
+        "--selector",
+        "--parent",
+        p.to_str().unwrap(),
+        "--output",
+        selector.to_str().unwrap(),
+    ]);
+    call(&[
+        "fresh",
+        "study-observe",
+        "--root",
+        selector.to_str().unwrap(),
+    ]);
+    let c = selector.join("C-KEEP");
+    let selected = selector.join("S-SELECT");
+    call(&["fresh", "run", "--root", c.to_str().unwrap()]);
+    call(&["fresh", "run", "--root", c.to_str().unwrap()]);
+    call(&[
+        "fresh",
+        "fixture-full",
+        "--root",
+        selected.to_str().unwrap(),
+    ]);
+    call(&[
+        "fresh",
+        "study-report",
+        "--root",
+        selector.to_str().unwrap(),
+    ]);
     // Same policy C in a second disposable study provides continuous versus1+1 equality.
-    let other_study=d.path().join("continuous");
-    call(&["fresh","study-prepare","--parent",parent.to_str().unwrap(),"--output",other_study.to_str().unwrap()]);
-    call(&["fresh","study-observe","--root",other_study.to_str().unwrap()]);
-    let full=other_study.join("C-REPEAT");call(&["fresh","fixture-full","--root",full.to_str().unwrap()]);
-    let a=checkpoint::load(&full.join("segment-0000/final"),Device::Cpu,true).unwrap();let b=checkpoint::load(&c.join("segment-0001/final"),Device::Cpu,true).unwrap();
-    assert_eq!(a.model.weight_hash().unwrap(),b.model.weight_hash().unwrap());
-    for(k,t)in &a.optimizer{assert_eq!(t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),b.optimizer[k].flatten_all().unwrap().to_vec1::<f32>().unwrap());}
-    let a=a.manifest.training.unwrap();let b=b.manifest.training.unwrap();assert_eq!((a.step,a.sampler_state,a.consumed_tokens,a.target_tokens),(b.step,b.sampler_state,b.consumed_tokens,b.target_tokens));
-    println!("TINY_OPTIMIZER_CALLS=8 actual_parent_fork=VERIFIED constant_LR_bits=VERIFIED continuous_vs_fresh_resume=EXACT");
+    let other_study = d.path().join("continuous");
+    call(&[
+        "fresh",
+        "study-prepare",
+        "--selector",
+        "--parent",
+        p.to_str().unwrap(),
+        "--output",
+        other_study.to_str().unwrap(),
+    ]);
+    call(&[
+        "fresh",
+        "study-observe",
+        "--root",
+        other_study.to_str().unwrap(),
+    ]);
+    let full = other_study.join("C-KEEP");
+    call(&["fresh", "fixture-full", "--root", full.to_str().unwrap()]);
+    let a = checkpoint::load(&full.join("segment-0000/final"), Device::Cpu, true).unwrap();
+    let b = checkpoint::load(&c.join("segment-0001/final"), Device::Cpu, true).unwrap();
+    assert_eq!(
+        a.model.weight_hash().unwrap(),
+        b.model.weight_hash().unwrap()
+    );
+    for (k, t) in &a.optimizer {
+        assert_eq!(
+            t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+            b.optimizer[k]
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap()
+        );
+    }
+    let a = a.manifest.training.unwrap();
+    let b = b.manifest.training.unwrap();
+    assert_eq!(
+        (a.step, a.sampler_state, a.consumed_tokens, a.target_tokens),
+        (b.step, b.sampler_state, b.consumed_tokens, b.target_tokens)
+    );
+    println!(
+        "TINY_OPTIMIZER_CALLS=10 TINY_GENERATIONS=167 TINY_TEACHERS=167 actual_selector_parent_fork=VERIFIED constant_LR_bits=VERIFIED continuous_vs_fresh_resume=EXACT"
+    );
 }
 
 #[test]
@@ -2887,7 +3000,8 @@ fn fresh_fx05_not_invoked_and_unknown_process_boundaries() {
         ("teacher", 3, "teacher_forward"),
         ("teacher", 7, "teacher_forward"),
     ];
-    for (kind, ordinal, boundary) in cases {
+    let kill_only=std::env::var("R3_FRESH_TEST_KILL_ONLY").as_deref()==Ok("1");
+    for (kind, ordinal, boundary) in cases.into_iter().filter(|_|!kill_only) {
         let d = tempfile::tempdir().unwrap();
         let root = d.path().join("run");
         let call = |action: &str, stop: bool| {
@@ -2981,7 +3095,7 @@ fn fresh_fx05_not_invoked_and_unknown_process_boundaries() {
         "cancel-time",
         "identity",
         "required-teacher",
-    ] {
+    ].into_iter().filter(|fault|!kill_only || fault.starts_with("kill-")) {
         let d = tempfile::tempdir().unwrap();
         let root = d.path().join("run");
         let call = |action: &str, inject: bool| {
@@ -3026,6 +3140,7 @@ fn fresh_fx05_not_invoked_and_unknown_process_boundaries() {
         };
         assert!(call("fixture", false).status.success());
         let first = call("fixture-full", true);
+        if fault.starts_with("kill-") {assert_eq!(first.status.code(),Some(86),"native entry hook must execute");}
         assert_eq!(
             first.status.success(),
             matches!(fault, "identity" | "required-teacher"),
@@ -3048,7 +3163,5 @@ fn fresh_fx05_not_invoked_and_unknown_process_boundaries() {
             "{fault}"
         );
     }
-    println!(
-        "TINY_OPTIMIZER_CALLS=24 successful_no_call_resumes=6 zero_optimizer_resume=true UNKNOWN_CANCEL_IO_BINDING_MISSING_TEACHER=BLOCKED"
-    );
+    println!("TINY_OPTIMIZER_CALLS={} successful_no_call_resumes={} zero_optimizer_resume=true kill_entry_exit86=VERIFIED",if kill_only{4}else{24},if kill_only{0}else{6});
 }

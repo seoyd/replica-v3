@@ -1,5 +1,31 @@
 # Replica v3 B0 runbook
 
+## Selector consistency study
+
+Use the preserved completed P-PHRASE6144 root as an explicit parent; never change its
+plan, completion records or resume=false. Build with the installed stable toolchain,
+locked/offline/accelerate and one compute thread. Run the directly budgeted FX04/FX05
+process tests, then `replica-check quick --fresh-selector --output NEW_CHECK_DIRECTORY`.
+This scope reuses the numeric, native, data and fork checks; it does not repeat the
+separately recorded interruption matrix or claim model quality from those tests.
+
+`fresh study-prepare --selector --parent PARENT_ROOT --output NEW_STUDY` verifies the
+parent native/Adam/old policy, immutable P phrase variants, and endpoint raw, and
+registers C-KEEP/S-SELECT. Each2048 new updates ends at8192. `fresh study-observe
+--root NEW_STUDY` performs same-weight parity16 and selector192 once; normal primary
+rows are reused. Failed/incomplete observation blocks learning and is never repaired
+by the read-only report. `fresh run --root NEW_STUDY/C-KEEP` saves the first update;
+subsequent commands continue only confirmed resumable segments within the same cap.
+Use the corresponding S-SELECT path for the second arm. Source/binary/data stay frozen.
+
+Each model call has an immutable prepared/resolved pair. A confirmed NotInvoked pure
+TIME_BUDGET preserves the cursor and permits continuation. Returned results/teachers
+are never regenerated. Missing resolutions, cancellation and failed sync remain
+blocked. Last-step EvaluationPending resumes evaluation with optimizer0. Reports
+read the original records and do not create missing evidence. `fresh study-report
+--root NEW_STUDY` recounts panels, selector pairs, actual exposure and cumulative usage.
+Only a qualifying final endpoint permits the existing independent final200/S5/S6 flow.
+
 ## Exposure and phrasing study
 
 Use a frozen `replica-train` built with locked/offline Accelerate and thread1.
