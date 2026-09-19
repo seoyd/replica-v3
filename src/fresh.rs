@@ -3727,6 +3727,417 @@ fn audit_updates(root: &Path, p: &Plan, h: &[Segment]) -> Result<binary::Value> 
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    // Explicit, training-free adapter for a closed study. It never calls run or
+    // study_observe, and reporting cannot create observations or repair history.
+    struct PosthocSelector {
+        binding: binary::Value,
+        inputs: BTreeMap<PathBuf, String>,
+        checkpoints: Vec<PathBuf>,
+        original: Vec<Episode>,
+        original_meta: Vec<Meta>,
+        original_rows: Vec<Vec<binary::Value>>,
+        flipped: Vec<Episode>,
+        meta: Vec<Meta>,
+        parity: Vec<usize>,
+    }
+    fn posthoc_mapping(
+        original: &[Episode],
+        om: &[Meta],
+        flipped: &[Episode],
+        fm: &[Meta],
+    ) -> Result<Vec<usize>> {
+        let selected: Vec<_> = original.iter().zip(om)
+            .filter(|(_, m)| (2..=4).contains(&m.bucket)).collect();
+        if selected.len() != flipped.len() || flipped.len() != fm.len() {
+            return Err(bad("posthoc mapping denominator"));
+        }
+        let mut ids = BTreeSet::new();
+        let mut bases: BTreeMap<&str, BTreeSet<usize>> = BTreeMap::new();
+        let mut counts = [0; 3];
+        for (((e, m), f), n) in selected.iter().zip(flipped).zip(fm) {
+            // Validate stored cases; never use a regenerated case for inference.
+            let expected = flip_selection(e, m)?;
+            if digest(&expected)? != digest(&(f, n))? || !ids.insert(&f.id)
+                || n.view > 3 || !bases.entry(&n.base).or_default().insert(n.view)
+            {
+                return Err(bad("posthoc mapping content/order/view"));
+            }
+            counts[n.bucket - 2] += 1;
+        }
+        if counts.iter().any(|&n| n != counts[0])
+            || bases.values().any(|v| v.len() != 4)
+        {
+            return Err(bad("posthoc bucket/base coverage"));
+        }
+        Ok((2..=4).flat_map(|bucket| fm.iter().enumerate()
+            .filter(move |(_, m)| m.bucket == bucket)
+            .take(if bucket == 2 { 6 } else { 5 }).map(|(i, _)| i)).collect())
+    }
+    impl PosthocSelector {
+        fn load(root: &Path, executable: &Path) -> Result<Self> {
+            let study = study_read_bound(root, Some(executable))?;
+            let (flipped, meta): (Vec<Episode>, Vec<Meta>) = read(&root.join("diagnostic.r3b"))?;
+            if study.schema != 3 || study.tiny || study.parent_step != 6144 || flipped.len() != 192 {
+                return Err(bad("posthoc requires the preserved selector study"));
+            }
+            let mut paths: BTreeSet<PathBuf> = [
+                root.join("study.r3b"), root.join("study-ready.r3b"),
+                root.join("diagnostic.r3b"), root.join("parent-audit.r3b"),
+                study.parent.join("plan.r3b"), study.parent_checkpoint.clone(), executable.into(),
+            ].into_iter().collect();
+            let mut checkpoints = vec![];
+            let mut identities = vec![];
+            let mut originals = vec![];
+            let mut original = vec![];
+            let mut original_meta = vec![];
+            for arm in &study.tie_break {
+                let arm_root = root.join(arm);
+                // Only directly read inputs and the step7168 panel, not the whole artifact tree.
+                for entry in std::fs::read_dir(&arm_root)? {
+                    let entry = entry?;
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if name.starts_with("eval-7168-dev512") || ["plan.r3b", "corpus.r3cor",
+                        "transfer.r3cor", "initial.r3m", "metadata.r3b", "tokenizer.r3b",
+                        "variants.r3cor", "question-variants.r3b", "selectors.r3cor",
+                        "selector-metadata.r3b"].contains(&name.as_str()) {
+                        paths.insert(entry.path());
+                    }
+                }
+                let p = plan_read_bound(&arm_root, &study.source, &study.binary)?;
+                let dev = verified_corpus(&arm_root.join("corpus.r3cor"), &p.corpus)?.validation;
+                let (_, dm, _) = verified_metadata(&arm_root, &p)?;
+                if dev.len() != 512 || dm.len() != 512 {
+                    return Err(bad("posthoc original primary denominator"));
+                }
+                if !original.is_empty() && (digest(&original)? != digest(&dev)?
+                    || digest(&original_meta)? != digest(&dm)?) {
+                    return Err(bad("posthoc arms differ in frozen inputs"));
+                }
+                let rows = binary::read_value_records(&arm_root.join("eval-7168-dev512.r3rows"))?;
+                let cp = PathBuf::from(rows.first().and_then(|h| h["checkpoint"].as_str())
+                    .ok_or_else(|| bad("posthoc original checkpoint missing"))?);
+                if !cp.canonicalize()?.starts_with(arm_root.canonicalize()?) {
+                    return Err(bad("posthoc checkpoint outside authorized arm"));
+                }
+                paths.insert(cp.clone());
+                let l = checkpoint::load(&cp, Device::Cpu, false)?;
+                let state = l.manifest.training.as_ref().ok_or_else(|| bad("posthoc native state"))?;
+                if state.step != 7168 || l.tokenizer.id() != study.tokenizer
+                    || l.model.config != p.architecture || p.tiny
+                    || p.fork.as_ref().is_none_or(|f| f.parent_adam != study.parent_adam
+                        || f.parent_state != study.parent_state || f.arm != *arm)
+                {
+                    return Err(bad("posthoc equal-step parent/native binding"));
+                }
+                let panel = audit_panel(&arm_root, &p, 7168, "dev512", &dev, &dm, &l.tokenizer)?;
+                identities.push(binary::record!({"arm":arm,"checkpoint":cp,"physical":file_hash(&cp)?,
+                    "model":l.model.weight_hash()?,"native_content":l.manifest.model_content_digest,
+                    "state":digest(state)?,"training_state":state,"policy":digest(&p)?,
+                    "historical_source":p.source,"historical_binary":p.binary,"primary":panel}));
+                checkpoints.push(cp);
+                originals.push(rows[1..].to_vec());
+                original = dev;
+                original_meta = dm;
+            }
+            let parity = posthoc_mapping(&original, &original_meta, &flipped, &meta)?;
+            if parity.len() != 16 || meta.iter().map(|m| &m.base).collect::<BTreeSet<_>>().len() != 48 {
+                return Err(bad("posthoc fixed panel coverage"));
+            }
+            let inputs: BTreeMap<_, _> = paths.into_iter().map(|p| {
+                let hash = file_hash(&p)?; Ok((p, hash))
+            }).collect::<Result<_>>()?;
+            let binding = binary::record!({"contract":"R3-ACCEPTANCE-AND-QUALITY-CLOSURE-1.0",
+                "label":"POSTHOC_EQUAL_STEP_SELECTOR_OBSERVATION","source":source_digest()?,
+                "binary":file_hash(&std::env::current_exe()?)?,"features":"accelerate; no test-support",
+                "backend":"CPU/F32/Accelerate","threads":1,"models":identities,"inputs":inputs,
+                "original":digest(&original)?,"flipped":digest(&flipped)?,"mapping":digest(&meta)?,
+                "parity_indices":parity,"decoding":"normal-greedy-strict-utf8-eos",
+                "generation_limit":416,"teacher_limit":0,"optimizer_limit":0});
+            Ok(Self { binding, inputs, checkpoints, original, original_meta,
+                original_rows: originals, flipped, meta, parity })
+        }
+        fn unchanged(&self) -> Result<()> {
+            for (path, hash) in &self.inputs {
+                if file_hash(path)? != *hash { return Err(bad("posthoc original input changed")); }
+            }
+            Ok(())
+        }
+        fn cases(&self, parity: bool) -> (Vec<Episode>, Vec<Meta>) {
+            if !parity { return (self.flipped.clone(), self.meta.clone()); }
+            self.parity.iter().map(|&i| {
+                let id = self.meta[i].source_id.as_ref().unwrap();
+                let j = self.original.iter().position(|e| e.id == *id).unwrap();
+                (self.original[j].clone(), self.original_meta[j].clone())
+            }).unzip()
+        }
+        fn rows(&self, output: &Path, arm: usize, parity: bool) -> Result<Vec<binary::Value>> {
+            let (es, ms) = self.cases(parity);
+            let name = format!("arm-{arm}-{}", if parity { "parity" } else { "selector" });
+            let path = output.join(format!("{name}.r3rows"));
+            if !path.exists() { return Ok(vec![]); }
+            let all = binary::read_value_records(&path)?;
+            let binding = binary::record!({"registration":digest(&self.binding)?,"arm":arm,
+                "checkpoint":self.checkpoints[arm],"dataset":digest(&es)?,"panel":name});
+            if all.first() != Some(&binding) || all.len() > es.len() + 1 {
+                return Err(bad("posthoc raw binding/count"));
+            }
+            let rows = &all[1..];
+            let l = checkpoint::load(&self.checkpoints[arm], Device::Cpu, false)?;
+            for (i, row) in rows.iter().enumerate() {
+                call_attempt(output, &name, "generation", &binding, &es[i], i, Some(row))?;
+                verify_generated(row, &l.tokenizer)?;
+                let prompt = l.tokenizer.prepare(&es[i].request, l.model.config.context as u32, &l.model.config.id()?)?;
+                if row["native_prompt_digest"] != prompt.token_digest {
+                    return Err(bad("posthoc native framing changed"));
+                }
+                if parity {
+                    let old = self.original_rows[arm].iter().find(|r| r["id"] == es[i].id).unwrap();
+                    for field in ["raw_tokens", "actual", "error", "finish_reason", "eos_index", "native_prompt_digest"] {
+                        if old[field] != row[field] { return Err(bad("posthoc output parity changed")); }
+                    }
+                }
+            }
+            score(rows, &es[..rows.len()], &ms[..rows.len()])?;
+            Ok(rows.to_vec())
+        }
+        fn observe_panel(&self, output: &Path, arm: usize, parity: bool,
+            control: &mut recovery::RunControl) -> Result<()> {
+            let (es, _) = self.cases(parity);
+            let name = format!("arm-{arm}-{}", if parity { "parity" } else { "selector" });
+            let mut rows = self.rows(output, arm, parity)?;
+            let l = checkpoint::load(&self.checkpoints[arm], Device::Cpu, false)?;
+            let binding = binary::record!({"registration":digest(&self.binding)?,"arm":arm,
+                "checkpoint":self.checkpoints[arm],"dataset":digest(&es)?,"panel":name});
+            let path = output.join(format!("{name}.r3rows"));
+            let new = !path.exists();
+            let mut f = std::fs::OpenOptions::new().create_new(new).append(true).open(&path)?;
+            if new { append_row(&mut f, &binding)?; std::fs::File::open(output)?.sync_all()?; }
+            for e in es.iter().skip(rows.len()) {
+                control.check("posthoc_next")?;
+                let attempt = prepare_call(output, &name, "generation", &binding, e, rows.len())?;
+                let mut row = match recovery::observe_generation(&l, e, &e.request, control, false) {
+                    recovery::ObservedCall::Returned(row) => row,
+                    recovery::ObservedCall::NotInvoked(_) => {
+                        resolve_call(&attempt, None, control)?;
+                        control.stop_result()?;
+                        return Err(bad("posthoc preparation failed without entry"));
+                    }
+                };
+                row["attempt"] = binary::record!(attempt.file_name().unwrap().to_string_lossy());
+                append_row(&mut f, &row)?;
+                resolve_call(&attempt, Some(&row), control)?;
+                rows.push(row);
+                control.check("posthoc_row_durable")?;
+            }
+            // Pure reread also checks parity before either selector panel can start.
+            let verified = self.rows(output, arm, parity)?;
+            let summary = self.panel_score(output, arm, parity, &verified)?;
+            let dest = output.join(format!("{name}-complete.r3b"));
+            if dest.exists() || pending_path(&dest).exists() {
+                let old: PanelResult = read_confirmed(&dest)?;
+                if old != summary { return Err(bad("posthoc summary differs")); }
+            } else { publish_confirmed(&dest, &summary)?; }
+            println!("POSTHOC panel={name} returned={} exact={} errors={} raw_tokens={} teacher=0 optimizer=0",
+                verified.len(), summary.exact, summary.errors,
+                verified.iter().map(|r| r["raw_tokens"].as_array().unwrap().len()).sum::<usize>());
+            Ok(())
+        }
+        fn panel_score(&self, output: &Path, arm: usize, parity: bool, rows: &[binary::Value]) -> Result<PanelResult> {
+            let (es, ms) = self.cases(parity);
+            let mut s = score(rows, &es, &ms)?;
+            s.step = 7168;
+            s.panel = format!("arm-{arm}-{}", if parity { "parity" } else { "selector" });
+            s.model = self.binding["models"][arm]["model"].as_str().ok_or_else(|| bad("posthoc model identity"))?.into();
+            s.dataset = digest(&es)?;
+            s.raw_hash = file_hash(&output.join(format!("{}.r3rows", s.panel)))?;
+            Ok(s)
+        }
+        fn report(&self, output: &Path) -> Result<binary::Value> {
+            let mut results = vec![];
+            let mut flips = vec![];
+            let mut both = vec![];
+            for arm in 0..2 {
+                for parity in [true, false] {
+                    let rows = self.rows(output, arm, parity)?;
+                    let summary = self.panel_score(output, arm, parity, &rows)?;
+                    let name = format!("arm-{arm}-{}-complete.r3b", if parity { "parity" } else { "selector" });
+                    let saved: PanelResult = read_confirmed(&output.join(name))?;
+                    if saved != summary { return Err(bad("posthoc complete summary differs")); }
+                    if !parity {
+                        let pairs = posthoc_pairs(&self.original_rows[arm], &rows, &self.flipped, &self.meta)?;
+                        both.push(pairs["rows"].as_array().unwrap().iter().map(|r| r["both"] == true).collect::<Vec<_>>());
+                        flips.push(rows.iter().map(|r| r["exact_match"] == true).collect::<Vec<_>>());
+                        results.push(binary::record!({"arm":arm,"score":summary,"pairs":pairs}));
+                    }
+                }
+            }
+            let gain_loss = |v: &[Vec<bool>]| [v[0].iter().zip(&v[1]).filter(|(a,b)| !**a && **b).count(),
+                v[0].iter().zip(&v[1]).filter(|(a,b)| **a && !**b).count()];
+            self.unchanged()?;
+            Ok(binary::record!({"registration":digest(&self.binding)?,"arms":results,
+                "flipped_gain_loss":gain_loss(&flips),"both_gain_loss":gain_loss(&both),
+                "originals_unchanged":true,"new_optimizer":0,"new_teacher":0,
+                "quality_improved_this_run":false,"candidate_promotion":false,"final200":"NOT_OPENED"}))
+        }
+    }
+    fn posthoc_pairs(original: &[binary::Value], flipped: &[binary::Value], es: &[Episode], ms: &[Meta]) -> Result<binary::Value> {
+        let mut summary = selector_pairs(original, flipped, es, ms)?;
+        let valid = |r: &binary::Value| r["generation_completed"] == true && r["error"].is_null()
+            && r["finish_reason"] == "stop" && r["actual"].is_string();
+        let mut rows = vec![];
+        for ((r, e), m) in flipped.iter().zip(es).zip(ms) {
+            let old = original.iter().find(|r| r["id"] == *m.source_id.as_ref().unwrap()).unwrap();
+            let got = r["actual"].as_str().map(citations).transpose();
+            let expected = citations(&e.answer)?;
+            let mut classes = vec![];
+            if let Ok(Some(ids)) = &got {
+                for id in ids {
+                    classes.push(if expected.contains(id) { "selected" }
+                        else if e.request.evidence.items.iter().any(|x| x.event_id == *id) { "other_provided" }
+                        else { "absent" });
+                }
+            }
+            rows.push(binary::record!({"id":e.id,"source":m.source_id,"bucket":m.bucket,"base":m.base,"view":m.view,
+                "original":old["exact_match"],"flipped":r["exact_match"],"both":old["exact_match"]==true && r["exact_match"]==true,
+                "same_valid_output":valid(old) && valid(r) && old["actual"]==r["actual"],
+                "citation_ids":got.as_ref().ok().and_then(|v| v.as_ref()),
+                "citation_classes":classes,"citation_parse_error":got.is_err(),
+                "no_citation":classes.is_empty(),"multiple_citations":classes.len()>1}));
+        }
+        summary["same_output"] = binary::record!(rows.iter().filter(|r| r["same_valid_output"]==true).count());
+        summary["rows"] = binary::record!(rows);
+        Ok(summary)
+    }
+    #[test]
+    fn posthoc_mapping_and_binary_pair_counts() -> Result<()> {
+        let (es, ms) = generate(1, 1, 20260919)?;
+        let (flipped, fm) = selector_panel(&es, &ms, false)?;
+        assert_eq!(posthoc_mapping(&es, &ms, &flipped, &fm)?.len(), 12);
+        for fault in 0..4 {
+            let mut broken = flipped.clone();
+            match fault {
+                0 => { broken.swap(0, 1); }
+                1 => { broken.pop(); }
+                2 => { broken[0].answer.push(' '); }
+                _ => { broken[0].request.input.push(' '); }
+            }
+            assert!(posthoc_mapping(&es, &ms, &broken, &fm).is_err());
+        }
+        let tok = ByteBpe::train(&[b"pair fixture".to_vec()], &neural::hash(b"pair fixture"), 264)?;
+        let row = |e: &Episode| -> Result<binary::Value> {
+            let body = tok.encode(e.answer.as_bytes())?;
+            let mut ids = body.clone(); ids.push(EOS);
+            Ok(binary::record!({"row_version":2,"id":e.id,"question":e.request.input,
+                "generated_evidence":e.request.evidence,"expected":e.answer,"actual":e.answer,
+                "generation_completed":true,"error":null,"finish_reason":"stop","exact_match":true,
+                "raw_tokens":ids,"generation":{"tokens":body,"finish":"stop","generated":ids.len()}}))
+        };
+        let original = es.iter().map(row).collect::<Result<Vec<_>>>()?;
+        let flipped_rows = flipped.iter().map(row).collect::<Result<Vec<_>>>()?;
+        let d = tempfile::tempdir()?;
+        let path = d.path().join("pairs.r3rows");
+        let mut f = std::fs::File::create(&path)?;
+        for r in &flipped_rows { append_row(&mut f, r)?; }
+        let mut loaded = binary::read_value_records(&path)?;
+        for r in &loaded { verify_generated(r, &tok)?; }
+        assert_eq!(score(&loaded, &flipped, &fm)?.exact, 12);
+        let pairs = posthoc_pairs(&original, &loaded, &flipped, &fm)?;
+        assert_eq!(pairs["pairs"], binary::record!([12, 0, 0, 0]));
+        assert_eq!(pairs["both_base4"], 3);
+        loaded[0]["expected"] = binary::record!("untrusted answer");
+        assert!(score(&loaded, &flipped, &fm).is_err());
+        loaded = flipped_rows;
+        let mut original = original;
+        for r in original.iter_mut().chain(&mut loaded) {
+            r["actual"] = binary::Value::Null;
+            r["error"] = binary::record!("failed");
+            r["exact_match"] = binary::record!(false);
+        }
+        assert_eq!(posthoc_pairs(&original, &loaded, &flipped, &fm)?["same_output"], 0);
+        let target = citations(&flipped[0].answer)?[0];
+        let other = flipped[0].request.evidence.items.iter().find(|r| r.event_id != target).unwrap().event_id;
+        loaded[0]["actual"] = binary::record!(format!("x [event:{target}] [event:{other}] [event:999999999]"));
+        let mixed = posthoc_pairs(&original, &loaded, &flipped, &fm)?;
+        // citations() sorts IDs; classes retain that ID order, not textual order.
+        let classes: BTreeSet<_> = mixed["rows"][0]["citation_classes"].as_array().unwrap()
+            .iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(classes, BTreeSet::from(["selected", "other_provided", "absent"]));
+        assert_eq!(mixed["rows"][0]["multiple_citations"], true);
+        assert_eq!(mixed["same_output"], 0);
+        println!("POSTHOC_FIXTURE mapping_faults=4 full_pairs=12 null_pairs=12 mixed_citations=1 optimizer=0 generation=0 teacher=0");
+        Ok(())
+    }
+    #[test]
+    #[ignore = "explicit closed study/output/mode; register/report are read-only on originals; observe has at most416 SMALL generations"]
+    fn posthoc_equal_step_selector() -> Result<()> {
+        if cfg!(feature = "test-support") || !cfg!(feature = "accelerate")
+            || std::env::var("VECLIB_MAXIMUM_THREADS").as_deref() != Ok("1")
+            || std::env::var("RAYON_NUM_THREADS").as_deref() != Ok("1") {
+            return Err(bad("posthoc requires production Accelerate, threads1"));
+        }
+        let env = |k| std::env::var(k).map_err(|_| bad("explicit posthoc paths/mode required"));
+        let output = PathBuf::from(env("R3_POSTHOC_OUTPUT")?);
+        let data = PosthocSelector::load(Path::new(&env("R3_POSTHOC_STUDY")?), Path::new(&env("R3_POSTHOC_EXECUTABLE")?))?;
+        let mode = env("R3_POSTHOC_MODE")?;
+        if mode == "register" {
+            std::fs::create_dir(&output)?;
+            publish_confirmed(&output.join("registration.r3b"), &data.binding)?;
+            data.unchanged()?;
+            println!("POSTHOC_REGISTERED {}", data.binding);
+            return Ok(());
+        }
+        let registration: binary::Value = read_confirmed(&output.join("registration.r3b"))?;
+        if registration != data.binding { return Err(bad("posthoc registration changed")); }
+        let mut index = 0;
+        let mut used = 0;
+        let mut finished = false;
+        while output.join(format!("command-{index:04}-started.r3b")).exists() {
+            let start = output.join(format!("command-{index:04}-started.r3b"));
+            let r: binary::Value = read_confirmed(&output.join(format!("command-{index:04}-finished.r3b")))
+                .map_err(|_| bad("posthoc started without terminal: usage UNKNOWN, blocked"))?;
+            if r["start"] != file_hash(&start)? || r["registration"] != digest(&registration)?
+                || r["control"]["teacher_calls"] != 0 || finished {
+                return Err(bad("posthoc command chain"));
+            }
+            used += r["control"]["generation_calls"].as_u64().ok_or_else(|| bad("posthoc usage UNKNOWN"))?;
+            finished = r["complete"] == true;
+            if finished && (!r["error"].is_null() || r["control"]["terminal_reason"] != "COMPLETED"
+                || r["control"]["observed_conditions"] != binary::record!([]) || used != 416) {
+                return Err(bad("posthoc completion/usage mismatch"));
+            }
+            if !finished && (r["control"]["observed_conditions"] != binary::record!(["TIME_BUDGET"])
+                || r["resume"] != true) { return Err(bad("posthoc failed command is sticky")); }
+            index += 1;
+        }
+        if used > 416 { return Err(bad("posthoc generation budget")); }
+        if mode == "report" {
+            if !finished { return Err(bad("posthoc incomplete command")); }
+            println!("POSTHOC_REPORT {}", data.report(&output)?);
+            return Ok(());
+        }
+        if mode != "observe" || finished { return Err(bad("posthoc mode/already complete")); }
+        let start = output.join(format!("command-{index:04}-started.r3b"));
+        write(&start, &binary::record!({"registration":digest(&registration)?,"prior_calls":used}))?;
+        let mut control = recovery::RunControl::command(false)?;
+        control.set_call_limits(416 - used as usize, 0);
+        let result = (|| -> Result<()> {
+            for parity in [true, false] { for arm in 0..2 {
+                data.observe_panel(&output, arm, parity, &mut control)?;
+            }}
+            data.unchanged()
+        })();
+        if let Err(e) = &result { control.classify_error(e); }
+        let result = control.seal_terminal().and(result);
+        publish_confirmed(&output.join(format!("command-{index:04}-finished.r3b")),
+            &binary::record!({"start":file_hash(&start)?,"registration":digest(&registration)?,
+                "control":control.receipt(),"complete":result.is_ok(),
+                "resume":result.is_err() && control.receipt()["observed_conditions"]==binary::record!(["TIME_BUDGET"]),
+                "error":result.as_ref().err().map(ToString::to_string)}))?;
+        println!("POSTHOC_COMMAND {}", control.receipt());
+        result
+    }
+
     #[test]
     fn fresh_exposure_digest_preserves_order_above_aggregate_codec_limit() {
         // The actual two-epoch five-task report contains more than one million

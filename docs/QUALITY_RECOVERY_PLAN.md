@@ -1,6 +1,28 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: existing execution path stabilization
+## Active: equal-step posthoc selector observation
+
+R3-ACCEPTANCE-AND-QUALITY-CLOSURE-1.0. R0–R2 independently accepted source
+`abd967980645a878f22069708daa9fbfce70bf87`; report commit
+`898f57d7dd8109386f23549d391618c558097774` records15 tests and P16 parity.
+Implementer Q0 verified that report's test log and executable hashes without
+rerunning its model calls. The accepted generation/timeout code stays frozen.
+
+Q0 is complete: both native step7168 artifacts, their primary512 raw/teachers,
+and the existing selector192 mapping pass the existing native/policy/scorer checks.
+An explicit ignored test in the existing training test module connects the generic
+loader, generation observer, call receipts and confirmed publisher without teacher
+or optimizer calls. Registration, observation and pure reporting are separate modes.
+No product CLI or model semantics change. Its test-only diff requires reviewer R3.
+
+Q1: metadata-fixed C6/D5/E5 parity per model, then192 existing selector cases per
+model, once. Cap416 SMALL generations, teacher/backward/optimizer0. Persist returned
+failures and resume only remaining observations after a confirmed pure time stop;
+unknown entry, cancellation or storage failure blocks. Q2 verifies raw/decode/labels,
+both-correct and paired gain/loss. R3 independently checks these new observations.
+No training, candidate promotion, old run resume or final200 opening is authorized.
+
+## Closed: existing execution path stabilization
 
 Closed on2026-09-19: STABILIZATION_SCOPE_VERIFIED. Source
 `abd967980645a878f22069708daa9fbfce70bf87` was pushed and remote-verified.

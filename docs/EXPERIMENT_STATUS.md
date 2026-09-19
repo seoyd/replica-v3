@@ -1,5 +1,65 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Acceptance / equal-step selector — Q0 complete
+
+MODE=IMPLEMENT_AND_MEASURE; R3-ACCEPTANCE-AND-QUALITY-CLOSURE-1.0.
+STABILIZATION_ACCEPTED=true per the separate independent report
+`docs/INDEPENDENT_ACCEPTANCE_2026-09-19.md`, commit
+`898f57d7dd8109386f23549d391618c558097774`. Its15 unique test exits and four executable
+hashes were checked against local evidence. This is not a new implementation-side
+independent review. Original accepted source is `abd967980645a878f22069708daa9fbfce70bf87`.
+
+Q0 EXECUTED_THIS_RUN: C/S native absolute7168 and original primary512 raw/teacher/
+completion bindings verified with existing readers and scorer: C436, S350, errors0.
+The serialized selector mapping is C/D/E64 each,48 bases×4view, unique IDs, validated
+request-only labels and inverse selections. No generated replacements are used as inputs.
+Original C/D/E full155 versus70; five other tasks281 versus280.
+
+The only source diff is a test-only adapter and a direct byte/mapping fixture in
+`src/fresh.rs`'s existing test module. No product inference/trainer/timeout changes.
+It separates register/observe/report, binds actual inputs/checkpoints, uses existing
+RunControl and prepared/resolved calls, preserves partial rows and forbids teacher.
+Test-only source digest `44351ced9f77c59ea79521ec438f3a4850db24f0dccc90c15209218cf54c28e1`;
+production-feature observer SHA256
+`542471cb669eeac618feae0a8fbb3b78a13ee3f42f5cf46cf943172cdd043fe0`.
+Rust/Cargo1.98.1, locked/offline release, Accelerate/F32 CPU, compute thread1,
+test-support absent. Product model policy/source remains historical, not overwritten.
+
+Direct unique fixture tests3 PASS: `posthoc_mapping_and_binary_pair_counts`,
+`fresh_strict_rows_roundtrip_command_stop_and_errors`,
+`selector_involution_labels_balance_and_negative_cases`. Generation/teacher/optimizer0.
+The first new fixture run failed because its expected citation order ignored the
+existing citation parser's sorted IDs; corrected the fixture assertion and retained
+the failed log. The final mapping fixture verifies4 malformed mappings,12 exact
+pairs, null/error equality exclusion and mixed citations with explicit IDs/classes.
+Its binary writer/reader uses the real codec. Strict rows cover6 paths; existing
+selector label test verifies3,072 involutions and6 negatives without model calls.
+
+One broad `clippy --tests` invocation also selected unrelated `tests/journal.rs:9`
+and failed its existing unused `Command` import. The adapter's unused local was
+removed and final targeted compile/tests passed. This is not whole clippy/fmt PASS;
+the prior `for_kv_map` debt remains outside scope. No unrelated source was changed.
+
+Allowed evidence root: `artifacts/acceptance-quality-closure-20260920/`.
+Registration `observation/registration.r3b` SHA256
+`7f6df85ea191b8cad8cd3d7fd7b71317cbb471f785694f323ebc97f6ff33b3f0` binds4,129 directly
+read files (step7168 raw/call receipts, native files, corpora, policies and mapping).
+Input hashes agree after Q0. No operating DB/private memory or final200 access.
+
+| step7168 | checkpoint under `artifacts/selector-consistency-20260919/` | native file SHA256 |
+| --- | --- | --- |
+| C | `C-KEEP/segment-0002/step-007168` | `b74292531bf00ab1c21157936254f1205835a9771b969991b5b5f59bf16e407a` |
+| S | `S-SELECT/segment-0002/step-007168` | `6c31d173c31a4f08e600f901289fa16d2779dd8639030d482a18b43b2bbbc8a0` |
+
+The S step artifact matches its final file bytes. C8192 is not substituted for C7168.
+Stored diagnostic semantic hash
+`8cff0fe541fbe8596be688e2c86d9bd2250eeae75bd10d4e2ba504b5a4c179ce`, mapping hash
+`d6b15b54f9cb765b38686a2f4d045ed70fb983b659ff9d34dc96d33802559045`.
+Before observing output, parity indices are fixed as0..5,64..68,128..132.
+Q1/Q2=NOT_RUN at this source freeze. NEW_SMALL_UPDATES/GENERATIONS/TEACHERS=0/0/0.
+No new TINY/scalar updates or model calls. H3/S4/GOAL1=false; final200=NOT_OPENED;
+old study remains inconclusive with candidate=null and S resume=false.
+
 ## 2026-09-19 Existing path stabilization — 검증·무학습 관측 완료
 
 RESULT=PASS / STABILIZATION_SCOPE_VERIFIED=true. 아래 수리 source 검증 후 코드 변경 없이
