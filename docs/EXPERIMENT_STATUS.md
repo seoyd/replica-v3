@@ -1,5 +1,130 @@
 # 진단 및 구현 상태
 
+## P5 최종 — 경계 수리 PASS, R-REPLAY는 첫1회 후 실행 결함으로 종료
+
+R3-RETENTION-FIRST-1.0 / 2026-09-19. **RESULT=PARTIAL.**
+실제로 새 SMALL1회를 수행했으나, 구현자가 새 probe 저장 호출에 넣은
+`RETENTION_PROBE` 문자열이 기존 `save_arm` 종료 사유에 없어 정상 첫 저장에
+실패했다. 오류는 `invalid input: unknown recovery termination`이다.
+disk sync나 모델 수치 실패로 확인된 것이 아니다. 이 실행은 품질 판정 전의
+**EXECUTION_FAILED**이며, 원 terminal/command는 IntegrityFail/Failed,
+resume=false/complete=false/candidate=false로 보존했다.
+
+이후 해당 호출을 기존 `RECOVERY_SCREENING` 사유로 수정했고, 같은 native
+writer와 새 process의 resume loader를 쓰는 TINY 직접 회귀에서 수정 전 실패,
+수정 후 weights/Adam/state 복원 통과를 확인했다. 이 회귀의 optimizer/forward는0.
+수정 후 SMALL 학습·실패 run 재개·새 attempt는 **실행하지 않았다**. 남은127회는
+새 시도권으로 사용하지 않는다. 1회 뒤 teacher probe,8/16/32 screen,64/128 및
+전체1424 평가, 동일32 역사 paired 비교는 모두 NOT_RUN_EXECUTION_FAILURE다.
+
+### 실제 소스와 실행 파일
+
+| 구분 | 전체 SHA / 의미 |
+|---|---|
+| 기준 source | `eb66357fbee97de67b637ec0b1986e636ebd372e` |
+| P1 경계 수리 | `e221d338639a97f811d631a4b649045d46ecef80` |
+| 실제 R 실행 source | `56f3f0eb3029dc549eee4cfd3bd052ffc4cb6243` |
+| 저장 사유 수리 후 candidate | `c2ce9c3ce1c456b54702ee6611f26157794836e1` |
+| 실제 실행 binary SHA256 | `58a723e08a4837e9a53053ffda319f590c3c185f0df82e33b54f2f0bc18fcbc2` |
+| 실행 evaluator source digest | `eac9ffaa34e8d05192c9290c4411410e5f858bec622f31046b683d8e21b28b8f` |
+| 실행 input binding | `7cb880ec9e67d171037dd543bd16ceaea757e440e8400bcec9f27b8e5995a338` |
+
+[기준→최종 candidate 소스 diff](https://github.com/seoyd/replica-v3/compare/eb66357fbee97de67b637ec0b1986e636ebd372e...c2ce9c3ce1c456b54702ee6611f26157794836e1).
+각 source는 정상 push하고 full remote SHA 일치를 확인했다. 이 최종 결과 절은
+별도 docs-only 보고다. 실제 SMALL 실행 동안 frozen source/lock/binary hash는
+유지됐고, 종료 뒤에만 위 저장 사유와 실패 보고를 고쳤다. 최종 candidate로
+SMALL1이 성공했다고 소급 표시하지 않는다.
+
+### EXECUTED_THIS_RUN: 사용량과 첫 update 관측
+
+부모는 A75-R24310 그대로다. 원 native T corpus와 owned train2560의 bytes 일치,
+R의 과거 train membership, Q4/T2 공통 tape와 sampler, LR1e-4 bits
+4547007122018943789, default loss/first weight8, Adam/clock/tokenizer/F32를 검증했다.
+별도 단일 등록 뒤 metadata-selected 부모8개를 normal greedy로 생성했고,
+기존 raw token/EOS/error와 **8/8 동등**했다. 정답률8/8이라는 뜻이 아니다.
+R128의 계획 input327,969/target34,458은 실제 사용량과 구분한다.
+
+| 실제 첫 배치 | draws | input tokens | target tokens | mean CE | weighted objective |
+|---|---:|---:|---:|---:|---:|
+| 기존 Q |4|1295|111|0.01262501|0.01264575|
+| 과거 full-copy R |2|542|60|0.0002938095|0.00031284845|
+| 기존 temporal T |2|726|67|3.565754|6.5056934|
+| 합계 |8|2563|238|1.0097669|1.8374114|
+
+신규 SMALL **1/128**, TINY **61/128**, scalar0. 신규 SMALL normal generation
+**8 entered/8 returned**, 생성 tokens236(EOS 포함); 학습 뒤 generation0.
+자체 train diagnostic forward8/256, extra diagnostic backward0/8.
+교사 관측은 같은 자체 모델이며 외부 teacher/모델/API 호출0이다.
+TINY observer 동등성 두 실행에서 추가 teacher4회를 사용했으며 SMALL과 합산하지
+않는다. 다른 TINY 실패/강제 종료 회귀의 UNKNOWN tail은 원 로그 그대로 유지한다.
+
+학습 전 고정 R train8의 teacher target286, token-mean NLL
+0.0003067367875618484, 첫 teacher mismatch는 모두 null이었다. free generation
+품질 수치가 아니다. 첫 update global gradient norm7.93250126303735,
+clip coefficient0.12606364207712392, 실제 Adam delta norm0.10187845539056552.
+
+| 중복 없는 parameter group | parameters | theta norm | 실제 delta norm |
+|---|---:|---:|---:|
+| FFN |7077888|77.35740853593474|0.08900782995729|
+| Q/K/norm |1113792|91.94951291310507|0.038001679380048545|
+| attention V/O |1105920|36.84714223890798|0.022607355065883003|
+| shared embedding |307584|35.898508058962214|0.02239655643804834|
+
+tied embedding은 한 번만 합산했다. optional g_old dot delta는
+SKIPPED_NOT_REQUIRED. 학습 후 probe1/8 및 delta8/32는 관측되지 않았다.
+prepare 명령의 기록 elapsed11.3693625초, 첫 학습 명령12.507687667초다.
+각120초 cleanup reservation은 실측 elapsed가 아니다. 컴파일/TINY/순수 파일
+재검산을 이 두 모델 호출 명령의 성능 수치로 합산하지 않는다.
+
+### 마지막 durable 파일과 허용된 원자료
+
+정상 screening checkpoint 발행은 실패했지만 오류 보존 경로의
+`artifacts/retention-first-20260919/R-REPLAY/segment-00/final.r3m`은 저장됐다.
+115,285,632 bytes, 실제 step24311. 이것은 **실패 보존 checkpoint**이며 측정된
+품질 endpoint나 재개 certificate가 아니다. 새 process의 pure report가 실제
+weights/Adam/step/tape를 검사하고 실패 상태를 그대로 반환했다(exit1, 완료 문구 없음).
+
+- physical SHA256: `11787d976a64423f7dc40b0cc6443128a5b4a09305dc572d3c50a81e50451be5`
+- weights SHA256: `7b1b9b96bc10f60c646ae6f11ab32c6687e696ee207b4fc940879a3867929292`
+- Adam SHA256: `052f10a7d7380e61d9e8dc64ec365fc489791987200972b9147dcbf331b083f2`
+
+인가된 새 증거 root는 `artifacts/retention-first-20260919/`다.
+`p3-prepare.log`, `p4-first.log`, `p5-final-failure-report.log`가 실제 실행 기록이다.
+`R-REPLAY/inputs.r3er`, `parent-screen.r3er`, `parent-parity/`,
+`retention-probe-0000/`, `segment-00/{terminal,command}.r3er`에 typed 상태와 raw가
+있다. `retention-plan/r-replay-registration.r3er`가 이 한 시도를 고정한다.
+`executed-replica-train`은 실제 binary 보존 사본이다. `final-candidate-source.diff`,
+`p3-frozen-source.sha256`, `p4-execution-source-verified.log`가 코드 연결 근거다.
+
+기존 모델/자료 위치와 hash는 아래 P2/P3 및 과거 절 그대로다. 원본1191파일과
+이번 실패 시도46파일의 SHA256가 종료 후에도 전부 같았다. 모델/Adam/corpus/raw/
+임시 지시문/DB/target은 Git에 게시하지 않았다. 운영 모델 pointer는 유지했다.
+
+### 최종 대조와 범위별 판정
+
+PF-AUDIT 발행 pending·digest·fresh denial, CHAIN-SCREEN 모든 조상 command,
+실제128/257/511/512 Record 경계, native source/tape/parent/raw 연결은 직접 확인했다.
+관련 quick19명령/24고유 테스트 PASS + 별도 native identity1 + 저장 사유 회귀1로
+이번 고유 테스트 **26개 PASS**다. 마지막 source 수정분은 해당 직접 process
+회귀와 all-targets clippy, 실제 실패의 pure-read 검산으로 확인했다.
+`p5-save-red.log`와 수정 후 `p5-save-green.log`를 모두 보존한다. 중간 fixture
+binding/환경/컴파일 실패와 SMALL 실패를 숨기거나 PASS 횟수로 합산하지 않는다.
+
+CODE_REPAIR=PASS_DIRECT_SCOPE; AUDIT_PUBLICATION=PASS; SCREEN_ANCESTRY=PASS;
+NATIVE_EXISTING_SCOPE=UNCHANGED_BINARY; RETENTION_SAVE_REASON_FIX=PASS_TINY;
+EXPERIMENT=EXECUTION_FAILED_CLOSED; FIRST_SAVE_FRESH_RESUME=NOT_COMPLETED;
+RETENTION_OLD/CROSS/QA=NOT_MEASURED; NEW_SKILL/base4=NOT_MEASURED;
+REPLAY_HYPOTHESIS=UNRESOLVED; COMPARATOR=HISTORICAL_T32_NOT_EVALUATED_AT_EQUAL32;
+H3_JOINT=NOT_PASSED; S4/S5/S6=NOT_RUN_NOT_PASSED;
+GOAL1_READY=false; GOAL1_ACCEPTED=false; INDEPENDENT_REVIEW=NOT_RUN.
+
+다음 한 가지 미해결 가설은 원래의 full-copy replay가 이전 능력을 보존하는지다.
+첫 배치에서 T objective가 Q/R보다 컸다는 관측은 있으나, 실제 전후 NLL와8회
+screen이 없어 망각 원인이나 R 효과의 근거로 단정할 수 없다. 먼저 이 동일 가설의
+실행 증거가 필요하며, 새 ratio/LR/loss/tokenizer 비교를 추가하지 않는다. 기존
+실패를 재개하거나 새 시도를 자동 등록하지 않았다. 후속 연구는 별도 인가가 필요하다.
+활성 owned 학습/검증 process0. 새 영구 파일0; 로컬 실험 산출물만 생성했다.
+
 ## P2/P3 — 기존 copy train 확인, R-REPLAY 준비
 
 P1 source `e221d338639a97f811d631a4b649045d46ecef80` 정상 push 후 remote 전체 SHA

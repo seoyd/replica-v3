@@ -1,6 +1,17 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: R3-RETENTION-FIRST-1.0
+## Closed after execution failure at1: R3-RETENTION-FIRST-1.0
+
+The single R-REPLAY used source56f3f0eb3029dc549eee4cfd3bd052ffc4cb6243.
+Parent parity8 passed; one SMALL update consumed input2563/target238 and Q4/R2/T2.
+The first probe checkpoint call then supplied an unsupported termination string.
+The command failed with IntegrityFail/non-resume, preserving a failure checkpoint
+at24311. Post-update probes and all8/16/32/64/128 quality panels are NOT_RUN.
+Source c2ce9c3ce1c456b54702ee6611f26157794836e1 reuses the existing native screening
+status and passes a direct TINY writer/fresh-loader regression (optimizer0). It
+does not change the failed run or authorize its remaining127 updates. No new attempt
+or post-fix SMALL execution occurred. Retention/new skill remain unmeasured and
+H3/S4/S5/S6/Goal1 remain unpassed. The protocol below records the closed study.
 
 Base source eb66357fbee97de67b637ec0b1986e636ebd372e; prior report
 dbd0eb3fcaf377524574670cc72e325a81f5959c. Preserve T32/C512 and all old failures.
