@@ -1,5 +1,35 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: R3-RETENTION-FIRST-1.0
+
+Base source eb66357fbee97de67b637ec0b1986e636ebd372e; prior report
+dbd0eb3fcaf377524574670cc72e325a81f5959c. Preserve T32/C512 and all old failures.
+P0 identities → P1 audit publication/ancestor command repairs → P2 pure T32
+recount, parent parity8 and native training coverage → P3 registered R-REPLAY
+and read-only observer parity → P4 first1/fresh resume, screen8/16/32 → gated64/128.
+No legacy JSON/SQLite cleanup, codec redesign or old experiment continuation.
+
+The sole new intervention is Q4/R2/T2 versus historical T32 Q6/T2. Keep the first
+four Q and last two T positions from the old tape, replacing only positions4/5
+with existing full-copy train examples (at least64 bases; at most512 views).
+Keep A75-R24310, native Adam/clock, LR1e-4, default loss/first-target weight8,
+tokenizer and F32 Accelerate threads1. No validation/conditional/sealed labels in
+training. Freeze provenance, exact prompt conflicts, tape/token counts and inputs.
+
+Screen remains OLD64/CROSS64/QA32/NEW64. Stop for OLD/CROSS loss>=12 once,
+errors>=5 and parent+4, QA loss>=4 twice, or execution/data/storage/numeric error.
+32→64 requires OLD>=60/CROSS>=56/QA>=18/errors<=2; 64→128 additionally requires
+NEW>=4 and base4>=1. At128, only retention plus NEW>=8/base4>=2/errors0 permits
+the same checkpoint's full1424 panels. These are spending gates, not H3/S4 PASS.
+
+Ceilings: one R attempt128 SMALL updates, generations4096, own diagnostic
+forwards256/backwards8 batches, TINY128; model wall7200s, command1800s and120s
+cleanup reservation. First1 is included, no extra SMALL save preflight, no retries
+or recycled remainder after stop. Observer measures true Adam delta/norm/clip and
+fixed8 train probes at0/1/8 without changing optimizer or sampler; optional dot
+product may be explicitly skipped. Publish actual counts and saved identities.
+H3, S4/S5/S6, Goal1 and external acceptance remain separate and unpassed.
+
 ## Closed at32: R3-QUALITY-RECOVERY-BOUNDED-BRIDGE-1.0
 
 Source eb66357fbee97de67b637ec0b1986e636ebd372e. FB01/FB02 direct regressions,

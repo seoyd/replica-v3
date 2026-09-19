@@ -491,6 +491,14 @@ pub fn publish_new_measured<T>(
     timing.link_ms = phase.elapsed().as_secs_f64() * 1000.;
     let phase = std::time::Instant::now();
     #[cfg(feature = "test-support")]
+    if path.file_name().is_some_and(|n| n == "audit-final.r3er")
+        && std::env::var("R3ER_TEST_STOP").is_ok_and(|v| v.starts_with("audit-final-sync"))
+    {
+        return Err(
+            std::io::Error::other("injected audit sync error AFTER final hard_link").into(),
+        );
+    }
+    #[cfg(feature = "test-support")]
     if path.file_name().is_some_and(|n| n == "attempt-0.r3er")
         && std::env::var("R3ER_TEST_STOP").as_deref() == Ok("conditional-registration-sync")
     {

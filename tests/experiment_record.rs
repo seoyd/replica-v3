@@ -92,6 +92,162 @@ fn evidence_manifest(root: &Path) -> Vec<(PathBuf, bool, u64, Vec<u8>)> {
     out
 }
 #[test]
+fn retention_audit_publication_requires_committed_final_in_fresh_process() {
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
+    for fault in [
+        None,
+        Some("audit-final-sync"),
+        Some("audit-final-sync-and-record-fail"),
+    ] {
+        let root = d.path().join(fault.unwrap_or("normal"));
+        call(
+            &[
+                "fixture-audit-publication",
+                "--from",
+                p(&bootstrap),
+                "--output",
+                p(&root),
+            ],
+            fault,
+            fault.is_none(),
+            &d.path().join("writer.log"),
+        );
+        assert!(root.join("audit-final.r3er").exists());
+        assert_eq!(
+            root.join("audit-publication-pending.r3er").exists(),
+            fault.is_some()
+        );
+        let before = evidence_manifest(&root);
+        call(
+            &[
+                "fixture-audit-publication",
+                "--from",
+                p(&bootstrap),
+                "--output",
+                p(&root),
+                "--verify",
+            ],
+            None,
+            fault.is_none(),
+            &d.path().join("reader.log"),
+        );
+        if fault.is_some() {
+            let out = call(
+                &[
+                    "screen-prepare",
+                    "--prior-arm",
+                    p(&bootstrap),
+                    "--observation",
+                    p(&bootstrap),
+                    "--audit",
+                    p(&root),
+                    "--output",
+                    p(&d.path().join("forbidden")),
+                ],
+                None,
+                false,
+                &d.path().join("admission.log"),
+            );
+            assert!(String::from_utf8_lossy(&out.stdout).contains("AUDIT_PUBLICATION_PENDING"));
+            assert!(!d.path().join("forbidden").exists());
+        }
+        assert_eq!(before, evidence_manifest(&root));
+    }
+    println!("AUDIT_REAL_RECORD_PUBLICATION SMALL=0 TINY_UPDATES=0 GENERATIONS=0");
+}
+
+#[test]
+fn retention_screen_quality_stop_requires_every_ancestor_command() {
+    let d = tempfile::tempdir().unwrap();
+    let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());
+    let obs = d.path().join("observation");
+    let root = d.path().join("T-SCREEN");
+    call(
+        &[
+            "fixture-bridge",
+            "--from",
+            p(&bootstrap),
+            "--output",
+            p(&obs),
+            "--observation",
+        ],
+        None,
+        true,
+        &d.path().join("fixture.log"),
+    );
+    call(
+        &["bridge-observe", "--root", p(&obs)],
+        None,
+        true,
+        &d.path().join("observe.log"),
+    );
+    call(
+        &[
+            "fixture-screen",
+            "--observation",
+            p(&obs),
+            "--output",
+            p(&root),
+        ],
+        None,
+        true,
+        &d.path().join("prepare.log"),
+    );
+    call(
+        &["run", "--root", p(&root)],
+        None,
+        true,
+        &d.path().join("first.log"),
+    );
+    call(
+        &[
+            "run",
+            "--root",
+            p(&root),
+            "--resume",
+            "segment-00/terminal.r3er",
+        ],
+        Some("screen-synthetic-quality"),
+        false,
+        &d.path().join("second.log"),
+    );
+    let args = [
+        "screen-report",
+        "--root",
+        p(&root),
+        "--terminal",
+        "segment-01/terminal.r3er",
+    ];
+    let out = call(&args, None, true, &d.path().join("positive.log"));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("QUALITY_STOP_PRESERVED=true"));
+    let original = evidence_manifest(&root);
+    let command_path = root.join("segment-00/command.r3er");
+    let command = fs::read(&command_path).unwrap();
+    for variant in ["missing", "corrupt", "failed"] {
+        match variant {
+            "missing" => fs::remove_file(&command_path).unwrap(),
+            "corrupt" => fs::write(&command_path, b"corrupt").unwrap(),
+            _ => {
+                call(
+                    &["fixture-ancestor-failed", "--root", p(&root)],
+                    None,
+                    true,
+                    &d.path().join("mutation.log"),
+                );
+            }
+        }
+        let before = evidence_manifest(&root);
+        let out = call(&args, None, false, &d.path().join(format!("{variant}.log")));
+        assert!(!String::from_utf8_lossy(&out.stdout).contains("T_SCREEN_COMPLETED=true"));
+        assert_eq!(before, evidence_manifest(&root));
+        fs::write(&command_path, &command).unwrap();
+    }
+    assert_eq!(original, evidence_manifest(&root));
+    println!("ANCESTRY_REAL_TINY_UPDATES=2 SYNTHETIC_ERROR_ROWS=true SMALL=0");
+}
+
+#[test]
 fn conditional_root_registration_survives_missing_child() {
     let d = tempfile::tempdir().unwrap();
     let bootstrap = PathBuf::from(std::env::var_os("R3ER_TEST_BOOTSTRAP").unwrap());

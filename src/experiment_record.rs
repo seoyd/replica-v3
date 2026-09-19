@@ -2835,6 +2835,12 @@ impl Record {
 }
 fn publish(root: &Path, locator: &str, record: &Record) -> Result<FileRef> {
     #[cfg(feature = "test-support")]
+    if std::env::var("R3ER_TEST_STOP").as_deref() == Ok("audit-final-sync-and-record-fail")
+        && root.join("audit-final.r3er").exists()
+    {
+        return Err(std::io::Error::other("injected all subsequent audit writes fail").into());
+    }
+    #[cfg(feature = "test-support")]
     if std::env::var("R3ER_TEST_STOP").as_deref() == Ok("pv-final-sync-and-record-fail")
         && root.join("preflight-final.r3er").exists()
     {
@@ -3188,6 +3194,19 @@ fn evaluate(
             let mut row = row;
             if s.tiny_spec {
                 row.diagnostic = Some(Scalar::F64(f64::from(0.009906131_f32)));
+                if s.screen()
+                    && kind == PanelKind::Dev
+                    && step - s.parent.step == 2
+                    && std::env::var("R3ER_TEST_STOP").as_deref() == Ok("screen-synthetic-quality")
+                {
+                    row.tokens.clear();
+                    row.eos = None;
+                    row.finish = Finish::Error;
+                    row.error = Some("explicit synthetic generation error fixture".into());
+                    row.error_class = Some("model".into());
+                    row.timing = None;
+                    println!("SYNTHETIC_QUALITY_ERROR_ROW=true NOT_MODEL_QUALITY_EVIDENCE=true");
+                }
             }
             row
         };
@@ -5090,6 +5109,68 @@ fn read_absolute(r: &FileRef) -> Result<Record> {
     Record::decode(&bytes)
 }
 fn verified_artifact_audit(file: &FileRef) -> Result<ArtifactAudit> {
+    verify_audit_publication(file)?;
+    reaudit_artifact(file)
+}
+
+// Publication admission is independent of a computed positive result. Legacy audit
+// data may be recounted explicitly, but cannot acquire a retrospective commit proof.
+fn verify_audit_publication(file: &FileRef) -> Result<()> {
+    let root = Path::new(&file.locator)
+        .parent()
+        .ok_or_else(|| bad("audit root"))?;
+    if root.join("audit-publication-pending.r3er").exists() {
+        return Err(bad(
+            "AUDIT_PUBLICATION_PENDING: admission blocked; model_calls=0",
+        ));
+    }
+    let Record::VerificationPending {
+        start,
+        final_digest,
+    } = read_record(root, &reference(root, "audit-publication.r3er")?)?
+    else {
+        return Err(bad("audit publication identity"));
+    };
+    if final_digest != file.digest {
+        return Err(bad("audit publication final digest"));
+    }
+    let Record::ArtifactAudit(initial) = read_record(root, &start)? else {
+        return Err(bad("audit publication start"));
+    };
+    let Record::ArtifactAudit(final_record) = read_absolute(file)? else {
+        return Err(bad("audit publication final"));
+    };
+    if initial.input != final_record.input
+        || initial.native != final_record.native
+        || initial.source != final_record.source
+        || initial.binary != final_record.binary
+        || initial.originals != final_record.originals
+        || initial.selection != final_record.selection
+        || initial.complete
+    {
+        return Err(bad("audit attempt/model/input identity"));
+    }
+    Ok(())
+}
+
+fn publish_audit_final(root: &Path, audit: &ArtifactAudit) -> Result<()> {
+    let final_record = Record::ArtifactAudit(Box::new(audit.clone()));
+    let identity = Record::VerificationPending {
+        start: reference(root, "audit-start.r3er")?,
+        final_digest: hash(&final_record.encode()?),
+    };
+    publish(root, "audit-publication-pending.r3er", &identity)?;
+    publish(root, "audit-final.r3er", &final_record)?;
+    publish(root, "audit-publication.r3er", &identity)?;
+    // Same linearization as preflight: both publications have synced before unlink.
+    std::fs::remove_file(root.join("audit-publication-pending.r3er"))?;
+    if let Err(e) = std::fs::File::open(root).and_then(|f| f.sync_all()) {
+        eprintln!("PUBLICATION_COMMITTED=true CLEANUP_WARNING={e}");
+    }
+    verify_audit_publication(&absolute_reference(&root.join("audit-final.r3er"))?)
+}
+
+fn reaudit_artifact(file: &FileRef) -> Result<ArtifactAudit> {
     let Record::ArtifactAudit(a) = read_absolute(file)? else {
         return Err(bad("screen requires artifact audit"));
     };
@@ -5415,6 +5496,7 @@ fn screen_report(root: &Path, terminal: &str, control: &mut RunControl) -> Resul
     }
     let reference = reference(root, terminal)?;
     let chain = lineage(root, &s, &reference)?;
+    verify_ancestor_commands(root, &s, &chain)?;
     let history = verified_history(root, &s, &chain)?;
     let t = &chain.last().unwrap().1;
     let Record::Command(c) =
@@ -6268,11 +6350,7 @@ fn bridge_artifact_audit(
     a.stop = control.observed.clone();
     a.elapsed = Scalar::F64(control.start.elapsed().as_secs_f64());
     a.complete = outcome.is_ok() && a.stop.is_empty();
-    publish(
-        output,
-        "audit-final.r3er",
-        &Record::ArtifactAudit(Box::new(a.clone())),
-    )?;
+    publish_audit_final(output, &a)?;
     println!(
         "C512_DIAGNOSTIC complete={} calls={:?} seconds={} STOP={:?} ERROR={:?} HISTORICAL_COMMAND_STILL_FAILED=true RESUME_AUTHORIZATION=false NEW_SMALL_UPDATES=0",
         a.complete,
@@ -7317,6 +7395,20 @@ fn resolve_native(root: &Path, s: &RunSnapshot, n: &CheckpointRef, resume: bool)
 #[derive(Subcommand)]
 pub enum Action {
     #[cfg(feature = "test-support")]
+    FixtureAuditPublication {
+        #[arg(long)]
+        from: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        verify: bool,
+    },
+    #[cfg(feature = "test-support")]
+    FixtureAncestorFailed {
+        #[arg(long)]
+        root: PathBuf,
+    },
+    #[cfg(feature = "test-support")]
     FixtureScreen {
         #[arg(long)]
         observation: PathBuf,
@@ -7679,6 +7771,60 @@ pub(super) fn command(action: Action) -> Result<()> {
     let mut control = RunControl::command(matches!(action, Action::Run { .. }))?;
     control.deadline = control.start + Duration::from_secs(1800);
     match action {
+        #[cfg(feature = "test-support")]
+        Action::FixtureAuditPublication {
+            from,
+            output,
+            verify,
+        } => {
+            let s = read_inputs(&from)?;
+            if !s.tiny_spec {
+                return Err(bad("publication fixture requires TINY"));
+            }
+            if !verify {
+                std::fs::create_dir(&output)?;
+                let mut a = ArtifactAudit {
+                    source: evaluator_source(),
+                    binary: unhex(&file_hash(&std::env::current_exe()?)?)?,
+                    input: absolute_reference(&from.join("inputs.r3er"))?,
+                    native: s.parent.clone(),
+                    originals: vec![],
+                    selection: vec![],
+                    fresh: vec![],
+                    numeric: vec![],
+                    panels: vec![],
+                    calls: [0; 4],
+                    elapsed: Scalar::F64(0.009906131),
+                    complete: false,
+                    stop: vec![],
+                    error: None,
+                };
+                publish(
+                    &output,
+                    "audit-start.r3er",
+                    &Record::ArtifactAudit(Box::new(a.clone())),
+                )?;
+                a.complete = true;
+                publish_audit_final(&output, &a)?;
+            }
+            verify_audit_publication(&absolute_reference(&output.join("audit-final.r3er"))?)?;
+            println!("AUDIT_PUBLICATION_VERIFIED=true SYNTHETIC_PAYLOAD_ONLY=true MODEL_CALLS=0");
+            Ok(())
+        }
+        #[cfg(feature = "test-support")]
+        Action::FixtureAncestorFailed { root } => {
+            if !read_inputs(&root)?.tiny_spec {
+                return Err(bad("TINY mutation only"));
+            }
+            let path = "segment-00/command.r3er";
+            let Record::Command(mut c) = read_record(&root, &reference(&root, path)?)? else {
+                return Err(bad("command"));
+            };
+            c.status = CommandStatus::Failed;
+            c.error = Some("explicit synthetic ancestor failure".into());
+            std::fs::write(root.join(path), Record::Command(c).encode()?)?;
+            Ok(())
+        }
         #[cfg(feature = "test-support")]
         Action::FixtureScreen {
             observation,
@@ -8988,6 +9134,21 @@ fn effective_outcome(root: &Path, s: &RunSnapshot, terminal: &FileRef) -> Result
     Ok(c)
 }
 
+fn verify_ancestor_commands(
+    root: &Path,
+    s: &RunSnapshot,
+    chain: &[(FileRef, SegmentReceipt)],
+) -> Result<()> {
+    if !s.historical {
+        for (r, _) in chain.iter().take(chain.len().saturating_sub(1)) {
+            if effective_outcome(root, s, r)?.status != CommandStatus::TimePause {
+                return Err(bad("ancestor command is not a verified time pause"));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn finalize_command(
     root: &Path,
     s: &RunSnapshot,
@@ -9091,6 +9252,7 @@ fn close_native_inner(
         }
     }
     let chain = lineage(root, &s, &last)?;
+    verify_ancestor_commands(root, &s, &chain)?;
     for (i, (_, stored)) in chain.iter().enumerate() {
         let continued_time_stop = i + 1 < chain.len()
             && stored.resume
@@ -9098,12 +9260,6 @@ fn close_native_inner(
             && stored.stop == [StopReason::TimeBudget];
         if !stored.stop.is_empty() && !continued_time_stop {
             return Err(bad("stored terminal stop forbids normal close"));
-        }
-        if !s.historical
-            && i + 1 < chain.len()
-            && effective_outcome(root, &s, &chain[i].0)?.status != CommandStatus::TimePause
-        {
-            return Err(bad("ancestor command is not a verified time pause"));
         }
     }
     let h = verified_history(root, &s, &chain)?;
@@ -14462,7 +14618,7 @@ mod binary_tests {
     fn segment_capacity_record_publisher_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         for metrics in [false, true] {
-            for count in [0, 1, 2, 255, 256, 257, 511, 512] {
+            for count in [0, 1, 2, 128, 255, 256, 257, 511, 512] {
                 let draws = vec![
                     Draw {
                         indices: vec![0],
@@ -14496,7 +14652,7 @@ mod binary_tests {
             }
         }
         println!(
-            "SYNTHETIC_TERMINAL_CAPACITY writer/publisher/reader counts=0,1,2,255,256,257,511,512 OPTIMIZER_CALLS=0"
+            "SYNTHETIC_TERMINAL_CAPACITY writer/publisher/reader counts=0,1,2,128,255,256,257,511,512 OPTIMIZER_CALLS=0"
         );
     }
     #[cfg(feature = "test-support")]

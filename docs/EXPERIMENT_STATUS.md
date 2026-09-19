@@ -1,5 +1,31 @@
 # 진단 및 구현 상태
 
+## P1 — retention 연구 전 발행·조상 경계 수리
+
+R3-RETENTION-FIRST-1.0. Base source eb66357fbee97de67b637ec0b1986e636ebd372e,
+시작 HEAD dbd0eb3fcaf377524574670cc72e325a81f5959c. 기존 dirty 원자료를 보존했다.
+Rust/Cargo1.98.1, 기존 lockfile/offline. 모델/학습 수식 변경0, 신규 SMALL0.
+
+EXECUTED_THIS_RUN: 새 process 회귀2 PASS. audit의 실제 typed ArtifactAudit
+writer/publisher/admission에서 정상 공개와 공개 후 directory-sync 실패를 검사했다.
+final이 존재해도 durable pending이 있으면 screen-prepare가 모델 호출 전에 거부한다.
+모든 후속 record write도 실패하는 fault에서 동일하게 차단된다. 테스트 payload는
+명시적 합성 자료이며 C512 재생성이나 실제 모델 진단 PASS로 세지 않는다.
+정상 audit은 start/final/model/input/source/raw identity와 publication digest를 묶는다.
+옛 audit에는 새 증명을 덧붙이지 않고 read-only 재감사와 새 admission을 구분한다.
+
+실제 TINY 첫1+새process1 뒤 명시적 합성 오류 row로 QualityGuard를 만든 회귀에서
+정상 screen-report는 연구 중단만 보고했다. 조상 command missing/corrupt/Failed는
+모두 거부, 완료 문구 없음, 보고 전후 파일 목록/bytes/hash 불변. 합성 오류는 모델
+품질 관측이 아니다. 정상 close와 중단 report가 같은 조상 effective_outcome을 사용한다.
+기존 preflight 공개/sync/cleanup 회귀 PASS, clippy all-targets PASS.
+정확한 이번 사용량과 후속 native/capacity 검사는 최종 절에 합산한다.
+
+로컬 증거: `artifacts/retention-first-20260919/p0-{worktree.txt,local.diff,inputs.sha256,originals.sha256}`,
+`p1-{process,preflight,capacity,native,clippy}.log`. 원 모델/raw/corpus는 게시하지 않는다.
+P2 coverage·parent parity와 R-REPLAY는 아직 NOT_RUN. 기존 T32/C512의 실패와
+resume=false는 그대로다. CODE_REPAIR와 H3/S4/Goal1은 별개이며 품질 미완료다.
+
 ## R6 최종 — 경계 수리 PASS, T-SCREEN32 품질 회귀로 종료
 
 R3-QUALITY-RECOVERY-BOUNDED-BRIDGE-1.0 / 2026-09-19.
