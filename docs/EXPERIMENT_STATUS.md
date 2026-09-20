@@ -1,5 +1,27 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 fixed selector-attention preparation verified
+
+After COVER4 closure0f100e63a31eda40b1c48e0193c527a82b1f52b6, add only an
+ignored fixed-weight diagnostic and its trusted-framing test in existing
+`src/fresh.rs`. Product model/trainer/generation and native formats are unchanged.
+Existing RunControl/confirmed publisher/attempt receipts and forward observer
+are reused. Exact policy/case/raw/native binding precedes any model observation.
+Select24 cases by train tape/development metadata order, not correct predictions;
+cap48 prompt-only forwards (24 observed +24 reference), optimizer/generation0.
+No learning policy or extra quality budget is registered here.
+
+Initial compile failed on two local tuple/error conversion types, before tests
+or model calls. Corrected framing unit executed1/PASS1 (0.00s); existing native
+observer forward/gradient/cache regression executed1/PASS1 (0.01s). Actual TINY
+5 forward calls,2 backward calls, optimizer/generation/teacher0. SMALL calls0 at
+preparation. Locked/offline/Accelerate, Rust1.98.1, thread1. No suite-wide PASS.
+Frozen production-feature diagnostic executable
+47551a9a36e4639a7849e11f6ceb513dff4453d98182c243eb8d9ab75adb209f,
+under `artifacts/selector-attention-20260920-evidence/`, alongside failed and
+passing build/test logs. Runtime diagnostic NOT_RUN at this registration.
+Attention is observational evidence, never a causal proof or quality substitute.
+
 ## 2026-09-20 COVER4 finalized: more scenes did not recover joint quality
 
 EXECUTED_THIS_RUN / DERIVED_EXISTING_RAW; independent acceptance not claimed.

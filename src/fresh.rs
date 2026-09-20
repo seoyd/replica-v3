@@ -5089,6 +5089,168 @@ mod tests {
         println!("TRAIN_PAIR_DIAGNOSTIC {receipt}");
         result.map(|_|())
     }
+    // Read-only attribution regions from trusted framing, never answer-dependent packing.
+    fn attention_regions(ids: &[u32]) -> Result<Vec<usize>> {
+        let roles: Vec<_> = ids.iter().copied().filter(|&t|t < neural::SPECIALS as u32).collect();
+        if roles != [neural::BOS,neural::SYSTEM_ROLE,neural::END_ROLE,neural::USER_ROLE,
+            neural::END_ROLE,neural::EVIDENCE_ROLE,neural::END_ROLE,neural::EVIDENCE_ROLE,
+            neural::END_ROLE,neural::ASSISTANT_ROLE] {return Err(bad("attention diagnostic requires exact two-record framing"));}
+        let mut regions=vec![4;ids.len()]; let mut current=4; let mut evidence=0;
+        for (i,&t) in ids.iter().enumerate() {
+            match t {
+                neural::SYSTEM_ROLE=>current=3,
+                neural::USER_ROLE=>current=0,
+                neural::EVIDENCE_ROLE=>{current=1+evidence;evidence+=1;},
+                neural::END_ROLE|neural::ASSISTANT_ROLE=>current=4,
+                t if t>=neural::SPECIALS as u32=>regions[i]=current,
+                _=>(),
+            }
+        }
+        if (0..4).any(|r|!regions.contains(&r)) {return Err(bad("empty attention diagnostic region"));}
+        Ok(regions)
+    }
+    #[test]
+    fn paired_attention_regions_use_trusted_framing() -> Result<()> {
+        let ids=[1,3,8,7,4,9,10,7,5,11,7,5,12,13,7,6];
+        assert_eq!(attention_regions(&ids)?,[4,4,3,4,4,0,0,4,4,1,4,4,2,2,4,4]);
+        assert!(attention_regions(&[]).is_err());
+        for i in 0..ids.len() {let mut wrong=ids.to_vec();wrong.remove(i);assert!(attention_regions(&wrong).is_err() || ids[i]>=8);}
+        let mut wrong=ids;wrong[12]=neural::EOS;assert!(attention_regions(&wrong).is_err());
+        Ok(())
+    }
+    #[test]
+    #[ignore = "explicit completed DIVERSE/new output/train raw; 24 prompt-only observations plus24 reference forwards, optimizer/generation0"]
+    fn paired_selector_attention_diagnostic() -> Result<()> {
+        if cfg!(feature="test-support") || !cfg!(feature="accelerate") {return Err(bad("attention diagnostic production features required"));}
+        let env=|key|std::env::var(key).map(PathBuf::from).map_err(|_|bad("explicit attention diagnostic paths required"));
+        let root=env("R3_ATTENTION_ROOT")?;let output=env("R3_ATTENTION_OUTPUT")?;
+        let train_raw=env("R3_ATTENTION_TRAIN_RAW")?;
+        let p:Plan=read(&root.join("plan.r3b"))?;
+        let end=history(&root,&p)?.pop().ok_or_else(||bad("attention endpoint absent"))?;
+        let tape=p.paired.as_ref().ok_or_else(||bad("attention tape missing"))?;
+        if tape.mode!="DIVERSE" || end.resume || end.phase.as_deref()!=Some("Finished") || end.step!=p.config.max_steps {
+            return Err(bad("attention diagnostic requires closed DIVERSE endpoint"));
+        }
+        let f=p.fork.as_ref().unwrap();
+        let corpus=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;
+        let (tm,dm,_)=verified_metadata(&root,&p)?;
+        let n=corpus.train.len();let dev=corpus.validation;
+        let all=verified_corpus(&root.join("training-values.r3cor"),p.training_values.as_ref().ok_or_else(||bad("attention owned pool"))?)?.train;
+        if all.len()!=4*n {return Err(bad("attention training pool shape"));}
+        let checkpoint=root.join(&end.checkpoint);
+        let l=checkpoint::load(&checkpoint,Device::Cpu,false)?;
+        if file_hash(&checkpoint)?!=end.checkpoint_hash || l.manifest.trained_steps!=end.step || l.tokenizer.id()!=p.tokenizer {return Err(bad("attention endpoint binding"));}
+        let model=l.model.weight_hash()?;
+        let (_,flips,fm)=paired_flip_panel(&p,&root,end.step,&dev,&dm)?;
+        audit_panel(&root,&p,end.step,"dev512",&dev,&dm,&l.tokenizer)?;
+        audit_panel(&root,&p,end.step,"selector192",&flips,&fm,&l.tokenizer)?;
+        let paths=[train_raw,root.join(format!("eval-{:04}-dev512.r3rows",end.step)),root.join(format!("eval-{:04}-selector192.r3rows",end.step))];
+        let raws=paths.iter().map(|path|Ok(binary::read_value_records(path)?)).collect::<Result<Vec<_>>>()?;
+        for rows in &raws {if rows[0]["binding"]["model"]!=model || rows[0]["binding"]["step"]!=end.step {return Err(bad("attention raw endpoint mismatch"));}}
+        let mut selected:Vec<(&str,usize,Episode,binary::Value)>=vec![];
+        for bucket in [2,3,4] {
+            let mut seen=std::collections::BTreeSet::new();
+            for &index in tape.rows[..tape.block].iter().flatten().filter(|&&i|tm[i%n].bucket==bucket && tm[i%n].view==0) {
+                let base=index%(2*n);if !seen.insert(tm[index%n].base.clone()) {continue;}
+                for i in [base,base+2*n] {
+                    if !tape.rows[..end.step-f.origin_step].iter().flatten().any(|&j|j==i) {return Err(bad("attention train side unexposed"));}
+                    let e=all[i].clone();let row=raws[0][1..].iter().find(|r|r["id"]==e.id).ok_or_else(||bad("attention original train raw missing"))?;
+                    selected.push(("trained",bucket,e,row.clone()));
+                }
+                if seen.len()==2 {break;}
+            }
+            for (e,m) in dev.iter().zip(&dm).filter(|(_,m)|m.bucket==bucket && m.view==0).take(2) {
+                let (flip,_)=flip_selection(e,m)?;
+                for (e,rows) in [(e.clone(),&raws[1]),(flip,&raws[2])] {
+                    let row=rows[1..].iter().find(|r|r["id"]==e.id).ok_or_else(||bad("attention development raw missing"))?;
+                    selected.push(("development",bucket,e,row.clone()));
+                }
+            }
+        }
+        if selected.len()!=24 {return Err(bad("attention diagnostic case count"));}
+        for (_,_,e,row) in &selected {
+            let prepared=l.tokenizer.prepare(&e.request,p.architecture.context as u32,&p.architecture.id()?)?;
+            let ids:Vec<u32>=binary::from_value(row["raw_tokens"].clone())?;
+            if resolve(&e.request)?!=e.answer || row["expected"]!=e.answer || row["native_prompt_digest"]!=prepared.token_digest
+                || !prepared.excluded.is_empty() || prepared.provided.len()!=2 || row["generation_completed"]!=true
+                || !row["error"].is_null() || row["finish_reason"]!="stop" || ids.last()!=Some(&neural::EOS)
+                || row["actual"]!=l.tokenizer.decode(&ids[..ids.len()-1])? {return Err(bad("attention frozen case/raw mismatch"));}
+            attention_regions(&prepared.token_ids)?;
+        }
+        std::fs::create_dir(&output)?;
+        let start=binary::record!({"source":source_digest()?,"binary":file_hash(&std::env::current_exe()?)?,"policy":digest(&p)?,
+            "checkpoint":checkpoint,"physical":end.checkpoint_hash,"model":model,"step":end.step,"cases":digest(&selected)?,
+            "raw_files":paths.iter().map(|path|Ok((path,file_hash(path)?))).collect::<Result<Vec<_>>>()?,
+            "scope":"PROMPT_ONLY_ATTENTION_OBSERVATION_NOT_CAUSAL_OR_QUALITY_ACCEPTANCE","selection":"first two executed view0 train pairs and first two view0 dev pairs per C/D/E",
+            "optimizer_limit":0,"generation_limit":0,"teacher_forward_limit":48,"automatic_retry":false,"region_order":["question","record0","record1","system","framing"]});
+        write(&output.join("started.r3b"),&start)?;
+        publish_confirmed(&output.join("cases.r3b"),&selected)?;
+        let mut raw=std::fs::OpenOptions::new().write(true).create_new(true).open(output.join("attention.r3rows"))?;
+        append_row(&mut raw,&start)?;
+        let mut control=recovery::RunControl::command(false)?;control.set_call_limits(0,48);
+        let result=(||->Result<()> {
+            for (i,(scope,bucket,e,old)) in selected.iter().enumerate() {
+                let prompt=l.tokenizer.prepare(&e.request,p.architecture.context as u32,&p.architecture.id()?)?;
+                let regions=attention_regions(&prompt.token_ids)?;
+                let refs=citations(&e.answer)?;
+                if refs.len()!=1 {return Err(bad("attention selected citation count"));}
+                let slot=e.request.evidence.items.iter().position(|item|item.event_id==refs[0]).ok_or_else(||bad("attention selected record absent"))?;
+                let input=Tensor::new(prompt.token_ids.as_slice(),&Device::Cpu)?.unsqueeze(0)?;
+                let mut previous=None;
+                for observed in [true,false] {
+                    let label=if observed {"observed"}else{"reference"};
+                    control.check("attention_before_call")?;
+                    let attempt=prepare_call(&output,label,"teacher",&start,e,i)?;
+                    if let Err(error)=control.begin_teacher() {resolve_call(&attempt,None,&control)?;return Err(error);}
+                    let mut heads=vec![];
+                    let returned=(||->Result<Vec<f32>> {
+                        let mut observer=|layer:usize,q:&Tensor,k:&Tensor,mask:&Tensor|->Result<()> {
+                            control.check("attention_layer")?;
+                            let (_,h,t,d)=q.dims4()?;
+                            let scores=(q.narrow(2,t-1,1)?.contiguous()?.matmul(&neural::transformer::repeat_kv(k,h)?.transpose(2,3)?.contiguous()?)?/(d as f64).sqrt())?
+                                .squeeze(0)?.squeeze(1)?.to_vec2::<f32>()?;
+                            let allowed=mask.narrow(2,t-1,1)?.flatten_all()?.to_vec1::<f32>()?;
+                            for (head,logits) in scores.iter().enumerate() {
+                                let permitted:Vec<_>=logits.iter().enumerate().filter(|(j,_)|allowed[*j]>0.).collect();
+                                if permitted.is_empty() || permitted.iter().any(|(_,v)|!v.is_finite()) {return Err(bad("attention nonfinite scores"));}
+                                let max=permitted.iter().map(|(_,v)|f64::from(**v)).fold(f64::NEG_INFINITY,f64::max);
+                                let z=permitted.iter().map(|(_,v)|(f64::from(**v)-max).exp()).sum::<f64>();
+                                let mut mass=[0f64;5];let mut visible=[0usize;5];let mut entropy=0.;
+                                for (j,v) in permitted {let prob=(f64::from(*v)-max).exp()/z;mass[regions[j]]+=prob;visible[regions[j]]+=1;if prob>0. {entropy-=prob*prob.ln();}}
+                                if (mass.iter().sum::<f64>()-1.).abs()>1e-9 {return Err(bad("attention mass sum"));}
+                                heads.push(binary::record!({"layer":layer,"head":head,"mass":mass,"visible_tokens":visible,"entropy":entropy}));
+                            }
+                            Ok(())
+                        };
+                        let logits=if observed {l.model.forward_observed(&input,None,&mut observer)?}else{l.model.forward(&input,None)?};
+                        control.check("attention_forward_returned")?;
+                        let last=logits.narrow(1,prompt.token_ids.len()-1,1)?.flatten_all()?.to_vec1::<f32>()?;
+                        if last.iter().any(|v|!v.is_finite()) {return Err(bad("attention nonfinite logits"));}
+                        Ok(last)
+                    })();
+                    let value=returned.as_ref().ok();
+                    let argmax=value.map(|v|v.iter().enumerate().max_by(|a,b|a.1.total_cmp(b.1).then(b.0.cmp(&a.0))).unwrap().0);
+                    let row=binary::record!({"ordinal":i,"id":e.id,"case":digest(e)?,"scope":scope,"bucket":bucket,"mode":label,
+                        "prompt_tokens":prompt.token_ids.len(),"prompt_digest":prompt.token_digest,"selected_slot":slot,"heads":heads,
+                        "logits":value,"argmax":argmax,"expected_first":l.tokenizer.encode(e.answer.as_bytes())?[0],"old_first":old["raw_tokens"][0],
+                        "error":returned.as_ref().err().map(ToString::to_string),"attempt":attempt.file_name().unwrap().to_string_lossy()});
+                    append_row(&mut raw,&row)?;resolve_call(&attempt,Some(&row),&control)?;
+                    let logits=returned?;
+                    if old["raw_tokens"][0]!=argmax.unwrap() {return Err(bad("attention old greedy first token mismatch"));}
+                    if observed {previous=Some(logits);}else if previous.as_ref()!=Some(&logits) {return Err(bad("attention observed/reference logits mismatch"));}
+                    control.check("attention_row_durable")?;
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error)=&result {control.classify_error(error);}
+        let result=control.seal_terminal().and(result);
+        let receipt=binary::record!({"start":file_hash(&output.join("started.r3b"))?,"raw":file_hash(&output.join("attention.r3rows"))?,
+            "control":control.receipt(),"error":result.as_ref().err().map(ToString::to_string),"optimizer":0,"generation":0,"quality_score":false});
+        publish_confirmed(&output.join("finished.r3b"),&receipt)?;
+        println!("SELECTOR_ATTENTION_DIAGNOSTIC {receipt}");
+        result
+    }
     #[test]
     fn paired_tape_full_writer_reader_bounds_and_balance() {
         let d = tempfile::tempdir().unwrap();

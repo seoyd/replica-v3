@@ -1,5 +1,31 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: fixed DIVERSE selector-attention diagnosis
+
+After COVER4's negative matched comparison, use the preserved DIVERSE7424
+weights once to separate observable input visibility/first-token behavior from
+unproven learning hypotheses. No optimizer or new autoregressive generation.
+Select the first two actually exposed view0 train pairs and first two view0
+development pairs per C/D/E, by existing tape/metadata order,24 cases total.
+Bind the original train48 and development/selector raw, native physical/model,
+tokenizer, policy and exact owned requests before calls. Reuse the existing
+forward observer and RunControl/call publisher in an ignored diagnostic test.
+
+Per case, observe last-prompt-query attention to trusted question/record0/
+record1/system/framing token regions; then perform one unchanged reference
+forward. Record all head/layer masses, allowed-token counts, entropy and logits.
+Require exact observed/reference logits and argmax agreement with existing
+normal-greedy first tokens. Expected selected-slot/first-token annotations are
+diagnostic-only and never enter model input. Attention mass is not causal proof.
+
+Caps SMALL optimizer0, generation0, prompt-only teacher forwards48 (24 observed
+and24 reference), active900s/cleanup120s; TINY optimizer/generation/teacher0,
+scalar0. Direct existing native observer test may perform TINY forward/backward
+comparisons, reported separately. One process, no automatic retry, checkpoint
+sweep or new training policy. Pending/failed attempts remain immutable; source
+and diagnostic binary freeze before model observations. Production code stays
+unchanged. Joint/S4/S5/S6/Goal1 gates remain unmet and unchanged.
+
 ## Current: COVER4 closed; joint quality not recovered
 
 COVER4 completed1280 updates at7424 and closed BUDGET_REACHED/Finished,
