@@ -1,5 +1,96 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Selector-wording exposure closed: limited gains, joint quality fails
+
+EXECUTED_THIS_RUN. Frozen source6f28e024a370ea4b809c5f2e648a8ff669e13cce,
+compiled digest879d697e8364ccd54a8cd24fbdc7961c226376ac555d1f9ccaa9bd8edc8105a3.
+The registered schema17 research completed2560 SMALL updates from COVER7424
+to9984. Only1920/20,480 training draws changed question wording; all target
+digests, facts, evidence/order/time, parent weights/Adam, LR3e-5, objective,
+tokenizer and other-five-task draws match the retained fixed-exposure control.
+Neither old failed studies nor this study's limits were extended.
+
+| Same-model endpoint | New updates | Train64 | Primary512 | Transfer128 | Flipped192 | Both192 |
+|---|---:|---:|---:|---:|---:|---:|
+| Retained COVER7424 parent |0|49|392|68|15|3|
+| Wording8448 |1024|45|372|70|30|10|
+| Wording9472 |2048|46|378|63|32|13|
+| Wording9984 |2560|50|386|67|33|12|
+| Retained fixed-exposure9984 |2560|46|376|64|20|9|
+
+Final primary buckets[56,62,38,30,19,64,53,64], transfer[4,7,4,1,7,13,15,16].
+Both C5/D7/E0,6 independent bases,1 complete four-view base. Original selection
+87/192, same-output100/192, pair counts[12,75,21,84]. The retained control has
+original76, same-output114 and both9. Strict same-case paired gain/loss:
+train5/1, primary35/25, transfer8/5, flipped17/4, both5/2. These are one retained
+control comparison, not replicated statistical evidence or product admission.
+Against this study's own parent, primary392→386 and transfer68→67 still fall.
+Other-five-task primary297→299/320; original C/D/E95→87/192.
+
+The reused raw-strata diagnostic verifies complete raw/native/call/teacher
+bindings with zero new model calls. Wording view3 flipped0→9/48 and both0→3/48
+versus the matched control. Final view0/1/2/3 both2/5/2/3, nonnumeric11/96 and
+numeric1/96. Final flipped first-error counts: exact33, other-record whole52,
+abstention41, selected citation/wrong body31, selected body/wrong citation13,
+other format/content22. Time selection still has both0/64. Wording exposure
+has a limited observed effect; it does not explain all failures, establish a
+tokenizer/architecture defect or recover the joint task. View2 still duplicates
+view0 in24/48 scenes; frozen data and denominators were not changed.
+
+Actual usage:2560 SMALL optimizer;4,365,578 input/314,416 target tokens including
+3,442/216 discarded at deadlines. Committed4,362,136/314,200, padding1,569,398.
+20,480 draws,2560 per task. Generation3160=3128 scheduled panels+32 entry parity;
+own-model teacher3128. The final study report records3144 generations because
+the earlier source-parity16 occurred before final registration and is added here.
+Separate TINY92 optimizer/495 generation/495 teacher include failed setup work;
+scalar0, new C++ calls0. Registered study elapsed2869.3186735839995s includes
+its preparation/parity; preceding source-parity control4.010657s is additional.
+Compilation and pure recount times are separate. Peak sampled trainer RSS
+1,506,560KiB, not an OS peak or S6 result.
+
+Five training/evaluation commands exit0: optimizer counts1+930+843+786+0,
+durable steps7425/8355/9198/9984/9984. Segment0003 reaches the optimizer cap,
+saves9984 and stops only TIME_BUDGET with evaluation pending. Fresh segment0004
+completes518 generations/519 teachers with no optimizer calls, preserving the
+already returned generation whose teacher was pending. Final checkpoint bytes
+equal segment0003: evaluation-only continuation did not modify weights/Adam.
+All3128 scheduled outputs complete with EOS and generation errors0. Final
+terminal BUDGET_REACHED/Finished/resume=false; joint=false, admissible=false.
+Cancellation, UNKNOWN, nonfinite, save error and mixed error conditions0.
+
+Pure `fresh paired-report` exit0 rechecks all native/terminal/dataset/score/
+decision/exposure/counter bindings. Log SHA256
+d53c5f6361e1c275e75fcca4947a9a32ddf593b14b0b84bd5e35982d80c42021.
+Existing exact raw-strata test1 PASS8.15s, optimizer/generation/teacher0.
+Its typed output SHA256c0a8424232f7926b83df2ff47e3c7fca9f384d668c4ce41781e025cc99298ebd.
+A local Rust reader reuses the native codec/tokenizer to verify same endpoint,
+dataset, IDs, expected, evidence and prompt digests, independently decode raw
+tokens/EOS and calculate the paired gains/losses above. Exit0; no model calls.
+Comparison log7599e9fef9486f68b4dd642dddfc1b4993d66104b8de3b5d152dc0a7fdf1535e.
+Direct numeric/input/process tests and their failed preparation attempts remain
+documented in the preceding registration entry; they were not rerun or hidden.
+
+Local durable native:
+`artifacts/selector-phrase-20260920-final/COVER/segment-0004/final`, physical
+a5a14b2113e8186a5a26510a8ae722d5e98e8f5b42808a17cf525391f706352b,
+model4f2580ce93c9890f55894f1804f6fe6d9c6c1694524fb75407f3a219381d953d.
+Terminal receiptc2776186189a2df69a9970dbbe61376604e7d7cd763baa5aef0f46ee6d1e75a6;
+final paired receiptb16351054b961f5088e350c5bc8da852293aa0426e807ed6db41f935a2f88723.
+Frozen CLI70aa6568fba1f0d30520feec0a43f38ed5376f1c298c3354b31eb157fb009bc3
+and diagnostic binary9a1b8e50c731e8a781d55f5d54172cc2e68188fcb3ef634f7d17c9055d160ec2
+remain unchanged. Evidence under `artifacts/selector-phrase-20260920-evidence/`
+includes candidate.diff, registration/test/parity logs, segment-0000..0004.log,
+paired-report.log, final-strata.r3b/log and paired-raw-comparison.log. Corpus,
+checkpoints, original raw, failure logs and local Rust helpers stay local.
+
+CODE_VERDICT=SCOPED_PASS; LEARNING_EXECUTION=COMPLETE;
+WORDING_EXPOSURE_EFFECT=LIMITED_OBSERVED_GAIN; DEVELOPMENT_JOINT_PASS=false;
+MODEL_QUALITY_RECOVERED=false; FINAL200=NOT_CREATED/NOT_OPENED;
+S4/S5/S6=NOT_RUN_PRECONDITION_FAILED; GOAL1_READY=false; GOAL1_ACCEPTED=false.
+This research is closed with optimizer budget0 remaining. No source/format/
+SQLite/core changes or new tracked files in this closure. Existing strict
+Clippy warnings remain as recorded; no global Clippy PASS is claimed.
+
 ## 2026-09-20 Selector-wording exposure implementation and registration verified
 
 Reuse `fresh paired-continue --selector-phrase-exposure` for schema17, same

@@ -1,6 +1,31 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: one bounded selector-wording exposure study
+## Current result: wording helps some development cases; joint gate remains unmet
+
+The registered selector-wording study is closed at9984 after2560 new updates,
+BUDGET_REACHED/Finished/resume=false. Final primary386/512, transfer67/128,
+flipped33/192, both12/192 (C5/D7/E0), generation errors0. Same-parent/budget
+fixed-exposure control is376/64/20/9. Paired gains/losses are35/25 primary,
+8/5 transfer and5/2 both. View3 improves flipped0→9/48 and both0→3/48, but
+numeric both is1/96 and time selection both0/64. Parent retention remains below
+392/68. These limited changes do not satisfy admission or the joint gate.
+
+The cap was reached before final evaluation finished. The preserved pure time
+stop saved9984; a new process completed evaluation with optimizer0 and identical
+native checkpoint bytes. All raw/call/teacher/native/counter audits pass. Actual
+SMALL2560 optimizer/3160 generation/3128 own-model teacher include both entry
+parities; separate TINY92/495/495. No additional C++ calls. The existing closed
+experiments, source data, failed setup and parent state remain unchanged.
+
+Do not extend or restart this study, substitute an intermediate best score, or
+interpret storage parity as model quality. Current evidence still leaves value
+and time-selection generalization unresolved. The trained original/value-swapped
+diagnostics use two trained value views, so their fitting scores do not prove
+unseen-value conditional copying. A further hypothesis requires its own bounded
+registration and evidence; no next optimizer call is authorized by this closure.
+Final200 remains NOT_CREATED/NOT_OPENED; S4/S5/S6 preconditions and Goal1 unmet.
+
+## Closed: one bounded selector-wording exposure study
 
 The user's continuing one-variable authorization covers a new schema17 research
 from the intact COVER7424 parent, physical
