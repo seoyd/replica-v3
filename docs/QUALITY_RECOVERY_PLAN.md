@@ -1,5 +1,28 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: fixed DIVERSE actual-view fitting diagnosis
+
+Read-only tape/raw audit found48 actually trained sides per C/D/E value view,
+twenty exposures each. Prior original48 covers view0; train64 overlaps just two
+view0 and one view1 side. Views1/2/3 therefore have47/48/48 unobserved sides.
+Register one fixed DIVERSE7424 diagnostic under the user's continuing quality
+investigation authorization. Do not reopen its optimizer budget or native state.
+
+Use the actual hash-bound training-values pool and first eight executed pairs
+per C/D/E, retaining exact request/answer/phrase/selector identity. Observe views
+1,2,3 once each; reuse the one identical input/expected answer already present in
+the same native endpoint's verified train64 raw, keeping its original provenance.
+Do not create a new call row for reused evidence. Report completed new calls and
+full48-case derived scores separately. View0's44/48 and all original raw remain.
+
+SMALL optimizer0, generation143/own-model teacher143 maximum; TINY/scalar0.
+One process at a time, command900s/cleanup120s, active1800s, no automatic retry or
+checkpoint sweep. Source change is confined to the existing ignored diagnostic
+and direct pure mapping tests. Production inference/trainer/model/data unchanged.
+Source/executable and selection/native hashes freeze before observations.
+This measures fitting of actual training views, not heldout quality or approval.
+No new learning is registered; use the results to justify a next single variable.
+
 ## Current: value diversity closed; selection remains unresolved
 
 DIVERSE reached its1280-update cap at7424 with primary399/512, transfer70/128,

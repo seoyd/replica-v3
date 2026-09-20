@@ -1,5 +1,28 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 fixed DIVERSE actual-training-view diagnosis registered
+
+DERIVED_EXISTING_RAW: the bound first1280 tape exposes48 selected sides per
+value view exactly20 times. Original48 already covers view0 (44 correct).
+Verified endpoint train64 overlaps two view0 and one view1 inputs; views2/3
+overlap none. New observation caps are47+48+48=143 generation and143 own-model
+teacher calls, optimizer0. The one view1 observation is reused with its original
+row/hash, not regenerated. Native remains DIVERSE7424 physical
+60c772b9ff71ae20438c4e33f535d53e73b1d4ef885ef3d041da704f6ebb5416.
+
+The existing ignored train diagnostic now reads the actual policy-bound native
+pool, requires executed tape membership and records pending versus full48-case
+selection separately. Only diagnostic/test code changes; production training,
+generation, tokenizer, objective and original evidence remain unchanged.
+Pure mapping/native test executed1/PASS1 in0.29s, no optimizer/generation/teacher.
+Retained diagnostic executable SHA256
+4da6e9ef5951917b590a6264a29cad9cafa64fa209dcaa0fe14409a058b91d28.
+Strict Clippy exited101 on existing warnings (including unrelated test targets);
+it executed no tests and is not counted as PASS. No unrelated lint cleanup.
+Evidence: `artifacts/diverse-fit-20260920-evidence/` coverage/mapping/clippy logs.
+New model observations NOT_RUN at registration; this does not change quality
+gates, reopen learning or grant Goal1 acceptance.
+
 ## 2026-09-20 DIVERSE1280 closed: limited changes, joint quality not recovered
 
 EXECUTED_THIS_RUN / DERIVED_EXISTING_RAW; independent acceptance not claimed.

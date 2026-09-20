@@ -1228,6 +1228,16 @@ legacy config/request IDs remain. This is a bounded evaluation/control migration
 whole-project JSON removal or model quality acceptance.
 ## VALUE exposure study
 
+For the closed DIVERSE actual-view fitting diagnosis, the existing ignored
+`paired_seen_train_diagnostic` test accepts `R3_TRAIN_PAIR_ACTUAL_VIEW=1`, `2`,
+or `3`. It requires the actual bound native training-values pool and executed
+tape membership. Each invocation uses a new output root and at most48 generation/
+own-teacher calls. View1 reuses one exactly matching train64 observation, resulting
+in47 new calls; views2/3 each48. `score` describes only new calls and `combined`
+the48-case derived result. Reuse references keep the original row identity/hash;
+no synthetic new call is written. These are training-fit diagnostics, not quality
+acceptance, and require their own bounded registration before execution.
+
 `--diverse-pair-values` registers a separate DIVERSE policy from P6144 using the
 same command below, followed by `fresh run --root NEW_ROOT/DIVERSE`. It keeps
 VALUE's eight C/D/E scenes per task and1280-update cap, but rotates four value

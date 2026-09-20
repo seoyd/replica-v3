@@ -4751,6 +4751,17 @@ mod tests {
             assert_eq!(edits,1);assert_eq!(digest(&restored)?,digest(before)?);count+=1;
         }
         assert_eq!(count,192);
+        for (i,m) in tm.iter().enumerate().filter(|(_,m)|(2..=4).contains(&m.bucket)&&m.view==0) {
+            for view in 1..=3 {
+                let j=tm.iter().position(|x|x.base==m.base&&x.bucket==m.bucket&&x.view==view).unwrap();
+                let rows=vec![[j;8]];
+                let (e,selected)=owned_value_view(&changed,&tm,i,view,&rows)?;
+                assert_eq!(digest(&e)?,digest(&changed[j])?);assert_eq!(selected.view,view);
+                assert!(owned_value_view(&changed,&tm,i,view,&[]).is_err());
+            }
+        }
+        assert!(owned_value_view(&changed,&tm,0,0,&[]).is_err());
+        assert!(owned_value_view(&changed,&tm,changed.len(),2,&[]).is_err());
         assert!(diverse_training_values(&all[..all.len()-1],&tm).is_err());
         let mut wrong=tm.clone();wrong[1].view=0;
         assert!(diverse_training_values(&all,&wrong).is_err());
@@ -4868,8 +4879,20 @@ mod tests {
         }
         Ok(out)
     }
+    fn owned_value_view(all:&[Episode],tm:&[Meta],index:usize,view:usize,executed:&[[usize;8]])->Result<(Episode,Meta)> {
+        if !(1..=3).contains(&view)||tm.is_empty()||all.len()!=4*tm.len()||index>=all.len() {return Err(bad("owned value view bounds"));}
+        let n=tm.len();let m=&tm[index%n];
+        if !(2..=4).contains(&m.bucket)||m.view!=0 {return Err(bad("owned value view requires selector original"));}
+        let matches:Vec<_>=tm.iter().enumerate().filter(|(_,x)|x.base==m.base&&x.bucket==m.bucket&&x.view==view).collect();
+        if matches.len()!=1 {return Err(bad("owned value view missing/duplicate"));}
+        let j=(index/n)*n+matches[0].0;
+        if !executed.iter().flatten().any(|&i|i==j) {return Err(bad("owned value view not actually exposed"));}
+        let e=all[j].clone();let mut selected=matches[0].1.clone();selected.id=e.id.clone();selected.source_id=None;
+        if resolve(&e.request)?!=e.answer {return Err(bad("owned value view label"));}
+        Ok((e,selected))
+    }
     #[test]
-    #[ignore = "explicit completed arm/new output; normal/value-swap/recombined48/48, margins0/96 generation/teacher; optimizer0"]
+    #[ignore = "explicit completed arm/new output; normal/value-swap/recombined48/48, actual views<=48/48, margins0/96 generation/teacher; optimizer0"]
     fn paired_seen_train_diagnostic() -> Result<()> {
         if cfg!(feature = "test-support") || !cfg!(feature = "accelerate") {
             return Err(bad("train diagnostic requires production features"));
@@ -4879,7 +4902,8 @@ mod tests {
         let value_swap=std::env::var("R3_TRAIN_PAIR_VALUE_SWAP").as_deref()==Ok("1");
         let recombine=std::env::var("R3_TRAIN_PAIR_RECOMBINE_VALUES").as_deref()==Ok("1");
         let margin_only=std::env::var("R3_TRAIN_PAIR_MARGIN_ONLY").as_deref()==Ok("1");
-        if [value_swap,recombine,margin_only].into_iter().filter(|x|*x).count()>1 {return Err(bad("choose one train diagnostic"));}
+        let actual_view=std::env::var("R3_TRAIN_PAIR_ACTUAL_VIEW").ok().map(|s|s.parse::<usize>().map_err(|_|bad("actual view integer"))).transpose()?;
+        if actual_view.is_some_and(|v|!(1..=3).contains(&v))||[value_swap,recombine,margin_only,actual_view.is_some()].into_iter().filter(|x|*x).count()>1 {return Err(bad("choose one train diagnostic"));}
         let p: Plan = read(&root.join("plan.r3b"))?;
         let end = history(&root, &p)?.pop().ok_or_else(||bad("completed arm missing"))?;
         if end.resume || end.phase.as_deref()!=Some("Finished") || end.step!=p.config.max_steps {
@@ -4892,6 +4916,11 @@ mod tests {
         let mut all = original;
         all.extend(verified_corpus(&root.join("variants.r3cor"), f.variants.as_ref().unwrap())?.train);
         all.extend(verified_corpus(&root.join("selectors.r3cor"), f.selector.as_ref().unwrap())?.train);
+        if actual_view.is_some() {
+            let hash=p.training_values.as_ref().ok_or_else(||bad("actual value pool required"))?;
+            all=verified_corpus(&root.join("training-values.r3cor"),hash)?.train;
+            if all.len()!=4*n {return Err(bad("actual value pool shape"));}
+        }
         let (tm, _, _) = verified_metadata(&root, &p)?;
         let mut es = vec![]; let mut ms = vec![];
         for bucket in [2,3,4] {
@@ -4902,6 +4931,9 @@ mod tests {
                 for i in [base, base+2*n] {
                     if !tape.rows[..tape.block].iter().flatten().any(|&j|j==i) { return Err(bad("unseen train pair")); }
                     let mut e = all[i].clone(); let mut m=tm[i%n].clone();
+                    if let Some(view)=actual_view {
+                        (e,m)=owned_value_view(&all,&tm,i,view,&tape.rows[..end.step-f.origin_step])?;
+                    }
                     if value_swap {
                         if m.view!=0 {return Err(bad("seen value diagnostic requires fitted view0"));}
                         let j=tm.iter().position(|candidate|candidate.base==m.base&&candidate.bucket==m.bucket&&candidate.view==1)
@@ -4918,6 +4950,31 @@ mod tests {
             }
         }
         if es.len()!=48 {return Err(bad("train pair denominator"));}
+        let full_es=es.clone();let full_ms=ms.clone();
+        let mut reused:BTreeMap<String,binary::Value>=BTreeMap::new();
+        let mut reuse_binding=None;
+        if actual_view.is_some() {
+            let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
+            let original=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?.train;
+            let (train,metadata)=subset(&original,&tm,8);
+            audit_panel(&root,&p,end.step,"train64",&train,&metadata,&tok)?;
+            let raw=root.join(format!("eval-{:04}-train64.r3rows",end.step));
+            let rows=binary::read_value_records(&raw)?;
+            if rows[0]["physical"]!=end.checkpoint_hash {return Err(bad("reused train observation endpoint"));}
+            let mut pending=vec![];let mut pending_meta=vec![];
+            for (e,m) in es.into_iter().zip(ms) {
+                let prompt=tok.prepare(&e.request,p.architecture.context as u32,&p.architecture.id()?)?;
+                let prompt_hash=digest(&prompt.token_ids)?;
+                let matched:Vec<_>=rows[1..].iter().filter(|r|r["prompt_digest"]==prompt_hash&&r["expected"]==e.answer).collect();
+                if matched.len()>1 {return Err(bad("ambiguous reused observation"));}
+                if let Some(row)=matched.first() {reused.insert(e.id.clone(),(*row).clone());}
+                else {pending.push(e);pending_meta.push(m);}
+            }
+            es=pending;ms=pending_meta;
+            if reused.len()!=usize::from(actual_view==Some(1)) {return Err(bad("actual view reuse differs from registered coverage"));}
+            let references=reused.iter().map(|(id,row)|Ok(binary::record!({"selected_id":id,"original_id":row["id"],"row_digest":digest(row)?}))).collect::<Result<Vec<_>>>()?;
+            reuse_binding=Some(binary::record!({"source":raw,"raw_hash":file_hash(&raw)?,"rows":references}));
+        }
         if recombine {
             es=recombine_train_values(&es,&all)?;
             for (e,m) in es.iter().zip(&mut ms) {m.id=e.id.clone();}
@@ -4992,18 +5049,28 @@ mod tests {
         }
         std::fs::create_dir(&output)?;
         let checkpoint = root.join(&end.checkpoint);
-        let panel=if value_swap {"seen-value-swap48"}else if recombine {"recombined-values48"}else{"seen-train48"};
-        write(&output.join("started.r3b"), &binary::record!({"source":source_digest()?,"binary":file_hash(&std::env::current_exe()?)?,"policy":digest(&p)?,"checkpoint":checkpoint,"physical":file_hash(&checkpoint)?,"cases":digest(&es)?,"scope":if value_swap {"SAME_SCENE_VALUE_SWAP_DIAGNOSTIC_NOT_HELDOUT"}else if recombine {"OWNED_TRAIN_VALUES_NEW_COMBINATIONS_NOT_HELDOUT"}else{"TRAIN_DIAGNOSTIC_NOT_HELDOUT"},"generation_limit":48,"teacher_limit":48,"optimizer_limit":0}))?;
-        if recombine {publish_confirmed(&output.join("diagnostic-cases.r3b"),&(&es,&ms))?;}
+        let owned_panel=actual_view.map(|v|format!("actual-train-view{v}"));
+        let panel=owned_panel.as_deref().unwrap_or(if value_swap {"seen-value-swap48"}else if recombine {"recombined-values48"}else{"seen-train48"});
+        let limit=es.len();
+        write(&output.join("started.r3b"), &binary::record!({"source":source_digest()?,"binary":file_hash(&std::env::current_exe()?)?,"policy":digest(&p)?,"checkpoint":checkpoint,"physical":file_hash(&checkpoint)?,"cases":digest(&es)?,"scope":if actual_view.is_some() {"ACTUAL_TRAIN_VIEW_FITTING_NOT_HELDOUT"}else if value_swap {"SAME_SCENE_VALUE_SWAP_DIAGNOSTIC_NOT_HELDOUT"}else if recombine {"OWNED_TRAIN_VALUES_NEW_COMBINATIONS_NOT_HELDOUT"}else{"TRAIN_DIAGNOSTIC_NOT_HELDOUT"},"generation_limit":limit,"teacher_limit":limit,"optimizer_limit":0,"actual_view":actual_view,"reused":reuse_binding}))?;
+        if recombine || actual_view.is_some() {publish_confirmed(&output.join("diagnostic-cases.r3b"),&(&es,&ms))?;}
+        if actual_view.is_some() {publish_confirmed(&output.join("full-selection.r3b"),&(&full_es,&full_ms))?;}
         let mut control = recovery::RunControl::command(false)?;
-        control.set_call_limits(48,48);
+        control.set_call_limits(limit,limit);
         let result = evaluate_panel(&p,&output,&checkpoint,end.step,panel,&es,&ms,&mut control);
         if let Err(e)=&result {control.classify_error(e);}
         let result=control.seal_terminal().and(result);
         let rows=binary::read_value_records(&output.join(format!("eval-{:04}-{panel}.r3rows",end.step)))?;
         let both=rows[1..].chunks_exact(2).filter(|r|r[0]["exact_match"]==true&&r[1]["exact_match"]==true).count();
         let same=rows[1..].chunks_exact(2).filter(|r|r[0]["generation_completed"]==true&&r[1]["generation_completed"]==true&&r[0]["actual"]==r[1]["actual"]).count();
-        let receipt=binary::record!({"start":file_hash(&output.join("started.r3b"))?,"control":control.receipt(),"score":result.as_ref().ok(),"both":both,"same":same,"error":result.as_ref().err().map(ToString::to_string),"optimizer":0});
+        let combined=if actual_view.is_some() && result.is_ok() {
+            let decisions:Vec<_>=full_es.iter().map(|e| {
+                let r=reused.get(&e.id).or_else(||rows[1..].iter().find(|r|r["id"]==e.id)).ok_or_else(||bad("incomplete actual train view"))?;
+                Ok(r["generation_completed"]==true&&r["error"].is_null()&&r["finish_reason"]=="stop"&&r["actual"]==e.answer)
+            }).collect::<Result<_>>()?;
+            Some(binary::record!({"planned":48,"new":limit,"reused":reused.len(),"full":decisions.iter().filter(|&&v|v).count(),"both":decisions.as_chunks::<2>().0.iter().filter(|p|p[0]&&p[1]).count()}))
+        }else{None};
+        let receipt=binary::record!({"start":file_hash(&output.join("started.r3b"))?,"control":control.receipt(),"score":result.as_ref().ok(),"both":if actual_view.is_some(){None}else{Some(both)},"same":if actual_view.is_some(){None}else{Some(same)},"combined":combined,"error":result.as_ref().err().map(ToString::to_string),"optimizer":0});
         publish_confirmed(&output.join("finished.r3b"), &receipt)?;
         println!("TRAIN_PAIR_DIAGNOSTIC {receipt}");
         result.map(|_|())
