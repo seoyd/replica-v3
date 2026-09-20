@@ -1,6 +1,22 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: exact-pair recurrence at unchanged SIDE objective
+## Active: fixed train margins after recurrence, no learning
+
+Use the existing teacher-only seen-pair diagnostic once for P6144 and REPLAY7424,
+same first8 actually seen pairs per C/D/E as SIDE. New root, at most96 own-model
+teacher calls, optimizer0/generation0,900s command/120s cleanup, no retries.
+Pure recount and case/parent equality check precede interpretation. Exact tape
+recount confirms these48 sides each had5 exposures rather than SIDE's1. Compare
+training margins separately from heldout generation; do not declare a generalization
+solution or cause from teacher accuracy. No new training before this observation.
+
+## Closed: exact-pair recurrence at unchanged SIDE objective
+
+Completed1280 updates at7424: primary369/512, transfer64/128, flipped25/192,
+both6/192 (C1/D5/E0,5 bases), errors0. Matched SIDE372/70/25/2; original70
+versus72, same output126 versus168. Train64 improved43→48, but development/
+transfer fell. No joint pass or adoption. Finished/BUDGET_REACHED, resume=false.
+Pure raw/native/usage report passed. Preserve the endpoint and its failure.
 
 Register one REPLAY arm from P6144 under the continuing user authorization.
 Retained SIDE6400/7424 is the matched control. Pure tape recount found each of

@@ -1,5 +1,56 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Exact-pair recurrence completed; joint gate failed
+
+EXECUTED_THIS_RUN, source `c34f6b40d9a02591823db8657774c4d42c28260d`.
+Completed1280 updates P6144→7424 under the registered REPLAY sampler. Parent,
+Adam, corpus bytes, tokenizer, family4 objective/LR/config and all nonselector
+update slots matched SIDE. First256 steps produced exactly the same evaluated
+model hashes and scores as SIDE, confirming the unchanged prefix of the tape.
+
+| Absolute step | New updates | Train64 | Primary512 | Transfer128 | Flipped192 | Both192 |
+|---|---:|---:|---:|---:|---:|---:|
+| 6400 | 256 | 47 | 367 | 69 | 6 | 0 |
+| 7424 | 1280 | 48 | 369 | 64 | 25 | 6 |
+
+Final primary buckets `[57,62,33,22,15,60,56,64]`, transfer
+`[4,8,4,0,1,16,15,16]`; both C1/D5/E0 across5 bases, base4=0.
+Original70/192 and same normal output126/192. Matched SIDE372/70/25/2,
+original72/same168. Train43→48 and both2→6 do not offset failed development/
+transfer gates. Screens32/64/128/768:44/46/41/44; flip24:0/0/1/3.
+Final screen39/64, guard_streak1, not a quality stop; registered optimizer cap
+exhausted. All2144 evaluation generations had EOS/errors0. REPLAY is not adopted.
+
+Actual input2,194,593/target156,859; committed2,192,797/156,720; discarded
+1,796/139, padding781,607.10,240 committed draws,1280 per task,5120 per phrase.
+Generation2160 including P16, own-model teacher2144, active study1555.799169460s.
+TINY49/615/615 is separate. First update saved/restored at6145. Real900s stop
+at6912 occurred after complete evaluation and before the next optimizer update:
+TrainingPending, TIME_BUDGET only, resume=true. Its uncommitted forward work
+remains counted. Fresh process did512 updates and final896 generations/teachers.
+Final Finished/BUDGET_REACHED, resume=false; no UNKNOWN/cancel/storage failure.
+Peak sampled RSS1,510,112KiB is not S6. Pure paired-report exit0 verified all
+native/raw/teacher/decision/usage bindings; prior failures were not changed.
+
+DERIVED_FROZEN_TAPE, no model calls: each C/D/E bucket has256 distinct exact
+samples at5 exposures,3840 unused;128 base scenes rather than SIDE's256. All48
+fixed diagnostic sides were seen5 times. DERIVED_EXISTING_RAW:132/192 flipped
+first-token teacher argmaxes incorrect, first mean NLL3.0166296231, remaining
+mean NLL0.2324026901. Teacher scores are not free-generation quality measures.
+
+Executable `artifacts/pair-replay-20260920-executable`, SHA256
+`3dcd4baf563feb9d32a22d101100d45f79a7b6600cc5b49154525a76388ac685`;
+source digest `87d56074d0cf380075a23eaa0a6794300383e097a470788782781e7d5bc7172e`;
+policy `b2b967915a6f373742e606ce6d25313e42025ca4d555b8c39fb59008d20e5c06`.
+Final `artifacts/pair-replay-20260920/REPLAY/segment-0002/final`, directly hashed
+physical SHA256 `33748a93e708b0b497ff78d55ad2034adf548325c4307ba536004a5ce7bb114a`,
+weights `ec43740107344cb2d50d615f28226d15c1e0d78b617f739b17b974d546405242`.
+Commands/tests/hashes/candidate.patch/input proof/recounts are local under
+`artifacts/pair-replay-20260920-evidence/`. Original raw remains unpublished.
+CODE_VERDICT=IMPLEMENTER_TESTED_PASS; LEARNING_EXECUTION=COMPLETE;
+MODEL_QUALITY_RECOVERED=false; FINAL200=NOT_CREATED/NOT_OPENED;
+S4/S5/S6=NOT_RUN_PRECONDITION_FAILED; GOAL1_READY=false; GOAL1_ACCEPTED=false.
+
 ## 2026-09-20 Exact-pair recurrence — implementation verified
 
 REPLAY is one new P6144 research registration. Same SIDE family4 loss, parent
