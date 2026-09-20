@@ -996,6 +996,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
         if manifest.train.sha256 != loaded.tokenizer.train_hash
             && !resumed_corpus
             && !run.replace_corpus
+            && !fresh.is_some_and(|(p,_)|p.reuses_tokenizer_mapping(&loaded.tokenizer))
         {
             return Err(Error::Corrupt("tokenizer/corpus mismatch".into()));
         }

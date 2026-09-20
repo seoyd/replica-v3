@@ -1,5 +1,97 @@
 # 진단 및 구현 상태
 
+## 2026-09-21 Identifiable baseline R0–R2 준비, 독립 A 대기
+
+CONTRACT=R3-IDENTIFIABLE-BASELINE-1.0. 시작 HEAD는
+5c5fcf1f40080a8cbf3d79487ec1d27de235e1de이며 기존 source42af900c2f52264ed629e95560f63e7ae493108a
+이후 제품 변경은 없었다. 미추적 .DS_Store 보존. Rust/Cargo1.98.1,
+locked/offline, Accelerate/F32/CPU/thread1. 새 의존성/외부 모델/C++ 실행0.
+
+EXECUTED_THIS_RUN: GROUND 실제 native를 읽어 step6634/objective5/Adam136 tensors,
+CANCELLED/resume=false와 physical d5bbf20570ee3e372f863a81ad966b5368a50f1027464f9df854d0fce6f2bc59를
+종료 기록과 대조했다. 새 forward/optimizer/generation/teacher0. +490 품질은
+여전히 NOT_MEASURED이며 마지막 +256의350/512·67/128·both0를 대입하지 않는다.
+
+기존 LibTorch REPORT뿐 아니라 저장된 두 state/metrics와 generation usage 파일도
+기존 Rust 순수 reader로 읽었다.256 clocks와 입력/target counts 일치, finite 확인.
+수치 차이는 기존 범위와 같았다. 이는 DERIVED_EXISTING_RAW이며 새 학습·C++ 실행이나
+독립 수용이 아니다. 공유 자료/설계 전체의 정확성을 증명하지 않는다.
+
+R1은 실제 native pool, frozen hashes, 실제 updates.r3rows의 sample_indices를
+policy의 draw와 대조했다. 아래 노출은 해당 fork만이며 부모의 학습량을 합산하지
+않는다. scene은 값/순서/질문을 제외하되 ID·대상·구역·관측시각·상태를 유지한다.
+빈 근거는 같은 evidence scene이 될 수 있어 semantic base 수도 별도 보존한다.
+
+| Pool | 물리 행 | semantic bases | 값 제외 evidence scenes | query bindings | 실제 노출 행 | 노출 min/median/max |
+|---|---:|---:|---:|---:|---:|---|
+| P-PHRASE |16384|2048|1963|11422|16384|1/1/1|
+| FIT |32768|2048|2219|16024|6448|0/0/80|
+| VALUE |32768|2048|2219|16024|6496|0/0/40|
+| COVER |32768|2048|2219|16024|6784|0/0/10|
+| COVER4 |32768|2048|2219|19096|7168|0/0/5|
+| GROUND |32768|2048|2219|19096|3218|0/0/2|
+
+모든 pool의 full entity는1361개다. 값 배치 수는 P/FIT/VALUE/COVER3420,
+COVER4/GROUND4752다. 원본 primary512, transfer128, selector 반대쪽192와
+보존된 VALUE recombined48의 실제 사례도 감사했다. label 해석 불일치,
+동일 prepared prompt의 상충 정답, 필수 근거 제외는 검사 범위에서0이었다.
+전체 pool과 실제 노출 가중 규칙 점수는 별도로 저장했다.
+
+P 학습의 D에서는 질문을 읽지 않는 lower-context 규칙이2048/2048,
+primary D에서64/64, 반대 selector D에서0/64다. shorter-entity 규칙은
+P train C1792/2048, primary C56/64, 반대 selector C8/64다. 타이인 규칙은
+정답으로 tie-break하지 않고 abstain 처리했다. GROUND pool의 D는 원본 범위
+패턴2048/4096이므로 원본 generator의 편향을 파생 pool 전체로 일반화할 수 없다.
+LABEL_INTEGRITY=VERIFIED; QUERY_NECESSITY=ORIGINAL_D_NOT_ENFORCED;
+NUISANCE_BALANCE=ORIGINAL_C_D_BIASED; TRAIN_SUPPORT=MEASURED_PER_FORK;
+EVAL_NOVELTY=SCENE_WORDING_VALUE_VIEWS_REPORTED_SEPARATELY. 모델이 실제로
+이 규칙을 쓴다는 인과 결론은 아니다. 삭제된 초기화 이전 자료는 NOT_AVAILABLE.
+
+R2는 별도 joint-binding-balanced-v1을 native로 준비했다.8192/512/128,
+train4096 semantic bases, C/D/E의 양쪽 query/시간 관계를 모두 포함한다.
+기존 request-only resolver, R3CORP 재로드, 전체 evidence, split 누수와
+정확한 선언 marginal cross-table 검사를 통과했다. 기존 tokenizer mapping562만
+재사용했고, 모델은9,513,408 parameters의 새 seed17이다. LOCAL5/GLOBAL6의
+weight-content af6abb8fd48cdd0d4396b86c543aee688efc770470c52adc0dcf7016acf40306 일치,
+architecture semantic ID는 다르다. 실제 새 Adam zero moments hash와 clock0도 기록했다.
+
+최종 sequence(min/median/max)는 train77/225/269, primary79/225/264,
+transfer81/224/259다. 실제 input>256인 사례는159/8192,8/512,3/128;
+층당 제거 edge 합은2194,118,7이다. STRUCTURE_TREATMENT_ACTIVE=true지만 작다.
+masked edge와 질문 정보의 완전 소실을 동일시하지 않는다. 실제 SMALL의76-token
+forward/gradient는 두 구조가 정확히 같았고,268-token cached/full 최대차는
+LOCAL1.1920929e-6/GLOBAL1.3113022e-6이다. mask257에서1개,268에서78개 차이.
+고정4096 tape의 arm당 예정 input6815880/target578012는 실제 학습 사용량이 아니다.
+
+관련 unit4개와 P16 parity1개 PASS, 모두0-test 아님. 기존 전체 안정화/quick을
+반복하지 않았다. 마지막 정확 실행은 `cargo test --locked --offline --release
+--features accelerate --bin replica-train identifiable_ -- --nocapture`(4/4),
+별도 exact/ignored `training::fresh::tests::stabilization_fixed_parent_parity`(1/1).
+P16은 raw160 tokens,16/16 일치, teacher0, 원본 inventory unchanged다.
+새 process의 `fresh run`은 review A 부재로 exit1, segment 생성/학습0으로 거부했다.
+수정 중 compile 오류2건과 이전 draft 준비를 보존했고 PASS로 합산하지 않았다.
+서로 다른 source의 draft에는 최종 hash를 덧붙이지 않는다.
+
+현재 최종 compiled source digest6e6f244279c3a48af70bd46decb2c15bd402c6a4d6d663cc46a1026b9ded440a,
+production executable a9af3e5d2d3e6202bd58c16706ef56dde28a55dfbe5ada13aaceb61ec9548d96.
+Preparation physical247a768ff388d2d31a45fc64003a6f737dc8aa81a44625c72f5d067870655075.
+Source/report Git SHA는 게시 기록에서 별도로 식별한다.
+
+허용된 로컬 증거: `artifacts/identifiable-baseline-20260921/`의 preparation,
+LOCAL5/GLOBAL6 plan/native/corpus/tokenizer/metadata와
+`artifacts/identifiable-baseline-20260921-evidence/`의 audit-final, parent16,
+pure numeric/usage recount, 각 build/test/실행 로그. 원본이나 데이터는 게시하지 않는다.
+Draft `artifacts/identifiable-baseline-20260921-preparation-01/`도 보존했으나 학습용 아님.
+
+ACTUAL_NEW_SMALL_UPDATES=0; NEW_TINY_UPDATES=0; GENERATION=16_RETURNED;
+TEACHER=0; UNKNOWN=0 for completed observations. 수치 forward는 SMALL16/backward4
+(draft+최종 준비), TINY32/backward8(직접 시험 네 실행)이며 생성과 구분한다.
+CODE_SCOPE=R0_R2_PREPARATION; NATIVE_INPUT_PARITY=PASS;
+INDEPENDENT_A=PENDING; TRAIN_FIT/UNSEEN_BINDING=NOT_RUN;
+OLD_REFERENCE_GATE=NOT_REOPENED; MODEL_QUALITY=NOT_IMPROVED_THIS_RUN;
+S4/S5/S6=NOT_RUN; GOAL1_READY=false; GOAL1_ACCEPTED=false.
+다음 의존은 독립 A의 실제 데이터/실험 사전수용이다. 실행자가 대신 PASS하지 않는다.
+
 ## 2026-09-20 사용자 요청 중지 — 현재 계보 종합 보고
 
 사용자의 중지 요청으로 GROUND 프로세스에 SIGINT를 전달했다. 기존 RunControl이

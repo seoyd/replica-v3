@@ -1278,3 +1278,16 @@ P6144 and preserved inputs, but widens the recurring prefix to32 scenes per
 C/D/E and alternates the two value views every64 updates. Maximum1280 updates;
 all old policies/closed budgets remain unchanged. The first8 pairs' final
 observations are a subset of its train scenes, not a heldout quality gate.
+# Identifiable baseline preparation
+
+Use the existing production `replica-train fresh` entry points with locked/offline
+Accelerate builds and VECLIB_MAXIMUM_THREADS=1/RAYON_NUM_THREADS=1.
+`identifiable-audit --roots ROOT... --diagnostics CASES... --output NEW_DIRECTORY`
+reads historical native corpora and committed update tapes without model calls.
+`identifiable-prepare --parent CLOSED_TOKENIZER_PARENT --output NEW_DIRECTORY`
+creates the balanced native dataset and LOCAL5/GLOBAL6 initial controls. The
+parent contributes tokenizer mapping only. Existing artifacts are never resumed.
+Independent review A must bind the preparation and source before `fresh run
+--root STUDY/LOCAL5` or GLOBAL6 can enter learning. Missing approval fails before
+segment creation. See the active quality plan for budgets,1024 matched-step gate
+and the unchanged independent product acceptance criteria.

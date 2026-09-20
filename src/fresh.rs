@@ -12,8 +12,21 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, io::Write, path::PathBuf};
 const REVISION: &str = "joint-educational-v1";
 const SYSTEM: &str = "제공된 기록과 질문만으로 답하세요. 요구한 원문 또는 값을 쓰고 근거를 [event:번호]로 인용하세요. 근거가 없거나 모호하면 구별해서 유보하세요. 순서만으로 원인을 단정하지 마세요.";
+#[path = "identifiable.rs"]
+mod identifiable;
 #[derive(Subcommand)]
 pub enum Command {
+    /// Read frozen research corpora and executed tapes without model calls.
+    IdentifiableAudit {
+        #[arg(long, required = true, num_args = 1..)] roots: Vec<PathBuf>,
+        #[arg(long, num_args = 1..)] diagnostics: Vec<PathBuf>,
+        #[arg(long)] output: PathBuf,
+    },
+    /// Prepare a separate balanced study; never resumes an existing model.
+    IdentifiablePrepare {
+        #[arg(long)] parent: PathBuf,
+        #[arg(long)] output: PathBuf,
+    },
     /// Explicit new research from a completed paired endpoint; never edits its terminal.
     PairedContinue {
         #[arg(long)] parent: PathBuf,
@@ -187,6 +200,8 @@ fn verified_metadata(root: &Path, p: &Plan) -> Result<(Vec<Meta>, Vec<Meta>, Vec
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    identifiable: Option<identifiable::Policy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     schema: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -695,6 +710,9 @@ fn corpus(train: Vec<Episode>, dev: Vec<Episode>, seed: u64) -> Result<data::nat
     data::native::from_episodes(m, train, dev)
 }
 impl Plan {
+    pub(super) fn reuses_tokenizer_mapping(&self, tok: &ByteBpe) -> bool {
+        self.identifiable.is_some() && self.tokenizer == tok.id()
+    }
     #[cfg(feature = "test-support")]
     pub(super) fn is_tiny(&self) -> bool {
         self.tiny
@@ -739,6 +757,7 @@ impl Plan {
         ))
     }
     pub(super) fn remaining_input(&self) -> Result<Option<u64>> {
+        if self.identifiable.is_some() { return identifiable::remaining_input(self).map(Some); }
         if self.paired.is_none() { return Ok(None); }
         Ok(Some(12_000_000u64.checked_sub(paired_work(&self.fork.as_ref().unwrap().study)?.0)
             .ok_or_else(|| bad("paired input budget exhausted"))?))
@@ -910,6 +929,9 @@ impl Plan {
         Ok(Some((tape.mode!="CONTRAST",pairs)))
     }
     pub(super) fn draw(&self, step: usize) -> Vec<usize> {
+        if let Some(policy) = &self.identifiable {
+            return policy.rows[step].to_vec();
+        }
         if let Some(tape) = &self.paired {
             let n = self.order.iter().map(Vec::len).sum::<usize>();
             return tape.at(step).expect("validated finite pair tape cursor").iter().map(|i| i % n).collect();
@@ -1052,6 +1074,7 @@ fn prepare(root: &Path, tiny: bool) -> Result<()> {
         })
         .collect();
     let plan = Plan {
+        identifiable: None,
         schema: Some(2),
         fork: None,
         paired: None,
@@ -1112,6 +1135,7 @@ fn source_digest() -> Result<String> {
     // Compile-time source identity; no temporary instruction is a runtime input.
     for source in [
         include_bytes!("fresh.rs").as_slice(),
+        include_bytes!("identifiable.rs").as_slice(),
         include_bytes!("training.rs").as_slice(),
         include_bytes!("data.rs").as_slice(),
         include_bytes!("native_corpus.rs").as_slice(),
@@ -1131,6 +1155,8 @@ fn source_digest() -> Result<String> {
 }
 pub fn execute(command: Command) -> Result<()> {
     match command {
+        Command::IdentifiableAudit { roots, diagnostics, output } => identifiable::audit(&roots, &diagnostics, &output),
+        Command::IdentifiablePrepare { parent, output } => identifiable::prepare(&parent, &output),
         Command::PairedContinue { parent, output, frozen_executable, fixed_cover_exposure, selector_phrase_exposure, parity } => paired_continue(&parent, &output, &frozen_executable, fixed_cover_exposure || selector_phrase_exposure, selector_phrase_exposure, parity.as_deref()),
         Command::PairedPrepare { parent, source_data, output, parity, first_target_four, learning_rate_threefold, co_batch, pair_contrast, sidewise_contrast, repeat_pair_block, repeat_two_blocks, fit_seen_pairs, alternate_pair_values, cover_value_pairs, diverse_pair_values, ground_selected_record } => paired_prepare(&parent, &source_data, &output, parity.as_deref(), [first_target_four, learning_rate_threefold, co_batch, pair_contrast, sidewise_contrast, repeat_pair_block, repeat_two_blocks, fit_seen_pairs, alternate_pair_values, cover_value_pairs, diverse_pair_values, ground_selected_record]),
         Command::PairedReport { root } => paired_report(&root).map(|r| println!("PAIRED_REPORT {r}")),
@@ -1212,7 +1238,7 @@ fn plan_read_bound(root: &Path, source: &str, executable: &str) -> Result<Plan> 
         || p.sampler != "bucket-base-permutation-v1"
         || p.order.len() != 8
         || (p.fork.is_none() && p.training_values.is_some())
-        || p.train_order != if let Some(tape) = &p.paired { digest(&tape.rows)? } else { digest(&p.order)? }
+        || p.train_order != if let Some(policy) = &p.identifiable { digest(&policy.rows)? } else if let Some(tape) = &p.paired { digest(&tape.rows)? } else { digest(&p.order)? }
     {
         return Err(bad("source/binary/sampler plan mismatch"));
     }
@@ -1226,7 +1252,10 @@ fn plan_read_bound(root: &Path, source: &str, executable: &str) -> Result<Plan> 
             return Err(bad("frozen input changed"));
         }
     }
-    let expected = if let Some(f) = &p.fork {
+    let expected = if p.identifiable.is_some() {
+        identifiable::verify_plan(root, &p)?;
+        identifiable::evaluation()
+    } else if let Some(f) = &p.fork {
         let study: Study = read(&f.study.join("study.r3b"))?;
         if file_hash(&f.study.join("study.r3b"))? != f.study_hash
             || study.source != p.source
@@ -1420,6 +1449,7 @@ fn history(root: &Path, p: &Plan) -> Result<Vec<Segment>> {
 }
 fn run(root: &Path, uninterrupted_fixture: bool) -> Result<()> {
     let p = plan_read(root)?;
+    if p.identifiable.is_some() { identifiable::authorize_run(root, &p)?; }
     let previous = history(root, &p)?;
     if uninterrupted_fixture && !p.tiny {
         return Err(bad("fixture requires TINY"));
@@ -1427,7 +1457,9 @@ fn run(root: &Path, uninterrupted_fixture: bool) -> Result<()> {
     if previous.last().is_some_and(|s| !s.resume) {
         return Err(bad("closed run cannot resume"));
     }
-    let (elapsed, generations, teachers) = if let Some(f) = &p.fork {
+    let (elapsed, generations, teachers) = if p.identifiable.is_some() {
+        identifiable::usage(&p)?
+    } else if let Some(f) = &p.fork {
         if p.paired.is_some() { paired_usage(&f.study)? } else { study_usage(&f.study, true)? }
     } else {
         (
@@ -1452,6 +1484,8 @@ fn run(root: &Path, uninterrupted_fixture: bool) -> Result<()> {
     let output = root.join(format!("segment-{index:04}"));
     let stop_after = if previous.is_empty() && !uninterrupted_fixture {
         p.origin_step() + 1
+    } else if p.identifiable.is_some() && (step < 1024 || (step == 1024 && previous.last().is_some_and(|s|s.phase.as_deref()==Some("EvaluationPending")))) {
+        1024
     } else {
         p.config.max_steps
     };
@@ -1606,6 +1640,8 @@ fn run(root: &Path, uninterrupted_fixture: bool) -> Result<()> {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 struct PanelResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    paired_both: Option<[usize; 8]>,
     step: usize,
     panel: String,
     model: String,
@@ -1632,6 +1668,7 @@ fn score(rows: &[binary::Value], episodes: &[Episode], meta: &[Meta]) -> Result<
         return Err(bad("incomplete evaluation"));
     }
     let mut s = PanelResult {
+        paired_both: None,
         step: 0,
         panel: String::new(),
         model: String::new(),
@@ -1704,6 +1741,13 @@ fn score(rows: &[binary::Value], episodes: &[Episode], meta: &[Meta]) -> Result<
         b.1 += usize::from(exact);
     }
     s.base4 = bases.values().filter(|&&(n, k)| n == 4 && k == 4).count();
+    if meta.iter().all(|m| m.base.starts_with("joint-binding-balanced-v1/")) {
+        let mut both = [0;8];
+        for m in meta.iter().filter(|m|m.view==0) {
+            if bases.get(m.base.as_str()) == Some(&(2,2)) { both[m.bucket]+=1; }
+        }
+        s.paired_both = Some(both);
+    }
     Ok(s)
 }
 fn verify_generated(row: &binary::Value, tok: &ByteBpe) -> Result<()> {
@@ -2175,6 +2219,9 @@ pub(super) fn evaluate_boundary(
     }
     if p.paired.is_some() {
         return paired_evaluate(p, root, path, step, control);
+    }
+    if p.identifiable.is_some() {
+        return identifiable::evaluate(p, root, path, step, control);
     }
     let (_, train, dev) = p.training_corpus(&root.join("corpus.r3cor"))?;
     let transfer = verified_corpus(&root.join("transfer.r3cor"), &p.transfer)?.validation;
@@ -2669,12 +2716,12 @@ fn audit_panels_range(
             p.tiny,
         ),
     ] {
-        let (es, ms) = if sub {
-            subset(es, ms, p.evaluation.fixture_per_bucket.unwrap_or(8))
-        } else {
-            (es.clone(), ms.clone())
-        };
         for &step in steps.iter().filter(|&&step| step >= first && step <= last) {
+        let (es, ms) = if sub {
+                subset(es, ms, if p.identifiable.is_some() && step==0 {4}else{p.evaluation.fixture_per_bucket.unwrap_or(8)})
+            } else {
+                (es.clone(), ms.clone())
+            };
             let key = format!("eval-{step:04}-{name}");
             let s = audit_panel(root, p, step, name, &es, &ms, &tok)?;
             count += es.len();
@@ -6560,6 +6607,7 @@ mod tests {
         wrong.evidence.items[0].original_excerpt.push('!');
         assert!(resolve(&wrong).is_err());
         let p = Plan {
+            identifiable: None,
             schema: None,
             fork: None,
             paired: None,

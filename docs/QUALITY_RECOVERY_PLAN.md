@@ -1,5 +1,64 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: identifiable baseline, prereview required before learning
+
+R3-IDENTIFIABLE-BASELINE-1.0 authorizes a separate study. The GROUND cancellation
+below remains historical and immutable: step6634, resume=false, unused790 not
+reusable. No new auxiliary objective, P-weight continuation or backend change.
+
+R0 preserves native/checkpoint/provenance; R1 reads existing frozen corpora and
+executed draws without model calls; R2 prepares balanced native data and the
+local/global control. An independent review A must PASS the exact preparation
+before R3. The implementer must not manufacture that decision. R4 compares equal
+steps and independently re-scores raw; R5 records the bounded design decision.
+
+The new dataset has8192 train,512 primary,128 transfer examples, eight tasks and
+two views per family. C/D keep identical evidence and change the query; E swaps
+observed timestamps only. All names in a pair have equal digit length. Value
+types share one distribution; event ranks, physical order, entity/value lengths
+and numeric streams are separately assigned. Context keys are hash-partitioned
+before families across the three splits; both record sides use the same finite
+key pool, stratified below/above1000 and equally assigned to either query side.
+The declared marginal cross-tables must match exactly. This does not claim
+independence of every high-order combination. Existing train grammar only; full
+key/value bindings and scenes cannot cross splits. Native reload, independent
+request-only labels, full evidence and prompt+target/EOS<=512 are mandatory.
+
+LOCAL5 is Config::small; GLOBAL6 changes local_layers to0 and uses the existing
+experimental profile. Random seed17 tensors are initialized once and copied
+with from_tensors. Tokenizer mapping alone comes from P6144. Fresh Adam zero
+moments/clock, CPU/F32/Accelerate/thread1, batch8 (one case per task), adjacent
+complementary views. Response+EOS CE, first-target1. LR3e-4, warmup128, cosine4096
+to3e-5, beta0.9/0.999, epsilon1e-8, decay0.01, clip1. No SIDE/GROUND/SPAN.
+
+Each arm<=4096 updates/20M input tokens; pair<=8192/40M. Segment900s/cleanup120s,
+total active14400s; generation6400/teacher6400 including parity and later gates.
+Reserve64 generations for independent final verification. The first real update
+is saved and followed by a new process, within each arm's budget. No extra
+SMALL preflight training. An absent/failed review, UNKNOWN usage, cancellation,
+IO/numeric error or peer failure blocks learning. Input allowance includes
+uncommitted work. At1024 both arms stop for matched-budget signal inspection;
+partial evaluation cannot advance the optimizer beyond that checkpoint.
+
+Evaluation:0 train32+screen32;256 screen64;512 and1024 train64+primary512+transfer128;
+2048 screen64;4096 full panels again. Each arm2304 generations. Extend both after
+1024 only if one arm improves512→1024 primary by16, CDE both by8, or fixed train
+CE by10%. Otherwise INCONCLUSIVE_AT_REGISTERED_BUDGET; no automatic search.
+Attained primary>=256 followed by loss>=96 and CE growth>=20% is a registered
+severe regression guard, not a comparison with P's425 historical score.
+
+New gate: primary>=487/512, every task>=58/64, transfer>=116/128, errors0,
+CDE both>=87/96. Old primary/transfer gates and selector both>=173/192 remain
+separate requirements for promotion. Then independent final200>=190 and each
+category>=36/40, invalid accepted citations0; existing S5 memory/restart and S6
+grouped INT4/M4 gates. Neither code/data checks nor the new dataset replace them.
+If actual mask difference is zero, omit GLOBAL6 and do not transfer its budget.
+The current prepared data has a small nonzero mask treatment, not evidence of
+question information being inaccessible through the residual/global layer.
+
+No new training has run under this study as of the R2 preparation entry. Existing
+failed studies and the following historical entries remain unchanged.
+
 ## Paused by user: GROUND cancelled after490 updates
 
 The user requested stopping work and a detailed report. SIGINT reached the
