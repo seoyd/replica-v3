@@ -93,6 +93,18 @@ features, thread1, fresh output paths and prior confirmed resume checks below ap
 
 ## Explicit paired follow-through
 
+The separately registered fixed-COVER exposure study uses
+`fresh paired-continue --fixed-cover-exposure --parent CLOSED_COVER_ROOT
+--output NEW_ROOT --frozen-executable COVER_RETAINED_EXECUTABLE --parity NEW_PARITY_ROOT`.
+It accepts only an intact closed COVER1280 endpoint. Obtain fresh16 parity with
+the existing production-feature `stabilization_fixed_parent_parity` test, setting
+`R3_PARITY_PARENT` to that endpoint root and `R3_PARITY_OUTPUT` to a new directory.
+The new `NEW_ROOT/COVER` plan owns a copy of its native inputs and preserves the
+absolute3840-row tape. Its2560 additional update cap, inherited guard history and
+original retention baseline do not alter the old terminal or permit another fork
+from the new study. Run and read-only report use the existing `fresh run` and
+`fresh paired-report` commands. TINY's explicit eight-row cycle is a fixture only.
+
 The follow-up requested on2026-09-20 creates a new research root from the closed
 ADJACENT endpoint; it does not resume or edit the old study. With the current
 production release executable:

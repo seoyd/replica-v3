@@ -1,5 +1,42 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Fixed COVER exposure registration verified; learning not yet run
+
+Reuse `fresh paired-continue` for a separate schema16 research from the intact
+closed COVER7424. It copies the exact native parent/Adam and all nine owned input
+files, retains first_step6144 and all3840 tape rows, and executes only the remaining
+absolute1280..3840 cursor. New maximum2560 updates; old terminal/resume=false and
+failed studies remain unchanged. Explicit registration rejects other parent
+policies and another continuation from itself. Shared parent16 verifier, prior
+screen streak and full-point progress bind entry; originalP retention baseline
+is copied unchanged. No math, corpus, tokenizer, framework, storage or C++ change.
+
+Final-source direct tests: two TINY native continuous/split regressions PASS36.33s;
+VALUE4 versus1+3, COVER8 versus1+7, then separate COVER continuation8 versus1+7.
+Weights/Adam/clock/cursor/tokens match, default objective and unregistered parent
+entries reject; old files and pure report inputs remain byte-identical. Actual
+TINY48 optimizer/312 generation/312 teacher including54 setup observations,
+scalar0. Full3840-row writer/reader/bounds/remaining-exposure/plateau test1 PASS1.84s,
+optimizer/generation/teacher0. Initial shortened test filter selected0 tests;
+retained as NOT_RUN, followed by the exact full name, not counted as an earlier PASS.
+Production parent16 test1 PASS13.42s,16 matching outputs/162 tokens, teacher0,
+optimizer0. Locked/offline Rust1.98.1 production build PASS19.08s, Accelerate/F32/thread1.
+
+Actual registration and pure input audit exit0: all9 native files identical,
+initial.r3m exactly the old durable final, mathematical config unchanged;
+planned20 more exposures for each384 selector sides,30 ancestral. Planned
+original/P phrase draws C1520/1040,D1440/1120,E1280/1280; no false phrase-balance claim.
+Prior progress retains(425,79,0),(380,67,0),(392,68,3), not a reset plateau history.
+Policy1c0d5c62eacb38f3a55efd02ed76d25e734570d94a73d80f780fe373f694a46d;
+compiled sourcefcba7275128f528b52372cef392e7d238347dac1c1f8c173640e4701114e691a;
+executable55edf16fe2c9de460d75c6b109bef373b980efec6f0434f2fd2b05f9e8388907;
+study3d7415dd8ba1e228dd1816d7f32c85b3e0ac0f7cf9eb33e84753c9cb37f70a7c.
+Parent Adam90c945663b2905c62af87a46a7bfcaf9aca0971480986cc1cf9b3d07c877c626.
+Evidence `artifacts/cover-exposure-20260920-evidence/`; new native study
+`artifacts/cover-exposure-20260920/`. No new tracked file. Implementation/registration
+PASS; new SMALL optimizer0 at this stage. Learning and all quality gates remain
+unverified. Final200 NOT_CREATED/NOT_OPENED; Goal1 remains unmet.
+
 ## 2026-09-20 COVER1280 closed: limited selection gain, trained scenes underfit
 
 EXECUTED_THIS_RUN with frozen source `c0b23edf48853743d376eefdb91d46798351acde`,

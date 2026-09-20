@@ -19,6 +19,9 @@ pub enum Command {
         #[arg(long)] parent: PathBuf,
         #[arg(long)] output: PathBuf,
         #[arg(long)] frozen_executable: PathBuf,
+        /// Explicit exposure-only research from closed COVER1280; no old resume.
+        #[arg(long)] fixed_cover_exposure: bool,
+        #[arg(long, requires = "fixed_cover_exposure")] parity: Option<PathBuf>,
     },
     /// Register the bounded pair-spacing comparison from preserved native train pools.
     PairedPrepare {
@@ -1085,7 +1088,7 @@ fn source_digest() -> Result<String> {
 }
 pub fn execute(command: Command) -> Result<()> {
     match command {
-        Command::PairedContinue { parent, output, frozen_executable } => paired_continue(&parent, &output, &frozen_executable),
+        Command::PairedContinue { parent, output, frozen_executable, fixed_cover_exposure, parity } => paired_continue(&parent, &output, &frozen_executable, fixed_cover_exposure, parity.as_deref()),
         Command::PairedPrepare { parent, source_data, output, parity, first_target_four, learning_rate_threefold, co_batch, pair_contrast, sidewise_contrast, repeat_pair_block, repeat_two_blocks, fit_seen_pairs, alternate_pair_values, cover_value_pairs } => paired_prepare(&parent, &source_data, &output, parity.as_deref(), [first_target_four, learning_rate_threefold, co_batch, pair_contrast, sidewise_contrast, repeat_pair_block, repeat_two_blocks, fit_seen_pairs, alternate_pair_values, cover_value_pairs]),
         Command::PairedReport { root } => paired_report(&root).map(|r| println!("PAIRED_REPORT {r}")),
         Command::StudyPrepare { parent, output, selector } => study_prepare(&parent, &output, selector),
@@ -1200,6 +1203,7 @@ fn plan_read_bound(root: &Path, source: &str, executable: &str) -> Result<Plan> 
             || ([7,8,9,10].contains(&study.schema) && study.updates!=if p.tiny {2}else{1280})
             || ([11,13,14].contains(&study.schema) && study.updates!=if p.tiny {4}else{1280})
             || ([12,15].contains(&study.schema) && study.updates!=if p.tiny {8}else{1280})
+            || (study.schema==16 && study.updates!=if p.tiny {8}else{2560})
             || p.corpus != f.original_corpus
             || p.tokenizer != study.tokenizer
         {
@@ -1217,7 +1221,7 @@ fn plan_read_bound(root: &Path, source: &str, executable: &str) -> Result<Plan> 
         }
         if let Some(tape) = &p.paired {
             let n = p.order.iter().map(Vec::len).sum::<usize>();
-            if ![4,5,6,7,8,9,10,11,12,13,14,15].contains(&study.schema) || !["SPACED", "ADJACENT", "COBATCH", "CONTRAST", "SIDE", "REPLAY", "WIDE", "FIT","VALUE","COVER"].contains(&tape.mode.as_str())
+            if ![4,5,6,7,8,9,10,11,12,13,14,15,16].contains(&study.schema) || !["SPACED", "ADJACENT", "COBATCH", "CONTRAST", "SIDE", "REPLAY", "WIDE", "FIT","VALUE","COVER"].contains(&tape.mode.as_str())
                 || (study.schema==8) != (tape.mode=="COBATCH")
                 || (study.schema==9) != (tape.mode=="CONTRAST")
                 || (study.schema==10) != (tape.mode=="SIDE")
@@ -1225,17 +1229,17 @@ fn plan_read_bound(root: &Path, source: &str, executable: &str) -> Result<Plan> 
                 || (study.schema==12) != (tape.mode=="WIDE")
                 || (study.schema==13) != (tape.mode=="FIT")
                 || (study.schema==14) != (tape.mode=="VALUE")
-                || (study.schema==15) != (tape.mode=="COVER")
-                || tape.mode != f.arm || (study.schema!=5 && tape.first_step != f.origin_step)
+                || ([15,16].contains(&study.schema)) != (tape.mode=="COVER")
+                || tape.mode != f.arm || (![5,16].contains(&study.schema) && tape.first_step != f.origin_step)
                 || tape.block != if p.tiny { 2 } else { 256 }
-                || tape.rows.len() != if p.tiny { if [12,15].contains(&study.schema) {8}else if [11,13,14].contains(&study.schema) {4}else{2} } else { 3840 }
+                || tape.rows.len() != if p.tiny { if [12,15,16].contains(&study.schema) {8}else if [11,13,14].contains(&study.schema) {4}else{2} } else { 3840 }
                 || f.origin_step + study.updates > tape.first_step + tape.rows.len()
                 || tape.samples != file_hash(&root.join("paired-samples.r3rows"))?
-                || tape.rows.iter().any(|r| r.iter().enumerate().any(|(b, i)| *i >= 4*n || (![8,9,10,11,12,13,14,15].contains(&study.schema) && !p.order[b].contains(&(i%n)))))
+                || tape.rows.iter().any(|r| r.iter().enumerate().any(|(b, i)| *i >= 4*n || (![8,9,10,11,12,13,14,15,16].contains(&study.schema) && !p.order[b].contains(&(i%n)))))
             { return Err(bad("paired policy/tape boundary")); }
             let parent: Plan = read(&study.parent.join("plan.r3b"))?;
             let (tm, _, _) = verified_metadata(root, &p)?;
-            if study.schema==5 {
+            if [5,16].contains(&study.schema) {
                 let mut expected=parent.paired.clone().ok_or_else(||bad("continuation parent tape"))?;
                 if p.tiny {expected.first_step=f.origin_step;}
                 if expected!=*tape || f.origin_step!=parent.config.max_steps
@@ -1244,7 +1248,7 @@ fn plan_read_bound(root: &Path, source: &str, executable: &str) -> Result<Plan> 
                 }
                 plan_read_bound(&study.parent, &parent.source, &parent.binary)?;
             } else { verify_pair_tape(&parent, &tm, tape)?; }
-        } else if [4,5,6,7,8,9,10,11,12,13,14,15].contains(&study.schema) { return Err(bad("paired study missing finite tape")); }
+        } else if [4,5,6,7,8,9,10,11,12,13,14,15,16].contains(&study.schema) { return Err(bad("paired study missing finite tape")); }
         for (name, h) in [
             ("selectors.r3cor", &f.selector),
             ("selector-metadata.r3b", &f.selector_metadata),
@@ -2885,6 +2889,7 @@ fn paired_evaluation(origin: usize, updates: usize, tiny: bool) -> EvaluationPol
         else if updates == 256 { (vec![32, 64, 128], vec![256]) }
         else if updates == 1280 { (vec![32,64,128,768], vec![256,1280]) }
         else if updates == 3840 { (vec![32,64,128,768,1792,2816,3328], vec![256,1280,2304,3840]) }
+        else if updates == 2560 { (vec![32,64,128,512,1536], vec![1024,2048,2560]) }
         else { (vec![512, 1536, 2560, 3072], vec![1024, 2048, 3584]) };
     let full: Vec<_> = full.into_iter().map(|n| origin+n).collect();
     EvaluationPolicy {
@@ -2972,7 +2977,13 @@ fn paired_decision(p: &Plan, root: &Path, step: usize) -> Result<binary::Value> 
     if screen.model != flip.model { return Err(bad("paired model mismatch")); }
     let parent: binary::Value = read(&f.study.join("parent-audit.r3b"))?;
     let baseline: PanelResult = binary::from_value(parent["baseline_screen"].clone())?;
-    let mut streak = 0; let mut stop = None;
+    let study:Study=read(&f.study.join("study.r3b"))?;
+    let prior = if study.schema==16 {Some(read::<binary::Value>(&f.study.join("research-authorization.r3b"))?)} else {None};
+    let mut streak = match &prior {
+        Some(a) => a["prior_decision"]["guard_streak"].as_u64().ok_or_else(||bad("prior guard UNKNOWN"))?,
+        None => 0,
+    };
+    let mut stop = None;
     let mut steps = p.evaluation.screen_steps.clone(); steps.extend(&p.evaluation.primary_steps); steps.sort(); steps.dedup();
     for n in steps.into_iter().filter(|&n| n <= step) {
         let r = if n == step { screen.clone() } else { paired_screen(p, root, n)? };
@@ -3003,8 +3014,8 @@ fn paired_decision(p: &Plan, root: &Path, step: usize) -> Result<binary::Value> 
         primary = Some(a.exact); transfer = Some(b.exact);
         if joint { stop = Some("DEVELOPMENT_JOINT_PASS_FINAL_NOT_RUN"); }
         let study:Study=read(&f.study.join("study.r3b"))?;
-        if [5,6,7,8,9,10,11,12,13,14,15].contains(&study.schema) && !joint && stop.is_none() && !p.tiny {
-            let prior=if study.schema==5 {
+        if [5,6,7,8,9,10,11,12,13,14,15,16].contains(&study.schema) && !joint && stop.is_none() && !p.tiny {
+            let prior=if [5,16].contains(&study.schema) {
                 let authorization:binary::Value=read(&f.study.join("research-authorization.r3b"))?;
                 authorization["prior_decision"].clone()
             } else {
@@ -3014,6 +3025,11 @@ fn paired_decision(p: &Plan, root: &Path, step: usize) -> Result<binary::Value> 
             let mut values=vec![(prior["primary"].as_u64().ok_or_else(||bad("prior primary missing"))?,
                 prior["transfer"].as_u64().ok_or_else(||bad("prior transfer missing"))?,
                 prior["pairs"]["pairs"][0].as_u64().ok_or_else(||bad("prior both missing"))?)];
+            if study.schema==16 {
+                let authorization:binary::Value=read(&f.study.join("research-authorization.r3b"))?;
+                values=binary::from_value(authorization["prior_progress"].clone())?;
+                if values.is_empty() {return Err(bad("prior progress UNKNOWN"));}
+            }
             for n in p.evaluation.primary_steps.iter().copied().filter(|&n|n<step) {
                 let r=paired_decision(p,root,n)?;
                 let saved:binary::Value=read_confirmed(&root.join(format!("paired-{n:04}.r3b")))?;
@@ -3248,22 +3264,7 @@ fn paired_prepare(parent: &Path, source_data: &Path, output: &Path, parity: Opti
             return Err(bad("registered full study token budget insufficient"));
         }
     }
-    let mut parity_receipt=binary::Value::Null;
-    if !pp.tiny {
-        let parity=parity.ok_or_else(||bad("production P16 parity required"))?;
-        let proof: binary::Value=read_confirmed(&parity.join("result.r3b"))?;
-        let selection: binary::Value=read(&parity.join("selection.r3b"))?;
-        let rows=binary::read_value_records(&parity.join("parity.r3rows"))?;
-        if proof["matched"]!=16 || proof["originals_unchanged"]!=true || !proof["error"].is_null()
-            || proof["control"]["terminal_reason"]!="COMPLETED" || proof["control"]["generation_calls"]!=16
-            || proof["control"]["teacher_calls"]!=0 || selection["source"]!=source_digest()?
-            || selection["policy"]!=digest(&pp)? || proof["selection"]!=file_hash(&parity.join("selection.r3b"))?
-            || proof["raw"]!=file_hash(&parity.join("parity.r3rows"))? || rows.len()!=17
-            || rows[0]["physical"]!=file_hash(&cp)? {
-            return Err(bad("paired P16 binding/parity incomplete"));
-        }
-        parity_receipt=proof;
-    }
+    let parity_receipt=verified_parent_parity(&pp,&cp,parity)?;
     let (_,mut panels)=audit_panels_range(&parent,&pp,end.step,end.step)?;
     let raw=binary::read_value_records(&parent.join(format!("eval-{:04}-dev512.r3rows",end.step)))?;
     let (screen,ms)=subset(&dev,&dm,if pp.tiny {1}else{8});
@@ -3350,13 +3351,30 @@ fn paired_prepare(parent: &Path, source_data: &Path, output: &Path, parity: Opti
         "C":file_hash(&output.join(&study.tie_break[0]).join("plan.r3b"))?,"P":if single {None}else{Some(file_hash(&output.join("ADJACENT/plan.r3b"))?)},"elapsed_seconds":started.elapsed().as_secs_f64()}))?;
     Ok(())
 }
-fn paired_continue(parent:&Path, output:&Path, executable:&Path)->Result<()> {
+fn verified_parent_parity(p:&Plan, checkpoint:&Path, parity:Option<&Path>)->Result<binary::Value> {
+    if p.tiny { return Ok(binary::Value::Null); }
+    let parity=parity.ok_or_else(||bad("production parent16 parity required"))?;
+    let proof: binary::Value=read_confirmed(&parity.join("result.r3b"))?;
+    let selection: binary::Value=read(&parity.join("selection.r3b"))?;
+    let rows=binary::read_value_records(&parity.join("parity.r3rows"))?;
+    if proof["matched"]!=16 || proof["originals_unchanged"]!=true || !proof["error"].is_null()
+        || proof["control"]["terminal_reason"]!="COMPLETED" || proof["control"]["generation_calls"]!=16
+        || proof["control"]["teacher_calls"]!=0 || selection["source"]!=source_digest()?
+        || selection["policy"]!=digest(p)? || proof["selection"]!=file_hash(&parity.join("selection.r3b"))?
+        || proof["raw"]!=file_hash(&parity.join("parity.r3rows"))? || rows.len()!=17
+        || rows[0]["physical"]!=file_hash(checkpoint)? {
+        return Err(bad("paired parent16 binding/parity incomplete"));
+    }
+    Ok(proof)
+}
+fn paired_continue(parent:&Path, output:&Path, executable:&Path, cover:bool, parity:Option<&Path>)->Result<()> {
     let started=Instant::now();
     let parent=parent.canonicalize()?;
     let pp:Plan=read(&parent.join("plan.r3b"))?;
     let pf=pp.fork.as_ref().ok_or_else(||bad("paired continuation parent fork"))?;
     let old=study_read_bound(&pf.study,Some(executable))?;
-    if old.schema!=4 || pf.arm!="ADJACENT" {return Err(bad("only explicit ADJACENT follow-through is registered"));}
+    let (schema,arm)=if cover {(16,"COVER")}else{(5,"ADJACENT")};
+    if old.schema!=if cover {15}else{4} || pf.arm!=arm {return Err(bad("unregistered continuation parent"));}
     plan_read_bound(&parent,&old.source,&old.binary)?;
     let h=history(&parent,&pp)?;
     let end=h.last().ok_or_else(||bad("continuation parent missing"))?;
@@ -3374,21 +3392,37 @@ fn paired_continue(parent:&Path, output:&Path, executable:&Path)->Result<()> {
         return Err(bad("continuation native policy mismatch"));
     }
     let tape=pp.paired.as_ref().unwrap();
-    let updates=if pp.tiny {2}else{tape.first_step+tape.rows.len()-state.step};
-    if updates!=if pp.tiny {2}else{3584} {return Err(bad("continuation fixed remaining tape length"));}
+    let updates=if pp.tiny {if cover {8}else{2}}else{(tape.first_step+tape.rows.len()).checked_sub(state.step).ok_or_else(||bad("continuation tape exhausted"))?};
+    if updates!=if pp.tiny {if cover {8}else{2}}else if cover {2560}else{3584} {return Err(bad("continuation fixed remaining tape length"));}
+    let parity_receipt=if cover {verified_parent_parity(&pp,&cp,parity)?}else{binary::Value::Null};
+    let mut prior_progress=vec![];
+    if cover && !pp.tiny {
+        let baseline:binary::Value=read(&pf.study.join("parent-audit.r3b"))?;
+        prior_progress.push((baseline["panels"][format!("eval-{:04}-dev512",old.parent_step).as_str()]["exact"].as_u64().ok_or_else(||bad("prior primary UNKNOWN"))?,
+            baseline["panels"][format!("eval-{:04}-transfer128",old.parent_step).as_str()]["exact"].as_u64().ok_or_else(||bad("prior transfer UNKNOWN"))?,
+            baseline["pairs"]["pairs"][0].as_u64().ok_or_else(||bad("prior pairs UNKNOWN"))?));
+        for step in &pp.evaluation.primary_steps {
+            let d=paired_decision(&pp,&parent,*step)?;
+            let saved:binary::Value=read_confirmed(&parent.join(format!("paired-{step:04}.r3b")))?;
+            if d!=saved || !d["stop"].is_null() {return Err(bad("failed prior decision cannot continue"));}
+            prior_progress.push((d["primary"].as_u64().ok_or_else(||bad("prior primary UNKNOWN"))?,
+                d["transfer"].as_u64().ok_or_else(||bad("prior transfer UNKNOWN"))?,
+                d["pairs"]["pairs"][0].as_u64().ok_or_else(||bad("prior pairs UNKNOWN"))?));
+        }
+    }
     std::fs::create_dir(output)?;let output=output.canonicalize()?;
     for name in ["diagnostic.r3b","parent-audit.r3b"] {
         neural::write_new(&output.join(name),&std::fs::read(pf.study.join(name))?)?;
     }
-    write(&output.join("research-authorization.r3b"),&binary::record!({"scope":"USER_REQUESTED_BOUNDED_FOLLOW_THROUGH_20260920","prior_study":file_hash(&pf.study.join("study.r3b"))?,"prior_terminal":file_hash(&parent.join(format!("segment-{:04}-finished.r3b",h.len()-1)))?,"prior_decision":decision,"prior_candidate_promoted":false,"new_optimizer_limit":updates,"hypothesis":"additional fixed-pool exposure; all mathematical and data policies unchanged","generation_limit":12000,"teacher_limit":10000,"active_seconds":21600,"input_limit":12000000,"target_limit":1000000}))?;
-    let study=Study {schema:5,source:source_digest()?,binary:file_hash(&std::env::current_exe()?)?,parent:parent.clone(),
+    write(&output.join("research-authorization.r3b"),&binary::record!({"scope":if cover {"USER_REQUESTED_FIXED_COVER_EXPOSURE_20260920"}else{"USER_REQUESTED_BOUNDED_FOLLOW_THROUGH_20260920"},"prior_study":file_hash(&pf.study.join("study.r3b"))?,"prior_terminal":file_hash(&parent.join(format!("segment-{:04}-finished.r3b",h.len()-1)))?,"prior_decision":decision,"prior_progress":prior_progress,"entry_parity":parity_receipt,"prior_candidate_promoted":false,"new_optimizer_limit":updates,"hypothesis":"additional fixed-pool exposure; all mathematical and data policies unchanged","generation_limit":12000,"teacher_limit":10000,"active_seconds":21600,"input_limit":12000000,"target_limit":1000000}))?;
+    let study=Study {schema,source:source_digest()?,binary:file_hash(&std::env::current_exe()?)?,parent:parent.clone(),
         parent_plan:file_hash(&parent.join("plan.r3b"))?,parent_checkpoint:cp.clone(),parent_file:file_hash(&cp)?,
         parent_model:l.model.weight_hash()?,parent_adam:optimizer_hash(&l.optimizer)?,parent_state:digest(state)?,
         parent_step:state.step,tokenizer:pp.tokenizer.clone(),updates,tiny:pp.tiny,
         inventory:vec![("research-authorization.r3b".into(),file_hash(&output.join("research-authorization.r3b"))?,std::fs::metadata(output.join("research-authorization.r3b"))?.len())],
-        diagnostic_hash:file_hash(&output.join("diagnostic.r3b"))?,parent_audit_hash:file_hash(&output.join("parent-audit.r3b"))?,tie_break:vec!["ADJACENT".into()]};
+        diagnostic_hash:file_hash(&output.join("diagnostic.r3b"))?,parent_audit_hash:file_hash(&output.join("parent-audit.r3b"))?,tie_break:vec![arm.into()]};
     write(&output.join("study.r3b"),&study)?;
-    let root=output.join("ADJACENT");std::fs::create_dir(&root)?;
+    let root=output.join(arm);std::fs::create_dir(&root)?;
     for name in ["corpus.r3cor","transfer.r3cor","metadata.r3b","tokenizer.r3b","variants.r3cor","question-variants.r3b","selectors.r3cor","selector-metadata.r3b","paired-samples.r3rows"] {
         neural::write_new(&root.join(name),&std::fs::read(parent.join(name))?)?;
     }
@@ -3425,11 +3459,11 @@ fn paired_work(root:&Path)->Result<(u64,u64,u64)> {
             used.2+=r["optimizer_calls"].as_u64().ok_or_else(||bad("paired updates UNKNOWN"))?;
         }
     }
-    if used.0>12_000_000||used.1>1_000_000||used.2>if [5,6,7,8,9,10,11,12,13,14,15].contains(&study.schema) {study.updates as u64}else{4096}{return Err(bad("paired global learning budget"));}
+    if used.0>12_000_000||used.1>1_000_000||used.2>if [5,6,7,8,9,10,11,12,13,14,15,16].contains(&study.schema) {study.updates as u64}else{4096}{return Err(bad("paired global learning budget"));}
     Ok(used)
 }
 fn paired_usage(root:&Path)->Result<(f64,usize,usize)> {
-    let s=study_read(root)?;if ![4,5,6,7,8,9,10,11,12,13,14,15].contains(&s.schema){return Err(bad("paired study schema"));}
+    let s=study_read(root)?;if ![4,5,6,7,8,9,10,11,12,13,14,15,16].contains(&s.schema){return Err(bad("paired study schema"));}
     let (mut elapsed,mut generation,teacher)=study_usage_bound(root,false,&s)?;
     for arm in &s.tie_break {
         let a=root.join(arm);let p=plan_read(&a)?;
@@ -3445,6 +3479,11 @@ fn paired_usage(root:&Path)->Result<(f64,usize,usize)> {
     if !s.tiny && [4,6,7,8,9,10,11,12,13,14,15].contains(&s.schema) {
         generation+=16;
         elapsed+=baseline["parity"]["control"]["elapsed_seconds"].as_f64().ok_or_else(||bad("parity time UNKNOWN"))?;
+    }
+    if !s.tiny && s.schema==16 {
+        let authorization:binary::Value=read(&root.join("research-authorization.r3b"))?;
+        generation+=16;
+        elapsed+=authorization["entry_parity"]["control"]["elapsed_seconds"].as_f64().ok_or_else(||bad("entry parity time UNKNOWN"))?;
     }
     paired_work(root)?;
     Ok((elapsed,generation,teacher))
@@ -3496,6 +3535,11 @@ fn paired_report(root:&Path)->Result<binary::Value> {
         }
         both_gain_loss=Some(binary::record!({"gain":outcomes[0].iter().zip(&outcomes[1]).filter(|(a,b)| !**a && **b).count(),
             "loss":outcomes[0].iter().zip(&outcomes[1]).filter(|(a,b)| **a && !**b).count()}));
+    }
+    if s.schema==16 {
+        return Ok(binary::record!({"source":s.source,"binary":s.binary,"results":results,"same_budget":endpoints,
+            "effect":"FIXED_COVER_EXPOSURE_NOT_MATCHED_COMPUTE_COMPARISON","usage":usage,"training_usage":paired_work(root)?,
+            "result":"FIXED_COVER_EXPOSURE_CLOSED_CHECK_JOINT_RESULT","GOAL1_READY":false}));
     }
     Ok(binary::record!({"source":s.source,"binary":s.binary,"results":results,"same_budget":endpoints,
         "paired_gain_loss":comparisons,"both_gain_loss":both_gain_loss,"effect":if s.schema==15 {"VALUE_COVERAGE_RETAINED_VALUE_CONTROL_SEPARATE"}else if s.schema==14 {"VALUE_EXPOSURE_RETAINED_FIT_CONTROL_SEPARATE"}else if s.schema==13 {"SEEN_PAIR_FITTING_DIAGNOSTIC_NOT_HELDOUT"}else if s.schema==12 {"RECURRENCE_COVERAGE_RETAINED_REPLAY_CONTROL_SEPARATE"}else if s.schema==11 {"PAIR_RECURRENCE_RETAINED_SIDE_CONTROL_SEPARATE"}else if s.schema==10 {"SIDE_MARGIN_RETAINED_SUM_CONTROL_SEPARATE"}else if s.schema==9 {"PAIR_CONTRAST_RETAINED_COBATCH_CONTROL_SEPARATE"}else if s.schema==8 {"COBATCH_RETAINED_CONTROL_COMPARISON_SEPARATE"}else if s.schema==7 {"LR9E5_RETAINED_CONTROL_COMPARISON_SEPARATE"}else if s.schema==6 {"FIRST_TARGET4_RETAINED_CONTROL_COMPARISON_SEPARATE"}else if s.schema==5 {"SINGLE_ARM_EXPOSURE_NOT_COMPARISON"}else if endpoints {"EQUAL_BUDGET"}else if endpoint_steps[0]==endpoint_steps[1]{"EARLY_STOPS_NO_256_COMPARISON"}else{"UNEQUAL_BUDGET_NOT_ESTABLISHED"},
@@ -3987,7 +4031,7 @@ fn study_read_bound(root: &Path, frozen_executable: Option<&Path>) -> Result<Stu
         12 => vec!["WIDE"],
         13 => vec!["FIT"],
         14 => vec!["VALUE"],
-        15 => vec!["COVER"],
+        15 | 16 => vec!["COVER"],
         _ => return Err(bad("study schema")),
     };
     if s.tie_break != names {
@@ -4002,7 +4046,7 @@ fn study_read_bound(root: &Path, frozen_executable: Option<&Path>) -> Result<Stu
         return Err(bad("study registration incomplete/changed"));
     }
     let executable = frozen_executable.map_or_else(std::env::current_exe, |p| Ok(p.to_path_buf()))?;
-    if ![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,14,15].contains(&s.schema)
+    if ![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,14,15,16].contains(&s.schema)
         || (frozen_executable.is_none() && s.source != source_digest()?)
         || s.binary != file_hash(&executable)?
         || s.parent_plan != file_hash(&s.parent.join("plan.r3b"))?
@@ -4012,7 +4056,7 @@ fn study_read_bound(root: &Path, frozen_executable: Option<&Path>) -> Result<Stu
     {
         return Err(bad("frozen study binding"));
     }
-    if [5,6,7,8,9,10,11,12,13,14,15].contains(&s.schema)
+    if [5,6,7,8,9,10,11,12,13,14,15,16].contains(&s.schema)
         && (s.inventory.len()!=1 || s.inventory[0].0!=Path::new("research-authorization.r3b")
             || s.inventory[0].1!=file_hash(&root.join("research-authorization.r3b"))?
             || s.inventory[0].2!=std::fs::metadata(root.join("research-authorization.r3b"))?.len()) {
@@ -4919,6 +4963,20 @@ mod tests {
             assert_eq!(seen.iter().map(|(i,_)|&tm[*i%n].base).collect::<BTreeSet<_>>().len(),32);
         }
         for step in [0,15,16,63,64,127,128,255,256,1279,3839] {assert_eq!(restored.at(6144+step).unwrap(),cover[step]);}
+        // Production continuation retains the original absolute tape, never rewinds it.
+        let mut exposure=production.clone();exposure.paired=Some(restored.clone());
+        let mut extra=vec![0usize;4*n];
+        for step in 7424..9984 {
+            let row=exposure.training_draw(step);assert_eq!(row,cover[step-6144]);
+            for i in row {extra[i]+=1;}
+        }
+        for bucket in 2..=4 {
+            let seen:Vec<_>=extra.iter().enumerate().filter(|(i,c)|tm[*i%n].bucket==bucket&&**c>0).collect();
+            assert_eq!(seen.len(),128);assert!(seen.iter().all(|(_,c)|**c==20));
+        }
+        assert_eq!(paired_evaluation(7424,2560,false).primary_steps,vec![8448,9472,9984]);
+        assert!(!no_further_progress(&[(425,79,0),(380,67,0),(392,68,3),(400,70,4)]));
+        assert!(no_further_progress(&[(425,79,0),(380,67,0),(392,68,3),(392,68,3),(392,68,3)]));
         let mut wrong=restored.clone();wrong.rows=values.clone();assert!(verify_pair_tape(&cover_parent,&tm,&wrong).is_err());
         wrong=restored.clone();wrong.rows[64]=wrong.rows[0];assert!(verify_pair_tape(&cover_parent,&tm,&wrong).is_err());
         let mut duplicate = tm.clone(); duplicate.push(tm[2*1024].clone());

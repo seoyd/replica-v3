@@ -3047,6 +3047,44 @@ fn value_exposure_native_resume(coverage: bool) {
     if coverage {
         call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),
             "--output",bad.to_str().unwrap(),flag,"--alternate-pair-values"],false);assert!(!bad.exists());
+        fn hashes(root:&std::path::Path)->std::collections::BTreeMap<std::path::PathBuf,String> {
+            let mut out=std::collections::BTreeMap::new();
+            for e in std::fs::read_dir(root).unwrap() {
+                let p=e.unwrap().path();if p.is_dir(){out.extend(hashes(&p));}
+                else{out.insert(p.clone(),replica_v3::neural::hash(&std::fs::read(p).unwrap()));}
+            }out
+        }
+        let follow=[d.path().join("exposure-continuous"),d.path().join("exposure-split")];
+        for (i,root) in follow.iter().enumerate() {
+            let parent=roots[i].join(mode);let before=hashes(&parent);
+            call(&["fresh","paired-continue","--parent",parent.to_str().unwrap(),"--output",bad.to_str().unwrap(),
+                "--frozen-executable",env!("CARGO_BIN_EXE_replica-train")],false);assert!(!bad.exists());
+            call(&["fresh","paired-continue","--parent",parent.to_str().unwrap(),"--output",root.to_str().unwrap(),
+                "--frozen-executable",env!("CARGO_BIN_EXE_replica-train"),"--fixed-cover-exposure"],true);
+            assert_eq!(before,hashes(&parent));
+            let arm=root.join(mode);
+            let old:binary::Value=binary::from_slice(&std::fs::read(parent.join("plan.r3b")).unwrap()).unwrap();
+            let new:binary::Value=binary::from_slice(&std::fs::read(arm.join("plan.r3b")).unwrap()).unwrap();
+            assert_eq!(old["paired"]["rows"],new["paired"]["rows"]);
+            assert_eq!(new["paired"]["first_step"],12); // Explicit TINY cycle, not the SMALL cursor.
+            for key in ["tokenizer","corpus","transfer","order","metadata"] {assert_eq!(old[key],new[key]);}
+            if i==0 {call(&["fresh","fixture-full","--root",arm.to_str().unwrap()],true);}
+            else {for _ in 0..2 {call(&["fresh","run","--root",arm.to_str().unwrap()],true);}}
+            let finished=hashes(root);
+            call(&["fresh","paired-report","--root",root.to_str().unwrap()],true);assert_eq!(finished,hashes(root));
+            call(&["fresh","paired-continue","--parent",arm.to_str().unwrap(),"--output",bad.to_str().unwrap(),
+                "--frozen-executable",env!("CARGO_BIN_EXE_replica-train"),"--fixed-cover-exposure"],false);assert!(!bad.exists());
+            assert_eq!(before,hashes(&parent));
+        }
+        let a=checkpoint::load(&follow[0].join("COVER/segment-0000/final"),Device::Cpu,true).unwrap();
+        let b=checkpoint::load(&follow[1].join("COVER/segment-0001/final"),Device::Cpu,true).unwrap();
+        assert_eq!(a.model.weight_hash().unwrap(),b.model.weight_hash().unwrap());
+        for (k,t) in &a.optimizer {assert_eq!(t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),b.optimizer[k].flatten_all().unwrap().to_vec1::<f32>().unwrap());}
+        let x=a.manifest.training.as_ref().unwrap();let y=b.manifest.training.as_ref().unwrap();
+        assert_eq!((x.step,x.sampler_state,x.consumed_tokens,x.target_tokens),(y.step,y.sampler_state,y.consumed_tokens,y.target_tokens));
+        assert_eq!(x.step,20);assert_eq!(x.resume_binding.as_ref().unwrap().family,4);
+        assert_eq!(x.config.lr.to_bits(),3e-5f64.to_bits());assert_eq!(x.config.first_target_weight,1.);
+        assert!(checkpoint::ResumeBinding::require_default(x,&a.tokenizer).is_err());
     }
     let mut used=[0u64;3];
     fn count(root:&std::path::Path,used:&mut [u64;3]) {

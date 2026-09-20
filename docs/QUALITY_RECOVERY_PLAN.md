@@ -1,5 +1,45 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: fixed COVER exposure, separate bounded research
+
+Under the user's continuing one-variable authorization, test exposure duration
+from the intact closed COVER7424 endpoint. Parent physical SHA256
+9845a43db02f197fca6026db058c503c1fa8856ffd673267904103c03b2e98e0,
+modeld8b2472422605e9305f2a25d8c39cbac555161d65d1303ca4b149c392dc60403.
+This is not G3 admission or adoption of its failed development scores. Preserve
+its BUDGET_REACHED/Finished/resume=false and every old study. The new schema16
+registration binds that parent/Adam/terminal, the actual preceding decisions,
+fresh16 parity and unchanged originalP6144 retention baseline. It must reject
+failed, incomplete, wrong-policy parents and a second continuation of itself.
+
+Only duration changes: at most2560 additional SMALL updates,7424→9984, taking
+the original COVER tape cursor1280→3840. Keep all3840 rows and first_step6144;
+the new run does not rewind the tape. Same32 train bases per C/D/E, both owned
+value views,6 selector slots every second update, original anchor rows, original
+P phrase policy, LR3e-5, first-target1 CE, SIDE family4 auxiliary0.1, weights,
+Adam, tokenizer, F32/backend and model. Each of384 selector sides gains20
+exposures, for30 total. No new corpus or heldout training, C++ calls or framework.
+Duration changes cumulative anchor exposure too; it is not a matched-compute
+comparison. Narrow VALUE40 exposures remain a separate historical observation.
+
+Limits:2560 optimizer,12M actual input/1M target including discarded work,
+12000 generation/10000 own-model teacher,21600 active seconds, command900s and
+cleanup120s. Direct TINY cap48 optimizer/384 generation/384 teacher, scalar0;
+its explicitly shortened eight-row continuation shifts first_step at a new
+eight-update cycle, while a pure full-size test checks the unchanged SMALL cursor.
+Run affected VALUE and COVER continuous/split native paths, direct tape/guard
+checks and fresh parent16 parity before source freeze/registration/learning.
+Save and restore the first actual update within this budget.
+
+New screens32/64/128/512/1536, full1024/2048/2560. Keep original screen baseline,
+carry prior guard streak and all prior full-point progress into the existing
+plateau rule; never reset a failed guard. Numeric/save/cancel/UNKNOWN failures
+remain blocking. At a completed final endpoint, run original48/value48 fitting
+diagnostics once each. These use the retained subset, not all96 COVER pairs.
+All old fitting, joint development and independent S4/S5/S6 gates stay unchanged.
+First joint pass freezes the candidate and proceeds to the authorized gates.
+Otherwise close honestly at the registered stop, without automatic extension.
+
 ## Current result: wider scenes remain underfit at the registered exposure
 
 COVER completed1280 updates and all final observations. Primary392/512,
