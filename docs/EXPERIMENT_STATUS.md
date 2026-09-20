@@ -1,5 +1,181 @@
 # 진단 및 구현 상태
 
+## 2026-09-21 R3–R5 실제 비교 종료 — 실행 검산 PASS, 두 군 품질 미달
+
+R3-IDENTIFIABLE-BASELINE-1.0의 사용자 인가 replacement 연구를 실제 끝점까지
+실행했다. LOCAL5/GLOBAL6 각각4096, 총8192 optimizer updates로 등록 상한을
+모두 사용했다. 두 최종 native는 Finished/resume=false/BUDGET_REACHED다.
+새 가설·LR·seed 탐색이나 추가 학습을 시작하지 않았다. 이번 변경은 기존
+실행 경로 사용과 상태 문서 갱신이며 제품/학습 소스·tests·Cargo 변경0이다.
+
+동결 source936d42258a6143ae664fca71ef8294b760b1dffe, 실행 시작 report HEAD
+a9e852a83d2775ba0242dc06a82b2a8af82c451e. Rust1.98.1, 기존 locked/offline
+Accelerate CPU/F32/thread1 production binary를 사용했다. Test-support/시간
+주입/fixture weights/외부 모델/API0. Binary SHA256
+1eeea87e0c8d66fb5f99136e106c70fca37788422416b45478a94a45acc1e201,
+compiled source digest f322766fb7ae198e1c5a6c8f6ad357676d35ebcdc529ca3f5b9a2083a92acb69.
+최종 source/Cargo diff가 비었고 binary hash도 변함없음을 확인했다.
+Preparation SHA256=f5f548ecadddcecf71eadc9e2f9752ded0b23baeda61173bb956ab7eb39c3376;
+LOCAL/GLOBAL plan 파일 SHA256은 각각
+4ba25d89b481c9b879a04e4cba5b4388da5378df745f46141d1ea907ef30b977 /
+4348a01c119567e6bbf65c9c73c3a48da5cb58564076b8c0226246659c2ccb9a,
+공통 tape hash=bcf6d73d59732af250525049e7df90fe66f14c4253d4fd3a1c6acb8b763e49ec.
+
+독립 A가 실제 replacement preparation을 수용한 후 첫1 update를 저장하고
+각각 새 process에서 재개했다. 두 군의 초기 tensor 내용
+af6abb8fd48cdd0d4396b86c543aee688efc770470c52adc0dcf7016acf40306,
+tokenizer mapping, train8192/primary512/transfer128, sample tape와 response CE,
+Adam, LR schedule은 같았다. Architecture ID/local_layers만 구분했다.
+두 군에서 매 update8과제 각1개, 전체4096 LR bit/step/sampler clock과
+objective binding이 독립 검산에 일치했다. 각8192행은 정확히4회 노출됐다.
+Train4096 semantic bases×2 views, primary256×2, transfer64×2를 구분한다.
+
+1024에서 두 군 모두 평가를 마친 뒤 독립 재검산으로 연장을 판단했다.
+LOCAL 고정 train CE1.2229007222446042→1.1316174637622385는7.4645% 감소,
+GLOBAL1.2456659498382388→1.107368776334503은11.1023% 감소였다.
+네 probe의 frozen 사례와 target1141이 같았다. GLOBAL의>=10% 조건으로
+기존 OR 신호를 충족해 두 군을4096까지 연장했으며, 예산을 늘린 것은 아니다.
+512→1024 primary 증가+16 또는 CDE both 증가+8 조건은 두 군 모두 미충족이었다.
+
+| Arm / step | 고정 train full | Primary full | Transfer full | Primary CDE both | 생성 오류 |
+|---|---:|---:|---:|---:|---:|
+|LOCAL5 /0|0/32|screen0/32|NOT_DUE|NOT_DUE|64|
+|GLOBAL6 /0|0/32|screen0/32|NOT_DUE|NOT_DUE|64|
+|LOCAL5 /256|NOT_DUE|screen10/64|NOT_DUE|screen0/12|0|
+|GLOBAL6 /256|NOT_DUE|screen10/64|NOT_DUE|screen0/12|0|
+|LOCAL5 /512|11/64|75/512|19/128|0/96|0|
+|GLOBAL6 /512|9/64|73/512|19/128|0/96|0|
+|LOCAL5 /1024|11/64|72/512|19/128|0/96|0|
+|GLOBAL6 /1024|11/64|77/512|20/128|0/96|0|
+|LOCAL5 /2048|NOT_DUE|screen10/64|NOT_DUE|screen0/12|0|
+|GLOBAL6 /2048|NOT_DUE|screen10/64|NOT_DUE|screen0/12|0|
+|LOCAL5 /4096|31/64|199/512|53/128|0/96|0|
+|GLOBAL6 /4096|28/64|189/512|50/128|0/96|0|
+
+Step0 무작위 초기 모델의 길이 종료/EOS 누락128건은 원자료와 분모에 남아 있다.
+최종 생성 오류0과 전체 학습 과정의 오류0은 다르다. 최종 각704건은 정상EOS/strict UTF-8다.
+
+|4096 panel|LOCAL full / body / citation|GLOBAL full / body / citation|CDE both (두 군)|
+|---|---|---|---:|
+|train64|31 /43 /38|28 /42 /39|0/12|
+|primary512|199 /282 /274|189 /282 /275|0/96|
+|transfer128|53 /73 /73|50 /74 /65|0/24|
+
+최종 primary A–H full은 LOCAL[23,53,7,7,6,5,34,64],
+GLOBAL[19,51,6,8,7,8,26,64], 각분모64다. Train은
+LOCAL[7,6,2,0,1,1,6,8], GLOBAL[5,6,1,0,0,1,7,8], 각8;
+transfer는 LOCAL[9,12,1,0,5,2,8,16], GLOBAL[8,9,1,2,3,4,7,16], 각16이다.
+각 과제 body/citation·base both, 길이/기록순서/context범위/leading-zero/
+반복숫자/표현/view별 정확한 분모와 결과는 독립 재채점 보고서와 native
+recount에 보존했다. Body나 citation 정답을 full로 대신하지 않는다.
+동일 primary에서 양군 모두 정답158, LOCAL만41, GLOBAL만31, 모두 오답282다.
+
+|실제 사용량/비용|LOCAL5|GLOBAL6|
+|---|---:|---:|
+|Optimizer updates|4096|4096|
+|Committed tape input / target|6,883,740 /598,104|6,883,740 /598,104|
+|Executed input / target (미커밋 포함)|6,885,380 /598,249|6,887,152 /598,395|
+|실행 후 미커밋 input / target|1,640 /145|3,412 /291|
+|Executed padding|1,225,164|1,225,504|
+|Generation / self-teacher|2304 /2304|2304 /2304|
+|Segment elapsed seconds|3316.574984667|3267.065457541|
+|Sampled trainer peak RSS KiB|5,557,264|5,531,120|
+|최종 native bytes|114,180,992|114,180,992|
+|가중치 tensor bytes|38,053,632|38,053,632|
+|Adam tensor bytes (136개)|76,107,264|76,107,264|
+|Batch1 F32 KV 최대 payload 계산 bytes|2,555,904|9,437,184|
+|4096 생성 중 기록된 최대 KV payload bytes|1,185,024|1,211,904|
+
+새 SMALL8192/TINY0, 실제 input13,772,532/target1,196,644/padding2,450,668;
+committed input13,767,480/target1,196,208이다. 새 generation4608,
+self-teacher4608 모두 ENTERED=RETURNED이며 NOT_INVOKED/UNKNOWN0.
+이전 고정P16 generation16은 재실행하지 않고 계약 누적4624에 포함한다.
+Generation6400/teacher6400 상한 내이며 예약된 독립64회는 사용하지 않았다.
+두 군 segment elapsed 합6583.640442208초이며 준비/기존parity와 이전r2
+실패0.912484459초는 별도 기록이다. 이번 replacement 준비 수치 forward8/
+backward2, optimizer0; 독립 최종 검토 모델/optimizer/teacher/generation0.
+
+RSS는 trainer의 표본 최대이고 OS high-water나 전체 평가 메모리 최대가 아니다.
+KV 용량은 실제 config/shape로 계산한 payload 한도이며 전체 working memory와
+다르다. 최종 기록 generation timer 기반 약409.54 vs411.44 token/s는 teacher,
+load, publication을 제외한다. Segment elapsed 기반 약1.2350 vs1.2537 update/s는
+평가/IO 포함 값이다. 같은 updates/target의 비교이며 동일 FLOPs 또는 통제된
+속도 benchmark라고 주장하지 않는다. 초기 tensor9513408 parameters와
+vocab562는 실제 준비/파일 관측값이며 새로운 대형 모델 능력의 증거가 아니다.
+
+LOCAL6개 segment durable step은1→1024→1024→2266→3553→4096,
+GLOBAL은1→1024→1024→2296→3586→4096이다. 두1024 평가 재개는 각각
+optimizer0, generation/teacher508/362회만 실행했다. 모든 시간 종료는
+TIME_BUDGET 단독·저장 성공으로 확인한 뒤 이어갔다. 미커밋 input/target도
+합산하며 추가 optimizer나 이미 반환된 평가행 재생성으로 보정하지 않았다.
+
+**R5 결정:** 양군의 실행은 정상 종료했지만 개발 품질은 둘 다 FAIL이다.
+Primary>=487, 각과제>=58/64, transfer>=116, CDE both>=87/96 조건을
+충족하지 못했다. GLOBAL6 전환을 채택하지 않고 두 연구 artifact를 보존한다.
+LOCAL의10개 primary 우위로 전체 local 구조가 우월하다고 주장하지 않는다.
+실제 mask 차이는 train164/8192, primary9/512, transfer3/128의 작은 범위이고
+seed1개 비교다. 새 balanced 점수와 과거 P6144 점수를 직접 증감률로 잇지 않는다.
+
+미확정 항목 하나는 **고정 train의 C/D/E에서 질문/관측시각에 따른 양쪽 정답
+전환과 정확한 인용을 학습하지 못한 병목**이다. 양군 train both0/12,
+primary both0/96이며 raw에는 질문을 바꿔도 같은 답/근거 밖 인용 ID를 낸
+사례가 있다. 이번 초기조건·4회 노출·예산에서 학습 미완성이라는 근거이며,
+코드 결함·모델 용량 부족·local mask·저장 포맷을 단일 원인으로 확정하지 않는다.
+추가 loss/LR/seed/노출 탐색을 자동 시작하지 않았다.
+
+CODE_SCOPE=UNCHANGED_VERIFIED_SOURCE; DATA_QUERY_NECESSITY=INDEPENDENT_A_PASS;
+NATIVE_INPUT_PARITY=PRIOR_VERIFIED_AND_P16_REUSED; STRUCTURE_TREATMENT_ACTIVE=true;
+R3=COMPLETED_REGISTERED_BUDGET; R4=INDEPENDENT_RAW_USAGE_RECOUNT_PASS;
+R5=NO_CANDIDATE_PROMOTION; TRAIN_FIT=INCOMPLETE; UNSEEN_BINDING=NOT_MET;
+OLD_REFERENCE_AND_GATE=NOT_RUN_NO_ELIGIBLE_CANDIDATE; MODEL_QUALITY=FAIL;
+final200/S4/S5/S6=NOT_RUN_PREREQUISITE_FAILED; GOAL1_READY=false;
+GOAL1_ACCEPTED=false. Final200 내용 열람/새 생성0. 남은 optimizer 예산0이다.
+
+실행 근거(EXECUTED_THIS_RUN): 고정 executable의 `fresh identifiable-prepare`
+1회; LOCAL5/GLOBAL6의 `fresh run --root ...` 각6회,12회 모두 exit0;
+1024와4096의 `fresh report` 각군2회,4회 모두 exit0. 기존 단위/전체 안정화
+시험은 반복하지 않았고0-test를 PASS로 세지 않았다. 보조 metadata reader의
+finished 파일 경로 오타1건은 파일 없음이었으며 실제 root의 파일을 읽어
+확인했다. 모델 command나 raw를 재실행한 오류가 아니다. 검토 scratch의
+컴파일/경로 오류와 교정 후 exit는 독립 보고서에 별도 보존한다.
+
+허용된 로컬 증거 경로(모두 원자료 게시 금지):
+
+- 연구: `artifacts/identifiable-baseline-20260921-r3/`.
+- 각 arm의 `corpus.r3cor`, `transfer.r3cor`, `plan.r3b`, `metadata.r3b`,
+  `tokenizer.r3b`, `initial.r3m`; root의 preparation/review-a/positions.
+- 각 arm의 `eval-*.r3rows`, teacher/call/receipt, `segment-*/updates.r3rows`,
+  train-control, started/finished 기록. 중간 raw를 saved endpoint로 부르지 않는다.
+- 마지막 native는 각각 `LOCAL5/segment-0005/final`,
+  `GLOBAL6/segment-0005/final`; 실제 physical SHA256
+  9ae709df781074ad5c4b211840b5a326cc250aef9f1e3f07af6400f15c242d95 /
+  5bd84314f2505b6706baf76a22ef2511cbe80ee3670843b6af7af1bcff893533.
+- 실행 로그/최종 reader 출력/보존 hash:
+  `artifacts/identifiable-learning-20260921-evidence/`.
+- 독립 A: `artifacts/identifiable-review-a-20260921-r3/REPORT.md`;
+  R4: `artifacts/identifiable-r4-review-20260921/`의 matched1024와 두 arm4096
+  보고서·native 재채점·비용/층화 통계. 독립 검토는 원본을 수정하지 않았다.
+- 실제 source diff:
+  `artifacts/identifiable-baseline-20260921-evidence/candidate-code.diff`,
+  base5c5fcf1f40080a8cbf3d79487ec1d27de235e1de→source936d42258a6143ae664fca71ef8294b760b1dffe,
+  SHA256 fa193491bb11d26b651757824f7bd50fdd6aee2d6b109705d3d3cb944abd37e8.
+
+종료 확인에서 P6144/GROUND native와 실패r2 control hash가 이전 값과 같았고,
+실행 중 제품 소스 변경0, 원본/DB 삭제0, 미추적 .DS_Store도 보존했다.
+이번 게시 대상은 이 상태와 기존 계획 문서뿐이며 source candidate와 report
+commit은 구분한다. 큰 raw/corpus/weights/Adam/임시 지시문은 stage하지 않는다.
+
+독립 최종 결과(EXECUTED_THIS_REVIEW)는
+`artifacts/identifiable-r4-review-20260921/MATCHED4096_REPORT.md`, SHA256
+ece9f91467d3f155ad6e12a28951041bfe33609f94176b8ed4d1f6952dca5922다.
+MATCHED4096_EXECUTION_INTEGRITY=PASS / DEVELOPMENT_GATE=FAIL(양군)로 닫혔다.
+각군13개 panel, 총4608 raw+4608 teacher 행과9216개 prepared/resolved 호출
+쌍을 이전 중간 검토 및 신규 검토로 모두 확인했다. 연장 근거 보고서
+MATCHED1024_REPORT.md SHA256
+8cd16a47cb8a7a780ce00580907ab4aa0b76d2f325f798e2f964badebf0448c2와
+LOCAL4096 원보고서도 덮어쓰지 않았다. 독립 검토의 무결성 PASS는
+모델 품질/Goal1 수용이 아니며, 원본 평가나 제품 소스를 수정하지 않았다.
+
 ## 2026-09-21 사용자 인가 R3–R5 실제 학습 — 별도 등록
 
 사용자가 저장 수리 후 R3–R5 실제 학습 진행을 명시적으로 승인했다. 실패 r2의

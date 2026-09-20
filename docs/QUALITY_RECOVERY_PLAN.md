@@ -1,14 +1,30 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: identifiable baseline, prereview required before learning
+## Closed: identifiable baseline R3–R5, registered budget used, quality not met
 
-The user explicitly authorized R3–R5 execution on2026-09-21 after the provenance
-repair. Register the replacement at `artifacts/identifiable-baseline-20260921-r3/`
-using repaired source936d42258a6143ae664fca71ef8294b760b1dffe and the retained
-production binary. The failed r2 attempt remains immutable and is not resumed.
-The same seed17 tensor values, tokenizer mapping, eight-task episodes, finite
-tape, schedule and all gates/caps below remain fixed. Obtain independent binding
-of this exact preparation to the prior data acceptance and code-repair review.
+The authorized replacement at `artifacts/identifiable-baseline-20260921-r3/`
+completed4096 updates per arm,8192 total, using frozen source
+936d42258a6143ae664fca71ef8294b760b1dffe and the retained production binary.
+Independent A accepted the replacement preparation before learning. At1024 the
+independent matched review verified GLOBAL6 fixed-train CE decreased11.1023%
+from512; this satisfied the existing OR signal and allowed both arms to continue
+to4096 without changing data, seed, LR, loss, tokenizer or Adam. It was not a
+quality acceptance. Both final native endpoints are Finished/resume=false with
+BUDGET_REACHED; no learning or automatic search remains authorized by this plan.
+
+LOCAL5 final train31/64, primary199/512, transfer53/128; GLOBAL6 final28/64,
+189/512,50/128. Both primary C/D/E both0/96 and fixed-train both0/12, with no
+final generation errors. Both fail the registered development gate. Preserve
+both artifacts; do not promote GLOBAL6 or claim LOCAL5 generally superior from
+one seed and the small active mask difference. Existing-reference candidate
+evaluation, final200/S4, S5 and S6 remain NOT_RUN due to the failed prerequisite.
+GOAL1_READY=false and GOAL1_ACCEPTED=false. Detailed raw/usage/cost verification
+and the bounded R5 decision are recorded in the latest experiment status.
+
+The policy below is the completed study's specification, not a renewed budget.
+The failed r2 attempt remains immutable and is not resumed. The same seed17
+tensor values, tokenizer mapping, eight-task episodes, finite tape and schedule
+were retained in the separately approved replacement.
 Previously consumed optimizer/input/target/generation/teacher in the failed
 attempt were0; its0.912484459s failed command and all prior preparation/parity
 costs remain separately reported. Never reinterpret that failure as success.
@@ -85,9 +101,9 @@ does not assert that the random weights learned the tokenizer's old corpus.
 Existing resume and checkpoint validators remain unchanged; a missing lineage
 on resume is still rejected. Direct TINY step0 save/new-process reload and
 negative-provenance checks exercise the boundary without optimizer calls.
-The actual two-arm learning comparison is NOT_RUN because the admitted attempt
-failed before update1. Any replacement needs its own explicit registration and
-review; the failed root cannot be made resumable by this code repair. Existing
+That earlier r2 comparison was NOT_RUN because it failed before update1. The
+separately registered and independently accepted r3 replacement above completed
+the actual comparison; it does not make the failed root resumable. Existing
 failed studies and the following historical entries remain unchanged.
 
 ## Paused by user: GROUND cancelled after490 updates
