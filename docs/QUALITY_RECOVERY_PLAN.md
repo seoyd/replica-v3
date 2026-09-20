@@ -1,5 +1,52 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: bounded training value-association diversity
+
+The user's continuing one-variable authorization covers DIVERSE, a new explicit
+P6144 research with the retained VALUE1280 as matched parent/update control.
+Do not resume or modify any closed VALUE/COVER/wording/diagnostic receipt.
+Parent is the preserved P-PHRASE6144, physical
+c4d6989fbcaad60516053dda206caf43abc08c4b388c3f765e4c446864f60e20.
+The native reader and same-source parent16 parity must prove its exact weights,
+Adam, tokenizer and objective before registering a SMALL run.
+
+Only train value-association diversity changes: same first8 recurring scenes
+per C/D/E, selector sides, phrase exposure, anchors and batch8/co-batch tape;
+four combinations instead of VALUE's original/exchanged two. Additional views2
+and3 clone the original view0 request and change respectively record slot0 or1
+to a distinct owned-train value of the same numeric/text class and numeric width.
+Choose the first eligible value in sorted owned-train values, independent of
+model output. Retain the other record value, ID/order/status/times/question and
+selected citation. Derive labels with the existing training-only request resolver.
+These single-record changes cannot duplicate the prior diagnostic inputs that
+changed both records to values disjoint from the original pair. No heldout text
+or answers are consulted or used for training.
+
+Reuse R3CORP for a separate typed training-values pool, bound in the existing Plan
+and native resume policy. The trainer and actual-update audit use that same pool;
+train64/primary/transfer/selector evaluations retain their original frozen files.
+Original/phrase/selector sources and tokenizer remain unmodified. Only indices
+for C/D/E views2/3 use the new content; other5 tasks stay byte-identical.
+The finite3840 tape is frozen, but this study consumes only1280 updates. Each
+selector side/value combination receives20 exposures, versus40 in VALUE; same
+total draws, fewer repeats per combination. Do not call this matched FLOPs.
+
+Keep LR3e-5, first-target1 response CE, SIDE family4 auxiliary0.1, original Adam,
+F32/Accelerate/thread1/model. SMALL max1280 updates,12M actual input/1M target,
+generation12000/own-model teacher10000, active21600s, command900s/cleanup120s.
+Same screens32/64/128/768 and full256/1280, same retention/no-progress/error gates.
+No automatic extension. Joint development/S4/S5/S6 criteria remain unchanged.
+After closure, reuse original/value-recombination diagnostic once at the same
+fixed endpoint, never promoting train-scene scores to heldout quality.
+
+Direct regression caps: TINY96 optimizer/768 generation/768 teacher, scalar0.
+Use the existing actual native continuous8 versus fresh1+7 path, plus unchanged
+VALUE continuous4 versus1+3. The new TINY fixture uses4 owned train bases rather
+than2 solely to supply a third text value; product SMALL still uses the unchanged
+256-base corpus. Pure native roundtrip, one-record-change invariants, full3840
+tape bounds/exposures and pre-call tamper rejection must pass. Freeze and publish
+source, verify remote SHA, then register a new root before any SMALL learning.
+
 ## Current diagnosis: correspondence fails on new values in familiar scenes
 
 Fixed VALUE7424 original48 remains exact with byte-identical raw token output.

@@ -1228,6 +1228,15 @@ legacy config/request IDs remain. This is a bounded evaluation/control migration
 whole-project JSON removal or model quality acceptance.
 ## VALUE exposure study
 
+`--diverse-pair-values` registers a separate DIVERSE policy from P6144 using the
+same command below, followed by `fresh run --root NEW_ROOT/DIVERSE`. It keeps
+VALUE's eight C/D/E scenes per task and1280-update cap, but rotates four value
+combinations every16 updates. Two extra views each change just one record value
+using owned train donors. The separate hash-bound `training-values.r3cor` supplies
+training samples to both the trainer and update audit. Its unchanged validation
+copy satisfies the existing corpus schema and is never a training sample. Original
+evaluation files, anchors, LR and objective stay fixed. Flags cannot be combined.
+
 `replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT
 --parity NEW_P16_ROOT --output NEW_ROOT --alternate-pair-values` registers the
 bounded original/value-exchanged-view study. Run `fresh run --root NEW_ROOT/VALUE`

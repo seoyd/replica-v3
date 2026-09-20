@@ -2990,27 +2990,33 @@ fn fresh_explicit_fork_matches_continuous_and_split_native_resume() {
 
 #[test]
 fn fresh_value_exposure_restores_identical_native_state() {
-    value_exposure_native_resume(false, false);
+    value_exposure_native_resume(false, false, false);
 }
 
 #[test]
 fn fresh_value_coverage_restores_identical_native_state() {
-    value_exposure_native_resume(true, false);
+    value_exposure_native_resume(true, false, false);
 }
 
 #[test]
 fn fresh_cover_phrase_restores_identical_native_state() {
-    value_exposure_native_resume(true, true);
+    value_exposure_native_resume(true, true, false);
 }
 
-fn value_exposure_native_resume(coverage: bool, wording: bool) {
+#[test]
+fn fresh_value_diversity_restores_identical_native_state() {
+    value_exposure_native_resume(false, false, true);
+}
+
+fn value_exposure_native_resume(coverage: bool, wording: bool, diversity: bool) {
     use replica_v3::{binary,neural::checkpoint};
     use candle_core::Device;
     let d=tempfile::tempdir().unwrap();
-    let (mode,flag,steps,cycle)=if coverage {("COVER","--cover-value-pairs",8,4)}else{("VALUE","--alternate-pair-values",4,2)};
+    let (mode,flag,steps,cycle)=if diversity {("DIVERSE","--diverse-pair-values",8,2)}else if coverage {("COVER","--cover-value-pairs",8,4)}else{("VALUE","--alternate-pair-values",4,2)};
     let call=|args:&[&str],success:bool| {
         let out=Command::new(env!("CARGO_BIN_EXE_replica-train")).args(args)
             .env("VECLIB_MAXIMUM_THREADS","1").env("RAYON_NUM_THREADS","1")
+            .env("R3_FRESH_FIXTURE_VALUE_DONORS",if diversity {"1"}else{"0"})
             .env("R3_FRESH_FIXTURE_EOS","1").output().unwrap();
         println!("VALUE_TEST_COMMAND {args:?} exit={}\n{}\n{}",out.status,String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));
         assert_eq!(out.status.success(),success);
@@ -3033,6 +3039,16 @@ fn value_exposure_native_resume(coverage: bool, wording: bool) {
         let rows=plan["paired"]["rows"].as_array().unwrap();assert_eq!(rows.len(),steps);
         assert_ne!(rows[0].as_array().unwrap()[..6],rows[cycle].as_array().unwrap()[..6]);
         if coverage {assert_ne!(rows[0].as_array().unwrap()[..6],rows[2].as_array().unwrap()[..6]);}
+        if diversity {
+            assert!(plan["training_values"].as_str().is_some());
+            let native=std::fs::read(arm.join("training-values.r3cor")).unwrap();
+            assert_eq!(plan["training_values"],replica_v3::neural::hash(&native));
+            // The real run must reject changed input before any new process calls.
+            std::fs::write(arm.join("training-values.r3cor"),b"invalid fixture").unwrap();
+            call(&["fresh","run","--root",arm.to_str().unwrap()],false);
+            assert!(!arm.join("segment-0000-started.r3b").exists());
+            std::fs::write(arm.join("training-values.r3cor"),native).unwrap();
+        }
         if i==0 {call(&["fresh","fixture-full","--root",arm.to_str().unwrap()],true);}
         else {for _ in 0..2 {call(&["fresh","run","--root",arm.to_str().unwrap()],true);}}
         call(&["fresh","paired-report","--root",root.to_str().unwrap()],true);

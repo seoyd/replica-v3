@@ -943,7 +943,10 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
             Some(manifest),
         )
     };
-    if let Some((p,root))=fresh {train.extend(p.additional_samples(root,&loaded.tokenizer)?);}
+    if let Some((p,root))=fresh {
+        train.extend(p.additional_samples(root,&loaded.tokenizer)?);
+        p.apply_training_values(root,&loaded.tokenizer,&mut train)?;
+    }
     if train.iter().any(|s| s.tokens.len() > config.seq_len + 1) {
         return Err(Error::Invalid("training sample context".into()));
     }

@@ -1,5 +1,53 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 bounded value-diversity preparation
+
+Continue source26ada8c9c8ca9c6a9cacd2d756a58d8d4286eeac under the user's
+one-variable improvement authorization. The closed recombination diagnostic found
+VALUE7424 full22/48 and both3/24 on new value combinations despite original48/48.
+This motivates DIVERSE from the intact P6144, compared with retained VALUE1280.
+It changes only train value associations: four views instead of two, same eight
+scenes per C/D/E, same selector/phrase/anchor rows, parent/Adam/LR/objective/model.
+The existing Plan binds a separate native training pool; actual trainer and token
+audit consume it. Original evaluation files remain separate. The merged pool has
+unique container IDs while preserving model request IDs and framed tokens, and
+retains an unchanged validation copy required by the existing corpus schema.
+
+Direct final process regression PASS1 (16.08s): TINY continuous8 versus fresh1+7,
+exact native weights/Adam/step/counters, altered-pool rejection before command
+entry, objective binding and mutually exclusive flag rejection. The unchanged
+VALUE process regression PASS1 (13.68s), continuous4 versus1+3. Pure native
+input/label/anchor roundtrip PASS1 (0.28s), full3840 tape writer-reader/exposure
+test PASS1 (2.08s), no optimizer/generation/teacher calls in those pure fixtures.
+The final process source only folds the equivalent pool-hash condition into a
+let-chain after Clippy identified a new style warning.
+
+Failed preparation evidence is retained: initial pure test compile error, empty
+native validation rejection, synthetic parent tape mismatch, and duplicate IDs
+when merging original/phrase containers. No model result was repaired. The failed
+process setup used TINY4 optimizer/75 generation/75 teacher. Successful DIVERSE
+was executed twice (20/129/129 each, including setup), unchanged VALUE once
+(12/129/129). Total TINY56 optimizer/462 generation/462 own-model teacher; scalar0,
+SMALL optimizer0 at this preparation stage. No C++ calls or external models.
+
+Local evidence: `artifacts/value-diversity-20260920-evidence/`, including
+`process.log`, `process-verified.log`, `process-final-source.log`,
+`control-process.log`, `native-values-container-final.log`, `full-tape-final.log`
+and retained TINY executables. No new tracked file. Production release build PASS
+(20.11s), Rust1.98.1 locked/offline Accelerate. Same-source P6144 normal parity
+PASS16/16 (one test14.47s,160 raw output tokens, teacher0/optimizer0), preserving
+original files. SMALL generation16 is counted against the new study allowance.
+Strict Clippy still fails only the pre-existing map-key iteration and return-type
+complexity warnings; the new warning is fixed. This is not an overall lint PASS.
+
+Frozen production executable `artifacts/value-diversity-20260920-executable`
+SHA25682d5645523d549f07abb4f22828d773fec889eff45e85f8cb25cbba84f922247;
+diagnostic binarya5e7d7dddc4a036440025e6039576cb7469fe1824f2d249ef466eaa83ff3d0e7;
+compiled source digest0ef9e427bf1f3ec480a26609292db8edd443d079ea9c46bf352129a45e243796.
+P native physicalc4d6989fbcaad60516053dda206caf43abc08c4b388c3f765e4c446864f60e20
+is unchanged. Registration/SMALL learning follow source publication; they have not
+run at this code-verification closure. Joint gate/S4/S5/S6/Goal1 remain unmet.
+
 ## 2026-09-20 Fixed VALUE recombination diagnosis closed: values and citations separate
 
 EXECUTED_THIS_RUN with source10ebba3ed3ef1a1bd1b14399b8158a1a16a80e8e,
