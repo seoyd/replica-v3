@@ -1265,7 +1265,11 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                         let (ce,count)=masked_loss(&logits.narrow(0,row,1)?,&b.target.narrow(0,row,1)?,&b.mask.narrow(0,row,1)?)?;
                         let correct=predictions[row].iter().zip(&labels[row]).zip(&masks[row]).filter(|((a,b),m)|a==b&&**m>0.).count();
                         let bucket=fresh.map_or(micro*config.microbatch+row,|(plan,_)|plan.sample_bucket(index));
-                        task_stats.push(replica_v3::binary::record!({"bucket":bucket,"index":index,"input":train[index].tokens.len()-1,"target":count,"ce":ce.to_scalar::<f32>()?,"correct_tokens":correct,"padding":b.input.dim(1)?-(train[index].tokens.len()-1)}));
+                        let token_observation=if fresh.is_some_and(|(p,_)|p.observes_target_tokens(state.step)) {
+                            let lp=candle_nn::ops::log_softmax(&logits.narrow(0,row,1)?.squeeze(0)?,1)?.to_vec2::<f32>()?;
+                            Some(masks[row].iter().enumerate().filter(|(_,m)|**m>0.).map(|(i,_)|replica_v3::binary::record!({"target":labels[row][i],"nll":-lp[i][labels[row][i] as usize],"argmax":predictions[row][i]})).collect::<Vec<_>>())
+                        } else {None};
+                        task_stats.push(replica_v3::binary::record!({"bucket":bucket,"index":index,"input":train[index].tokens.len()-1,"target":count,"ce":ce.to_scalar::<f32>()?,"correct_tokens":correct,"padding":b.input.dim(1)?-(train[index].tokens.len()-1),"target_token_observation":token_observation}));
                     }
                 }
                 let value = f64::from(loss.to_scalar::<f32>()?);
@@ -1319,7 +1323,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
             state.validation_loss = None;
             if let Some(trace)=&mut fresh_trace {
                 use std::io::Write;
-                replica_v3::binary::write_value_record(trace,&replica_v3::binary::record!({"step":state.step,"sampler":state.sampler_state,"epoch":state.step/1024,"paired_cursor":fresh.and_then(|(p,_)|p.pair_position(state.step-1)),"draw":fresh.map(|(p,_)|p.draw(state.step-1)),"sample_indices":balanced,"tasks":task_stats,"input":step_tokens,"target":targets,"ce":state.train_loss,"objective":objective_sum/targets as f64,"lr":actual_lr,"lr_bits":actual_lr.to_bits(),"grad_norm":grad_norm,"clip":(config.clip/(grad_norm+1e-12)).min(1.),"delta_norm":delta}))?;
+                replica_v3::binary::write_value_record(trace,&replica_v3::binary::record!({"step":state.step,"sampler":state.sampler_state,"epoch":fresh.map_or(state.step/1024,|(p,_)|p.epoch(state.step)),"paired_cursor":fresh.and_then(|(p,_)|p.pair_position(state.step-1)),"draw":fresh.map(|(p,_)|p.draw(state.step-1)),"sample_indices":balanced,"tasks":task_stats,"input":step_tokens,"target":targets,"ce":state.train_loss,"objective":objective_sum/targets as f64,"lr":actual_lr,"lr_bits":actual_lr.to_bits(),"grad_norm":grad_norm,"clip":(config.clip/(grad_norm+1e-12)).min(1.),"delta_norm":delta}))?;
                 trace.flush()?;
                 if state.step==config.budget_start_step+1||state.step.is_multiple_of(32){trace.sync_all()?;}
             }

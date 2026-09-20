@@ -2,6 +2,8 @@
 //! Uses the existing native corpus, request resolver, publisher and trainer plan.
 use super::*;
 use std::collections::BTreeSet;
+#[path = "binding.rs"]
+pub(super) mod binding;
 const DATASET: &str = "joint-binding-balanced-v1";
 const CONTRACT: &str = "R3-IDENTIFIABLE-BASELINE-1.0";
 
@@ -972,6 +974,7 @@ fn prepare_model(local: &Transformer, global: bool) -> Result<Transformer> {
     )
 }
 pub(super) fn verify_plan(root: &Path, p: &Plan) -> Result<()> {
+    if binding::is(p) { return binding::verify_plan(root, p); }
     let own = p
         .identifiable
         .as_ref()
@@ -1206,6 +1209,7 @@ pub(super) fn prepare(parent: &Path, output: &Path) -> Result<()> {
 // A review is an external authorization bound to this exact preparation. This
 // command never writes a PASS or treats elapsed time as approval.
 pub(super) fn authorize_run(_root: &Path, p: &Plan) -> Result<()> {
+    if binding::is(p) { return binding::authorize(_root, p); }
     let own = p.identifiable.as_ref().unwrap();
     let prep: binary::Value = read_confirmed(&own.study.join("preparation.r3b"))?;
     let review: binary::Value = read_confirmed(&own.study.join("review-a.r3b"))
@@ -1276,6 +1280,7 @@ pub(super) fn authorize_run(_root: &Path, p: &Plan) -> Result<()> {
     Ok(())
 }
 pub(super) fn usage(p: &Plan) -> Result<(f64, usize, usize)> {
+    if binding::is(p) { return binding::usage(p); }
     let own = p.identifiable.as_ref().unwrap();
     let prep: binary::Value = read_confirmed(&own.study.join("preparation.r3b"))?;
     let review: binary::Value = read_confirmed(&own.study.join("review-a.r3b"))?;
@@ -1321,6 +1326,7 @@ pub(super) fn usage(p: &Plan) -> Result<(f64, usize, usize)> {
     Ok((elapsed, generations, teachers))
 }
 pub(super) fn remaining_input(p: &Plan) -> Result<u64> {
+    if binding::is(p) { return binding::remaining(p, false); }
     let own = p.identifiable.as_ref().unwrap();
     let root = own.study.join(&own.arm);
     let mut used = 0u64;
@@ -1374,6 +1380,7 @@ pub(super) fn evaluate(
     step: usize,
     control: &mut recovery::RunControl,
 ) -> Result<Option<String>> {
+    if binding::is(p) { return binding::evaluate(p, root, path, step, control); }
     let c = verified_corpus(&root.join("corpus.r3cor"), &p.corpus)?;
     let x = verified_corpus(&root.join("transfer.r3cor"), &p.transfer)?;
     let (tm, dm, xm) = verified_metadata(root, p)?;

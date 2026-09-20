@@ -1,5 +1,71 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: bounded selection learnability — R3-BINDING-LEARNABILITY-1.0
+
+Preserve the closed LOCAL5/GLOBAL6 runs, weights, Adam, tokenizer, raw failures,
+and the historical GROUND cancellation. This is a separate training-only study,
+not a continuation or product replacement. No new core, loss, tokenizer mapping,
+backend, storage or user DB change. Rust, locked/offline Cargo, CPU F32/Accelerate,
+one compute thread and one owned heavy process. External model/teacher/API0.
+
+L0 separates observed failures from hypotheses with independent math review A
+and data-design review B. Astra was actually invoked; Fable was unavailable and
+has a handoff packet, not a fabricated review. Actual prepared corpus/native/tape
+and source must independently PASS before L2. Source is committed/pushed and the
+production executable frozen before any SMALL optimizer call.
+
+L1 prepares A(short key,value), B(eight-digit key,value), C(short key,value+event
+citation), D(eight-digit key,value+event citation). All four share the same seed17
+random LOCAL5 SMALL tensors, fresh Adam0 and retained tokenizer mapping. The V/VC
+comparison changes the explicit output instruction together with its answer
+contract. It is not a pure character-length intervention. V citation is N/A.
+
+Enumerate2520 canonical two-record key/value scenes from ten digits; choose128
+train bases and128 dev bases, each with two opposite queries on identical
+evidence. Four digits per base are distinct. Split identity excludes row/event
+IDs and physical order. Full scenes are disjoint; individual edges/digits are
+shared. Twelve full digit-rotation orbits plus eight reserved rotations balance
+key/value marginals, and opposite assignments separate train/dev full scenes.
+K8 maps the same ten keys to ten fixed names in both splits, with balanced
+repeated digits/common prefixes. Event IDs use an independent stream and are
+identical across arms. Source/status/times/context are common. All actual
+prompt+answer+EOS lengths must fit256, provided=2/excluded=0; training and native
+generation prompt IDs must match. Request-only label checks never enter inference.
+
+The explicit512-row tape draws four different bases and both views per batch8.
+Each32 updates is an epoch;512 updates give each of256 examples16 exposures.
+Default masked response CE/first-target1; no auxiliary. LR32 linear warmup to
+3e-4 then constant, Adam beta.9/.999, epsilon1e-8, decay.01, clip1, fresh clock0.
+The first actual update is saved and resumed in a new process within512, not
+replayed. Per-target CE uses already computed logits and adds no model forward.
+
+L2 runs A only. Step0/128/256 evaluate frozen train32+dev64; step512 evaluates
+train256+dev256. Thus800 generation and800 self-teacher calls per arm. Require
+train full>=254/256 and both>=126/128; dev full>=244/256 and both>=116/128;
+final errors0, normal greedy/actual EOS/strict UTF-8, and fixed16 post-load parity.
+Failing full train closes POSITIVE_CONTROL_NOT_ESTABLISHED; train passing but dev
+failing closes MINIMAL_COMPOSITION_NOT_ESTABLISHED. B/C/D remain NOT_RUN_PREREQUISITE.
+Only A passing permits L3 B/C/D, each from the common initial tensor, each512.
+The same full/both criteria apply to all arms. B/D passing the basic gate permits
+one128-row new-name probe each; it never changes selection or authorizes more
+training. Final200 is not created or used in this study.
+
+Total SMALL<=2048 optimizer updates, input5M/target1M including discarded work;
+generation<=4096/self-teacher<=4096, active7200s, segment900s/cleanup120s. Include
+post-load16, independent at most16 per arm, and new-name probes in the ledger.
+TINY direct regressions separately cap optimizer128/generation512/teacher512.
+No seed/LR exploration or unused-budget transfer. NaN/Inf, leakage, identity or
+storage errors, UNKNOWN and cancellation stop. Initial low accuracy and length
+termination remain failure rows without a quality stop; control-token execution
+errors retain the existing integrity stop. Clean time continuation only follows
+the accepted pending/cursor rules. No accepted stabilization suite is repeated.
+
+L4 independently re-scores saved raw and native identity, reports first value
+token/body/citation/EOS/both and query sides, actual step/input/target/padding,
+per-example exposure, last durable checkpoint and stop. Short diagnostic success
+does not satisfy H3, S4, S5, S6 or Goal1. No operating model pointer changes.
+GOAL1_READY/ACCEPTED remain false until their separate full contracts pass.
+
 ## Closed: identifiable baseline R3–R5, registered budget used, quality not met
 
 The authorized replacement at `artifacts/identifiable-baseline-20260921-r3/`

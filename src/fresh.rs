@@ -16,6 +16,17 @@ const SYSTEM: &str = "제공된 기록과 질문만으로 답하세요. 요구�
 mod identifiable;
 #[derive(Subcommand)]
 pub enum Command {
+    /// Prepare the bounded four-condition selection learnability study.
+    BindingPrepare {
+        #[arg(long)] parent: PathBuf,
+        #[arg(long)] output: PathBuf,
+    },
+    /// Read-only score/call/checkpoint recount for the selection study.
+    BindingReport { #[arg(long)] root: PathBuf },
+    /// One registered, fresh-process A endpoint parity (16 calls, no teacher).
+    BindingParity { #[arg(long)] root: PathBuf },
+    /// Once-only held-out names after the registered K8 development gate.
+    BindingProbe { #[arg(long)] root: PathBuf },
     /// Read frozen research corpora and executed tapes without model calls.
     IdentifiableAudit {
         #[arg(long, required = true, num_args = 1..)] roots: Vec<PathBuf>,
@@ -738,6 +749,7 @@ impl Plan {
         &self.source
     }
     pub(super) fn remaining_targets(&self, root: &Path) -> Result<Option<u64>> {
+        if identifiable::binding::is(self) { return identifiable::binding::remaining(self, true).map(Some); }
         let Some(f) = &self.fork else { return Ok(None) };
         if self.paired.is_some() {
             return Ok(Some(1_000_000u64.checked_sub(paired_work(&f.study)?.1)
@@ -773,12 +785,19 @@ impl Plan {
             .ok_or_else(|| bad("paired input budget exhausted"))?))
     }
     pub(super) fn learning_rate(&self, step: usize) -> f64 {
+        if identifiable::binding::is(self) { return self.config.lr * (step as f64 / self.config.warmup as f64).min(1.); }
         self.fork
             .as_ref()
             .map_or_else(|| self.config.learning_rate(step), |f| f.constant_lr)
     }
     pub(super) fn origin_step(&self) -> usize {
         self.fork.as_ref().map_or(0, |f| f.origin_step)
+    }
+    pub(super) fn epoch(&self, step: usize) -> usize {
+        step / if identifiable::binding::is(self) { 32 } else { 1024 }
+    }
+    pub(super) fn observes_target_tokens(&self, step: usize) -> bool {
+        identifiable::binding::is(self) && step == 0
     }
     pub(super) fn pair_position(&self, absolute: usize) -> Option<binary::Value> {
         self.paired.as_ref().map(|t| binary::record!({"absolute":absolute,
@@ -968,6 +987,16 @@ impl Plan {
             .collect()
     }
 }
+#[cfg(any(test, feature = "test-support"))]
+fn numeric_token_fixture(model: &Transformer, id: u32) -> Result<()> {
+    if model.config.hidden != 32 || model.config.layers != 2 {return Err(bad("TINY tensor fixture only"));}
+    for (name,v) in &model.vars {
+        let mut data=vec![if name.ends_with("norm")||name=="embedding"{1f32}else{0.};v.elem_count()];
+        if name=="embedding" {let h=model.config.hidden;data[id as usize*h..(id as usize+1)*h].fill(2.);}
+        v.set(&Tensor::from_vec(data,v.dims(),&Device::Cpu)?)?;
+    }
+    Ok(())
+}
 fn prepare(root: &Path, tiny: bool) -> Result<()> {
     std::fs::create_dir(root)?;
     let tiny_bases=if cfg!(feature="test-support") && std::env::var("R3_FRESH_FIXTURE_VALUE_DONORS").as_deref()==Ok("1") {4}else{2};
@@ -1052,26 +1081,8 @@ fn prepare(root: &Path, tiny: bool) -> Result<()> {
     {
         // Numerical tensor fixture only. The token is selected by real logits/greedy,
         // not by a decoder override; ordinary SMALL preparation cannot enter it.
-        for (name, v) in &model.vars {
-            let mut data = vec![
-                if name.ends_with("norm") || name == "embedding" {
-                    1f32
-                } else {
-                    0.
-                };
-                v.elem_count()
-            ];
-            if name == "embedding" {
-                let h = model.config.hidden;
-                let id = if std::env::var("R3_FRESH_FIXTURE_EOS").as_deref() == Ok("token") {
-                    tok.encode(b"x")?[0] as usize
-                } else {
-                    EOS as usize
-                };
-                data[id * h..(id + 1) * h].fill(2.);
-            }
-            v.set(&Tensor::from_vec(data, v.dims(), &Device::Cpu)?)?;
-        }
+        let id=if std::env::var("R3_FRESH_FIXTURE_EOS").as_deref()==Ok("token"){tok.encode(b"x")?[0]}else{EOS};
+        numeric_token_fixture(&model,id)?;
     }
     let m = checkpoint::initialized(&model, &tok, 17, source.clone())?;
     checkpoint::save(&root.join("initial.r3m"), &model, &tok, m, &BTreeMap::new())?;
@@ -1146,6 +1157,7 @@ fn source_digest() -> Result<String> {
     for source in [
         include_bytes!("fresh.rs").as_slice(),
         include_bytes!("identifiable.rs").as_slice(),
+        include_bytes!("binding.rs").as_slice(),
         include_bytes!("training.rs").as_slice(),
         include_bytes!("data.rs").as_slice(),
         include_bytes!("native_corpus.rs").as_slice(),
@@ -1165,6 +1177,10 @@ fn source_digest() -> Result<String> {
 }
 pub fn execute(command: Command) -> Result<()> {
     match command {
+        Command::BindingPrepare { parent, output } => identifiable::binding::prepare(&parent, &output, false),
+        Command::BindingReport { root } => identifiable::binding::report(&root),
+        Command::BindingParity { root } => identifiable::binding::parity(&root),
+        Command::BindingProbe { root } => identifiable::binding::probe(&root),
         Command::IdentifiableAudit { roots, diagnostics, output } => identifiable::audit(&roots, &diagnostics, &output),
         Command::IdentifiablePrepare { parent, output } => identifiable::prepare(&parent, &output),
         Command::PairedContinue { parent, output, frozen_executable, fixed_cover_exposure, selector_phrase_exposure, parity } => paired_continue(&parent, &output, &frozen_executable, fixed_cover_exposure || selector_phrase_exposure, selector_phrase_exposure, parity.as_deref()),
@@ -1245,8 +1261,8 @@ fn plan_read_bound(root: &Path, source: &str, executable: &str) -> Result<Plan> 
     if p.revision != REVISION
         || p.source != source
         || p.binary != executable
-        || p.sampler != "bucket-base-permutation-v1"
-        || p.order.len() != 8
+        || p.sampler != if identifiable::binding::is(&p) { "query-pair-tape-v1" } else { "bucket-base-permutation-v1" }
+        || p.order.len() != if identifiable::binding::is(&p) { 1 } else { 8 }
         || (p.fork.is_none() && p.training_values.is_some())
         || p.train_order != if let Some(policy) = &p.identifiable { digest(&policy.rows)? } else if let Some(tape) = &p.paired { digest(&tape.rows)? } else { digest(&p.order)? }
     {
@@ -1264,7 +1280,7 @@ fn plan_read_bound(root: &Path, source: &str, executable: &str) -> Result<Plan> 
     }
     let expected = if p.identifiable.is_some() {
         identifiable::verify_plan(root, &p)?;
-        identifiable::evaluation()
+        if identifiable::binding::is(&p) { identifiable::binding::evaluation(p.tiny) } else { identifiable::evaluation() }
     } else if let Some(f) = &p.fork {
         let study: Study = read(&f.study.join("study.r3b"))?;
         if file_hash(&f.study.join("study.r3b"))? != f.study_hash
@@ -1494,7 +1510,7 @@ fn run(root: &Path, uninterrupted_fixture: bool) -> Result<()> {
     let output = root.join(format!("segment-{index:04}"));
     let stop_after = if previous.is_empty() && !uninterrupted_fixture {
         p.origin_step() + 1
-    } else if p.identifiable.is_some() && (step < 1024 || (step == 1024 && previous.last().is_some_and(|s|s.phase.as_deref()==Some("EvaluationPending")))) {
+    } else if p.identifiable.is_some() && !identifiable::binding::is(&p) && (step < 1024 || (step == 1024 && previous.last().is_some_and(|s|s.phase.as_deref()==Some("EvaluationPending")))) {
         1024
     } else {
         p.config.max_steps
@@ -1751,7 +1767,7 @@ fn score(rows: &[binary::Value], episodes: &[Episode], meta: &[Meta]) -> Result<
         b.1 += usize::from(exact);
     }
     s.base4 = bases.values().filter(|&&(n, k)| n == 4 && k == 4).count();
-    if meta.iter().all(|m| m.base.starts_with("joint-binding-balanced-v1/")) {
+    if meta.iter().all(|m| m.base.starts_with("joint-binding-balanced-v1/") || m.base.starts_with("binding-learnability-v1/")) {
         let mut both = [0;8];
         for m in meta.iter().filter(|m|m.view==0) {
             if bases.get(m.base.as_str()) == Some(&(2,2)) { both[m.bucket]+=1; }
@@ -2705,6 +2721,7 @@ fn audit_panels_range(
     first: usize,
     last: usize,
 ) -> Result<(usize, BTreeMap<String, PanelResult>)> {
+    if identifiable::binding::is(p) { return identifiable::binding::audit(root, p, first, last); }
     let (_, tr, dv) = p.training_corpus(&root.join("corpus.r3cor"))?;
     let tx = verified_corpus(&root.join("transfer.r3cor"), &p.transfer)?.validation;
     let (tm, dm, xm) = verified_metadata(root, p)?;

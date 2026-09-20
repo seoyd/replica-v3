@@ -1329,7 +1329,7 @@ pub(super) fn fresh_teacher_with_foil(
             &[],
             control,
             foil,
-            false,
+            e.family.starts_with("binding-learnability-v1/"),
             true,
             &mut entered,
         )
@@ -1484,7 +1484,7 @@ fn teacher_observation(
         complete_stop?;
     }
     Ok(
-        record!({"conditional_foil":foil_difference,"target_tokens_including_eos":gold.len(),"mean_nll":nll.iter().sum::<f64>()/gold.len() as f64,"first_target_nll":nll[0],
+        record!({"target_token_observation":e.family.starts_with("binding-learnability-v1/").then(||record!({"gold":gold,"nll":nll,"argmax":predicted,"scope":"gold-prefix teacher; separate from free generation"})),"conditional_foil":foil_difference,"target_tokens_including_eos":gold.len(),"mean_nll":nll.iter().sum::<f64>()/gold.len() as f64,"first_target_nll":nll[0],
         "remaining_mean_nll":nll.iter().skip(1).sum::<f64>()/(gold.len()-1).max(1) as f64,"objective":(nll.iter().sum::<f64>()+(w-1.)*nll[0])/gold.len() as f64,"first_target_weight":w,
         "objective_scope":"per-example first-target-weighted response CE; batch/pair/span auxiliary not measured here",
         "teacher_forced_correct_tokens":gold.iter().zip(&predicted).filter(|(a,b)|a==b).count(),"first_target_correct":gold[0]==predicted[0],"last_content_correct":gold.len()>1 && gold[gold.len()-2]==predicted[gold.len()-2],"eos_correct":predicted.last()==Some(&EOS),

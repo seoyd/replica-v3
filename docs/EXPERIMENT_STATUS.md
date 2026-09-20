@@ -1,5 +1,92 @@
 # 진단 및 구현 상태
 
+## 2026-09-21 최소 선택 학습 준비 — R3-BINDING-LEARNABILITY-1.0
+
+새 계약은 종료된 LOCAL5/GLOBAL6을 재개하지 않는다. 새 SMALL 학습 전
+L0/L1 자료·수식·실행 경로 검증을 진행한다. 기준 source936d42258a6143ae664fca71ef8294b760b1dffe,
+보고 e57294c2c829abcc9f5ef15f320f6c27351f2229 이후 변경을 보존했다.
+Rust1.98.1, 기존 Cargo.lock/offline/Accelerate CPU/F32/thread1을 사용한다.
+기존 native 저장·공유 trainer/evaluator를 사용하며 제품 추론에 generator나
+정답 resolver를 넣지 않는다. 새 학습 내용은 후속 실제 실행 기록으로 구분한다.
+
+L0 근거는 보존된 독립 MATCHED4096_REPORT와 원자료 identity다. 아래 train64는
+전체8192의 표본이다. 과거 모델의 수치이며 이번 실행으로 재생성한 값이 아니다.
+
+|train 과제(각8)|LOCAL full/body/citation|GLOBAL full/body/citation|
+|---|---|---|
+|A|7/7/8|5/5/8|
+|B|6/8/6|6/8/6|
+|C|2/4/2|1/4/3|
+|D|0/3/1|0/3/2|
+|E|1/2/3|0/3/3|
+|F|1/4/4|1/4/2|
+|G|6/7/6|7/7/7|
+|H|8/8/8|8/8/8|
+
+두 군 C/D/E train 공동정답0/12, primary0/96, transfer0/24다.
+각4096 updates에서8192행은 정확히4회 노출됐다. 실제 mask 차이는
+train164/8192·primary9/512·transfer3/128로, 활성 개입은 존재하지만 대부분
+입력의 마스크는 같았다. 작은 train 적합과 새 조합 선택의 실패를 확인했으며,
+용량·저장·Rust·tokenizer·local mask 하나를 원인으로 확정하지 않는다.
+
+설계 검토 A는 실제 Astra SOURCE_ONLY, 설계 B는 실제 독립 자료 검토자다.
+Fable 도구는 없어 NOT_RUN이며 전달 질문을 준비했다. 두 설계 검토는 실제
+준비 corpus/native/tape 사전 수용이나 모델 품질 PASS의 대체물이 아니다.
+원자료·검토 packet은 로컬 ignored artifacts에 보존하며 게시하지 않는다.
+
+실제 준비 자료는 네 군 각각train256/dev256/new-name128, 총2560행이다.
+독립 reader에서 네 숫자 중복 배제·request-only label·canonical scene 분할·
+공통 latent/event/순서·tokenizer prompt parity·제공 근거2/제외0을 확인했다.
+최대 prompt+target/EOS는 A146/B167/C154/D175다. 공통512 update tape는
+각32회마다256행을 한 번씩 사용하여 각행16회 노출한다. 네 군 전체 계획
+input2,613,248/target155,648은 계산값이며 실행 사용량이 아니다.
+Source/status/time/context는 공통이고, 물리순서는train/dev 각각64/64다.
+독립 event stream의 ID 크기 순서는70/58·71/57로 우연히 불균형이지만
+양쪽 query를 함께 사용하므로 selected-ID-rank는128/128이다.
+
+공통 SMALL은9,513,408 parameter/38,053,632 tensor bytes/F32/local5다.
+네 최초 weight-content는
+af6abb8fd48cdd0d4396b86c543aee688efc770470c52adc0dcf7016acf40306,
+tokenizer mapping은ec945ee5f3cbd87992bdfa13f199de2a671b94b64337dff04d85e01d982ab9ef다.
+새 seed17 초기화이며 과거 학습 weights/Adam을 불러오지 않았다. Native에
+training state/optimizer가 없고, 첫 진입의 fresh Adam zero/clock0을 검증했다.
+
+직접 회귀 두 이름: `binding_data_tape_native_batch_contract`,
+`binding_tiny_continuous_vs_new_process_resume`. Release/locked/offline/
+accelerate의 정확한 module 필터에서2 PASS, 최종 report 경로 추가 후 정확한
+process 시험1 PASS. Native/전수 framing/label shift/EOS mask/512 tape·LR의
+writer→publisher→reader와 실제 TINY2 vs새process1+1을 확인했다. 초기 대비
+weights/Adam 변화, 최종 weights/Adam/clock/cursor/input/target 일치 및 target
+NLL 평균=기존 CE를 검사했다. 추가 teacher forward 없이 관측값을 저장한다.
+
+개발 중 native scene-binding 문자열/축소 fixture context 오류를 수정했다.
+무작위 TINY의 첫 control-token 실패는 optimizer0/generation1/teacher0로
+보존했다. 저장/재개 회귀에는 기존 TINY 전용 EOS tensor fixture를 재사용했다.
+이 fixture는 production binary에 컴파일되지 않는다. 통과한 네 번의 process
+회귀를 포함한 현재 TINY 누적optimizer16/generation129/self-teacher128이다.
+0-test PASS0. 처음 넓은 `binding_` 필터에 우연히 포함된 기존
+`harness_m04_native_checkpoint_and_eval_binding_before_close_gate`는 legacy-v2
+objective binding 없는 fixture 로드에서 실패했다. 이번 신규 경로의 PASS에
+합산하거나 이 무관한 fixture를 수정하지 않았고, 이후 정확한 필터를 썼다.
+
+독립 검토가 발견한 parity 전체 예산 누락/TINY512 판정 가정과 committed
+input 보고 오류도 좁게 수정했다. Committed는 실제 updates trace 합계,
+discarded는 실행 사용량에서 그 합계를 뺀 값이다. 수정 전 준비물은학습0으로
+보존하고, 동일 자료·초기 tensor·조건을 수정 source에 다시 결속했다.
+실행 root: `artifacts/binding-learnability-20260921-study-r1/`.
+Preparation SHA256 ab793fce6b513ba3ad8c8e030f5acd510b57e079381a624bb0a3749d794a14d6,
+compiled source digest b700e0460d07b6ec9dd739fecfd5b8eb7e1b084ef5aa688e16e19cc2f04a36a0,
+production binary SHA256819dbbe752d38c99b86aca7394e6ad3184f1f8a69c8a17668f8a6beabf910872.
+직접 실행 로그와 검토 packet은 `artifacts/binding-learnability-20260921-evidence/`
+및 review-a/review-b 경로에 보존한다. SMALL optimizer/generation/teacher는
+준비 종료 시0이다. 실제 준비물 독립 사전검토 A/B는 모두 PASS로 닫혔고
+그 수용을 exact preparation/source에 native receipt로 결속했다.
+A 보고 SHA25618728d9f00db3336cea02dc63514ac5064f484bfccdde70053eabb1009381702,
+B 보고 SHA256fc6d732be3c3b6c1f59d90ae42a032cf36e6aedf75520bccc8426fde67c5b478.
+L1 코드/자료 준비 PASS이며 모델 품질 PASS가 아니다.
+후속 품질 결과·source/remote SHA는 실제 단계가 닫힌 뒤
+기록한다. S4/S5/S6·GOAL1_READY/ACCEPTED는 미충족이다.
+
 ## 2026-09-21 R3–R5 실제 비교 종료 — 실행 검산 PASS, 두 군 품질 미달
 
 R3-IDENTIFIABLE-BASELINE-1.0의 사용자 인가 replacement 연구를 실제 끝점까지
