@@ -1307,6 +1307,14 @@ pub(super) fn fresh_teacher(
     e: &Episode,
     control: &mut RunControl,
 ) -> ObservedCall<Result<Value>> {
+    fresh_teacher_with_foil(l, e, None, control)
+}
+pub(super) fn fresh_teacher_with_foil(
+    l: &Loaded,
+    e: &Episode,
+    foil: Option<&str>,
+    control: &mut RunControl,
+) -> ObservedCall<Result<Value>> {
     let mut entered = false;
     let result = (|| {
         let p = l.tokenizer.prepare(
@@ -1320,7 +1328,7 @@ pub(super) fn fresh_teacher(
             &p.token_ids,
             &[],
             control,
-            None,
+            foil,
             false,
             true,
             &mut entered,
@@ -1478,6 +1486,7 @@ fn teacher_observation(
     Ok(
         record!({"conditional_foil":foil_difference,"target_tokens_including_eos":gold.len(),"mean_nll":nll.iter().sum::<f64>()/gold.len() as f64,"first_target_nll":nll[0],
         "remaining_mean_nll":nll.iter().skip(1).sum::<f64>()/(gold.len()-1).max(1) as f64,"objective":(nll.iter().sum::<f64>()+(w-1.)*nll[0])/gold.len() as f64,"first_target_weight":w,
+        "objective_scope":"per-example first-target-weighted response CE; batch/pair/span auxiliary not measured here",
         "teacher_forced_correct_tokens":gold.iter().zip(&predicted).filter(|(a,b)|a==b).count(),"first_target_correct":gold[0]==predicted[0],"last_content_correct":gold.len()>1 && gold[gold.len()-2]==predicted[gold.len()-2],"eos_correct":predicted.last()==Some(&EOS),
         "first_argmax":predicted[0],"first_eos_probability":lp[0][EOS as usize].exp(),"first_gold_probability":lp[0][gold[0] as usize].exp(),"first_argmax_probability":lp[0][predicted[0] as usize].exp(),"first_gold_id":gold[0],
         "first_difference":difference,"first_byte_difference":byte_difference,"first_difference_field":byte_difference.map(|p|field_at(&e.answer,p)),"field_token_accuracy":field_accuracy,"training_prompt_matches_generation":framed[0].tokens[..framed[0].response_start]==*prompt,

@@ -4474,7 +4474,7 @@ mod tests {
         assert!(!no_further_progress(&[(367,70,0),(368,68,0),(367,69,0)]));
     }
     #[test]
-    #[ignore = "explicit completed paired arm and new output; 48 train-only generations and teachers, zero updates"]
+    #[ignore = "explicit completed arm/new output; normal48/48 or margins0/96 generation/teacher; optimizer0"]
     fn paired_seen_train_diagnostic() -> Result<()> {
         if cfg!(feature = "test-support") || !cfg!(feature = "accelerate") {
             return Err(bad("train diagnostic requires production features"));
@@ -4511,6 +4511,68 @@ mod tests {
             }
         }
         if es.len()!=48 {return Err(bad("train pair denominator"));}
+        if std::env::var("R3_TRAIN_PAIR_MARGIN_ONLY").as_deref()==Ok("1") {
+            let study:Study=read(&f.study.join("study.r3b"))?;
+            if file_hash(&f.study.join("study.r3b"))?!=f.study_hash {return Err(bad("margin study binding"));}
+            std::fs::create_dir(&output)?;
+            let endpoints=[("parent",study.parent_checkpoint,study.parent_file,study.parent_step),
+                ("final",root.join(&end.checkpoint),end.checkpoint_hash.clone(),end.step)];
+            let start=binary::record!({"source":source_digest()?,"binary":file_hash(&std::env::current_exe()?)?,
+                "policy":digest(&p)?,"cases":digest(&es)?,"endpoints":endpoints,
+                "scope":"TRAIN_ONLY_TEACHER_MARGIN_NOT_GENERATION","selection":"first eight actually seen pairs per C/D/E in first tape block",
+                "optimizer_limit":0,"generation_limit":0,"teacher_limit":96,"automatic_retry":false});
+            write(&output.join("started.r3b"),&start)?;
+            let mut raw=std::fs::OpenOptions::new().write(true).create_new(true).open(output.join("margins.r3rows"))?;
+            append_row(&mut raw,&start)?;
+            let mut control=recovery::RunControl::command(false)?;control.set_call_limits(0,96);
+            let mut summaries=BTreeMap::new();
+            let result=(||->Result<()> {
+                for (label,path,physical,step) in &endpoints {
+                    control.check("margin_before_native_load")?;
+                    if file_hash(path)?!=*physical {return Err(bad("margin checkpoint physical mismatch"));}
+                    let l=checkpoint::load(path,Device::Cpu,false)?;
+                    if l.manifest.trained_steps!=*step || l.tokenizer.id()!=p.tokenizer {return Err(bad("margin native step/tokenizer"));}
+                    let binding=binary::record!({"start":file_hash(&output.join("started.r3b"))?,"physical":physical,"model":l.model.weight_hash()?});
+                    let mut margins=vec![];
+                    for (i,e) in es.iter().enumerate() {
+                        control.check("margin_next_teacher")?;
+                        let foil=&es[i^1].answer;
+                        let binding=binary::record!({"endpoint":binding,"foil":digest(foil)?});
+                        let attempt=prepare_call(&output,label,"teacher",&binding,e,i)?;
+                        let observed=match recovery::fresh_teacher_with_foil(&l,e,Some(foil),&mut control) {
+                            recovery::ObservedCall::Returned(result)=>result,
+                            recovery::ObservedCall::NotInvoked(result)=> {
+                                resolve_call(&attempt,None,&control)?;
+                                return Err(result.err().unwrap_or_else(||bad("margin teacher not invoked")));
+                            }
+                        };
+                        let row=binary::record!({"endpoint":label,"ordinal":i,"bucket":ms[i].bucket,"id":e.id,
+                            "teacher":observed.as_ref().ok(),"error":observed.as_ref().err().map(ToString::to_string),
+                            "attempt":attempt.file_name().unwrap().to_string_lossy()});
+                        append_row(&mut raw,&row)?;resolve_call(&attempt,Some(&row),&control)?;
+                        let value=observed?;
+                        let margin=value["conditional_foil"]["margin"].as_f64().filter(|v|v.is_finite()).ok_or_else(||bad("missing/nonfinite conditional margin"))?;
+                        margins.push(margin);
+                        control.check("margin_row_durable")?;
+                    }
+                    let pairs=margins.as_chunks::<2>().0;
+                    summaries.insert(*label,binary::record!({"pairs":pairs.len(),"both_positive":pairs.iter().filter(|p|p[0]>0.&&p[1]>0.).count(),
+                        "both_margin_one":pairs.iter().filter(|p|p[0]>=1.&&p[1]>=1.).count(),
+                        "sum_margin_one":pairs.iter().filter(|p|p[0]+p[1]>=1.).count(),
+                        "sum_pass_but_one_side_nonpositive":pairs.iter().filter(|p|p[0]+p[1]>=1.&&(p[0]<=0.||p[1]<=0.)).count(),
+                        "mean_sum":pairs.iter().map(|p|p[0]+p[1]).sum::<f64>()/pairs.len() as f64,
+                        "minimum_side":margins.iter().copied().fold(f64::INFINITY,f64::min),"maximum_side":margins.iter().copied().fold(f64::NEG_INFINITY,f64::max)}));
+                }
+                Ok(())
+            })();
+            if let Err(e)=&result {control.classify_error(e);}
+            let result=control.seal_terminal().and(result);
+            let receipt=binary::record!({"start":file_hash(&output.join("started.r3b"))?,"raw":file_hash(&output.join("margins.r3rows"))?,
+                "control":control.receipt(),"summaries":summaries,"error":result.as_ref().err().map(ToString::to_string),"optimizer":0,"quality_score":false});
+            publish_confirmed(&output.join("finished.r3b"),&receipt)?;
+            println!("TRAIN_MARGIN_DIAGNOSTIC {receipt}");
+            return result;
+        }
         std::fs::create_dir(&output)?;
         let checkpoint = root.join(&end.checkpoint);
         write(&output.join("started.r3b"), &binary::record!({"source":source_digest()?,"binary":file_hash(&std::env::current_exe()?)?,"policy":digest(&p)?,"checkpoint":checkpoint,"physical":file_hash(&checkpoint)?,"cases":digest(&es)?,"scope":"TRAIN_DIAGNOSTIC_NOT_HELDOUT","generation_limit":48,"teacher_limit":48,"optimizer_limit":0}))?;

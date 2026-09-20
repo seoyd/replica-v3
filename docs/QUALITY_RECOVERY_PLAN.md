@@ -1,5 +1,29 @@
 # Diagnostic repair and bounded quality recovery
 
+## Closed: fixed train-pair margin diagnosis, no learning
+
+Completed96 own-model teachers, optimizer0/generation0. Independent raw recount
+passed. At CONTRAST7424,8/24 seen pairs meet sum>=1;4 of those have one side<=0.
+Only4/24 have both sides positive and0/24 both>=1. Parent P6144 has0/24 in
+all three positive criteria. This demonstrates a limitation of sum aggregation
+on these fixed train pairs, not the sole cause of heldout failure. A separate
+bounded experiment may test per-side aggregation while retaining other settings.
+
+Before selecting the next single learning variable, use the existing seen-pair
+diagnostic's optional teacher-only mode. Select the first8 actually seen pairs
+per C/D/E from the first frozen tape block, before model calls. Compare P6144 and
+the closed CONTRAST7424 on those same24 pairs/48 sides using existing native
+loading, foil teacher and durable call helpers. New optimizer0, generation0,
+own-model teacher at most96, one900s command/120s cleanup, no automatic retry.
+Inputs/original checkpoints/receipts stay read-only; all outputs use a new root.
+For each side, record correct-versus-counterpart logit margin at their first
+divergent token under the shared gold prefix. Recount both-positive, both>=1,
+sum>=1 and sum>=1 with a nonpositive side. These are train-only teacher metrics,
+not generation accuracy or heldout quality. Compare the actual measurements
+before changing the equation; no coefficient/margin sweep is authorized here.
+The teacher's old `objective` field is per-example response CE, not family3's
+batch auxiliary; new records state this scope explicitly. Historical raw stays intact.
+
 ## Closed: paired discrimination objective at fixed co-batch exposure
 
 Completed1280 updates at7424: primary366/512, transfer68/128, flipped39/192,

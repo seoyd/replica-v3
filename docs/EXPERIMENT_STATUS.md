@@ -1,5 +1,40 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Fixed train-pair margins independently recounted
+
+EXECUTED_THIS_RUN: existing seen-pair diagnostic, optional teacher-only mode,
+one ignored test PASS in40.33s. First8 seen pairs per C/D/E were fixed before
+calls; P6144 and CONTRAST7424 used the same24 pairs/48 sides. New SMALL/TINY
+updates0, generation0, own-model teacher96, errors0, COMPLETED. Control-accounted
+time20.744033792s excludes setup/load. These are train-only conditional teacher
+logit margins, not normal generation scores or heldout quality.
+
+| Model | Both positive /24 | Both>=1 /24 | Sum>=1 /24 | Sum>=1 but one<=0 /24 |
+|---|---:|---:|---:|---:|
+| P6144 | 0 | 0 | 0 | 0 |
+| CONTRAST7424 | 4 | 0 | 8 | 4 |
+
+Mean sum margins0.0249998371 and1.1160218641. Aggregate success can hide a wrong
+side in actual trained examples. Most pairs also fail the aggregate margin, so
+this does not establish a unique cause. It supports a next single-variable test
+of per-side aggregation; no coefficient/LR/data/core search follows implicitly.
+
+Pure Rust recount exit0 verified97 raw records, endpoint ordinals,96 prepared/
+resolved calls, row hashes, start/raw digests, completion and every aggregate;
+that recount made0 model calls. Clippy exit0 with the existing map-key warning.
+Teacher records now identify the old `objective` field as per-example CE rather
+than the batch auxiliary; old artifacts are untouched. No product inference change.
+
+Source digest `fe165a6b63fec130d8d8b96b7f79a5f1956047823912252aed06104f405b317d`;
+test binary SHA256 `52e9d5173a9145d4ae0afb222922effa5edec1620c85403c86399317cf4b1848`.
+Evidence root `artifacts/pair-contrast-20260920-evidence/`, diagnostic raw
+`train-margin96/margins.r3rows`, SHA256
+`06bdbd9351de338efb50786f8bb9727e0d5e80da1890208faead688439beefe9`.
+The command, test list/build, margin96.log, margin-recount.log and Rust recount
+source remain local. Historical checkpoints/receipts are unchanged.
+DIAGNOSTIC=VERIFIED; MODEL_QUALITY_RECOVERED=false; FINAL200=NOT_OPENED;
+S4/S5/S6=NOT_RUN_PRECONDITION_FAILED; GOAL1_READY=false; GOAL1_ACCEPTED=false.
+
 ## 2026-09-20 Paired discrimination completed; joint quality still failed
 
 EXECUTED_THIS_RUN, source `725f152e5376118439e9b153579d529a5835bdf7`.
