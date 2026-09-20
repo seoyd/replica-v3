@@ -1,6 +1,25 @@
 # Diagnostic repair and bounded quality recovery
 
-## Current: bounded train-only record grounding ready for registration
+## Paused by user: GROUND cancelled after490 updates
+
+The user requested stopping work and a detailed report. SIGINT reached the
+existing RunControl; final native step6634 and actual usage were saved, command
+exit1/CANCELLED/Failed/resume=false. Goal status is paused. No new training,
+diagnostic, automatic retry or extension is registered by this report.
+Unused790 updates are not automatically reusable. Existing parents/failed raw/
+policies remain intact. Current source42af900c2f52264ed629e95560f63e7ae493108a.
+
+Actual SMALL490 updates,838299 input/60205 target including discarded1688/132;
+1160 generation/1160 own-teacher plus the earlier16 parity generations. Last
+complete quality panel is+256: train49/64, primary350/512, transfer67/128,
+flip8/192, both0/192, errors0. The cancelled490 endpoint is NOT_EVALUATED.
+Compared with matched COVER4+256, primary347→350, transfer67→67,
+flip10→8 and both0→0 do not demonstrate joint quality recovery. Final200 remains
+NOT_CREATED/NOT_OPENED; S4/S5/S6 and Goal1 acceptance remain unmet.
+The latest status section contains the source/raw/checkpoint identities, actual
+counts, prior intervention table, known limitations and independent-review handoff.
+
+## Prior registration: bounded train-only record grounding
 
 Under the user's continuing one-variable authorization, prepare GROUND from the
 same P6144 parent as COVER4. This is a hypothesis about learning record selection,

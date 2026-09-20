@@ -1,5 +1,174 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 사용자 요청 중지 — 현재 계보 종합 보고
+
+사용자의 중지 요청으로 GROUND 프로세스에 SIGINT를 전달했다. 기존 RunControl이
+취소를 관측하고 checkpoint를 저장한 뒤 command exit1로 종료했다. Goal 상태는
+paused다. 학습/평가를 재시작하지 않으며 취소된 run의 resume=false를 변경하지 않는다.
+아래 과거 비교는 보존된 상태 보고를 다시 읽은 DERIVED_EXISTING_REPORT다.
+이번 GROUND 실행·중지·원시 행 재검산은 EXECUTED_THIS_RUN/DERIVED_EXISTING_RAW다.
+과거 모든 실험을 이번에 다시 실행하거나 독립 재수용한 것은 아니다.
+
+**실제 중지 상태와 사용량**
+
+| 항목 | 확인 결과 |
+|---|---|
+| 실행 source |42af900c2f52264ed629e95560f63e7ae493108a; 학습 전 origin/main 일치|
+| compiled source digest |8c788660847293ae99ae8d955cfcd5256725cea5973118bc18b4d09fbc349115|
+| 고정 CLI SHA256 |e826ba0076151ed708f8e2e7972d14432f185f5c942f38740ddb5dac160e763f|
+| policy logical digest |dacdc24ed8a0024e6a1e98789dc8ff165486b786ea8a49b1798482627291fccd|
+| 실제 신규 SMALL optimizer |490 = 첫 process1 + 다음 process489; absolute6144→6634|
+| 실제 input / target |838,299 /60,205; 미커밋 계산 포함|
+| optimizer에 반영된 input / target |836,611 /60,073|
+| 취소 때 미반영 input / target |1,688 /132; 사용량에서 제외하지 않음|
+| generation / 자체 teacher |학습 평가1,160/1,160; 별도 P16 포함 generation1,176|
+| 준비 TINY |optimizer50 /generation333 /teacher333; 실패 두 번 포함|
+| 시간 |두 학습 command 합671.302171792초; 준비/빌드/P16과 구분|
+| 마지막 저장 |GROUND/segment-0001/final, step6634, family5, Adam136 tensors|
+| 종료 |CANCELLED, phase Failed, resume=false, checkpoint_saved=true|
+| 저장/수치/UNKNOWN 오류 |관측 없음; work_error는 요청된 cancelled|
+| 관측 최대 sampled RSS |1,546,144KiB; S6 성능 검증 아님|
+| 마지막 전체 품질 평가 |step6400(+256); 중지 checkpoint6634는 최종 품질 미측정|
+
+한도1280 중790회는 실행하지 않았다. 이를 다음 실행에 자동 이월하지 않는다.
+마지막 step6634 raw update의 input 누계11125315와 terminal input11127003의
+차이1688은 취소 전 미반영 계산이다. terminal의 target817009는 committed 상태,
+사용량 보고의 executed target에는 추가132를 포함한다. 값의 차이를 손상이나
+추가 optimizer 실행으로 잘못 해석하지 않는다. 순수 Rust reader가490개 update의
+연속 clock/고정 LR, 사용량 합계, native objective/state와 terminal 파일 hash를 검산했다.
+모델 forward/generation/teacher/optimizer를 추가 실행하지 않았다.
+
+**구현된 구조와 저장의 현재 상태**
+
+자체 random-init 계보의9,513,408-parameter SMALL이다. 6 layers/hidden384/
+FFN1024, Q8/KV2/head48 GQA, pre-RMSNorm와 QK-RMSNorm, RoPE, SwiGLU,
+tied embedding/output, local256 다섯 층과 global2048 한 층을 사용한다.
+이는2017 원형을 그대로 옮긴 구조가 아니지만, 현대적 구성요소를 사용한 것과
+현재 교육용 QA 품질 수용은 별개다. 자체 train-only BPE vocab562, CPU F32/
+Accelerate/thread1이며 외부 학습 weights/tokenizer/teacher/API는 없다.
+
+제품·학습·검증의 구현은 Rust/Candle이다. 사용자 승인 격리 C++ LibTorch 비교는
+`artifacts/libtorch-parity-20260920/` 안의 별도 실험이며 제품/Cargo에 연결하지 않았다.
+모델 weights와 Adam/objective/state는 R3MODEL, source corpus는 R3CORP,
+train cache는 R3TOK, typed 실험 기록은 R3ER, metadata/IPC/row는 R3BIN이다.
+직접 JSON 사용/의존은 제거됐고 범용 라이브러리 내부 의존은 허용한 범위에 남는다.
+SQLite는 사용자 기억/관계의 기존 기능으로 유지하며 모델 tensor 저장소가 아니다.
+이 저장 변경만으로 품질 개선을 주장하지 않는다. JSON→binary가 품질 저하의
+원인이라는 통제 비교 증거도 현재 없다. 초기화 전 원자료는 사용자 승인 삭제로
+현재 검산할 수 없으며 이번에 복원하지 않았다.
+
+**초기화 이후 주요 실제 학습 비교**
+
+Primary는 고정512, transfer는 별도 표현128, both는 원본/뒤집기 양쪽을
+전체 답변·인용·EOS까지 맞힌192쌍이다. 다음은 각 endpoint의 점수이며 서로 다른
+fork의 updates를 한 모델의 누적 학습으로 더하면 안 된다. 모든 행이 같은 loss/
+자료인 것은 아니며, 통제된 해당 비교군 내부에서만 인과적 해석을 제한한다.
+
+| 실험 / 개입 | 신규 updates | Primary /512 | Transfer /128 | Both /192 |
+|---|---:|---:|---:|---:|
+| Fresh random baseline |4096|392|40|당시 미측정|
+| C-REPEAT |2048|425|44|당시 미측정|
+| P-PHRASE: 질문 표현 노출 |2048|425|79|후속 관측0|
+| SPACED: pair 간격128 |256|375|65|0|
+| ADJACENT: pair 간격1 |256|367|70|0|
+| ADJACENT 후속 고정 노출 |추가3584|368|67|4|
+| first-target 가중치4 |3840|339|67|7|
+| LR9e-5 |1280|330|60|0|
+| COBATCH: 같은 batch의 pair |1280|371|60|0|
+| CONTRAST: 합산 margin |1280|366|68|0|
+| SIDE: 각 side margin |1280|372|70|2|
+| REPLAY: 같은 pair 반복 |1280|369|64|6|
+| WIDE: 반복 장면 확대 |1280|375|69|5|
+| FIT: 적은 train pair 집중 |1280|398|76|0|
+| VALUE: 값 교환 노출 |1280|393|72|0|
+| COVER:32 장면/두 값 view |1280|392|68|3|
+| COVER 고정 추가 노출 |추가2560|376|64|9|
+| COVER 질문 표현 추가 노출 |별도 추가2560|386|67|12|
+| DIVERSE:8 장면/네 값 view |1280|399|70|0|
+| COVER4:32 장면/네 값 view |1280|375|67|2|
+| GROUND: record attention 보조 loss |256 평가 /490에서 취소|350|67|0|
+
+앞선 C-KEEP/S-SELECT 연구는 C2048회, S1024회에서 S의 품질 중단으로 종료돼
+동일 예산 최종 비교가 아니다. 후속 안정화 R2와 고정 원자료 관측 R3의 독립 수용은
+실행 경계/관측 신뢰성 범위이며, 이 표의 모델 품질 수용이 아니다. 초기화 전의
+학습·저장·guard·raw close 수리는 각 역사 절에 남겨두되 현재 모델 계보와 섞지 않는다.
+
+**배운 점과 미확정 원인**
+
+FIT는 실제 노출된48개 전체 답변과24개 양쪽 pair를 모두 맞혔다. VALUE도
+원본48/48 및 학습한 값 교환48/48을 맞혔지만 새 값 조합은22/48, both3/24였다.
+DIVERSE 실제 학습 네 view는178/192, both83/96이며 각 입력20회 노출이었다.
+반면 새 개발 both는0/192였다. 따라서 모든 종류의 학습이 전혀 안 되는 상태는
+아니며, 학습한 사례를 벗어난 값·질문 조건·인용 연결의 일반화가 핵심 미달이다.
+
+COVER 추가2560은 실제 train subset의 정답을 개선했지만 primary392→376,
+transfer68→64, both3→9였다. 다른 다섯 과제 합계는297→300/320이고 원래
+C/D/E 선택은95→76/192로 떨어졌다. 따라서 이를 모든 기존 능력의 망각으로
+단정할 수 없다. 원본·반대 조건을 동시에 맞히는 선택 기능이 여전히 부족하다.
+COVER4에서 각 사례5회 노출이 충분하다고 입증된 것도 아니다. 반복 수 부족과
+데이터 커버리지 부족은 남은 가설이지만 무조건 더 돌릴 근거는 아니다.
+
+Rust/LibTorch는 동일 부모/Adam/자료로 각256회 학습했고, 학습38/48,
+개발45/64로 동일했다. fresh process112개 출력의 모든 토큰이 일치했다.
+one-step 수치 대조도 사전 허용오차 내였다. 이는 시험한 경로에서 Rust/Candle
+특유의 계산 문제가 설명력이 약함을 뜻하며, 공유한 설계/입력의 모든 결함을
+배제하거나 PyTorch 전환만으로 개선된다고 말할 근거는 아니다.
+
+고정 DIVERSE24입력 관측에서는 질문과 두 기록이 실제 제공되고 가려지지 않았다.
+관측 forward와 일반 forward logits는 같았고 기존 greedy 첫 토큰과도 일치했다.
+개발 첫 토큰 정답은3/12로 낮았다. 정답을 맞힌 train도 선택 기록의 attention이
+항상 더 높지는 않았다. attention 크기는 원인 증명이나 정답 보증이 아니다.
+
+GROUND의256회 대조는 COVER4 대비 primary347→350(획득3/손실0),
+transfer67→67, 뒤집기10→8(획득0/손실2), both0→0이다. 미세한 일부 차이이며
+품질 회복 증거가 아니다. 요청 취소로1280 endpoint 비교는 NOT_RUN이다.
+490회 checkpoint에256회 점수를 붙이거나 취소를 정상 완료로 바꾸지 않는다.
+
+**최근 구현 검증과 실패도 포함한 범위**
+
+최근 source는 training.rs의 학습 보조 loss, fresh.rs의 train annotation/등록/
+동일 자료 검증, checkpoint.rs/artifact.rs의 objective family5, 직접 tests와
+기존 문서만 바꿨다. 새 tracked 파일은 없다. scalar/finite-difference/mask/
+무작위 native gradient/annotation/tape/native 저장·재개/실제 process/P16을 검증했다.
+첫 process 실패는 schema 연결 누락으로 학습 전에 거부된 것이며 수정했다.
+두 번째는 Q/K가0인 EOS fixture에서 가중치 차이를 요구한 잘못된 assertion이었다.
+이를 실제 random-model gradient 시험과 fixture objective 증가 검증으로 분리했다.
+실패를 PASS나 실제 SMALL 품질로 세지 않았다. 이 취소 뒤 loader 재검산의 첫 시도는
+오래된 top-level rlib을 링크해 새 family5를 거부했다. 현 production dependency
+rlib으로 다시 읽은 결과 성공했으며 두 로그를 모두 보존했다. 모델 파일 수정0이다.
+
+**현재 인계와 판정**
+
+실행 code candidate는42af900c2f52264ed629e95560f63e7ae493108a다. 코드 diff:
+`git diff 6321efe2ddea8eb899046dc0d5a4190391898001 42af900c2f52264ed629e95560f63e7ae493108a -- src tests docs`.
+이 절을 게시한 commit은 report-only이며 학습 source와 구분한다.
+원자료는 로컬 ignored artifacts에 보존하고 Git에 업로드하지 않는다.
+
+- 부모: `artifacts/fresh-exposure-phrase-20260919/P-PHRASE/segment-0003/final`.
+- 현재 연구: `artifacts/record-grounding-20260920/GROUND/`.
+- native corpus: 위 연구의 `training-values.r3cor`,32768 train/512 validation.
+- 마지막 저장: 위 연구의 `segment-0001/final`; physical
+  d5bbf20570ee3e372f863a81ad966b5368a50f1027464f9df854d0fce6f2bc59;
+  model452e912122f6df952a8cbbd02686326dac0c935d4534204ef805d11ccc8b7c55.
+- 종료: `segment-0001-finished.r3b`; physical
+  94ac8cc3196a360769c66269aa87327ccda0401bfd1c56c37f166f0b24835596.
+- 마지막 평가: `eval-6400-{train64,dev512,transfer128,selector192}.r3rows`;
+  판정 `paired-6400.r3b`; modeld17d99d4a15ff8dd37e36e1780f06617a3dfd0306c5fd4faa7a270b8eb73779b.
+- 실행/실패/시험/재집계: `artifacts/record-grounding-20260920-evidence/`의
+  `segment0000.log`, `segment0001.log`, `compare6400.log`, `stop-recount-current.log`,
+  `candidate-source.diff` 및 개별 test/build/input/reader 로그.
+- 격리 C++ 대조 보고: `artifacts/libtorch-parity-20260920/REPORT.md`.
+
+CODE_PREPARATION=PASS; GROUND_STUDY=USER_CANCELLED_INCOMPLETE;
+DEVELOPMENT_JOINT_PASS=false; MODEL_QUALITY_RECOVERED=false;
+final200=NOT_CREATED/NOT_OPENED; S4 미통과; S5/S6 새 후보 수용=NOT_RUN;
+GOAL1_READY=false; GOAL1_ACCEPTED=false; 목표 실행=PAUSED.
+
+재개 시 권장은 동일한 작은 변수 실험의 자동 반복이 아니라, 보존된 source/raw를
+독립 검토에 넘기고 데이터의 장면/값/표현 커버리지와 선택·복사의 학습 설계를 먼저
+검토하는 것이다. 기준을 낮추거나 더 많은 step 자체를 개선 근거로 삼지 않는다.
+이 권장은 신규 실행 등록이 아니다. 사용자 요청 전 추가 학습/진단을 실행하지 않는다.
+
 ## 2026-09-20 GROUND preparation verified; learning not yet executed
 
 Under the continuing one-variable authorization, the existing trainer now adds
