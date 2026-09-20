@@ -1,6 +1,26 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: bounded selection learnability — R3-BINDING-LEARNABILITY-1.0
+## Closed: bounded selection learnability — A positive control not established
+
+R3-BINDING-LEARNABILITY-1.0 completed its authorized A512 branch. Independent
+preparation A/B PASS was bound to the exact native preparation before source
+a4267d308c233f7bab47e1c4bcf39f4f4e21d3cb was pushed and remotely verified.
+The production executable stayed frozen throughout the real1+511 updates.
+Final train213/256, both85/128; dev55/256, both1/128; errors0. Native fresh-process
+fixed16 parity16/16 and independent raw/receipt recount passed. A fails both
+registered train and unseen-combination gates: POSITIVE_CONTROL_NOT_ESTABLISHED.
+B/C/D and new-name probes are NOT_RUN_PREREQUISITE. The unused1536 updates are
+not transferable and this is not a new continuation permission.
+
+Actual committed/executed input593920, target8192, padding/discarded0,128 bases,
+each example16 exposures;512 optimizer calls,816 generation including parity,
+800 self-teacher. The final native is Finished/resume=false/BUDGET_REACHED.
+Every final wrong output fails at its first value token and still has normal EOS;
+most choose the other record's value. Learning execution/storage correctness did
+not establish the minimum compositional selection capability. Preserve all raw.
+S4/S5/S6 and Goal1 remain unaccepted; no final200 was created or opened.
+
+The following is the completed specification, not authorization to rerun it.
 
 Preserve the closed LOCAL5/GLOBAL6 runs, weights, Adam, tokenizer, raw failures,
 and the historical GROUND cancellation. This is a separate training-only study,

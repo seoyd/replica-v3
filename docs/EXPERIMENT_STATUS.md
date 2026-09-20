@@ -1,5 +1,138 @@
 # 진단 및 구현 상태
 
+## 2026-09-21 최소 선택 A512 종료 — 실행 검산 PASS, 양성대조 미확립
+
+R3-BINDING-LEARNABILITY-1.0의 L0/L1 독립 사전검토 후 A(K1-V)를 실제512회
+학습했다. 첫1회를 저장하고 새 process에서511회를 이어갔다. 두 segment는
+정상 종료했으며 최종512 checkpoint는 Finished/resume=false/BUDGET_REACHED다.
+Train213/256·both85/128, dev55/256·both1/128로 등록 합격선에 못 미쳤다.
+따라서 POSITIVE_CONTROL_NOT_ESTABLISHED로 닫고 B/C/D 및 새 이름 probe는
+NOT_RUN_PREREQUISITE다. 미사용1536 update를 재사용하거나 정책을 바꾸지 않았다.
+
+**실제 source/candidate:** a4267d308c233f7bab47e1c4bcf39f4f4e21d3cb.
+학습 전에 정상 push했고 `git ls-remote origin refs/heads/main`이 같은 전체
+SHA임을 확인했다. Base report e57294c2c829abcc9f5ef15f320f6c27351f2229 이후
+source diff는 새 training-only binding.rs와 기존 fresh/identifiable 경로,
+trainer/teacher 관측 및 두 상태 문서다. 모델 수식·loss·Adam·tokenizer·저장
+포맷·제품 검색/생성·SQLite·Cargo는 바꾸지 않았다. 실행 중 source diff0.
+
+동결 executable: `artifacts/binding-learnability-20260921-executable`, SHA256
+819dbbe752d38c99b86aca7394e6ad3184f1f8a69c8a17668f8a6beabf910872.
+Compiled source digest b700e0460d07b6ec9dd739fecfd5b8eb7e1b084ef5aa688e16e19cc2f04a36a0.
+실행 root `artifacts/binding-learnability-20260921-study-r1/A/`의 policy SHA256
+374da364863daf7fb2326e1cf349edbab71b4331e8117617ca2d29bcac1b82d7,
+corpus.r3cor SHA256 a7e71768c0313b02816729e8f274aa509d458a5901293256033bc54d7469c814.
+최종 `segment-0001/final`의 **실제 전체 파일 SHA256**은
+0630aa0ad8a576351df0beb7a7467e3610715daffb94ab69eb2ad099b05566ba다.
+TRAIN_END 로그의 sha256=22af0b6d8e3738de0607c49baae394a417f3a1b5ac5e6d3c90adce674b71d140는
+기존 출력 코드가 manifest.weights_sha256을 표시한 것이므로 전체 파일 해시와
+구분한다. 평가의 model weight_hash는
+3aafe3fd1e039dcf0bb02fdf9e413c7cf45b272bbdefb12294a8d6b6cc320c05다.
+
+|step/panel|Full=value 첫 token=body|Both|EOS/생성 오류|Teacher response CE|
+|---|---:|---:|---:|---:|
+|0 train32|0/32|0/16|0/32|6.7892534435|
+|0 dev64|0/64|0/32|0/64|6.7905149870|
+|128 train32|4/32|0/16|32/0|1.2256494129|
+|128 dev64|7/64|0/32|64/0|1.2931039004|
+|256 train32|15/32|1/16|32/0|0.7774145659|
+|256 dev64|25/64|1/32|64/0|0.8432347958|
+|512 train256(전수)|213/256|85/128|256/0|0.2168226225|
+|512 dev256(전수)|55/256|1/128|256/0|1.4753604117|
+
+최종 raw에서 같은 ID·질문·근거의 첫 train32/dev64만 다시 추출하면
+train28/32·both12/16, dev11/64·both0/32다. Step256의 같은 표본과 비교할 때
+train15→28, dev25→11로 갈라졌다. 전수256과 중간 표본64를 같은 분모로
+비교한 결과가 아니며, 이 추출의 신규 generation은0이다.
+
+V에는 인용 요청이 없으므로 citation=N/A다. Short value 점수를 인용 포함
+전체 QA나 Goal1 점수로 합산하지 않는다. 초기96개 길이 종료/EOS 누락은
+분모와 원본에 남아 있으며 정상 평가 완료와 정답을 구분했다. 최종 양쪽
+query view 정답은 train104/128·109/128, dev33/128·22/128이다.
+
+최종 오답244개는 모두 `[잘못된 숫자 token, EOS]`였다. Train 오답43개 중
+다른 기록의 값40·두 기록 밖 숫자3, dev 오답201개 중 다른 기록의 값195·
+두 기록 밖 숫자6이다. 형식/UTF-8/실행 오류는0. 한 base의 두 query에 같은
+값을 낸 경우 train40/128, dev53/128이었다. 두 view의 정답 개수[0,1,2]
+분포는 train[0,43,85], dev[74,53,1]이다. 첫 값 token teacher CE는
+train0.4331888402/dev2.9502633182, EOS CE는0.0004564049/0.0004575052다.
+이 원자료는 인용 생성이나 EOS 종료 이전의 값 선택 문제를 보여 준다.
+배운 train 조합에 대한 적합도도 완전하지 않아 순수 일반화 문제만으로
+한정하지 않는다. 어떤 수식·Rust·저장·tokenizer 하나를 원인으로 확정하지 않는다.
+
+실제512 updates에서128 train bases×2 views 각각16회 노출, input593,920,
+target8,192, padding0, 미커밋/폐기 input0/target0이다. 최초 batch response
+CE6.78829956, gradient norm38.14025465, 실제 weight delta L2 0.02885980,
+첫 LR9.375e-6과32부터3e-4 고정을 trace에서 검산했다. Adam clock/cursor는
+저장·새process 재개 후 누적 유지됐으며 모든512행의 draw/LR가 고정 tape와 같다.
+마지막 batch CE0.32067224는 전체 train CE와 구분한다.
+
+학습·예정 평가 두 segment elapsed 합288.427923833초, parity0.739871875초로
+기록된 실행 합289.167795708초다. Sampled peak
+RSS1,138,160KiB다. SMALL 실제 generation800/self-teacher800, 이후 별도 새
+process의 고정 dev 첫16 parity16/16까지 generation816/teacher800이다.
+독립 검토는 추가 generation0으로 실제 raw/token/EOS/teacher 및 parity
+receipt를 재검산했다. Native model 재현과 낮은 정답률은 동시에 성립한다.
+학습·평가에 NaN/Inf·자료 변경·UNKNOWN·취소·저장 오류는 없었다.
+TINY 누적16 optimizer/129 generation/128 teacher는 별도이며 위 수치에
+합산하지 않는다. 자동 재시도·새 seed·LR 변경·모델 크기 변경0.
+
+최종 native 파일114,180,992bytes는 weights38,053,632bytes,
+Adam m/v76,107,264bytes와 metadata/directory/alignment20,096bytes다.
+기존 native 형식을 그대로 사용한 관측이며 저장 최적화 성과가 아니다.
+학습·평가·IO를 포함한 두 segment 기준1.77514updates/s,
+input2,059.163tokens/s·target28.402tokens/s다. 최종512건의 generation만
+분리하면1,024출력token/기록된6.420초=159.502tokens/s다. 밀리초 해상도의
+호출 시간이며 teacher/load/publication을 제외하므로 위 처리량과 구분한다.
+
+실제 명령은 frozen executable의 아래 첫 명령을 두 개의 별도 process로
+실행한 뒤 report/parity 명령을 실행했다. 각 process에
+`VECLIB_MAXIMUM_THREADS=1 OMP_NUM_THREADS=1 RAYON_NUM_THREADS=1`을 적용했고
+모두 exit0이었다. 학습 종료는 품질 합격이 아니다.
+
+```text
+artifacts/binding-learnability-20260921-executable fresh run --root artifacts/binding-learnability-20260921-study-r1/A
+artifacts/binding-learnability-20260921-executable fresh binding-report --root artifacts/binding-learnability-20260921-study-r1/A
+artifacts/binding-learnability-20260921-executable fresh binding-parity --root artifacts/binding-learnability-20260921-study-r1/A
+cargo test --release --locked --offline --features accelerate --bin replica-train training::fresh::identifiable::binding::tests:: -- --nocapture --test-threads=1
+```
+
+마지막 명령은 학습 전 직접 회귀2건의 실행이며 후속 정확한 process 회귀는
+그 두 이름 중 하나의 재검증이다. Unique tests2, zero-test invocation0;
+다른 초기 실패 이력은 아래 준비 절에 별도 기록했다. 상세 증거의 로컬 위치:
+
+- `artifacts/binding-learnability-20260921-evidence/`: 직접 tests/build,
+  A-segment-0000.log/0001.log, A-report.log, A-parity.log,
+  candidate.diff, source-commit.txt/source-remote.txt, final-artifact-hashes.txt.
+- `artifacts/binding-learnability-20260921-study-r1/A/`: native corpus/metadata,
+  tokenizer/initial/plan, eval-0000/0128/0256/0512 raw·teacher 및 prepared/resolved
+  call receipts, segment 끝 기록, 최종 weights+Adam와 parity 원자료.
+- `artifacts/binding-learnability-20260921-review-a/`, `...-review-b/`:
+  서로 다른 설계·실제 준비물 검토와 L4 독립 재채점. 원자료는 게시하지 않는다.
+
+L4 독립 실행 보고서는
+`artifacts/binding-learnability-20260921-review-b/l4/A512/REPORT.md`,
+SHA256 acf772213677b19b8130d14c8856187cfe0335d97201c3a493f8695399ccd683다.
+별도 Rust reader의8 panel 재채점, usage/trace512, 최종 오류 분류,
+동일 표본 대조와 native/receipt 검사가 모두 exit0이었다. 독립 검토자의
+신규 모델 호출은0이며 기존16개 parity의 실제 token/receipt를 검증했다.
+이 판정은 원자료 무결성 PASS이고 모델 품질 수용은 아니다.
+
+다음 변경을 제안한다면 **입력 표현의 key/value 연결** 한 축만 대상으로 한다.
+같은 사실·query·정답·분할을 유지한 채 기록 본문의 key/value 경계를 명시하는
+일관된 슬롯 표현과 현재 문장 표현을 대조하는 가설이다. 숫자/EOS 출력은
+안정됐지만 다른 기록의 값을 고르는 오류가 집중된 것이 조사 근거다.
+표현이 원인이라는 증거나 입증된 처방은 아니며, 기본 연산 결함도 확정하지
+않았다. 제안용 새 corpus·정책·모델 호출·학습은0이고 자동 후속 실행은 없다.
+
+CODE_SCOPE/INDEPENDENT_PLAN_REVIEW/RAW_RECOUNT=PASS.
+EASY_CONTROL_TRAIN=FAIL, EASY_CONTROL_UNSEEN=FAIL,
+MULTITOKEN_KEY/CITATION_OUTPUT/NEW_IDENTIFIER_TRANSFER=NOT_RUN_PREREQUISITE.
+역사 모델·실패 원본은 해시 재확인으로 보존했다. H3/S4/S5/S6는 이 작은 과제로
+수용하지 않으며 final200은 생성·사용하지 않았다. GOAL1_READY=false,
+GOAL1_ACCEPTED=false. 이번 계약의 제한 실험과 실패 경계 기록은 완료됐고
+추가 학습은 시작하지 않는다.
+
 ## 2026-09-21 최소 선택 학습 준비 — R3-BINDING-LEARNABILITY-1.0
 
 새 계약은 종료된 LOCAL5/GLOBAL6을 재개하지 않는다. 새 SMALL 학습 전
