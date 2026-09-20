@@ -1,5 +1,90 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 DIVERSE1280 closed: limited changes, joint quality not recovered
+
+EXECUTED_THIS_RUN / DERIVED_EXISTING_RAW; independent acceptance not claimed.
+Learning source d6330f78806bba2a30664678075c148ca7ce103f was normally pushed and
+matched origin/main before registration. Frozen production binary
+82d5645523d549f07abb4f22828d773fec889eff45e85f8cb25cbba84f922247 and source digest
+0ef9e427bf1f3ec480a26609292db8edd443d079ea9c46bf352129a45e243796 remained unchanged
+through learning and diagnostics. Policy
+de27cc90dbc79e3a99fcd8e4e8e8dc695d15307b86995073a49f7a05e3a11446 binds P6144,
+same Adam/tokenizer/LR3e-5/SIDE family4 and the separate four-value-view pool.
+Native pool physicald51db542a8b62beac4dcc182763ecea565d3248f35c93db3c6de0bc791022c88.
+
+Pre-call actual input comparison verified nine original files byte-identical to
+VALUE (including initial native), same config/evaluation/fork state, all19200
+anchor slots over the3840-row tape unchanged,11520 selector draws with fixed
+base/phrase/side. New native pool changes6144 table rows; first1280 uses64 sides
+per C/D/E bucket twenty times each. Prior recombination48 prompts overlap0 with
+the new train pool. No dev/final input is used to generate training donors.
+
+| Same saved endpoint observation | VALUE7424 control | DIVERSE7424 |
+|---|---:|---:|
+| Train64 whole answers |57|59|
+| Primary512 |393|399|
+| Transfer128 |72|70|
+| Flipped192 |2|4|
+| Original and flipped both192 |0|0|
+| Generation errors in final required panels |0|0|
+| Seen original48 / both24 |48 /24|44 /21|
+| Fixed recombined48 / both24 |22 /3|23 /4|
+
+Current final primary buckets[56,61,36,39,16,63,64,64], transfer
+[4,8,5,4,1,16,16,16]. Original selector91/192, same normal output158/192;
+paired outcomes[both0,original-only91,flipped-only4,neither97], C/D/E both0 each.
+Strict raw decode/expected/EOS recount gives control→new gains/losses: primary
+21/15, transfer0/2, flipped2/0, train2/0, both0/0. This is not quality recovery.
+At256: train53, primary406, transfer74, flipped5, both0. Screens32/64/128/768
+were47/47/46/48 of64, each flip0/24, errors0. All2144 required generated rows
+across scheduled panels completed with EOS and no generation errors.
+
+Actual SMALL optimizer1280=1+755+524,6144→7424; input2190136/target156256,
+including time-discarded1684/116. Committed2188452/156140, padding788528.
+First native6145 saved and restored by a new process. Segment0001 reached6900,
+pure TIME_BUDGET at900s, saved with resume=true; segment0002 restored it and
+completed7424. Final Finished/NO_FURTHER_PROGRESS/resume=false, underlying
+trainer BUDGET_REACHED; no UNKNOWN, cancel, numerical or save error. Observed
+peak sampled RSS1557728KiB. No automatic budget extension or extra optimizer.
+
+Same frozen diagnostic executable performed original48 and recombined48 in
+separate fresh processes (one test each,12.46s/13.34s). Native physical/model
+identity is the final7424 for both. Original raw692 tokens, recombined670,
+EOS/error48/0 each; own teacher target696 each. Recombined cases/metadata and
+input digests equal the prior VALUE diagnostic exactly. First-body classes:
+exact23, other supplied record12, old selected3, other10. Correct citation43/48;
+teacher/greedy first-token mismatch0, first gold28/48 including5 later errors.
+These are fixed developmental diagnostics, not heldout acceptance. The initial
+read-only recount incorrectly required a nonexistent raw `case` field; its failure
+is retained. Corrected reader verifies the actual prepared-case digest, complete
+case artifact equality, raw decode, EOS and call receipts without new calls.
+
+Total SMALL1280 optimizer/2256 generation/2240 teacher includes parent16 and
+diagnostic96. Existing usage ledger1597.465755960s plus diagnostic control
+7.041869459+6.874799333s =1611.382424752s active. Compilation/test wrapper times
+are separate. TINY56 optimizer/462 generation/462 teacher, scalar0/C++0; no new
+TINY calls after source publication. All registered limits respected.
+
+Final native: `artifacts/value-diversity-20260920/DIVERSE/segment-0002/final`,
+physical60c772b9ff71ae20438c4e33f535d53e73b1d4ef885ef3d041da704f6ebb5416,
+modela0c36fc9aac19696d245eca60dfb130de290bb798eb25948f65d1e501c6c7a1c.
+Terminaldfe50a490a97123b28dd744f0be8550dd8d1fc785f2c734237a272d073575e93;
+paired receipt2a6323423947838083dabd0dee64631853fcff407a4ce1dec7e7e00e0c2eef6e.
+Evidence `artifacts/value-diversity-20260920-evidence/`: prepare, input comparison,
+segment0000–0002, paired-report, compare, original48/recombined48 and verified
+diagnostic recount logs, raw/call records and retained executables. The existing
+pure report reverified native/state, panels, objective/LR/tape, usage and guards.
+Report log SHA256e26bd5e427b007e51bcf67c0b5d3b9b0ebd05d915d2895972d54fc389657aaeb;
+comparison de99b5e12d80227d0f4de2531ef22a17924f2c0d05eb8347189e05e59312f6e4;
+diagnostic recount069843500b35eb7f872be396c1704d7a48581e96c7772ffa7a2582840631420a.
+
+CODE_DIRECT_CHECKS=PASS; LEARNING_EXECUTION=COMPLETE; DEVELOPMENT_JOINT_PASS=false;
+MODEL_QUALITY_RECOVERED=false; FINAL200=NOT_CREATED/NOT_OPENED;
+S4/S5/S6=NOT_RUN_PRECONDITION_FAILED; GOAL1_READY=false; GOAL1_ACCEPTED=false.
+No operating model replacement, original rewrite, new tracked file or dependency.
+Full strict Clippy remains blocked by the two documented pre-existing warnings.
+This docs-only closure is separate from the reviewed/executed source above.
+
 ## 2026-09-20 bounded value-diversity preparation
 
 Continue source26ada8c9c8ca9c6a9cacd2d756a58d8d4286eeac under the user's

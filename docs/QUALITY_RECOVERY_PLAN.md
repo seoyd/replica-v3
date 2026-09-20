@@ -1,6 +1,27 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: bounded training value-association diversity
+## Current: value diversity closed; selection remains unresolved
+
+DIVERSE reached its1280-update cap at7424 with primary399/512, transfer70/128,
+flipped4/192, both0/192 and generation errors0. It closed Finished with
+NO_FURTHER_PROGRESS/resume=false. Matched VALUE control is393/72/2/0;
+primary paired gain/loss21/15, transfer0/2. Neither meets admission or joint gates.
+Same-scene original fitting drops48→44/48, while fixed recombined inputs improve
+only22→23/48 and both3→4/24. All diagnostic raw/case/call bindings verify.
+This does not establish transferable selection or a storage/backend defect.
+
+Actual SMALL1280 optimizer/2256 generation/2240 own-model teacher include the
+entry16 parity and endpoint96 diagnostic calls. TINY56/462/462 is separate.
+No further execution is authorized by this closed registration. Preserve all
+previous failures and native states. Final200 NOT_CREATED/NOT_OPENED; joint
+development/S4/S5/S6/Goal1 remain unmet. Any next one-variable study requires a
+separate bounded policy grounded in these results; no new study is registered.
+Before choosing it, separate insufficient fitting of the four trained views
+from transfer to unseen scenes using existing raw and the frozen draw metadata.
+Do not infer that one extra correct diagnostic case resolves the failure or
+automatically reopen the existing no-progress endpoint.
+
+## Closed: bounded training value-association diversity
 
 The user's continuing one-variable authorization covers DIVERSE, a new explicit
 P6144 research with the retained VALUE1280 as matched parent/update control.
