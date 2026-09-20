@@ -1,5 +1,18 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 attention pre-call association corrected
+
+Initial source36b26fc50e37b7b3b780dcf1b72e0bfec07ad017/executable47551a9…
+returned exit101 in7.66s before output directory or model calls. The merged
+native pool deliberately prefixes unique container IDs while retaining exact
+request/target bytes; the original train48 raw uses unmerged IDs. Diagnostic
+lookup now requires a unique native-prompt digest and expected answer, retaining
+native/model/EOS/raw validation. Original failure/log/binary are preserved.
+Extended framing/content test executed1/PASS1 (0.00s), including duplicate,
+different-prompt and different-answer rejection. SMALL/TINY model calls0 for
+this correction. No production inference/data/weights change; no generation
+retry or budget extension. Corrected observation remains NOT_RUN here.
+
 ## 2026-09-20 fixed selector-attention preparation verified
 
 After COVER4 closure0f100e63a31eda40b1c48e0193c527a82b1f52b6, add only an

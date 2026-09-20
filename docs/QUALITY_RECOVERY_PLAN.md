@@ -26,6 +26,13 @@ sweep or new training policy. Pending/failed attempts remain immutable; source
 and diagnostic binary freeze before model observations. Production code stays
 unchanged. Joint/S4/S5/S6/Goal1 gates remain unmet and unchanged.
 
+Initial preparation rejected a merged-pool container ID against the earlier
+unmerged train raw before output creation or model calls. Preserve the failure;
+correct only the association to unique exact native-prompt digest plus expected
+answer, keeping raw/model/content validation. Directly test duplicate and wrong
+content rejection. One corrected preparation uses a new output path; no attempted
+model call is retried and the48-forward cap remains unchanged.
+
 ## Current: COVER4 closed; joint quality not recovered
 
 COVER4 completed1280 updates at7424 and closed BUDGET_REACHED/Finished,

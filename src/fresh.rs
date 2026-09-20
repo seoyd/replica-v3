@@ -5109,6 +5109,11 @@ mod tests {
         if (0..4).any(|r|!regions.contains(&r)) {return Err(bad("empty attention diagnostic region"));}
         Ok(regions)
     }
+    fn attention_recorded_row(rows:&[binary::Value],prompt:&str,answer:&str)->Result<binary::Value> {
+        let matches:Vec<_>=rows.iter().filter(|r|r["native_prompt_digest"]==prompt && r["expected"]==answer).collect();
+        if matches.len()!=1 {return Err(bad("attention recorded input missing/ambiguous"));}
+        Ok(matches[0].clone())
+    }
     #[test]
     fn paired_attention_regions_use_trusted_framing() -> Result<()> {
         let ids=[1,3,8,7,4,9,10,7,5,11,7,5,12,13,7,6];
@@ -5116,6 +5121,11 @@ mod tests {
         assert!(attention_regions(&[]).is_err());
         for i in 0..ids.len() {let mut wrong=ids.to_vec();wrong.remove(i);assert!(attention_regions(&wrong).is_err() || ids[i]>=8);}
         let mut wrong=ids;wrong[12]=neural::EOS;assert!(attention_regions(&wrong).is_err());
+        let row=binary::record!({"id":"old-container-id","native_prompt_digest":"same-owned-prompt","expected":"same-answer"});
+        assert_eq!(attention_recorded_row(std::slice::from_ref(&row),"same-owned-prompt","same-answer")?,row);
+        assert!(attention_recorded_row(&[row.clone(),row.clone()],"same-owned-prompt","same-answer").is_err());
+        assert!(attention_recorded_row(std::slice::from_ref(&row),"different-prompt","same-answer").is_err());
+        assert!(attention_recorded_row(&[row],"same-owned-prompt","different-answer").is_err());
         Ok(())
     }
     #[test]
@@ -5154,8 +5164,11 @@ mod tests {
                 let base=index%(2*n);if !seen.insert(tm[index%n].base.clone()) {continue;}
                 for i in [base,base+2*n] {
                     if !tape.rows[..end.step-f.origin_step].iter().flatten().any(|&j|j==i) {return Err(bad("attention train side unexposed"));}
-                    let e=all[i].clone();let row=raws[0][1..].iter().find(|r|r["id"]==e.id).ok_or_else(||bad("attention original train raw missing"))?;
-                    selected.push(("trained",bucket,e,row.clone()));
+                    let e=all[i].clone();
+                    // Native merged pools have unique container IDs; prompt/target stay identical.
+                    let prompt=l.tokenizer.prepare(&e.request,p.architecture.context as u32,&p.architecture.id()?)?;
+                    let row=attention_recorded_row(&raws[0][1..],&prompt.token_digest,&e.answer)?;
+                    selected.push(("trained",bucket,e,row));
                 }
                 if seen.len()==2 {break;}
             }
