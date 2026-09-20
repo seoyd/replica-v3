@@ -1,6 +1,46 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: fixed DIVERSE selector-attention diagnosis
+## Next: bounded train-only record grounding preparation
+
+Under the user's continuing one-variable authorization, prepare GROUND from the
+same P6144 parent as COVER4. This is a hypothesis about learning record selection,
+not a diagnosed attention implementation defect. The fixed-weight observation
+below rejects question masking for its24 inputs, while development first-token
+correctness remains3/12. Correct train outputs also lack uniform selected-record
+attention dominance; attention magnitude alone does not prove causal use.
+
+One variable only: retain COVER4's exact data/pool/tape/32 scenes/four values/
+anchors/Adam/tokenizer/LR3e-5/first-target1 response CE/SIDE auxiliary0.1; add a
+fixed training-only selected-record attention penalty. At each C/D/E sample's
+first response position, use the last layer's existing masked attention weights.
+Let A be attention summed across all query heads and tokens in the selected
+record; B is the corresponding sum across both supplied records. Add
+`0.1 * mean_selector(-ln(max(A / B, 1e-8)))` to the existing objective. No selector
+sample means exact zero additional loss. Full record-content spans exclude role
+markers; tokens/padding/masks and every generation computation stay unchanged.
+Use train-only resolver/citation labels; never pass labels, selected-slot metadata
+or restricted evidence to inference. No attention head, coefficient, LR or seed
+sweep. Last-layer choice and coefficient are fixed before results, not optimized
+on these observations. This experiment may fail and does not lower acceptance.
+
+Bind objective family and exact annotation/policy in the existing native resume
+identity; do not change tensor/storage layout or permit silent old-loss resume.
+Reuse forward_observed inside the actual training pass, not an extra teacher
+model. Direct scalar/gradient/mask/annotation/no-selector tests and exact TINY
+continuous versus fresh-process resume must pass before any SMALL run. Verify
+normal inference parity, same parent/Adam/data/tape, and freeze source/binary.
+Preparation caps TINY64 optimizer/768 generation/768 own-teacher, scalar16;
+actual direct forward/backward calls are separately reported. No new framework.
+
+Proposed registered SMALL cap1280 updates,12M input/1M target including discarded
+work,12000 generation/10000 own-teacher,21600s active,900s command/120s cleanup.
+Same screens32/64/128/768 and full256/1280 as the retained COVER4 control; all
+existing retention/no-progress/numerical/stop and joint gates apply. Only a new
+explicit parent-bound root may execute after implementation checks. No training
+has been registered or executed yet; no closed budget is extended. A joint pass
+freezes the candidate for the unchanged independent S4/S5/S6 path.
+
+## Closed: fixed DIVERSE selector-attention diagnosis
 
 After COVER4's negative matched comparison, use the preserved DIVERSE7424
 weights once to separate observable input visibility/first-token behavior from
@@ -32,6 +72,18 @@ correct only the association to unique exact native-prompt digest plus expected
 answer, keeping raw/model/content validation. Directly test duplicate and wrong
 content rejection. One corrected preparation uses a new output path; no attempted
 model call is retried and the48-forward cap remains unchanged.
+
+Corrected source58a6f97583a545b50ace20c7a936af16ad769276 observation completed:
+24 cases,48 prompt-only forwards,9752 processed prompt tokens,2.6192165s control
+time, optimizer/generation0. All24 observed/reference last-token logits exactly
+match and agree with the previous normal-greedy first tokens. Prompts186–241
+tokens; question visibility is nonzero in all48 heads/layers per case.
+Train first/full11/12 and both5/6; development first3/12, prior full2/12,
+both0/6. These selected cases are diagnostic, not population quality estimates.
+All raw/case/native/call/usage bindings verify; no numerical/cancel/UNKNOWN error.
+The initial pre-call failure remains separate. No more model calls are authorized
+by this closed diagnostic. Its evidence motivates the single grounding hypothesis
+above without claiming an established attention or storage cause.
 
 ## Current: COVER4 closed; joint quality not recovered
 

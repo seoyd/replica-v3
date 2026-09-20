@@ -1,5 +1,58 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 selector attention observed; mask-loss explanation unsupported here
+
+Corrected source58a6f97583a545b50ace20c7a936af16ad769276 was pushed and matched
+origin/main before observation. Frozen executable
+bd95a5da32c35fcbe7b6ca604519db4d8f82aa821a12c2569d4d462628034466 executed exactly
+`training::fresh::tests::paired_selector_attention_diagnostic` in a new process:
+executed1/PASS1, exit0,10.04s including input/native audit. Native DIVERSE7424
+physical remains60c772b9ff71ae20438c4e33f535d53e73b1d4ef885ef3d041da704f6ebb5416,
+weightsa0c36fc9aac19696d245eca60dfb130de290bb798eb25948f65d1e501c6c7a1c.
+
+First two executed view0 train pairs and first two view0 development pairs per
+C/D/E give24 inputs, selected without looking at outcomes. Each has one observed
+and one reference prompt forward:48 own-model teacher-budget calls,9752 prompt
+tokens, RunControl2.6192165s, optimizer/generation0. No target prefix was supplied.
+All24 observed/reference last-position logits are exactly identical and their
+argmax agrees with the preserved greedy raw. All prompts186–241 tokens retain
+both records and the question; no question region is masked at any of48 layer/
+head observations per case. This rules out missing/masked question input for
+these cases, not for arbitrary long prompts or as a proof of semantic use.
+
+| Fixed diagnostic sample | First-token correct /12 | Existing full /12 | Both full /6 |
+|---|---:|---:|---:|
+| Actual trained scenes |11|11|5|
+| Development scenes |3|2|0|
+
+C/D/E first-token train4/4/3 of4, development1/1/1 of4. Full train4/4/3,
+development1/0/1. Existing whole-answer scores are reuses, not fresh generations.
+Final-layer mean selected/other-record attention mass on development is
+C0.336/0.343, D0.362/0.348, E0.366/0.339. Even correct train cases need not have
+selected-record mass dominance (train D0.383/0.420); neither these averages nor
+head visualizations establish the causal mechanism. No unique storage,
+tokenizer, optimizer or attention implementation cause is established.
+
+Pure Rust `recount.rs` verified all24 cases,48 prepared/resolved call receipts,
+native/raw physical hashes, observation/reference logits, original raw token,
+complete counts, finite normalized attention and usage; exit0, no model calls.
+Evidence `artifacts/selector-attention-20260920-evidence/` includes preserved
+initial compile/pre-call failures, corrected tests/executable, observation log,
+`observation-content-bound/` cases/attention/start/finish/call binaries and reader.
+Raw SHA25617574bd4c6c3022c48f0368e971725a2760993d453744c82b6dc06455fedf4ee;
+finished55a0c18f645f1c2077b71471269aa6d90e85586fc211f1109f03fdbe18c4cc44;
+recount36af0b841fdcef63e3b7091026ad04b8ca9f4eadbc3ee362559a92c66dc8a255.
+No unknown/failed model calls. Initial failed preparation used0 forwards.
+TINY direct observer regression used5 forward/2 backward, optimizer0;
+all SMALL optimizer0/generation0/teacher-forwards48 for this diagnosis.
+
+DIAGNOSTIC_EXECUTION=PASS, MODEL_QUALITY_RECOVERED=false. Existing DIVERSE
+development399/70/both0 and COVER4 375/67/both2 remain unchanged. Final200 remains
+NOT_CREATED/NOT_OPENED; S4/S5/S6 unmet; GOAL1_READY/GOAL1_ACCEPTED=false.
+Next single hypothesis is a fixed train-only record-grounding loss with the
+same COVER4 data and P parent. It is not implemented or executed at this entry;
+direct gradient/native-resume gates and a new bounded registration precede it.
+
 ## 2026-09-20 attention pre-call association corrected
 
 Initial source36b26fc50e37b7b3b780dcf1b72e0bfec07ad017/executable47551a9…
