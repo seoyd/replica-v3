@@ -1,5 +1,36 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: fixed VALUE endpoint, unseen value-combination diagnostic
+
+Register a read-only diagnostic before any further learning. Parent is the closed
+VALUE7424 native at `artifacts/pair-value-20260920/VALUE/segment-0002/final`,
+physical09b0f972cebf37cd0ea1006a1a606176282c4a79d722374aa305ca9949a1e1b1.
+Its original and exchanged train views previously scored48/48 each, both24/24,
+while development both remained0/192. This diagnostic separates fitting those
+two values from copying other supplied values under the same trained selectors.
+
+Reuse `paired_seen_train_diagnostic`, actual native generation, RunControl and
+binary call/panel receipts. Recheck the same original48 with the new diagnostic
+binary against retained raw tokens. Then change only the values in both records
+of those48 cases: choose the first two-value donor in the owned train order with
+distinct values, neither in the old pair, same numeric/text class and numeric
+width. Preserve entity/context/record ID/order/status/times/question and citation;
+request-only resolver verifies the new labels before calls. No expected answer
+or resolver is an inference input. Text lengths may differ; not matched FLOPs.
+Reject any changed prompt already present in the combined owned train sources.
+New cases remain diagnostic development data and do not enter training/final200.
+
+Only the VALUE7424 model is observed: optimizer0, at most96 SMALL generation and
+96 own-model teacher calls including the48 original parity cases; TINY/scalar0.
+One process at a time, command900s/cleanup120s, total active1800s, no automatic
+retry or checkpoint sweep. Use one new evidence root
+`artifacts/value-combination-20260920-evidence/`. Pure fixture checks execute no
+model calls. Failed preparation/calls and unknown usage remain preserved/blocking.
+Report full/body/citation/EOS, both, old-answer repetition and actual token use.
+Success on these combinations is not heldout quality; failure is evidence for
+value/selector transfer work, not proof of one optimizer or tokenizer defect.
+No new learning is registered here; all prior terminal budgets remain closed.
+
 ## Current result: wording helps some development cases; joint gate remains unmet
 
 The registered selector-wording study is closed at9984 after2560 new updates,

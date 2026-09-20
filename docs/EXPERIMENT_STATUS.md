@@ -1,5 +1,22 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 New value-combination diagnostic prepared; observations not yet run
+
+Extend only the existing test-scoped `paired_seen_train_diagnostic`; no product
+training/inference, math, data source or storage changes. Recombine values from
+verified owned train donors in deterministic input order, preserving numeric
+width/type and all selector fields. Reject old-pair value overlap, invalid pairs
+and any changed prompt already in the owned train sources. Request-only label
+validation remains outside generation. New inputs/metadata are recorded locally.
+
+Pure fixture verifies192 cases and malformed boundaries,1 PASS0.01s. Existing
+value-swap fixture also1 PASS0.01s; no model calls or optimizer updates. Locked/offline
+release test build PASS14.18s. Initial unqualified exact-list selected0 tests,
+recorded as NOT_EXECUTED; corrected fully qualified list confirms exactly1 test.
+The unchanged VALUE7424 physical file hash was directly verified. Only its new
+original48 parity and recombined48 observation are registered, SMALL optimizer0,
+generation/teacher max96 each, TINY/scalar0; no new learning is registered.
+
 ## 2026-09-20 Selector-wording exposure closed: limited gains, joint quality fails
 
 EXECUTED_THIS_RUN. Frozen source6f28e024a370ea4b809c5f2e648a8ff669e13cce,

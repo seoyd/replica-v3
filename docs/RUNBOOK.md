@@ -1,5 +1,20 @@
 # Replica v3 B0 runbook
 
+## Fixed-model new value combinations
+
+The production-feature `training::fresh::tests::paired_seen_train_diagnostic`
+accepts `R3_TRAIN_PAIR_RECOMBINE_VALUES=1`, mutually exclusive with value-swap
+and margin-only. Set `R3_TRAIN_PAIR_ROOT` to the explicitly registered closed
+arm and `R3_TRAIN_PAIR_OUTPUT` to a new directory. Build locked/offline with
+Accelerate, retain the exact test executable, use compute threads1 and execute
+the fully qualified ignored test only. This takes48 generation/48 own-model
+teacher calls, zero optimizer; labels never enter native generation.
+It keeps the first eight seen selector pairs per C/D/E and changes only values
+using the first disjoint same-type/width donor in owned train order. All new
+prompt digests must be absent from owned training inputs. Preserve the explicit
+diagnostic cases, start/terminal/call/raw receipts and do not turn these derived
+train-scene observations into heldout quality or automatic training permission.
+
 ## Fixed seen-pair fitting diagnostic
 
 `replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT

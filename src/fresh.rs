@@ -4690,7 +4690,69 @@ mod tests {
         assert_eq!(checked,48);Ok(())
     }
     #[test]
-    #[ignore = "explicit completed arm/new output; normal or value-swap48/48, margins0/96 generation/teacher; optimizer0"]
+    fn recombined_values_preserve_selection_and_reject_overlap() -> Result<()> {
+        let (all, metadata)=generate(32,0,19)?;
+        let mut es=vec![];
+        for (e,m) in all.iter().zip(&metadata).filter(|(_,m)|(2..=4).contains(&m.bucket)&&m.view==0) {
+            es.extend([e.clone(),flip_selection(e,m)?.0]);
+        }
+        let new=recombine_train_values(&es,&all)?;
+        assert_eq!(new.len(),192);
+        for (a,b) in es.iter().zip(&new) {
+            assert_ne!(a.answer,b.answer);
+            assert_eq!(citations(&a.answer)?,citations(&b.answer)?);
+            assert_eq!(resolve(&b.request)?,b.answer);
+            let mut restored=b.clone();restored.id=a.id.clone();restored.answer=a.answer.clone();
+            restored.request.request_id=a.request.request_id.clone();
+            for (x,y) in restored.request.evidence.items.iter_mut().zip(&a.request.evidence.items) {x.original_excerpt=y.original_excerpt.clone();}
+            assert_eq!(digest(&restored)?,digest(a)?);
+        }
+        assert!(recombine_train_values(&es[..1],&all).is_err());
+        assert!(recombine_train_values(&es[..2],&[]).is_err());
+        assert!(recombine_train_values(&es[..2],&es[..2]).is_err());
+        let mut wrong=es[..2].to_vec();wrong[1].request.evidence.items.reverse();
+        assert!(recombine_train_values(&wrong,&all).is_err());
+        wrong=es[..2].to_vec();wrong[0].answer.clear();
+        assert!(recombine_train_values(&wrong,&all).is_err());
+        Ok(())
+    }
+    // Diagnostic only: choose donor values in owned train order, never by output.
+    // Preserve numeric width; text lengths can differ and are not compute matched.
+    fn recombine_train_values(es:&[Episode],donors:&[Episode])->Result<Vec<Episode>> {
+        if es.is_empty() || !es.len().is_multiple_of(2) {return Err(bad("value diagnostic pair count"));}
+        let mut out=vec![];
+        for pair in es.chunks_exact(2) {
+            let a=&pair[0].request.evidence.items; let b=&pair[1].request.evidence.items;
+            if a.len()!=2 || b.len()!=2 || a.iter().zip(b).any(|(a,b)|a.original_excerpt!=b.original_excerpt)
+                || resolve(&pair[0].request)?!=pair[0].answer || resolve(&pair[1].request)?!=pair[1].answer
+                || pair[0].answer==pair[1].answer {return Err(bad("value diagnostic invalid source pair"));}
+            let old=[parsed_record(&a[0])?.2,parsed_record(&a[1])?.2];
+            let numeric=|s:&str|!s.is_empty()&&s.bytes().all(|b|b.is_ascii_digit());
+            let mut chosen=None;
+            for donor in donors {
+                if donor.request.evidence.items.len()!=2 {continue;}
+                let values=[parsed_record(&donor.request.evidence.items[0])?.2,parsed_record(&donor.request.evidence.items[1])?.2];
+                if values[0]==values[1] || values.iter().any(|v|old.contains(v))
+                    || old.iter().zip(values).any(|(a,b)|numeric(a)!=numeric(b)||(numeric(a)&&a.len()!=b.len())) {continue;}
+                chosen=Some(values);break;
+            }
+            let values=chosen.ok_or_else(||bad("no disjoint owned train values of matching type/width"))?;
+            for e in pair {
+                let mut changed=e.clone();changed.id=format!("{}-recombined-values",e.id);
+                changed.request.request_id=changed.id.clone();
+                for (item,value) in changed.request.evidence.items.iter_mut().zip(values) {
+                    let (entity,context,_)=parsed_record(item)?;
+                    item.original_excerpt=format!("{entity}의 {context} 값은 {value}이다.");
+                }
+                changed.answer=resolve(&changed.request)?;
+                if changed.answer==e.answer || citations(&changed.answer)?!=citations(&e.answer)? {return Err(bad("value diagnostic selection changed"));}
+                out.push(changed);
+            }
+        }
+        Ok(out)
+    }
+    #[test]
+    #[ignore = "explicit completed arm/new output; normal/value-swap/recombined48/48, margins0/96 generation/teacher; optimizer0"]
     fn paired_seen_train_diagnostic() -> Result<()> {
         if cfg!(feature = "test-support") || !cfg!(feature = "accelerate") {
             return Err(bad("train diagnostic requires production features"));
@@ -4698,8 +4760,9 @@ mod tests {
         let root = PathBuf::from(std::env::var("R3_TRAIN_PAIR_ROOT").map_err(|_|bad("explicit arm required"))?);
         let output = PathBuf::from(std::env::var("R3_TRAIN_PAIR_OUTPUT").map_err(|_|bad("new diagnostic output required"))?);
         let value_swap=std::env::var("R3_TRAIN_PAIR_VALUE_SWAP").as_deref()==Ok("1");
+        let recombine=std::env::var("R3_TRAIN_PAIR_RECOMBINE_VALUES").as_deref()==Ok("1");
         let margin_only=std::env::var("R3_TRAIN_PAIR_MARGIN_ONLY").as_deref()==Ok("1");
-        if value_swap && margin_only {return Err(bad("choose one train diagnostic"));}
+        if [value_swap,recombine,margin_only].into_iter().filter(|x|*x).count()>1 {return Err(bad("choose one train diagnostic"));}
         let p: Plan = read(&root.join("plan.r3b"))?;
         let end = history(&root, &p)?.pop().ok_or_else(||bad("completed arm missing"))?;
         if end.resume || end.phase.as_deref()!=Some("Finished") || end.step!=p.config.max_steps {
@@ -4738,6 +4801,16 @@ mod tests {
             }
         }
         if es.len()!=48 {return Err(bad("train pair denominator"));}
+        if recombine {
+            es=recombine_train_values(&es,&all)?;
+            for (e,m) in es.iter().zip(&mut ms) {m.id=e.id.clone();}
+            let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
+            validate_framed(&es,&tok)?;
+            let seen: BTreeSet<_>=all.iter().map(|e|tok.prepare(&e.request,2048,"value-diagnostic").map(|p|p.token_digest)).collect::<Result<_>>()?;
+            for e in &es {
+                if seen.contains(&tok.prepare(&e.request,2048,"value-diagnostic")?.token_digest) {return Err(bad("recombined diagnostic input already in owned training sources"));}
+            }
+        }
         if margin_only {
             let study:Study=read(&f.study.join("study.r3b"))?;
             if file_hash(&f.study.join("study.r3b"))?!=f.study_hash {return Err(bad("margin study binding"));}
@@ -4802,8 +4875,9 @@ mod tests {
         }
         std::fs::create_dir(&output)?;
         let checkpoint = root.join(&end.checkpoint);
-        let panel=if value_swap {"seen-value-swap48"}else{"seen-train48"};
-        write(&output.join("started.r3b"), &binary::record!({"source":source_digest()?,"binary":file_hash(&std::env::current_exe()?)?,"policy":digest(&p)?,"checkpoint":checkpoint,"physical":file_hash(&checkpoint)?,"cases":digest(&es)?,"scope":if value_swap {"SAME_SCENE_VALUE_SWAP_DIAGNOSTIC_NOT_HELDOUT"}else{"TRAIN_DIAGNOSTIC_NOT_HELDOUT"},"generation_limit":48,"teacher_limit":48,"optimizer_limit":0}))?;
+        let panel=if value_swap {"seen-value-swap48"}else if recombine {"recombined-values48"}else{"seen-train48"};
+        write(&output.join("started.r3b"), &binary::record!({"source":source_digest()?,"binary":file_hash(&std::env::current_exe()?)?,"policy":digest(&p)?,"checkpoint":checkpoint,"physical":file_hash(&checkpoint)?,"cases":digest(&es)?,"scope":if value_swap {"SAME_SCENE_VALUE_SWAP_DIAGNOSTIC_NOT_HELDOUT"}else if recombine {"OWNED_TRAIN_VALUES_NEW_COMBINATIONS_NOT_HELDOUT"}else{"TRAIN_DIAGNOSTIC_NOT_HELDOUT"},"generation_limit":48,"teacher_limit":48,"optimizer_limit":0}))?;
+        if recombine {publish_confirmed(&output.join("diagnostic-cases.r3b"),&(&es,&ms))?;}
         let mut control = recovery::RunControl::command(false)?;
         control.set_call_limits(48,48);
         let result = evaluate_panel(&p,&output,&checkpoint,end.step,panel,&es,&ms,&mut control);
