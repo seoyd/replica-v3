@@ -1,5 +1,62 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Co-batch completed; joint selection not recovered
+
+EXECUTED_THIS_RUN on frozen source `e1e2ca4098bc55ec6fc9407fd837bbb16b464b85`.
+All1280 registered SMALL updates completed from P6144 to7424. Batch8 grouping
+alone changed against the retained ADJACENT control; weights/Adam at entry,
+data/two-update multisets, tokenizer, LR3e-5 and response CE remained identical.
+
+| Absolute step | New updates | Train64 | Primary512 | Transfer128 | Flipped192 | Both192 |
+|---|---:|---:|---:|---:|---:|---:|
+| 6400 | 256 | 43 | 368 | 67 | 5 | 0 |
+| 7424 | 1280 | 48 | 371 | 60 | 21 | 0 |
+
+At matched7424, retained ADJACENT was366/512,73/128,33/192,both2/192.
+COBATCH original77/192, same normal output179/192, every C/D/E both0;
+primary buckets `[57,58,30,25,22,62,53,64]`, transfer
+`[7,8,1,0,4,12,12,16]`. Screens32/64/128/768 were47/48/41/47 out of64;
+flipped24 scores0/0/1/1. All2144 evaluation generations ended with EOS/errors0.
+Grouping alone is not adopted: retention/transfer/joint selection failed.
+
+Actual input2,197,229/target157,654 includes discarded1,796/154;
+committed input2,195,433/target157,500; padding781,139.10,240 draws,
+1280 per task,5120 per familiar/P phrase. Generation2160 including P16,
+teacher2144, active accounting1586.816652667s. The first update was saved
+and restored in a fresh process. A real900s timeout at6904 saved successfully,
+TIME_BUDGET only, resume=true; its discarded work remains counted. The next
+process completed520 updates and all remaining evaluations. Final native at7424,
+Finished/NO_FURTHER_PROGRESS, resume=false; training also records BUDGET_REACHED.
+Peak sampled RSS1,330,320KiB is not an S6 benchmark. TINY33 updates/453 generation/
+453 teacher and scalar optimizer0 are separate. No UNKNOWN/cancel/storage failure.
+Pure `fresh paired-report` exit0 verified raw, teachers, native, policy, exposure
+and actual usage. No historical endpoint or operational pointer changed.
+
+DERIVED_EXISTING_RAW, optimizer/generation/teacher0: final192 target pairs first
+differ at token0 for172 and token1 for20.137 flipped first-token teacher argmaxes
+are incorrect; first mean NLL1.9534215490, remaining mean NLL0.1666936514.
+The repeated179 identical outputs support investigating conditional discrimination;
+they do not prove an attention/optimizer defect. A local Rust recount initially
+used a nonexistent singular teacher filename; corrected plural input completed
+without model calls. No missing observation was converted into a zero score.
+
+Executable `artifacts/cobatch-20260920-executable`, SHA256
+`22909120b1a096e9fd72c673adf726d9a6a68a209ded143f2f3d14e18504aca3`;
+code digest `b5701a3a5a4b4e437b1f4d73da3a0bd5ba68f05849b7a59d1c55852d50b86a4d`;
+policy `2dd9a8da3361925032dede655a7291ebb4cc96dcc9b195097c115e53d050c232`.
+Final native `artifacts/cobatch-20260920/COBATCH/segment-0002/final`, physical
+SHA256 `a32f855b41d030ec65565cf4f0c57e9535a333c1cf34a948108563769056f699`,
+weights `4355a6423b1e3f5e43fab028549e1b1ee29d505464c79ee4da1c264dd74c44ae`.
+Raw/teachers/decisions are in that arm; test/source/binary hashes, candidate.patch,
+input-equality proof, Rust recounts and command logs are under
+`artifacts/cobatch-20260920-evidence/`. Original/private artifacts stay unpublished.
+
+CODE_VERDICT=IMPLEMENTER_TESTED_PASS; LEARNING_EXECUTION=COMPLETE;
+DEVELOPMENT_JOINT_PASS=false; FINAL200=NOT_CREATED/NOT_OPENED;
+S4/S5/S6=NOT_RUN_PRECONDITION_FAILED; GOAL1_READY=false; GOAL1_ACCEPTED=false.
+Independent current review is pending. A subsequent intervention must use a new
+bounded policy; this closed run and its unused alternatives are not reopened.
+
 ## 2026-09-20 Co-batch research — direct verification before SMALL
 
 The continuing user authorization permits a new bounded batch-grouping hypothesis.

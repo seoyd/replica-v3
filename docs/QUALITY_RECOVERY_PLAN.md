@@ -1,6 +1,13 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: joint pair packing at unchanged batch8
+## Closed: joint pair packing at unchanged batch8
+
+Completed1280 new updates at7424: primary371/512, transfer60/128, flipped21/192,
+both0/192, generation errors0. Matched ADJACENT control was366/73/33/2.
+Stop NO_FURTHER_PROGRESS with the optimizer cap exhausted, resume=false.
+Batch grouping alone did not recover joint quality and is not adopted. Preserve
+all native/raw evidence. Further single-variable research needs a separate
+parent-bound registration under the user's continuing authorization.
 
 The user authorized continuing evidence-based one-variable research. Neither
 first-target4 nor LR9e-5 recovered joint selection; keep their failures closed.
