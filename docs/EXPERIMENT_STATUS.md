@@ -1,5 +1,208 @@
 # 진단 및 구현 상태
 
+## 2026-09-21 Foundation orbit512 비교 종료 — 공동 선택 기준선 미확립
+
+R3-FOUNDATION-ORBIT-1.0의 준비·검토 A 후 FIXED/BOTH를 각각 실제512회
+학습했다. 각 군은 같은 보존 A initial에서 fresh Adam으로 시작해1회 저장,
+새 process511회를 수행했다. 네 학습 command는 모두 exit0이며 두 최종
+endpoint는 Finished/resume=false/BUDGET_REACHED다. 신규 SMALL optimizer는
+합계1024로 상한을 전부 사용했다. 추가 학습·seed/LR 탐색·기존 run 재개는0.
+
+**핵심 판정:** 정상 실행/자료/재채점과 모델 품질을 구분한다. BOTH의 새 dev
+FULL은 FIXED보다19개 많지만 QUERY_BOTH는46→1, ALL4는1→0이다.
+두 군 모두 train/dev 후보 조건에 미달했다. `orbit-compare`의 selected는
+Null이며 confirmation은 NOT_RUN_PREREQUISITE다. 구현자는 봉인된 평가
+본문/정답을 읽지 않았다. MINIMAL_BINDING_BASELINE_VERIFIED=false,
+S4/S5/S6=NOT_ACCEPTED, GOAL1_READY=false, GOAL1_ACCEPTED=false다.
+
+### 실제 코드·실행 신원
+
+Source candidate **13969c6fe2b7b9232297a0796b037b202add350b**를 학습 전에
+정상 push했고 실제 원격 main SHA 일치를 확인했다. 학습 중 source diff0.
+변경 source는 src/binding.rs, src/fresh.rs, src/quality_recovery.rs이며,
+기존 data/tape 검증·trainer·RunControl·native reader·publisher·scorer를
+사용하는 training-only 비교 경로다. 새 source 파일0, 새 core/framework0.
+모델 수식·tokenizer·optimizer·기본 loss·storage/SQLite·제품 생성은 그대로다.
+후속 이 상태/계획 갱신은 report-only commit이며 학습 source와 구분한다.
+
+동결 production executable은 artifacts/foundation-orbit-20260921-executable,
+SHA256 **5745c440536e5046518dad97b450a78a3c8d9f14e5680a88a2b382e809f3fea1**.
+Compiled source digest
+3ad507da91a8fcc32ac0fb490a720c7cc8d21c5157102e9a5b1fcaadcf11e74a.
+Test-support 없이 Rust1.98.1/locked/offline/Accelerate로 빌드했다.
+LOCAL5 SMALL9,513,408 parameters, CPU/F32/thread1, tokenizer562, seq256,
+batch8/accumulation1, 기본 CE/first-target1, Adam beta.9/.999/eps1e-8,
+decay.01/clip1, warmup32→LR3e-4 고정을 양쪽에서 유지했다.
+
+같은 initial physical SHA256
+a58b1d3ff6ac7e4597f886b0450f84d0230911ab900a5c367547f7198a15faaa,
+tokenizer SHA256 ec945ee5f3cbd87992bdfa13f199de2a671b94b64337dff04d85e01d982ab9ef.
+동일 common corpus physical SHA256은
+e73fddef722c4cd1c249d9896b49dd7e1dcae96bc39ad0eb1e3438ee6c5a51ac다.
+모두 이전 학습된 A512가 아닌 A의 무학습 initial을 사용했다.
+
+Train/dev는 각128개 서로 다른 semantic skeleton×4이며 두 집합은 겹치지
+않는다. Digit0~9의 train key 빈도는[25,25,26,26,26,25,25,26,26,26],
+value는[26,26,26,25,25,26,26,26,25,25]다. Dev key는
+[25,26,25,25,26,26,25,26,26,26], value는[26,26,26,25,26,26,25,25,26,25].
+각 기대25.6에서 절대편차 최대0.6이며 physical order64/64다. 질문 없이
+첫/마지막 기록, 작은 event ID, 작은 value를 고르는 독립 규칙은 각각
+256/512다. 실제 prompt+digit+EOS는 모두146tokens, 제공2/제외0이다.
+이는 label 일치와 자료 균형 검증이며 모델이 그 규칙을 배웠다는 뜻은 아니다.
+
+### 같은 endpoint의 실제 전수 결과
+
+|Arm / panel|FULL|QUERY_BOTH|SWAP_BOTH|ALL4|Gold / foil / other / malformed|EOS / errors|
+|---|---:|---:|---:|---:|---|---|
+|FIXED common train-orbit|274/512|88/256|42/256|0/128|274 /224 /14 /0|512 /0|
+|FIXED unseen dev|236/512|46/256|19/256|1/128|236 /252 /24 /0|512 /0|
+|BOTH exposed train-orbit|256/512|0/256|31/256|0/128|256 /256 /0 /0|512 /0|
+|BOTH unseen dev|255/512|1/256|28/256|0/128|255 /257 /0 /0|512 /0|
+
+FIXED의 실제 exposed fit은213/256·queryboth85/128이고, 미노출 반대 배정은
+61/256·queryboth3/128이다. common train274/512를 exposed fit이라고 하지
+않는다. FIXED256 unique×16, BOTH512 unique×8; 공통128 skeleton은 각16번
+방문했다. 두 군 모두 총4096행을 소비했고512 tape의 base/query 순서와
+LR bits·Adam clock은 독립 검산에서 일치했다. 각input593920/target8192,
+합계input1,187,840/target16,384, padding/폐기/미커밋 input·target 모두0.
+
+각 train 후보조건 full>=508/queryboth>=252/all4>=124와 dev 조건
+full>=488/queryboth>=232/all4>=116을 모두 충족하지 못했다. 정상 종료/EOS나
+새 process 재현 PASS는 이 품질 조건을 대신하지 않는다.
+
+|고정64 표본 step|FIXED train FULL/query/swap/all4|FIXED dev|BOTH train|BOTH dev|
+|---|---|---|---|---|
+|0|0/0/0/0|0/0/0/0|0/0/0/0|0/0/0/0|
+|128|9/0/0/0|8/0/1/0|8/0/0/0|6/0/0/0|
+|256|29/1/3/0|29/0/4/0|29/0/1/0|26/0/0/0|
+
+표의 분모는 FULL64, query/swap32, all4 16이다. Step0의 각64 오류/EOS0도
+분모와 raw에 보존했다. Step128/256의 각 표본은 EOS64/오류0이다. 이 표본과 최종
+512 전수를 같은 분모로 이어 붙여 개선률을 만들지 않는다.
+
+### 효과와 해석의 한계
+
+같은 dev FIXED→BOTH의 FULL gain143/loss124, +19/512=+3.7109375%p다.
+128개 orbit별 FULL 비율 차이로 계산한 SE1.5211013%p, 정규근사95% 구간은
+[0.7295790,6.6922960]%p다. 한 seed·작은 고정 alphabet에서의 paired 관측이며
+512개 독립 문항이나 넓은 언어 일반화의 신뢰구간으로 해석하지 않는다.
+QUERY_BOTH gain0/loss45, ALL4 gain0/loss1이므로 FULL 증가를 공동 선택
+능력 회복이라고 부를 수 없다.
+
+BOTH는 train query256쌍 전부, dev256쌍 중253쌍에서 두 질문에 같은 값을
+냈다. FIXED는 각각96/256·135/256이었다. 같은 query의 배정 변경에도 같은
+출력인 쌍은 FIXED train180/dev187, BOTH train194/dev199(각분모256)다.
+BOTH 최종 오답은 모두 다른 제공 기록의 값이었다. 두 자료의 정답 검증과
+실제 정상 생성 실패가 함께 확인됐으며, 후처리/EOS/잘못된 숫자 문자열로
+점수를 보정하지 않았다. 이 특정 endpoint의 질문 구별 실패를 관측한 것이지,
+모든 모델/분포에서 질문을 전혀 읽지 않는다는 명제나 내부 회로 증명이 아니다.
+
+|Arm / panel|첫 digit full-vocab NLL|EOS full-vocab NLL|gold/foil 재정규화 NLL|
+|---|---:|---:|---:|
+|FIXED train|1.592714804543|0.000456482669|1.470620619273|
+|FIXED dev|2.042247317189|0.000457582499|1.858239618418|
+|BOTH train|0.924160953742|0.000329529201|0.848874226970|
+|BOTH dev|0.959151574061|0.000328443898|0.848460166582|
+
+동일 self-teacher forward의 첫 분기 raw gold−foil logits에서 stable
+softplus(−delta)를 재계산했다. ln2=0.69314718056은 마지막 열의 두 후보
+대조에만 사용한다. 모든 최종 teacher 첫 argmax와 free generation 첫 token은
+일치했다. Full-vocab NLL 감소나 token 정확도 거듭제곱으로 FULL을 설명하지
+않는다. 양쪽 배정 노출만 바꾸는512회 비교는 선택 학습을 확립하지 못했다.
+더 긴 학습/다른 설계의 가능성이나 실패 원인을 이 한 비교로 확정하지 않는다.
+
+독립 native 검사는 FIXED512와 기존 A512의 실제 parameter content,
+Adam136 tensors 전체 F32 bits, tokenizer/architecture/clock/cursor/input/target이
+동일함을 확인했다. 새 생성이나 재학습 없이 읽기만 수행했다. 이는 FIXED
+학습 경로의 보존 증거이며 옛 dev55/256과 새 dev236/512의 성능 비교가 아니다.
+
+### 저장·명령·검증 자료
+
+마지막 durable은 각 study/{FIXED,BOTH}/segment-0001/final, step512다.
+실제 native 전체 파일 SHA256:
+
+- FIXED:7500f025bdf1ac9513c7e1c638028cbdd8b4480b9d12742bc214b8ba73ee2743.
+- BOTH:44c8c105f7e240a90e18028face8f404782fe9b7e69ab6b993fbaa512e18c364.
+
+최종 평가에 사용한 중간 저장 파일과 final 파일의 physical hash는 서로
+다르다. Native tensor-content/step/정책을 독립 연결해 같은 모델임을 확인했다.
+TRAIN_END의 sha256 표시는 기존 manifest.weights_sha256이며 위 전체 파일
+해시와 구분한다. 기록된 두 segment 시간은 FIXED357.211796초,
+BOTH357.996675751초로 합715.208471751초다. 모델 load·평가·저장을 포함하고
+컴파일/독립 reader 시간과 구분한다. 각900초/cleanup120초 제한 내 종료했다.
+Sampled peak RSS는 FIXED1,185,952KiB, BOTH2,414,912KiB다. 동일 내구성의
+독립 성능 benchmark가 아니며 메모리/저장 최적화나 S6 통과 증거가 아니다.
+
+아래 명령은 모두 동결 executable로 실제 실행했다. 모든 모델 process에
+VECLIB_MAXIMUM_THREADS=1 OMP_NUM_THREADS=1 RAYON_NUM_THREADS=1을 적용했다.
+각 run은1회 segment와511회 segment의 별도 process로 두 번 실행했다.
+각 report는 기존 raw 읽기이고, parity는 고정 첫16개 새 생성이다.
+
+```text
+artifacts/foundation-orbit-20260921-executable fresh orbit-swap --parent /Users/seo/Projects/Replica-v3/artifacts/binding-learnability-20260921-study-r1/A --output /Users/seo/Projects/Replica-v3/artifacts/foundation-orbit-20260921-study
+artifacts/foundation-orbit-20260921-executable fresh orbit-prepare --parent /Users/seo/Projects/Replica-v3/artifacts/binding-learnability-20260921-study-r1/A --output /Users/seo/Projects/Replica-v3/artifacts/foundation-orbit-20260921-study
+artifacts/foundation-orbit-20260921-executable fresh run --root /Users/seo/Projects/Replica-v3/artifacts/foundation-orbit-20260921-study/FIXED
+artifacts/foundation-orbit-20260921-executable fresh run --root /Users/seo/Projects/Replica-v3/artifacts/foundation-orbit-20260921-study/BOTH
+artifacts/foundation-orbit-20260921-executable fresh binding-report --root /Users/seo/Projects/Replica-v3/artifacts/foundation-orbit-20260921-study/FIXED
+artifacts/foundation-orbit-20260921-executable fresh binding-report --root /Users/seo/Projects/Replica-v3/artifacts/foundation-orbit-20260921-study/BOTH
+artifacts/foundation-orbit-20260921-executable fresh binding-parity --root /Users/seo/Projects/Replica-v3/artifacts/foundation-orbit-20260921-study/FIXED
+artifacts/foundation-orbit-20260921-executable fresh binding-parity --root /Users/seo/Projects/Replica-v3/artifacts/foundation-orbit-20260921-study/BOTH
+artifacts/foundation-orbit-20260921-executable fresh orbit-compare --study /Users/seo/Projects/Replica-v3/artifacts/foundation-orbit-20260921-study
+```
+
+위 실제 명령은 exit0이다. 준비 단계의 상대경로 실패1건은 아래 절과 원본
+swap16.log에 보존했다. Checkpoint나 정책 파일을 수정해 통과시키지 않았다.
+구현자 parity는 각16/16이며 실제 원자료/실패 포함 raw token·EOS가 같다.
+시험은 아래 T1~T6를 덮는 고유3건만 실행해 PASS/exit0였고 zero-test0이다.
+test binary SHA2569dd95fd3c3dbe4254ebb7f4ecc724b6d912a82ffe97b9d3a67bdbfc7b229425c.
+TINY optimizer8/generation64/teacher64, scalar/finite-difference0으로 별도다.
+
+```text
+cargo test --release --locked --offline --features accelerate --bin replica-train training::fresh::identifiable::binding::tests::foundation_ -- --nocapture --test-threads=1
+```
+
+검토자도 동일 frozen executable의 fresh orbit-review-parity --root에 같은
+FIXED/BOTH 절대경로를 주어 순차 실행했다. 각 exit0/16개 생성/16개 일치,
+teacher0/optimizer0이며 재시도0이다. 독립 raw/teacher/receipt/usage 재검산에서
+학습평가 generation2816 + swap16 + 구현자parity32 + 검토자parity32 =2896,
+self-teacher2816, optimizer1024를 확인했다. 모든 generation2896/teacher2816은
+RETURNED, NOT_INVOKED0/UNKNOWN0이다. 정상 생성 완료와 정답 여부는 별도다.
+Swap 및4개 parity까지 포함한 recorded elapsed 합722.039185168초로,
+active7200초 상한 내다. 컴파일·보고서 작성·독립 raw reader 시간은 이 모델
+실행/관측 receipt 합에 넣지 않았다. 미사용 호출량을 추가 진단에 쓰지 않았다.
+
+수학 최종 독립 보고 artifacts/foundation-orbit-20260921-math-review/FINAL-RESULT-REVIEW.md의
+SHA256은944af34eb63a0def9a98a519420efb7fcf1bf4fa4bd1feac2046f38d3e3baa20다.
+이 검토자는 추가 모델 호출0으로 양군 trace1024·최종 raw/teacher2048을
+검산했다. 별도 데이터 검토자의 실제32회 재생성과 구분한다.
+데이터 최종 독립 보고 artifacts/foundation-orbit-20260921-review/d4/REPORT.md는
+SHA2568056a45a204ddd29e653923cb7b4c91f92fcd229239e5a9aef88fa6cca2baf0f다.
+실제16개 예정 panel의 raw/teacher2816행씩,2개 usage/endpoint와 관측 ledger를
+검산하고 독립32개 출력을 재생성했다. INDEPENDENT_RECOUNT_INTEGRITY=PASS,
+FIXED_BASELINE_CANDIDATE=FAIL, BOTH_BASELINE_CANDIDATE=FAIL이다.
+원 A의 지정20개 corpus/checkpoint/Adam/raw/종료/parity 파일은 사전 hash와
+모두 일치했고, frozen source/executable도 실행 후 다시 일치했다.
+
+CODE_SCOPE=IMPLEMENTED_AND_DIRECT_TESTED; INDEPENDENT_DATA_REVIEW=PASS;
+VALUE_SWAP16=EXECUTED; TRAIN_FIT_FIXED=213/256_EXPOSED;
+TRAIN_FIT_BOTH=256/512; UNSEEN_RECOMBINATION=FAIL; MODEL_EFFECT=MIXED_FULL_AND_WORSE_JOINT;
+CONFIRMATION=NOT_RUN_PREREQUISITE; MINIMAL_BINDING_BASELINE_VERIFIED=false;
+S4/S5/S6=NOT_ACCEPTED; GOAL1_READY=false; GOAL1_ACCEPTED=false.
+최신 요구사항 전체와 구현/실행/조건부 미실행을 종료 시 다시 대조했다.
+인가 범위 구현·제한 비교는 완료됐고, 남은 품질 목표를 성공으로 바꾸지 않았다.
+
+실제 준비물/원자료는 프로젝트 내부의 아래 허용 경로에 보존했다.
+
+- artifacts/foundation-orbit-20260921-study/: preparation/selection/review-a,
+  두 arm의 corpus.r3cor/metadata.r3b/plan.r3b/tokenizer.r3b/initial.r3m,
+  0·128·256·512 raw/teacher/receipt, updates trace와 최종 weights+Adam.
+- artifacts/foundation-orbit-20260921-evidence/: 실제 source diff,
+  source-commit.txt/source-remote.txt, frozen source/binary hashes, 직접 tests,
+  build/swap/prepare/4개 segment/report/parity/comparison stdout.
+- artifacts/foundation-orbit-20260921-review/ 및
+  artifacts/foundation-orbit-20260921-math-review/: 독립 준비·결과 reader,
+  보고서/해시/실행 로그. 이 원자료와 리뷰 전문은 Git에 게시하지 않는다.
+
 ## 2026-09-21 Foundation orbit 준비 — D0~D2 검증, 학습 전 source 동결
 
 R3-FOUNDATION-ORBIT-1.0으로 별도 자료 개입을 준비한다. 시작 HEAD는

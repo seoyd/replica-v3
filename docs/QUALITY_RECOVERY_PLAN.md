@@ -1,6 +1,28 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: foundation orbit — assignment diversity at fixed skeleton exposure
+## Closed: foundation orbit — bounded comparison complete, binding baseline not established
+
+Source13969c6fe2b7b9232297a0796b037b202add350b was independently preparation-bound,
+pushed and frozen before the two real1+511-update runs. Both512 endpoints ended
+normally with durable weights/Adam and resume=false/BUDGET_REACHED. The new
+SMALL1024-update budget is exhausted; no continuation or unspent-budget transfer.
+
+Final common train/dev FULL is FIXED274/236 and BOTH256/255 (each512 rows).
+FIXED exposed fit213/256 is separate from its common train-orbit score.
+Dev QUERY_BOTH46→1 and ALL4 1→0 fail the joint gate. BOTH answers identically
+across253/256 dev query pairs, despite normal digit+EOS and no final generation
+errors. Paired full gain143/loss124 does not establish binding quality. Independent
+trace/Adam/raw/teacher recount and fresh-process parity are execution evidence;
+they do not grant a model-quality pass.
+
+No arm meets the registered train/dev thresholds, so confirmation is
+NOT_RUN_PREREQUISITE and remains sealed from implementer evaluation. No candidate
+was promoted. MINIMAL_BINDING_BASELINE_VERIFIED=false; S4/S5/S6 not accepted;
+GOAL1_READY/GOAL1_ACCEPTED=false. All original and new failed-quality artifacts
+are preserved. A later proposal requires a separate, evidence-based contract;
+this closed comparison does not authorize another LR/seed/core/loss search.
+
+The following is the completed study's fixed design and acceptance definition.
 
 R3-FOUNDATION-ORBIT-1.0 preserves closed A512/LOCAL5/GLOBAL6 models, all source,
 raw failures and native state. Base source a4267d308c233f7bab47e1c4bcf39f4f4e21d3cb;
