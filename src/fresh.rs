@@ -43,6 +43,8 @@ pub enum Command {
         #[arg(long)] repeat_two_blocks: bool,
         /// Train-only diagnostic: repeat the first eight seen pairs per C/D/E.
         #[arg(long, conflicts_with_all = ["first_target_four", "learning_rate_threefold", "co_batch", "pair_contrast", "sidewise_contrast", "repeat_pair_block", "repeat_two_blocks"])] fit_seen_pairs: bool,
+        /// Same FIT scenes and conditions; alternate owned original/value-swap views.
+        #[arg(long, conflicts_with_all = ["first_target_four", "learning_rate_threefold", "co_batch", "pair_contrast", "sidewise_contrast", "repeat_pair_block", "repeat_two_blocks", "fit_seen_pairs"])] alternate_pair_values: bool,
     },
     /// Pure recount and the preregistered continuation gate; never starts training.
     PairedReport { #[arg(long)] root: PathBuf },
@@ -832,7 +834,7 @@ impl Plan {
         b.policy = checkpoint::ResumeBinding::digest_bytes(&binary::to_vec(self)?);
         b.provenance = b.policy;
         b.train_order = checkpoint::ResumeBinding::digest_bytes(self.train_order.as_bytes());
-        if let Some(tape) = &self.paired && ["CONTRAST","SIDE","REPLAY","WIDE","FIT"].contains(&tape.mode.as_str()) {
+        if let Some(tape) = &self.paired && ["CONTRAST","SIDE","REPLAY","WIDE","FIT","VALUE"].contains(&tape.mode.as_str()) {
             b.family = if tape.mode == "CONTRAST" {3}else{4};
             b.normalizer = b.family;
             b.span_alpha_bits = Some(0.1f64.to_bits());
@@ -841,7 +843,7 @@ impl Plan {
         Ok(b)
     }
     pub(super) fn contrast_pairs(&self, indices: &[usize]) -> Result<Option<(bool,Vec<(usize,usize)>)>> {
-        let Some(tape) = self.paired.as_ref().filter(|t| ["CONTRAST","SIDE","REPLAY","WIDE","FIT"].contains(&t.mode.as_str())) else { return Ok(None); };
+        let Some(tape) = self.paired.as_ref().filter(|t| ["CONTRAST","SIDE","REPLAY","WIDE","FIT","VALUE"].contains(&t.mode.as_str())) else { return Ok(None); };
         let n = self.order.iter().map(Vec::len).sum::<usize>();
         if n == 0 || indices.len() != 8 || indices.iter().any(|&i| i >= 4*n) {
             return Err(bad("contrast sample bounds"));
@@ -1082,7 +1084,7 @@ fn source_digest() -> Result<String> {
 pub fn execute(command: Command) -> Result<()> {
     match command {
         Command::PairedContinue { parent, output, frozen_executable } => paired_continue(&parent, &output, &frozen_executable),
-        Command::PairedPrepare { parent, source_data, output, parity, first_target_four, learning_rate_threefold, co_batch, pair_contrast, sidewise_contrast, repeat_pair_block, repeat_two_blocks, fit_seen_pairs } => paired_prepare(&parent, &source_data, &output, parity.as_deref(), [first_target_four, learning_rate_threefold, co_batch, pair_contrast, sidewise_contrast, repeat_pair_block, repeat_two_blocks, fit_seen_pairs]),
+        Command::PairedPrepare { parent, source_data, output, parity, first_target_four, learning_rate_threefold, co_batch, pair_contrast, sidewise_contrast, repeat_pair_block, repeat_two_blocks, fit_seen_pairs, alternate_pair_values } => paired_prepare(&parent, &source_data, &output, parity.as_deref(), [first_target_four, learning_rate_threefold, co_batch, pair_contrast, sidewise_contrast, repeat_pair_block, repeat_two_blocks, fit_seen_pairs, alternate_pair_values]),
         Command::PairedReport { root } => paired_report(&root).map(|r| println!("PAIRED_REPORT {r}")),
         Command::StudyPrepare { parent, output, selector } => study_prepare(&parent, &output, selector),
         Command::StudyObserve { root } => study_observe(&root),
@@ -1194,7 +1196,7 @@ fn plan_read_bound(root: &Path, source: &str, executable: &str) -> Result<Plan> 
             || p.config.first_target_weight != if study.schema==6 {4.}else{1.}
             || (study.schema==6 && study.updates!=if p.tiny {2}else{3840})
             || ([7,8,9,10].contains(&study.schema) && study.updates!=if p.tiny {2}else{1280})
-            || ([11,13].contains(&study.schema) && study.updates!=if p.tiny {4}else{1280})
+            || ([11,13,14].contains(&study.schema) && study.updates!=if p.tiny {4}else{1280})
             || (study.schema==12 && study.updates!=if p.tiny {8}else{1280})
             || p.corpus != f.original_corpus
             || p.tokenizer != study.tokenizer
@@ -1213,19 +1215,20 @@ fn plan_read_bound(root: &Path, source: &str, executable: &str) -> Result<Plan> 
         }
         if let Some(tape) = &p.paired {
             let n = p.order.iter().map(Vec::len).sum::<usize>();
-            if ![4,5,6,7,8,9,10,11,12,13].contains(&study.schema) || !["SPACED", "ADJACENT", "COBATCH", "CONTRAST", "SIDE", "REPLAY", "WIDE", "FIT"].contains(&tape.mode.as_str())
+            if ![4,5,6,7,8,9,10,11,12,13,14].contains(&study.schema) || !["SPACED", "ADJACENT", "COBATCH", "CONTRAST", "SIDE", "REPLAY", "WIDE", "FIT","VALUE"].contains(&tape.mode.as_str())
                 || (study.schema==8) != (tape.mode=="COBATCH")
                 || (study.schema==9) != (tape.mode=="CONTRAST")
                 || (study.schema==10) != (tape.mode=="SIDE")
                 || (study.schema==11) != (tape.mode=="REPLAY")
                 || (study.schema==12) != (tape.mode=="WIDE")
                 || (study.schema==13) != (tape.mode=="FIT")
+                || (study.schema==14) != (tape.mode=="VALUE")
                 || tape.mode != f.arm || (study.schema!=5 && tape.first_step != f.origin_step)
                 || tape.block != if p.tiny { 2 } else { 256 }
-                || tape.rows.len() != if p.tiny { if study.schema==12 {8}else if [11,13].contains(&study.schema) {4}else{2} } else { 3840 }
+                || tape.rows.len() != if p.tiny { if study.schema==12 {8}else if [11,13,14].contains(&study.schema) {4}else{2} } else { 3840 }
                 || f.origin_step + study.updates > tape.first_step + tape.rows.len()
                 || tape.samples != file_hash(&root.join("paired-samples.r3rows"))?
-                || tape.rows.iter().any(|r| r.iter().enumerate().any(|(b, i)| *i >= 4*n || (![8,9,10,11,12,13].contains(&study.schema) && !p.order[b].contains(&(i%n)))))
+                || tape.rows.iter().any(|r| r.iter().enumerate().any(|(b, i)| *i >= 4*n || (![8,9,10,11,12,13,14].contains(&study.schema) && !p.order[b].contains(&(i%n)))))
             { return Err(bad("paired policy/tape boundary")); }
             let parent: Plan = read(&study.parent.join("plan.r3b"))?;
             let (tm, _, _) = verified_metadata(root, &p)?;
@@ -1238,7 +1241,7 @@ fn plan_read_bound(root: &Path, source: &str, executable: &str) -> Result<Plan> 
                 }
                 plan_read_bound(&study.parent, &parent.source, &parent.binary)?;
             } else { verify_pair_tape(&parent, &tm, tape)?; }
-        } else if [4,5,6,7,8,9,10,11,12,13].contains(&study.schema) { return Err(bad("paired study missing finite tape")); }
+        } else if [4,5,6,7,8,9,10,11,12,13,14].contains(&study.schema) { return Err(bad("paired study missing finite tape")); }
         for (name, h) in [
             ("selectors.r3cor", &f.selector),
             ("selector-metadata.r3b", &f.selector_metadata),
@@ -2719,6 +2722,32 @@ fn validate_framed(es: &[Episode], tok: &ByteBpe) -> Result<()> {
     }
     Ok(())
 }
+fn verify_seen_value_swap(before: &Episode, after: &Episode) -> Result<()> {
+    let a=&before.request.evidence.items; let b=&after.request.evidence.items;
+    if a.len()!=2 || b.len()!=2 || before.family!=after.family || before.category!=after.category
+        || before.binding!=after.binding || before.sequence!=after.sequence {
+        return Err(bad("seen value swap scene/count"));
+    }
+    for i in 0..2 {
+        let (entity,context,value)=parsed_record(&a[i])?;
+        let (new_entity,new_context,new_value)=parsed_record(&b[i])?;
+        if entity!=new_entity || context!=new_context || value==new_value
+            || new_value!=parsed_record(&a[1-i])?.2 {
+            return Err(bad("seen value swap must exchange different values only"));
+        }
+    }
+    let mut restored=after.request.clone();
+    restored.request_id=before.request.request_id.clone();
+    for (record,old) in restored.evidence.items.iter_mut().zip(a) {
+        record.original_excerpt=old.original_excerpt.clone();
+    }
+    if digest(&restored)?!=digest(&before.request)? || resolve(&before.request)?!=before.answer
+        || resolve(&after.request)?!=after.answer || before.answer==after.answer
+        || citations(&before.answer)?!=citations(&after.answer)? {
+        return Err(bad("seen value swap changed another input field or label"));
+    }
+    Ok(())
+}
 fn flip_selection(e: &Episode, m: &Meta) -> Result<(Episode, Meta)> {
     if !(2..=4).contains(&m.bucket) {
         return Err(bad("selector bucket"));
@@ -2971,7 +3000,7 @@ fn paired_decision(p: &Plan, root: &Path, step: usize) -> Result<binary::Value> 
         primary = Some(a.exact); transfer = Some(b.exact);
         if joint { stop = Some("DEVELOPMENT_JOINT_PASS_FINAL_NOT_RUN"); }
         let study:Study=read(&f.study.join("study.r3b"))?;
-        if [5,6,7,8,9,10,11,12,13].contains(&study.schema) && !joint && stop.is_none() && !p.tiny {
+        if [5,6,7,8,9,10,11,12,13,14].contains(&study.schema) && !joint && stop.is_none() && !p.tiny {
             let prior=if study.schema==5 {
                 let authorization:binary::Value=read(&f.study.join("research-authorization.r3b"))?;
                 authorization["prior_decision"].clone()
@@ -3085,11 +3114,12 @@ fn pair_tapes(parent: &Plan, tm: &[Meta], block: usize, steps: usize) -> Result<
     Ok(out)
 }
 fn verify_pair_tape(parent: &Plan, tm: &[Meta], tape: &PairTape) -> Result<()> {
-    let arm = match tape.mode.as_str() { "SPACED" => 0, "ADJACENT" | "COBATCH" | "CONTRAST" | "SIDE" | "REPLAY" | "WIDE" | "FIT" => 1, _ => return Err(bad("unknown pair policy")) };
+    let arm = match tape.mode.as_str() { "SPACED" => 0, "ADJACENT" | "COBATCH" | "CONTRAST" | "SIDE" | "REPLAY" | "WIDE" | "FIT" | "VALUE" => 1, _ => return Err(bad("unknown pair policy")) };
     let mut expected = pair_tapes(parent, tm, tape.block, tape.rows.len())?;
-    if ["COBATCH","CONTRAST","SIDE","REPLAY","WIDE","FIT"].contains(&tape.mode.as_str()) {
-        let repeat = match tape.mode.as_str() { "REPLAY" => Some(tape.block), "WIDE" => Some(2*tape.block), "FIT" => Some(if parent.tiny {2}else{16}), _ => None };
+    if ["COBATCH","CONTRAST","SIDE","REPLAY","WIDE","FIT","VALUE"].contains(&tape.mode.as_str()) {
+        let repeat = match tape.mode.as_str() { "REPLAY" => Some(tape.block), "WIDE" => Some(2*tape.block), "FIT" | "VALUE" => Some(if parent.tiny {2}else{16}), _ => None };
         expected[1]=co_batch_rows(&expected[1],repeat)?;
+        if tape.mode=="VALUE" {expected[1]=value_exchange_rows(&expected[1],tm,repeat.unwrap())?;}
     }
     if expected[arm] != tape.rows { return Err(bad("pair tape duplicate/missing/unknown case or altered order")); }
     Ok(())
@@ -3117,8 +3147,31 @@ fn co_batch_rows(adjacent: &[[usize;8]], repeat_block: Option<usize>) -> Result<
     }
     Ok(out)
 }
-fn paired_prepare(parent: &Path, source_data: &Path, output: &Path, parity: Option<&Path>, interventions: [bool;8]) -> Result<()> {
-    let [first_target_four, learning_rate_threefold, co_batch, pair_contrast, sidewise_contrast, repeat_pair_block, repeat_two_blocks, fit_seen_pairs] = interventions;
+// Keep the fitted scenes/phrase/sides and anchors; every other cycle changes
+// only the owned original view0 to its same-scene value-exchange view1.
+fn value_exchange_rows(rows: &[[usize;8]], tm: &[Meta], cycle: usize) -> Result<Vec<[usize;8]>> {
+    if tm.is_empty() || cycle<2 || !cycle.is_multiple_of(2) || rows.is_empty() || !rows.len().is_multiple_of(cycle) {
+        return Err(bad("value exposure cycle/metadata"));
+    }
+    let n=tm.len();let mut views=BTreeMap::new();
+    for (i,m) in tm.iter().enumerate().filter(|(_,m)|m.view==1) {
+        if views.insert((&m.base,m.bucket),i).is_some() {return Err(bad("duplicate value view"));}
+    }
+    let mut out=rows.to_vec();
+    for (step,row) in out.iter_mut().enumerate() {
+        for index in row {
+            if *index>=4*n {return Err(bad("value exposure index"));}
+            let m=&tm[*index%n];
+            if !(2..=4).contains(&m.bucket) {continue;}
+            if m.view!=0 {return Err(bad("value exposure requires original view0"));}
+            let other=*views.get(&(&m.base,m.bucket)).ok_or_else(||bad("missing value view"))?;
+            if (step/cycle)%2==1 {*index=(*index/n)*n+other;}
+        }
+    }
+    Ok(out)
+}
+fn paired_prepare(parent: &Path, source_data: &Path, output: &Path, parity: Option<&Path>, interventions: [bool;9]) -> Result<()> {
+    let [first_target_four, learning_rate_threefold, co_batch, pair_contrast, sidewise_contrast, repeat_pair_block, repeat_two_blocks, fit_seen_pairs, alternate_pair_values] = interventions;
     if interventions.into_iter().filter(|x|*x).count()>1 {return Err(bad("only one research intervention may be registered"));}
     let single = interventions.into_iter().any(|x|x);
     let lr = if learning_rate_threefold {9e-5}else{3e-5};
@@ -3173,10 +3226,17 @@ fn paired_prepare(parent: &Path, source_data: &Path, output: &Path, parity: Opti
     validate_framed(&all,&l.tokenizer)?;
     let framed=samples(&all,&l.tokenizer,pp.config.seq_len)?;
     let block=if pp.tiny {2}else{256};
-    let tapes=pair_tapes(&pp,&tm,block,if pp.tiny {if repeat_two_blocks {8}else if repeat_pair_block || fit_seen_pairs {4}else{2}}else{3840})?;
-    let repeat = if fit_seen_pairs {Some(if pp.tiny {2}else{16})}else if repeat_two_blocks {Some(2*block)}else{repeat_pair_block.then_some(block)};
+    let tapes=pair_tapes(&pp,&tm,block,if pp.tiny {if repeat_two_blocks {8}else if repeat_pair_block || fit_seen_pairs || alternate_pair_values {4}else{2}}else{3840})?;
+    let repeat = if fit_seen_pairs || alternate_pair_values {Some(if pp.tiny {2}else{16})}else if repeat_two_blocks {Some(2*block)}else{repeat_pair_block.then_some(block)};
     let updates=if first_target_four {tapes[1].len()}else if single {if pp.tiny {tapes[1].len()}else{1280}}else{block};
-    let planned=if repeat.is_some() {[tapes[0].clone(),co_batch_rows(&tapes[1],repeat)?]}else{tapes.clone()};
+    let mut planned=if repeat.is_some() {[tapes[0].clone(),co_batch_rows(&tapes[1],repeat)?]}else{tapes.clone()};
+    if alternate_pair_values {
+        let before=planned[1].clone();
+        planned[1]=value_exchange_rows(&before,&tm,repeat.unwrap())?;
+        for (old,new) in before.iter().flatten().zip(planned[1].iter().flatten()) {
+            if old!=new {verify_seen_value_swap(&all[*old],&all[*new])?;}
+        }
+    }
     let totals: Vec<_>=planned.iter().map(|t| t.iter().map(|r| r.iter().fold((0u64,0u64),|(i,v),&j|
         (i+(framed[j].tokens.len()-1) as u64,v+(framed[j].tokens.len()-framed[j].response_start) as u64))).collect::<Vec<_>>()).collect();
     for arm in 0..2 {
@@ -3228,23 +3288,23 @@ fn paired_prepare(parent: &Path, source_data: &Path, output: &Path, parity: Opti
     let mut inventory=vec![];
     if single {
         let path=output.join("research-authorization.r3b");
-        write(&path,&binary::record!({"scope":if fit_seen_pairs {"USER_AUTHORIZED_SEEN_PAIR_LEARNABILITY_20260920"}else if repeat_two_blocks {"USER_AUTHORIZED_SINGLE_VARIABLE_RECURRENCE_COVERAGE_20260920"}else if repeat_pair_block {"USER_AUTHORIZED_SINGLE_VARIABLE_PAIR_RECURRENCE_20260920"}else if sidewise_contrast {"USER_AUTHORIZED_SINGLE_VARIABLE_SIDE_MARGIN_20260920"}else if pair_contrast {"USER_AUTHORIZED_SINGLE_VARIABLE_PAIR_CONTRAST_20260920"}else if co_batch {"USER_AUTHORIZED_SINGLE_VARIABLE_COBATCH_20260920"}else if learning_rate_threefold {"USER_AUTHORIZED_SINGLE_VARIABLE_LR9E5_20260920"}else{"USER_AUTHORIZED_SINGLE_VARIABLE_FIRST_TARGET4_20260920"},
-            "hypothesis":if fit_seen_pairs {"test full-answer learnability by repeating first8 seen pairs per C/D/E; unchanged SIDE objective and exact other-task rows; narrowed coverage is diagnostic only"}else if repeat_two_blocks {"repeat first two C/D/E blocks instead of one; same SIDE objective and anchor rows; trade exact exposure for base coverage; retained REPLAY control"}else if repeat_pair_block {"repeat first C/D/E pair block; other five tasks updatewise unchanged; increased exact exposure reduces distinct sample/view coverage; retained SIDE control"}else if sidewise_contrast {"penalize each wrong side instead of allowing aggregate cancellation; retained sum-contrast control at matched cursors"}else if pair_contrast {"paired target-divergence discrimination at unchanged co-batch tape; retained pure-CE control at matched cursors"}else if co_batch {"joint selector-pair gradients at unchanged batch8, LR, loss, Adam and two-update case multiset"}else if learning_rate_threefold {"test adaptation rate with fixed threefold LR; retained coefficient-1 LR3e-5 control at matched cursors"}else{"increase first-response-token learning weight; retained coefficient-1 control at matched tape cursors"},
+        write(&path,&binary::record!({"scope":if alternate_pair_values {"USER_AUTHORIZED_SINGLE_VARIABLE_VALUE_EXPOSURE_20260920"}else if fit_seen_pairs {"USER_AUTHORIZED_SEEN_PAIR_LEARNABILITY_20260920"}else if repeat_two_blocks {"USER_AUTHORIZED_SINGLE_VARIABLE_RECURRENCE_COVERAGE_20260920"}else if repeat_pair_block {"USER_AUTHORIZED_SINGLE_VARIABLE_PAIR_RECURRENCE_20260920"}else if sidewise_contrast {"USER_AUTHORIZED_SINGLE_VARIABLE_SIDE_MARGIN_20260920"}else if pair_contrast {"USER_AUTHORIZED_SINGLE_VARIABLE_PAIR_CONTRAST_20260920"}else if co_batch {"USER_AUTHORIZED_SINGLE_VARIABLE_COBATCH_20260920"}else if learning_rate_threefold {"USER_AUTHORIZED_SINGLE_VARIABLE_LR9E5_20260920"}else{"USER_AUTHORIZED_SINGLE_VARIABLE_FIRST_TARGET4_20260920"},
+            "hypothesis":if alternate_pair_values {"alternate owned value-swap view every first16-pair cycle; same bases/phrase/selector sides/anchor rows and SIDE objective; retained FIT control"}else if fit_seen_pairs {"test full-answer learnability by repeating first8 seen pairs per C/D/E; unchanged SIDE objective and exact other-task rows; narrowed coverage is diagnostic only"}else if repeat_two_blocks {"repeat first two C/D/E blocks instead of one; same SIDE objective and anchor rows; trade exact exposure for base coverage; retained REPLAY control"}else if repeat_pair_block {"repeat first C/D/E pair block; other five tasks updatewise unchanged; increased exact exposure reduces distinct sample/view coverage; retained SIDE control"}else if sidewise_contrast {"penalize each wrong side instead of allowing aggregate cancellation; retained sum-contrast control at matched cursors"}else if pair_contrast {"paired target-divergence discrimination at unchanged co-batch tape; retained pure-CE control at matched cursors"}else if co_batch {"joint selector-pair gradients at unchanged batch8, LR, loss, Adam and two-update case multiset"}else if learning_rate_threefold {"test adaptation rate with fixed threefold LR; retained coefficient-1 LR3e-5 control at matched cursors"}else{"increase first-response-token learning weight; retained coefficient-1 control at matched tape cursors"},
             "first_target_weight":if first_target_four {4.}else{1.},"constant_lr":lr,
-            "objective":if sidewise_contrast || repeat_pair_block || repeat_two_blocks || fit_seen_pairs {"response CE + 0.1 * mean_pair (softplus(1-(za[ya]-za[yb])) + softplus(1-(zb[yb]-zb[ya])))/2; first divergent target, shared teacher prefix; no pairs means zero auxiliary"}else if pair_contrast {"response CE + 0.1 * mean_pair softplus(1 - ((za[ya]-za[yb]) + (zb[yb]-zb[ya]))); first divergent target, shared teacher prefix; no pairs means zero auxiliary"}else if first_target_four {"(sum response NLL + 3 * sum first-target NLL) / actual response token count"}else{"sum response NLL / actual response token count"},
+            "objective":if sidewise_contrast || repeat_pair_block || repeat_two_blocks || fit_seen_pairs || alternate_pair_values {"response CE + 0.1 * mean_pair (softplus(1-(za[ya]-za[yb])) + softplus(1-(zb[yb]-zb[ya])))/2; first divergent target, shared teacher prefix; no pairs means zero auxiliary"}else if pair_contrast {"response CE + 0.1 * mean_pair softplus(1 - ((za[ya]-za[yb]) + (zb[yb]-zb[ya]))); first divergent target, shared teacher prefix; no pairs means zero auxiliary"}else if first_target_four {"(sum response NLL + 3 * sum first-target NLL) / actual response token count"}else{"sum response NLL / actual response token count"},
             "new_optimizer_limit":updates,"generation_limit":12000,"teacher_limit":10000,"active_seconds":21600,"input_limit":12000000,"target_limit":1000000,
             "control_absolute_steps":if pp.tiny {vec![state.step+updates]}else if first_target_four {vec![6400,7424,8448,9984]}else{vec![6400,7424]},"prior_candidate_promoted":false}))?;
         inventory.push((PathBuf::from("research-authorization.r3b"),file_hash(&path)?,std::fs::metadata(&path)?.len()));
     }
-    let study=Study {schema:if fit_seen_pairs {13}else if repeat_two_blocks {12}else if repeat_pair_block {11}else if sidewise_contrast {10}else if pair_contrast {9}else if co_batch {8}else if learning_rate_threefold {7}else if first_target_four {6}else{4},source:source_digest()?,binary:file_hash(&std::env::current_exe()?)?,parent:parent.clone(),
+    let study=Study {schema:if alternate_pair_values {14}else if fit_seen_pairs {13}else if repeat_two_blocks {12}else if repeat_pair_block {11}else if sidewise_contrast {10}else if pair_contrast {9}else if co_batch {8}else if learning_rate_threefold {7}else if first_target_four {6}else{4},source:source_digest()?,binary:file_hash(&std::env::current_exe()?)?,parent:parent.clone(),
         parent_plan:file_hash(&parent.join("plan.r3b"))?,parent_checkpoint:cp.clone(),parent_file:file_hash(&cp)?,
         parent_model:l.model.weight_hash()?,parent_adam:optimizer_hash(&l.optimizer)?,parent_state:digest(state)?,
         parent_step:state.step,tokenizer:pp.tokenizer.clone(),updates,tiny:pp.tiny,inventory,
         diagnostic_hash:file_hash(&output.join("diagnostic.r3b"))?,parent_audit_hash:file_hash(&output.join("parent-audit.r3b"))?,
-        tie_break:if fit_seen_pairs {vec!["FIT".into()]}else if repeat_two_blocks {vec!["WIDE".into()]}else if repeat_pair_block {vec!["REPLAY".into()]}else if sidewise_contrast {vec!["SIDE".into()]}else if pair_contrast {vec!["CONTRAST".into()]}else if co_batch {vec!["COBATCH".into()]}else if single {vec!["ADJACENT".into()]}else{vec!["SPACED".into(),"ADJACENT".into()]}};
+        tie_break:if alternate_pair_values {vec!["VALUE".into()]}else if fit_seen_pairs {vec!["FIT".into()]}else if repeat_two_blocks {vec!["WIDE".into()]}else if repeat_pair_block {vec!["REPLAY".into()]}else if sidewise_contrast {vec!["SIDE".into()]}else if pair_contrast {vec!["CONTRAST".into()]}else if co_batch {vec!["COBATCH".into()]}else if single {vec!["ADJACENT".into()]}else{vec!["SPACED".into(),"ADJACENT".into()]}};
     write(&output.join("study.r3b"),&study)?;
     for arm in &study.tie_break {
-        let tape=if ["COBATCH","CONTRAST","SIDE","REPLAY","WIDE","FIT"].contains(&arm.as_str()) {co_batch_rows(&tapes[1],repeat)?}else{tapes[usize::from(arm=="ADJACENT")].clone()};
+        let tape=if arm=="VALUE" {planned[1].clone()}else if ["COBATCH","CONTRAST","SIDE","REPLAY","WIDE","FIT","VALUE"].contains(&arm.as_str()) {co_batch_rows(&tapes[1],repeat)?}else{tapes[usize::from(arm=="ADJACENT")].clone()};
         let root=output.join(arm);std::fs::create_dir(&root)?;
         for name in ["corpus.r3cor","transfer.r3cor","metadata.r3b","tokenizer.r3b"] {
             neural::write_new(&root.join(name),&std::fs::read(parent.join(name))?)?;
@@ -3362,11 +3422,11 @@ fn paired_work(root:&Path)->Result<(u64,u64,u64)> {
             used.2+=r["optimizer_calls"].as_u64().ok_or_else(||bad("paired updates UNKNOWN"))?;
         }
     }
-    if used.0>12_000_000||used.1>1_000_000||used.2>if [5,6,7,8,9,10,11,12,13].contains(&study.schema) {study.updates as u64}else{4096}{return Err(bad("paired global learning budget"));}
+    if used.0>12_000_000||used.1>1_000_000||used.2>if [5,6,7,8,9,10,11,12,13,14].contains(&study.schema) {study.updates as u64}else{4096}{return Err(bad("paired global learning budget"));}
     Ok(used)
 }
 fn paired_usage(root:&Path)->Result<(f64,usize,usize)> {
-    let s=study_read(root)?;if ![4,5,6,7,8,9,10,11,12,13].contains(&s.schema){return Err(bad("paired study schema"));}
+    let s=study_read(root)?;if ![4,5,6,7,8,9,10,11,12,13,14].contains(&s.schema){return Err(bad("paired study schema"));}
     let (mut elapsed,mut generation,teacher)=study_usage_bound(root,false,&s)?;
     for arm in &s.tie_break {
         let a=root.join(arm);let p=plan_read(&a)?;
@@ -3379,7 +3439,7 @@ fn paired_usage(root:&Path)->Result<(f64,usize,usize)> {
         }
     }
     let baseline:binary::Value=read(&root.join("parent-audit.r3b"))?;
-    if !s.tiny && [4,6,7,8,9,10,11,12,13].contains(&s.schema) {
+    if !s.tiny && [4,6,7,8,9,10,11,12,13,14].contains(&s.schema) {
         generation+=16;
         elapsed+=baseline["parity"]["control"]["elapsed_seconds"].as_f64().ok_or_else(||bad("parity time UNKNOWN"))?;
     }
@@ -3435,9 +3495,9 @@ fn paired_report(root:&Path)->Result<binary::Value> {
             "loss":outcomes[0].iter().zip(&outcomes[1]).filter(|(a,b)| **a && !**b).count()}));
     }
     Ok(binary::record!({"source":s.source,"binary":s.binary,"results":results,"same_budget":endpoints,
-        "paired_gain_loss":comparisons,"both_gain_loss":both_gain_loss,"effect":if s.schema==13 {"SEEN_PAIR_FITTING_DIAGNOSTIC_NOT_HELDOUT"}else if s.schema==12 {"RECURRENCE_COVERAGE_RETAINED_REPLAY_CONTROL_SEPARATE"}else if s.schema==11 {"PAIR_RECURRENCE_RETAINED_SIDE_CONTROL_SEPARATE"}else if s.schema==10 {"SIDE_MARGIN_RETAINED_SUM_CONTROL_SEPARATE"}else if s.schema==9 {"PAIR_CONTRAST_RETAINED_COBATCH_CONTROL_SEPARATE"}else if s.schema==8 {"COBATCH_RETAINED_CONTROL_COMPARISON_SEPARATE"}else if s.schema==7 {"LR9E5_RETAINED_CONTROL_COMPARISON_SEPARATE"}else if s.schema==6 {"FIRST_TARGET4_RETAINED_CONTROL_COMPARISON_SEPARATE"}else if s.schema==5 {"SINGLE_ARM_EXPOSURE_NOT_COMPARISON"}else if endpoints {"EQUAL_BUDGET"}else if endpoint_steps[0]==endpoint_steps[1]{"EARLY_STOPS_NO_256_COMPARISON"}else{"UNEQUAL_BUDGET_NOT_ESTABLISHED"},
+        "paired_gain_loss":comparisons,"both_gain_loss":both_gain_loss,"effect":if s.schema==14 {"VALUE_EXPOSURE_RETAINED_FIT_CONTROL_SEPARATE"}else if s.schema==13 {"SEEN_PAIR_FITTING_DIAGNOSTIC_NOT_HELDOUT"}else if s.schema==12 {"RECURRENCE_COVERAGE_RETAINED_REPLAY_CONTROL_SEPARATE"}else if s.schema==11 {"PAIR_RECURRENCE_RETAINED_SIDE_CONTROL_SEPARATE"}else if s.schema==10 {"SIDE_MARGIN_RETAINED_SUM_CONTROL_SEPARATE"}else if s.schema==9 {"PAIR_CONTRAST_RETAINED_COBATCH_CONTROL_SEPARATE"}else if s.schema==8 {"COBATCH_RETAINED_CONTROL_COMPARISON_SEPARATE"}else if s.schema==7 {"LR9E5_RETAINED_CONTROL_COMPARISON_SEPARATE"}else if s.schema==6 {"FIRST_TARGET4_RETAINED_CONTROL_COMPARISON_SEPARATE"}else if s.schema==5 {"SINGLE_ARM_EXPOSURE_NOT_COMPARISON"}else if endpoints {"EQUAL_BUDGET"}else if endpoint_steps[0]==endpoint_steps[1]{"EARLY_STOPS_NO_256_COMPARISON"}else{"UNEQUAL_BUDGET_NOT_ESTABLISHED"},
         "selected_for_continuation":eligible.first().map(|v|&v.0),"usage":usage,"training_usage":paired_work(root)?,
-        "result":if s.schema==13 {"SEEN_PAIR_FITTING_CLOSED_CHECK_TRAIN_AND_JOINT_SEPARATELY"}else if s.schema==12 {"RECURRENCE_COVERAGE_CLOSED_CHECK_JOINT_RESULT"}else if s.schema==11 {"PAIR_RECURRENCE_CLOSED_CHECK_JOINT_RESULT"}else if s.schema==10 {"SIDE_MARGIN_CLOSED_CHECK_JOINT_RESULT"}else if s.schema==9 {"PAIR_CONTRAST_CLOSED_CHECK_JOINT_RESULT"}else if s.schema==8 {"COBATCH_CLOSED_CHECK_JOINT_RESULT"}else if s.schema==7 {"LR9E5_CLOSED_CHECK_JOINT_RESULT"}else if s.schema==6 {"FIRST_TARGET4_CLOSED_CHECK_JOINT_RESULT"}else if s.schema==5 {"FOLLOW_THROUGH_CLOSED_CHECK_JOINT_RESULT"}else if eligible.is_empty(){"STUDY_COMPLETE_NO_ADMISSIBLE_LEARNER"}else{"G3_ENTRY_PASS"},"GOAL1_READY":false}))
+        "result":if s.schema==14 {"VALUE_EXPOSURE_CLOSED_CHECK_JOINT_RESULT"}else if s.schema==13 {"SEEN_PAIR_FITTING_CLOSED_CHECK_TRAIN_AND_JOINT_SEPARATELY"}else if s.schema==12 {"RECURRENCE_COVERAGE_CLOSED_CHECK_JOINT_RESULT"}else if s.schema==11 {"PAIR_RECURRENCE_CLOSED_CHECK_JOINT_RESULT"}else if s.schema==10 {"SIDE_MARGIN_CLOSED_CHECK_JOINT_RESULT"}else if s.schema==9 {"PAIR_CONTRAST_CLOSED_CHECK_JOINT_RESULT"}else if s.schema==8 {"COBATCH_CLOSED_CHECK_JOINT_RESULT"}else if s.schema==7 {"LR9E5_CLOSED_CHECK_JOINT_RESULT"}else if s.schema==6 {"FIRST_TARGET4_CLOSED_CHECK_JOINT_RESULT"}else if s.schema==5 {"FOLLOW_THROUGH_CLOSED_CHECK_JOINT_RESULT"}else if eligible.is_empty(){"STUDY_COMPLETE_NO_ADMISSIBLE_LEARNER"}else{"G3_ENTRY_PASS"},"GOAL1_READY":false}))
 }
 fn study_prepare(parent: &Path, output: &Path, selector: bool) -> Result<()> {
     let started = Instant::now();
@@ -3923,6 +3983,7 @@ fn study_read_bound(root: &Path, frozen_executable: Option<&Path>) -> Result<Stu
         11 => vec!["REPLAY"],
         12 => vec!["WIDE"],
         13 => vec!["FIT"],
+        14 => vec!["VALUE"],
         _ => return Err(bad("study schema")),
     };
     if s.tie_break != names {
@@ -3937,7 +3998,7 @@ fn study_read_bound(root: &Path, frozen_executable: Option<&Path>) -> Result<Stu
         return Err(bad("study registration incomplete/changed"));
     }
     let executable = frozen_executable.map_or_else(std::env::current_exe, |p| Ok(p.to_path_buf()))?;
-    if ![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].contains(&s.schema)
+    if ![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,14].contains(&s.schema)
         || (frozen_executable.is_none() && s.source != source_digest()?)
         || s.binary != file_hash(&executable)?
         || s.parent_plan != file_hash(&s.parent.join("plan.r3b"))?
@@ -3947,7 +4008,7 @@ fn study_read_bound(root: &Path, frozen_executable: Option<&Path>) -> Result<Stu
     {
         return Err(bad("frozen study binding"));
     }
-    if [5,6,7,8,9,10,11,12,13].contains(&s.schema)
+    if [5,6,7,8,9,10,11,12,13,14].contains(&s.schema)
         && (s.inventory.len()!=1 || s.inventory[0].0!=Path::new("research-authorization.r3b")
             || s.inventory[0].1!=file_hash(&root.join("research-authorization.r3b"))?
             || s.inventory[0].2!=std::fs::metadata(root.join("research-authorization.r3b"))?.len()) {
@@ -4502,32 +4563,6 @@ mod tests {
     }
     // Diagnostic-only: the owned view1 must differ from fitted view0 solely in
     // the two supplied values. Labels validate the test; they never enter generation.
-    fn verify_seen_value_swap(before: &Episode, after: &Episode) -> Result<()> {
-        let a=&before.request.evidence.items; let b=&after.request.evidence.items;
-        if a.len()!=2 || b.len()!=2 || before.family!=after.family || before.category!=after.category
-            || before.binding!=after.binding || before.sequence!=after.sequence {
-            return Err(bad("seen value swap scene/count"));
-        }
-        for i in 0..2 {
-            let (entity,context,value)=parsed_record(&a[i])?;
-            let (new_entity,new_context,new_value)=parsed_record(&b[i])?;
-            if entity!=new_entity || context!=new_context || value==new_value
-                || new_value!=parsed_record(&a[1-i])?.2 {
-                return Err(bad("seen value swap must exchange different values only"));
-            }
-        }
-        let mut restored=after.request.clone();
-        restored.request_id=before.request.request_id.clone();
-        for (record,old) in restored.evidence.items.iter_mut().zip(a) {
-            record.original_excerpt=old.original_excerpt.clone();
-        }
-        if digest(&restored)?!=digest(&before.request)? || resolve(&before.request)?!=before.answer
-            || resolve(&after.request)?!=after.answer || before.answer==after.answer
-            || citations(&before.answer)?!=citations(&after.answer)? {
-            return Err(bad("seen value swap changed another input field or label"));
-        }
-        Ok(())
-    }
     #[test]
     fn seen_value_swap_changes_only_values_and_rejects_other_changes() -> Result<()> {
         let (all,metadata)=generate(4,0,19)?;
@@ -4818,6 +4853,39 @@ mod tests {
         for i in [0,1,15,16,255,256,1279,3839] {assert_eq!(restored.at(6144+i).unwrap(),fit[i]);}
         let mut wrong=restored.clone();wrong.rows=replay.clone();assert!(verify_pair_tape(&production,&tm,&wrong).is_err());
         wrong=restored.clone();wrong.rows[16][0]=co[16][0];assert!(verify_pair_tape(&production,&tm,&wrong).is_err());
+        let values=value_exchange_rows(&fit,&tm,16).unwrap();
+        let value_tape=PairTape {mode:"VALUE".into(),rows:values.clone(),..tape.clone()};
+        let path=d.path().join("VALUE.r3b");publish_confirmed(&path,&value_tape).unwrap();
+        let value_back:PairTape=read_confirmed(&path).unwrap();assert_eq!(value_back,value_tape);
+        let mut value_parent=production.clone();value_parent.paired=None;
+        verify_pair_tape(&value_parent,&tm,&value_back).unwrap();
+        value_parent.paired=Some(value_back.clone());
+        let mut counts=vec![0usize;4*n];
+        for (step,(old,row)) in fit.iter().zip(&values).enumerate() {
+            let (sidewise,pairs)=value_parent.contrast_pairs(row).unwrap().unwrap();assert!(sidewise);
+            assert_eq!(pairs.len(),if step%2==0 {3}else{0});
+            for (a,b) in pairs {assert_eq!(row[b],row[a]+2*n);}
+            for (&before,&after) in old.iter().zip(row) {
+                if (2..=4).contains(&tm[before%n].bucket) {
+                    assert_eq!(tm[before%n].base,tm[after%n].base);
+                    assert_eq!(tm[after%n].view,(step/16)%2);
+                    assert_eq!(before/n,after/n,"phrase and side retained");
+                }else{assert_eq!(before,after,"anchor slot retained");}
+                if step<1280 {counts[after]+=1;}
+            }
+        }
+        for bucket in 2..=4 {
+            let seen:Vec<_>=counts.iter().enumerate().filter(|(i,c)|tm[*i%n].bucket==bucket&&**c>0).collect();
+            assert_eq!(seen.len(),32);assert!(seen.iter().all(|(_,c)|**c==40));
+            assert_eq!(seen.iter().map(|(i,_)|&tm[*i%n].base).collect::<BTreeSet<_>>().len(),8);
+        }
+        for step in [0,15,16,31,32,255,256,1279,3839] {assert_eq!(value_back.at(6144+step).unwrap(),values[step]);}
+        let mut wrong=value_back.clone();wrong.rows=fit.clone();assert!(verify_pair_tape(&production,&tm,&wrong).is_err());
+        for cycle in [0,1,3,17] {assert!(value_exchange_rows(&fit,&tm,cycle).is_err());}
+        assert!(value_exchange_rows(&[],&tm,16).is_err());
+        let mut wrong=fit.clone();wrong[0][0]=4*n;assert!(value_exchange_rows(&wrong,&tm,16).is_err());
+        let mut duplicate=tm.clone();duplicate.push(tm.iter().find(|m|m.view==1).unwrap().clone());
+        assert!(value_exchange_rows(&fit,&duplicate,16).is_err());
         let mut duplicate = tm.clone(); duplicate.push(tm[2*1024].clone());
         assert!(pair_tapes(&p,&duplicate,256,3840).is_err());
         let mut missing=tm.clone(); missing.remove(2*1024); assert!(pair_tapes(&p,&missing,256,3840).is_err());

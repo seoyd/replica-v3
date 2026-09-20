@@ -1190,3 +1190,13 @@ The older named recovery/corpus/harness commands retain their legacy JSON interf
 they are not an automatic fallback from native readers. Product JSON IPC and opaque
 legacy config/request IDs remain. This is a bounded evaluation/control migration, not
 whole-project JSON removal or model quality acceptance.
+## VALUE exposure study
+
+`replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT
+--parity NEW_P16_ROOT --output NEW_ROOT --alternate-pair-values` registers the
+bounded original/value-exchanged-view study. Run `fresh run --root NEW_ROOT/VALUE`
+and pure `fresh paired-report --root NEW_ROOT` with the frozen executable.
+This keeps the FIT bases, anchors and training settings; cap1280 new updates.
+The existing `paired_seen_train_diagnostic` production-feature test accepts
+`R3_TRAIN_PAIR_VALUE_SWAP=1` for the separate48-case changed-value observation;
+it cannot combine with margin mode and requires a new output directory.

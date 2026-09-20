@@ -1,5 +1,35 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 VALUE exposure implementation and registration verified
+
+New explicit P6144 fork, same SIDE objective/LR3e-5/Adam/tokenizer and exact
+anchor slots as FIT. Only alternate owned view0/view1 every16 updates on the
+same C/D/E bases. Cap1280, unchanged retention/termination/joint quality gates.
+Shared request validator enforces value-only changes before registration;
+production generation receives no labels or resolver. Existing sampler/codec/
+RunControl/report paths accept the explicit VALUE policy; no new framework.
+
+Direct tests: full3840-row writer/reader/tape1 PASS(1.69s), value-only validator1
+PASS(0.01s), actual TINY continuous4 versus fresh1+3 process1 PASS(14.34s).
+TINY12 optimizer/129 generation/129 teacher including27 setup observations;
+weights/Adam/cursor match, default-objective resume and mixed flags rejected.
+Initial pure tape test failed on missing new-mode recurrence binding, before
+any model call; fixed and passing output retained beside the original failure.
+Production P16 parity1 PASS(13.34s),16 matching generations/160 raw tokens,
+teacher0/optimizer0. Release build PASS18.61s. Strict Clippy101 retains only the
+same two pre-existing for_kv_map/type_complexity warnings; no global PASS claim.
+
+Actual owned input check exit0: all10 native files byte-identical to retained
+FIT/SIDE;19,200 anchor slots identical,11,520 selector slots with5,760 mapped to
+the same-base/value-exchanged view across the complete3840-row policy. No new
+corpus. Source digest1a2c8a9eccd7e70408cbfddc3e86dd67ab6f850fc2293df73ef4555895e405f9;
+frozen executable09c5a3ec8626ba6b85092dcc04ce354b192f01b7f3d777a42e96183ad40b490e.
+Policy0898b4bca43435b2e27c77c8eeea5ddb297f7b01a682e63469eb6d875f61a59a.
+Study `artifacts/pair-value-20260920/`, evidence `artifacts/pair-value-20260920-evidence/`.
+This entry closes implementation/registration only: new SMALL optimizer0 at
+registration; actual learning results are separate. Old FIT/source/failures remain
+intact. GOAL1_READY=false; final200 NOT_CREATED/NOT_OPENED; S4/S5/S6 not eligible.
+
 ## 2026-09-20 Fixed FIT value-exchange diagnosis
 
 EXECUTED_THIS_RUN: reuse the existing production evaluation path on the closed

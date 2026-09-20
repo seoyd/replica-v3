@@ -1,5 +1,34 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: one value-exposure intervention from original P6144
+
+Register VALUE under the continuing one-variable authorization, comparing with
+the retained matched-budget FIT execution. The fixed FIT model fits48/48 but
+scores10/48 when only supplied values exchange, including24 old exact answers.
+Change only C/D/E value-view exposure: the same first8 paired train bases per
+bucket alternate existing view0/view1 every16 updates. Retain the exact anchor
+slots, question/phrase/selector sides/IDs/order/times, original P6144/Adam,
+tokenizer, SIDE family4 auxiliary0.1, first-target1 CE, LR3e-5 and native model.
+Registration verifies each changed owned request differs only in its values.
+No corpus generation/editing or old terminal/budget changes. At1280 there are
+40 exposures of each of96 sides, versus FIT80 of each of48: that coverage versus
+exact repetition tradeoff is explicit, not a second hidden hyperparameter.
+
+Cap1280 SMALL optimizer,12M actual input/1M target including discarded work,
+12000 generations/10000 own-model teachers,21600 active seconds,900s command/
+120s cleanup. Direct TINY cap24 optimizer/256 generation/256 teacher, scalar0.
+Reuse full3840-row writer/reader/tape checks and an actual TINY continuous4 versus
+fresh1+3 across the value boundary. P16 production parity precedes source/binary
+freeze; first actual update is saved and restored within the1280 allowance.
+Same screens32/64/128/768, full256/1280, retention/plateau/unsafe-failure guards.
+No extension or LR/seed/tokenizer/architecture search. No C++ calls are needed.
+
+At a complete final endpoint run the existing original48 and exchanged48
+diagnostics once each, at most96 generations/96 required teachers within these
+limits. Reading-change success requires47/48 full and23/24 both on each panel,
+errors0; it remains separate from all unchanged joint development/S4/S5/S6 gates.
+If quality guards stop early, report the incomplete evidence without reopening.
+
 ## Closed: fixed-weight value exchange on the fitted train scenes
 
 Executed48 normal generations/48 own-model teachers, optimizer0. Original
