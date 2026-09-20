@@ -260,7 +260,7 @@ not implemented. There is no accepted product model or Goal1 pass.
 The current writer uses R3MODEL wire2; the reader explicitly supports wire1 and2.
 The same F32 weights and tokenizer mapping remain the inference model identity.
 RESUME v2 requires a typed ResumeBinding in TrainingState, with semantic revision,
-response-CE versus normalized-span family, exact first-target/alpha IEEE bits,
+response-CE, normalized-span or fixed paired-divergence family, exact first-target/alpha IEEE bits,
 normalizer/annotation, ordered training source, tokenizer/framing/config/corpus,
 and executed policy/provenance digests. The descriptor has a domain-separated
 digest; it does not recursively hash its containing checkpoint. Adam and all

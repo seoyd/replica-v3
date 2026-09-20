@@ -1194,6 +1194,31 @@ mod tests {
             full.manifest.training.as_ref().unwrap().sampler_state,
             u64::MAX - 17
         );
+        // The fixed paired objective reuses the descriptor bytes, but can never
+        // silently resume as default CE or lose its coefficient/annotation.
+        let mut contrast = full.manifest.clone();
+        let state = contrast.training.as_mut().unwrap();
+        let binding = state.resume_binding.as_mut().unwrap();
+        binding.family = 3; binding.normalizer = 3; binding.execution = 1;
+        binding.span_alpha_bits = Some(0.1f64.to_bits()); binding.annotation = Some([7;32]);
+        let path = d.path().join("paired-objective");
+        save(&path,&full.model,&full.tokenizer,contrast.clone(),&full.optimizer).unwrap();
+        let restored = load(&path,Device::Cpu,true).unwrap();
+        assert_eq!(restored.manifest.training,contrast.training);
+        assert!(ResumeBinding::require_default(restored.manifest.training.as_ref().unwrap(),&restored.tokenizer).is_err());
+        for change in 0..5 {
+            let mut invalid = contrast.training.clone().unwrap();
+            let b = invalid.resume_binding.as_mut().unwrap();
+            match change {
+                0 => b.span_alpha_bits = Some(0.2f64.to_bits()),
+                1 => b.annotation = None,
+                2 => b.normalizer = 1,
+                3 => b.execution = 0,
+                4 => b.first_target_weight_bits = 4f64.to_bits(),
+                _ => unreachable!(),
+            }
+            assert!(b.clone().validate(&invalid,&full.tokenizer).is_err());
+        }
         let inference = d.path().join("inference");
         export_inference(&inference, &full).unwrap();
         let exported = load(&inference, Device::Cpu, false).unwrap();

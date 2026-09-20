@@ -276,6 +276,50 @@ fn response_loss(logits: &Tensor, batch: &Batch, weight: f64) -> Result<(Tensor,
     };
     Ok((ce, objective, n))
 }
+// Training-only paired supervision. The two targets share their prefix up to
+// the first divergence, so neither teacher prefix reveals the selected side.
+// No extra forward, generated answer correction, or product inference oracle.
+fn pair_contrast_loss(
+    logits: &Tensor,
+    samples: &[Sample],
+    indices: &[usize],
+    pairs: &[(usize, usize)],
+) -> Result<Tensor> {
+    let (rows, len, vocab) = logits.dims3()?;
+    if rows != indices.len() || indices.iter().any(|&i| i >= samples.len()) {
+        return Err(Error::Invalid("paired loss batch bounds".into()));
+    }
+    let zero = Tensor::zeros((), DType::F32, logits.device())?;
+    let mut losses = Vec::with_capacity(pairs.len());
+    let mut seen = std::collections::BTreeSet::new();
+    for &(a, b) in pairs {
+        if a >= rows || b >= rows || a == b || !seen.insert(a) || !seen.insert(b) {
+            return Err(Error::Invalid("paired loss duplicate/self/out-of-range row".into()));
+        }
+        let sa = &samples[indices[a]];
+        let sb = &samples[indices[b]];
+        if sa.response_start == 0 || sb.response_start == 0
+            || sa.response_start >= sa.tokens.len() || sb.response_start >= sb.tokens.len()
+            || sa.tokens.last() != Some(&EOS) || sb.tokens.last() != Some(&EOS) {
+            return Err(Error::Invalid("paired loss target boundary/EOS".into()));
+        }
+        let ta = &sa.tokens[sa.response_start..];
+        let tb = &sb.tokens[sb.response_start..];
+        let j = ta.iter().zip(tb).position(|(x,y)| x != y)
+            .ok_or_else(|| Error::Invalid("paired loss requires distinct targets".into()))?;
+        let (pa,pb) = (sa.response_start+j-1, sb.response_start+j-1);
+        let (ya,yb) = (ta[j] as usize,tb[j] as usize);
+        if pa >= len || pb >= len || ya >= vocab || yb >= vocab {
+            return Err(Error::Invalid("paired loss position/token bounds".into()));
+        }
+        let at = |r,p,y| logits.narrow(0,r,1)?.narrow(1,p,1)?.narrow(2,y,1)?.reshape(());
+        let separation = ((at(a,pa,ya)? - at(a,pa,yb)?)? + (at(b,pb,yb)? - at(b,pb,ya)?)?)?;
+        let margin = (separation.neg()? + 1.)?;
+        // log(exp(0)+exp(margin)), using the backend's stable log-sum-exp.
+        losses.push(Tensor::stack(&[&zero,&margin],0)?.log_sum_exp(0)?);
+    }
+    Ok(if losses.is_empty() { zero } else { (Tensor::stack(&losses,0)?.mean_all()? * 0.1)? })
+}
 fn validation_loss(
     model: &Transformer,
     samples: &[Sample],
@@ -1113,11 +1157,15 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                     break;
                 }
                 let logits = loaded.model.forward(&b.input, Some(&b.valid))?;
-                let (loss, objective, n) = response_loss(
+                let (loss, mut objective, n) = response_loss(
                     &logits,
                     &b,
                     config.first_target_weight,
                 )?;
+                if let Some((plan,_)) = fresh
+                    && let Some(pairs) = plan.contrast_pairs(&indices)? {
+                    objective = (objective + pair_contrast_loss(&logits,&train,&indices,&pairs)?)?;
+                }
                 if fresh.is_some() {
                     let predictions=logits.argmax(2)?.to_vec2::<u32>()?;
                     let labels=b.target.to_vec2::<u32>()?;let masks=b.mask.to_vec2::<f32>()?;
@@ -1179,7 +1227,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
             state.validation_loss = None;
             if let Some(trace)=&mut fresh_trace {
                 use std::io::Write;
-                replica_v3::binary::write_value_record(trace,&replica_v3::binary::record!({"step":state.step,"sampler":state.sampler_state,"epoch":state.step/1024,"paired_cursor":fresh.and_then(|(p,_)|p.pair_position(state.step-1)),"draw":fresh.map(|(p,_)|p.draw(state.step-1)),"sample_indices":balanced,"tasks":task_stats,"input":step_tokens,"target":targets,"ce":state.train_loss,"lr":actual_lr,"lr_bits":actual_lr.to_bits(),"grad_norm":grad_norm,"clip":(config.clip/(grad_norm+1e-12)).min(1.),"delta_norm":delta}))?;
+                replica_v3::binary::write_value_record(trace,&replica_v3::binary::record!({"step":state.step,"sampler":state.sampler_state,"epoch":state.step/1024,"paired_cursor":fresh.and_then(|(p,_)|p.pair_position(state.step-1)),"draw":fresh.map(|(p,_)|p.draw(state.step-1)),"sample_indices":balanced,"tasks":task_stats,"input":step_tokens,"target":targets,"ce":state.train_loss,"objective":objective_sum/targets as f64,"lr":actual_lr,"lr_bits":actual_lr.to_bits(),"grad_norm":grad_norm,"clip":(config.clip/(grad_norm+1e-12)).min(1.),"delta_norm":delta}))?;
                 trace.flush()?;
                 if state.step==config.budget_start_step+1||state.step.is_multiple_of(32){trace.sync_all()?;}
             }
@@ -1809,6 +1857,50 @@ mod tests {
             .remove("first_target_weight");
         let decoded: TrainConfig = replica_v3::binary::from_value(legacy).unwrap();
         assert_eq!(decoded.first_target_weight, 1.);
+    }
+    #[test]
+    fn paired_contrast_matches_scalar_gradients_shared_prefix_and_boundaries() {
+        let device=Device::Cpu;
+        let samples=[
+            Sample{tokens:vec![BOS,8,9,10,11,EOS],response_start:3,curriculum:false},
+            Sample{tokens:vec![BOS,12,13,8,10,12,EOS],response_start:4,curriculum:false},
+        ];
+        let values:Vec<f32>=(0..192).map(|i|(i%23) as f32*0.07-0.8).collect();
+        let ix=|r:usize,p:usize,t:usize| (r*6+p)*16+t;
+        let (aa,ab,ba,bb)=(ix(0,3,11),ix(0,3,12),ix(1,4,11),ix(1,4,12));
+        for shift in [0.,7.] {
+            let mut v=values.clone();v[aa]+=shift;v[ba]+=shift;
+            let logits=Var::from_vec(v.clone(),(2,6,16),&device).unwrap();
+            let loss=pair_contrast_loss(&logits,&samples,&[0,1],&[(0,1)]).unwrap();
+            let x=1.-f64::from(v[aa]-v[ab]+v[bb]-v[ba]);
+            let expected=0.1*x.exp().ln_1p();
+            assert!((f64::from(loss.to_scalar::<f32>().unwrap())-expected).abs()<1e-6);
+            let grad=loss.backward().unwrap().get(&logits).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            let g=0.1/(1.+(-x).exp());
+            for (i,actual) in grad.iter().enumerate() {
+                let expected=if i==aa||i==bb {-g}else if i==ab||i==ba {g}else{0.};
+                assert!((f64::from(*actual)-expected).abs()<1e-6,"gradient at {i}");
+            }
+            assert_eq!(loss.to_scalar::<f32>().unwrap(),pair_contrast_loss(&logits,&samples,&[0,1],&[(1,0)]).unwrap().to_scalar::<f32>().unwrap());
+            assert_eq!(pair_contrast_loss(&logits,&samples,&[0,1],&[]).unwrap().to_scalar::<f32>().unwrap(),0.);
+            for pairs in [vec![(0,0)],vec![(0,2)],vec![(0,1),(1,0)]] {
+                assert!(pair_contrast_loss(&logits,&samples,&[0,1],&pairs).is_err());
+            }
+            assert!(pair_contrast_loss(&logits,&samples,&[0,0],&[(0,1)]).is_err());
+            assert!(pair_contrast_loss(&logits,&samples,&[0,2],&[(0,1)]).is_err());
+        }
+        for sign in [-1.,1.] {
+            let mut v=values.clone();for i in [aa,bb] {v[i]=sign*1000.;}for i in [ab,ba] {v[i]=-sign*1000.;}
+            let logits=Var::from_vec(v,(2,6,16),&device).unwrap();
+            let loss=pair_contrast_loss(&logits,&samples,&[0,1],&[(0,1)]).unwrap();
+            assert!(loss.to_scalar::<f32>().unwrap().is_finite());
+            assert!(loss.backward().unwrap().get(&logits).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap().iter().all(|v|v.is_finite()));
+        }
+        let b=batch(&samples,&[0,1],&device).unwrap();
+        let logits=Tensor::from_vec(values,(2,6,16),&device).unwrap();
+        let (ce,objective,count)=response_loss(&logits,&b,1.).unwrap();
+        assert_eq!(count,6);assert_eq!(ce.to_scalar::<f32>().unwrap(),objective.to_scalar::<f32>().unwrap());
+        println!("PAIR_CONTRAST_SCALAR optimizer=0 generation=0 teacher=0");
     }
     #[test]
     fn adam_matches_independent_reference_and_teacher_forcing_masks() {

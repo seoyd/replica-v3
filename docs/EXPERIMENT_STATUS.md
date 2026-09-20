@@ -1,5 +1,35 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Paired discrimination — implementation and direct verification
+
+The next user-authorized single-variable trial is CONTRAST, from the same P6144
+parent as the closed COBATCH control. Sample tape, all native source data,
+tokenizer, Adam, LR3e-5, batch8 and model remain unchanged. Training adds fixed
+0.1 mean softplus pair discrimination at the first distinct target token after
+a shared teacher prefix. Existing response CE is separately logged. No extra
+forward, external teacher, product annotation or decoding change. Native objective
+family3 binds the equation/coefficient/training table without changing the byte
+layout; default-loss resume rejects it. No new production module/framework.
+
+EXECUTED_THIS_RUN: independent scalar gradient/value/common-bias/finite-extreme/
+invalid-pair test1 PASS (optimizer0); full3840-row native tape and actual pair
+mapping test1 PASS (0.87s, model calls0); native writer-reader/inference-view and
+objective-binding rejection test1 PASS (0.06s, model calls0). Actual TINY process
+regression1 PASS (61.91s):37 updates,507 generations/507 teachers including27
+setup observations. Continuous2 versus fresh1+1 weights/Adam are exact, learning
+counts/config/tape match pure-CE co-batch, trained weights differ, pure reporting
+does not write, and unsafe-failure/conflicting-intervention gates remain enforced.
+
+Initial scalar test listing compilation failed on an inferred i32 fixture index;
+explicit usize fixed it before execution. That failed build remains recorded,
+not counted as PASS. Final production P16 test1 PASS (14.18s):16/16 exact raw
+outputs,160 tokens, errors0, optimizer0/teacher0, originals unchanged. Clippy exit0
+with only the pre-existing map-key warning. Rust/Cargo1.98.1, locked/offline,
+Accelerate/thread1. New SMALL learning0 at this verification stage.
+Local evidence: `artifacts/pair-contrast-20260920-evidence/`. The subsequent
+bounded1280-update trial must record its actual results separately. Existing
+failures remain closed; joint quality, S4/S5/S6 and Goal1 are not accepted.
+
 ## 2026-09-20 Co-batch completed; joint selection not recovered
 
 EXECUTED_THIS_RUN on frozen source `e1e2ca4098bc55ec6fc9407fd837bbb16b464b85`.

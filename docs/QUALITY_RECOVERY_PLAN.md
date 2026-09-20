@@ -1,5 +1,45 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: paired discrimination objective at fixed co-batch exposure
+
+The user's continuing one-variable authorization permits one new CONTRAST trial
+from P6144, retaining the exact COBATCH sample tape, batch8, Adam, LR3e-5,
+tokenizer, native data, clipping/decay and model. The closed COBATCH control at
+6400/7424 is reused read-only. No new examples, framing, decoding or product oracle.
+COBATCH ended both0/192 and identical normal outputs179/192. Existing target pairs
+differ first at token0 in172 cases and token1 in20; these observations motivate
+explicit conditional discrimination, not a proven cause or an assumed solution.
+
+Only the training objective changes. For each co-batched C/D/E original/flip pair,
+find the first distinct target token after their shared gold prefix. With correct
+tokens ya/yb and their respective native logits za/zb at that position, define
+`d = (za[ya]-za[yb]) + (zb[yb]-zb[ya])`. Optimize existing response CE plus
+`0.1 * mean_pair log(1+exp(1-d))`; use stable log-sum-exp, fixed margin1 and
+coefficient0.1. Anchor-only batches add zero. The CE denominator stays the actual
+response tokens, and CE is logged separately from the objective. The auxiliary
+has its own pair mean and changes gradient magnitude; it is not a mere rescaling
+of first-target CE. A common token preference at both inputs cancels in d.
+No extra model forward/teacher call and no gradient from evaluation data.
+
+Existing native resume descriptor family3/normalizer3 identifies this exact
+equation, stores coefficient0.1 in its existing optional coefficient slot, and
+binds the training pair table, tape and policy. No tensor/file layout changes.
+Generic/default-loss resume rejects it; native inference receives no annotation.
+The caller verifies complete C/D/E pairs, distinct targets, shared prefix,
+token/position bounds and EOS. Product logits/greedy/strict UTF-8 stay unchanged.
+
+Maximum1280 new SMALL updates,12M input/1M target including discarded work,
+12000 generation/10000 own-model teacher,21600 active seconds,900s command/
+120s cleanup. TINY64 updates/768 generation/768 teacher, scalar optimizer0.
+Verify independent scalar loss/gradients, common-bias invariance, extreme finite
+logits, malformed pairs,3840-row tape, native binding and actual continuous2
+versus fresh1+1; then production P16 parity before source freeze and learning.
+Save/resume the first actual update. Screens32/64/128/768 and full train64,
+primary512,transfer128,selector192 at256/1280. Original retention/plateau,
+cancel/numeric/storage/UNKNOWN guards and final joint thresholds remain unchanged.
+Stop on first joint pass for independent S4 and conditional S5/S6; otherwise close
+at the registered stop/cap. No coefficient/margin search or combined intervention.
+
 ## Closed: joint pair packing at unchanged batch8
 
 Completed1280 new updates at7424: primary371/512, transfer60/128, flipped21/192,

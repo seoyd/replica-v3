@@ -1,5 +1,16 @@
 # Replica v3 B0 runbook
 
+## Paired discrimination research
+
+`replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT
+--parity NEW_PARITY_ROOT --output NEW_ROOT --pair-contrast` registers CONTRAST:
+the same COBATCH tape and P6144/Adam/LR3e-5, with a fixed training-only paired
+divergence auxiliary objective. It conflicts with all other intervention flags.
+Use `fresh run --root NEW_ROOT/CONTRAST` and pure `fresh paired-report --root NEW_ROOT`
+with the frozen production executable. Maximum1280 new updates; native objective
+family3 is required for resume. Read-only native inference uses unchanged greedy
+generation and does not consume pair annotations or expected answers.
+
 ## Joint pair packing research
 
 `replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT
