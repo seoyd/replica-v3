@@ -1,6 +1,12 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: widen the recurring pair pool, one sampling variable
+## Closed: widen the recurring pair pool, one sampling variable
+
+Completed1280 updates at7424: primary375/512, transfer69/128, flipped32/192,
+both5/192 (D5 across3 bases), errors0. REPLAY was369/64/25/6: primary/transfer
+increased but both did not. Original78/192, same output141/192. No joint pass,
+no adoption; Finished/BUDGET_REACHED, resume=false. Pure report verified all
+raw/native/usage bindings. Do not extend the period sweep or reopen this budget.
 
 Register one WIDE arm from the unchanged P6144 parent under the user's continuing
 one-variable authorization. Preserve the closed REPLAY trial and compare its

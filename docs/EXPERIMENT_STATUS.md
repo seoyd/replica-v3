@@ -1,5 +1,56 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Two-block recurrence completed; joint quality remains unmet
+
+EXECUTED_THIS_RUN, source `def394b19426f49fe34074a84640bc3084dc6ad9`.
+WIDE completed1280 updates P6144→7424. Pure report exit0 verifies frozen inputs,
+actual tape/Adam/LR, strict raw/teacher panels, decision and terminal/usage.
+No source or binary changes during learning; old checkpoints/failures preserved.
+
+| Absolute step | New updates | Train64 | Primary512 | Transfer128 | Flipped192 | Both192 |
+|---|---:|---:|---:|---:|---:|---:|
+| 6400 | 256 | 47 | 367 | 69 | 6 | 0 |
+| 7424 | 1280 | 47 | 375 | 69 | 32 | 5 |
+
+Final primary buckets `[55,62,30,28,20,60,56,64]`, transfer
+`[4,8,4,0,6,16,15,16]`; both C0/D5/E0 across3 bases, base4=0.
+Original78/192, same normal output141/192, pair counts `[5,73,27,87]`.
+Matched REPLAY369/64/25/6, original70/same126. Wider coverage improved primary/
+transfer relative to REPLAY but not joint selection, and remains below P6144.
+Not adopted. Screens32/64/128/768:44/46/41/43; flip24:0/0/1/1. Final screen42,
+guard_streak0. All2144 evaluation generations had normal EOS/errors0.
+
+Actual input2,197,323/target157,630; committed2,195,433/157,500; discarded
+1,890/130; padding783,397.10,240 draws,1280 per task,5120 per phrase.
+Generation2160 including P16, own-model teacher2144, active study1508.965294499s
+including prepare. Separate TINY65/669/669. First update saved/restored6145;
+900s TIME_BUDGET at6948 had TrainingPending/resume=true and counted its
+uncommitted forward. New process completed476 updates and final896 generations/
+teachers. Final Finished/BUDGET_REACHED/resume=false; no UNKNOWN/cancel/save error.
+Trainer peak sampled RSS1,495,904KiB; separate OS ps samples reached4,638,784KiB.
+These are distinct observation methods, not an S6 measurement or guaranteed peak.
+
+DERIVED_FROZEN_TAPE: per C/D/E,512 distinct exact cases across256 bases,
+256 cases twice/256 three times,3584 unused. All48 fixed diagnostic sides saw3
+exposures. Input proof verifies unchanged parent/config/pools and all19,200
+nonselector slots across the3840-row registered tape. First512 equals SIDE;
+first256 model/raw scores also match SIDE/REPLAY. DERIVED_EXISTING_RAW:
+119/192 flipped teacher first argmaxes incorrect, mean first NLL2.4457423820,
+remaining0.2093856636. Teacher results are not free-generation accuracy.
+
+Executable `artifacts/pair-wide-20260920-executable`, SHA256
+`22864e624f927abfffabf545ca4bfeccd2a542e714a8a0cda46373d185d1a996`;
+source digest `ef5a05b4a030dc3ce767d306bc464ce3e285558a0603f8db660e4de37c4fa38d`;
+policy `6102a3a62a3308c1a9cf999918413b6c519eb8f1af6bdb6e9114af98af64bc07`.
+Final native `artifacts/pair-wide-20260920/WIDE/segment-0002/final`, directly
+hashed whole-file SHA256 `f224140c68c1887c6b1167c8d85947e86b45c2f810722db006c16313aab6cb76`,
+model weights `17ebed6248f12362319dd3483138c194572d4d6428bd558a89d653bf95d684f0`.
+Evidence/candidate.patch/commands/raw recounts under
+`artifacts/pair-wide-20260920-evidence/`; corpus/weights/raw are local only.
+CODE_VERDICT=IMPLEMENTER_TESTED_PASS; LEARNING_EXECUTION=COMPLETE;
+MODEL_QUALITY_RECOVERED=false; FINAL200=NOT_CREATED/NOT_OPENED;
+S4/S5/S6=NOT_RUN_PRECONDITION_FAILED; GOAL1_READY=false; GOAL1_ACCEPTED=false.
+
 ## 2026-09-20 Two-block recurrence — implementation verified
 
 WIDE changes only the recurring C/D/E prefix from256 to512 updates relative to
