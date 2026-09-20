@@ -1,5 +1,40 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 SIDE train margins and exact exposure, no learning
+
+EXECUTED_THIS_RUN: existing teacher-only diagnostic1 PASS (10.88s),96 own-model
+teachers, generation0, optimizer0, errors0. Control-accounted6.040619416s excludes
+loading/setup. Same first8 seen pairs per C/D/E as the previous CONTRAST probe.
+Pure Rust verification confirms the case digest and all48 parent teacher records
+are identical across the two observations. The raw/call/receipt recount passes.
+
+| Final model | Both margins>0 /24 | Both>=1 /24 | Sum>=1 /24 | Sum>=1 but one<=0 /24 |
+|---|---:|---:|---:|---:|
+| CONTRAST7424 | 4 | 0 | 8 | 4 |
+| SIDE7424 | 4 | 1 | 2 | 0 |
+
+SIDE mean sum0.3379638443, minimum side-1.9402074814, maximum2.0724487305.
+Both models have27 positive margins among46 sides whose first divergence is at
+target token0. Of these positive margins, vocabulary argmax is wrong2 times for
+CONTRAST and1 for SIDE. Both first-token gold argmax pairs4/24 in each; the2
+nonzero-divergence sides are not inferred from token0. These are training-only
+teacher facts, not full-answer generation scores or generalization evidence.
+
+DERIVED_FROZEN_TAPE, model calls0: each C/D/E bucket has1280 draws from1280
+distinct exact samples (each1 exposure),2816 exact samples unused, all256 base
+scenes represented. The fixed48 diagnostic sides each had exactly1 exposure in
+the new1280-update trial. Thus “seen train” does not mean repeatedly optimized
+to convergence. The unchanged both-positive count supports testing exact-case
+recurrence separately; it does not establish low exposure as the unique cause.
+
+Evidence `artifacts/side-margin-20260920-evidence/`: margin96.log,
+margin-recount.log, margin-comparison.log, exposure-recount.log and their Rust
+helpers. Raw `train-margin96/margins.r3rows` SHA256
+`de710010ef1cd525ea093bd5721229cc6c21ffe08e56db3010c367078a9cde4f`;
+start `6eeadb8e9c9d6be8079466d86065afec9cf1316cbd91796ae76733669a6690ff`.
+The bounded learning trial remains closed. DIAGNOSTIC=VERIFIED;
+MODEL_QUALITY_RECOVERED=false; FINAL200=NOT_OPENED; GOAL1_READY=false.
+
 ## 2026-09-20 Separate side margins completed; joint quality failed
 
 EXECUTED_THIS_RUN, source `4dfa81fc5a4e7c337872ef4d629976fbc75a8347`.
@@ -45,8 +80,11 @@ Executable `artifacts/side-margin-20260920-executable`, SHA256
 source digest `a2a4c5d716bb9e313929ed5da1a08cba0fc6d33ad73fb0b5dc212a4154fec080`;
 policy `8767859d6e4fa2d0ae2406a2d6995c68289a5e2796347404ef976c7d948907ab`.
 Final `artifacts/side-margin-20260920/SIDE/segment-0002/final`, physical SHA256
-`38d2eb679a57f3aa74b3e7a6d1af687e39688d6b22a21e803381519bd887a2e9`, weights
+`de1a59ee2152793ac67a2de0f6ecd97a1137ba72c14e7beb50dee8e2c2bb1f41`, weights
 `ae949f151a87aa1585bd24748e08d7e638be240290785a885512db7984dbf849`.
+The trainer's printed `sha256=38d2eb...` is its manifest weights digest, not the
+whole-file SHA256. The physical value above is directly hashed and agrees with
+the terminal checkpoint binding; this corrects the prior report's mislabeled hash.
 Commands/tests/hashes/candidate.patch/input equality/pure report/error recount:
 `artifacts/side-margin-20260920-evidence/`. Original artifacts stay unpublished.
 CODE_VERDICT=IMPLEMENTER_TESTED_PASS; LEARNING_EXECUTION=COMPLETE;

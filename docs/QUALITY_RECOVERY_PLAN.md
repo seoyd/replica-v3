@@ -1,6 +1,18 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: fixed train-pair margins after sidewise learning, no updates
+## Closed: fixed train-pair margins after sidewise learning, no updates
+
+Completed96 teachers, generation0/optimizer0, errors0; pure recount passed.
+SIDE and CONTRAST both have4/24 train pairs with both margins positive. SIDE
+has1/24 both>=1 and0 aggregate-pass/wrong-side pairs. This changes margin
+calibration without solving conditional choice. On46 first-token divergence
+sides, positive-margin but wrong vocabulary argmax occurs1 time in SIDE and2
+in CONTRAST; third-token preference is not the dominant failure in this sample.
+Pure tape recount found all48 fixed train sides had exactly one exposure during
+1280 updates. Each C/D/E bucket exposed1280 distinct exact samples once, with
+2816 other exact samples unused. This is exact-sample exposure, not unique base
+count: all256 bases per bucket were represented. Consider recurrence separately
+from marginal loss weighting; no causal claim or tiny-set quality substitution.
 
 Use the existing optional teacher-only seen-pair diagnostic once in a new root
 for SIDE7424 and P6144: first8 actually seen train pairs per C/D/E, same selection
