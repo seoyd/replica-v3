@@ -1,5 +1,36 @@
 # 진단 및 구현 상태
 
+## 2026-09-21 사용자 인가 R3–R5 실제 학습 — 별도 등록
+
+사용자가 저장 수리 후 R3–R5 실제 학습 진행을 명시적으로 승인했다. 실패 r2의
+start/control/누락 final은 그대로 보존하고 새 root
+`artifacts/identifiable-baseline-20260921-r3/`를 등록했다. Source는
+936d42258a6143ae664fca71ef8294b760b1dffe, 시작 report HEAD는
+7c7ada08c91e0334b533e11dec9ef4b8c6a8d467다. 미추적 .DS_Store 보존.
+Rust1.98.1/locked offline/CPU F32 Accelerate/thread1, 새 의존성/모델/API0.
+Production binary1eeea87e0c8d66fb5f99136e106c70fca37788422416b45478a94a45acc1e201,
+compiled source f322766fb7ae198e1c5a6c8f6ad357676d35ebcdc529ca3f5b9a2083a92acb69.
+
+새 preparation f5f548ecadddcecf71eadc9e2f9752ded0b23baeda61173bb956ab7eb39c3376.
+기존 수용본과 같은 semantic corpus/모든 사례·정답, tokenizer, metadata,
+sample tape, 초기 tensor 내용 af6abb8fd48cdd0d4396b86c543aee688efc770470c52adc0dcf7016acf40306이다.
+Native corpus의 물리 hash 차이는 converted_at만 변경된 데 따른 것이며 변환기와
+semantic 내용은 동일하다. LOCAL5/GLOBAL6 policy는 각각
+4ba25d89b481c9b879a04e4cba5b4388da5378df745f46141d1ea907ef30b977 /
+4348a01c119567e6bbf65c9c73c3a48da5cb58564076b8c0226246659c2ccb9a다.
+예산/조건은 기존 각4096, 총8192, 각 input20M, active14400s,
+generation/teacher 각6400 그대로이며1024 공동 비교 후에만 조건부 연장한다.
+
+이번 준비 수치 SMALL forward8/backward2, optimizer0/generation0/teacher0.
+기존 P16은 재실행하지 않고 그16 generation을 총 사용량에 계속 포함한다.
+이전 실패의 실제 optimizer/input/target/generation/teacher0와0.912484459초는
+보존·별도 보고한다. 새 준비 source/data binding의 독립 확인 뒤 첫 update를
+저장하고 새 process 복원으로 진행한다. 독립 A binding은 PASS로 종료했다:
+`artifacts/identifiable-review-a-20260921-r3/REPORT.md`, SHA256
+6df045a1ea40b37128cd2ce818e9ef32da7018f6e26f5e7ae2087b35e73d8835.
+실제 보고서를 승인 기록에 연결했다. 이는 모델 품질 PASS가 아니다.
+증거: `artifacts/identifiable-learning-20260921-evidence/`.
+
 ## 2026-09-21 첫 실제 실행의 저장 실패 보존, tokenizer 출처 연결 수리
 
 독립 A는 교정 source10b8f46e2e16809dc0b5719b89fbed4670e8832a와 preparation

@@ -2,6 +2,17 @@
 
 ## Active: identifiable baseline, prereview required before learning
 
+The user explicitly authorized R3–R5 execution on2026-09-21 after the provenance
+repair. Register the replacement at `artifacts/identifiable-baseline-20260921-r3/`
+using repaired source936d42258a6143ae664fca71ef8294b760b1dffe and the retained
+production binary. The failed r2 attempt remains immutable and is not resumed.
+The same seed17 tensor values, tokenizer mapping, eight-task episodes, finite
+tape, schedule and all gates/caps below remain fixed. Obtain independent binding
+of this exact preparation to the prior data acceptance and code-repair review.
+Previously consumed optimizer/input/target/generation/teacher in the failed
+attempt were0; its0.912484459s failed command and all prior preparation/parity
+costs remain separately reported. Never reinterpret that failure as success.
+
 R3-IDENTIFIABLE-BASELINE-1.0 authorizes a separate study. The GROUND cancellation
 below remains historical and immutable: step6634, resume=false, unused790 not
 reusable. No new auxiliary objective, P-weight continuation or backend change.
