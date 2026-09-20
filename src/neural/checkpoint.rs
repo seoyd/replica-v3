@@ -154,11 +154,12 @@ pub struct ResumeBinding {
     pub version: u8,
     /// 1: response CE, 2: normalized answer-byte span CE,
     /// 3: response CE + 0.1 * mean paired first-divergence softplus (margin1).
+    /// 4: response CE + 0.1 * mean of per-side first-divergence softplus (margin1).
     pub family: u8,
     pub first_target_weight_bits: u64,
-    /// Historical coefficient slot: span alpha for family2, pair coefficient for3.
+    /// Historical coefficient slot: span alpha for family2, pair coefficient for3/4.
     pub span_alpha_bits: Option<u64>,
-    /// 1: target denominator; 2: per-example mass; 3: target CE plus pair mean.
+    /// 1: target denominator; 2: per-example mass; 3: CE plus pair mean; 4: CE plus side mean.
     pub normalizer: u8,
     pub annotation: Option<[u8; 32]>,
     pub train_order: [u8; 32],
@@ -209,7 +210,7 @@ impl ResumeBinding {
     }
     pub fn validate(&self, state: &TrainingState, tok: &ByteBpe) -> Result<()> {
         if self.version != 1
-            || ![1, 2, 3].contains(&self.family)
+            || ![1, 2, 3, 4].contains(&self.family)
             || self.execution > 1
             || self.first_target_weight_bits != state.config.first_target_weight.to_bits()
             || self.tokenizer != Self::digest_bytes(tok.semantic_id().as_bytes())
@@ -226,8 +227,8 @@ impl ResumeBinding {
                     || self.span_alpha_bits != Some(1f64.to_bits())
                     || self.annotation.is_none()
                     || self.execution != 1))
-            || (self.family == 3
-                && (self.normalizer != 3
+            || ([3,4].contains(&self.family)
+                && (self.normalizer != self.family
                     || self.first_target_weight_bits != 1f64.to_bits()
                     || self.span_alpha_bits != Some(0.1f64.to_bits())
                     || self.annotation.is_none()

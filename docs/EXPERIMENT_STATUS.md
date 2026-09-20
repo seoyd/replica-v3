@@ -1,5 +1,36 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Separate side-margin objective — direct verification
+
+One new SIDE registration compares separate per-side margins with the retained
+CONTRAST sum-margin control at the same6400/7424 cursors. Same P6144 weights/
+Adam/data/tape/tokenizer/LR3e-5/batch8; coefficient0.1 and unchanged response CE.
+Only aggregation changes to the average of two margin1 softplus penalties.
+The native descriptor family4/normalizer4 distinguishes this exact equation;
+existing family3 semantics and inference framing are preserved. No new module,
+framework, dataset, production annotation or decoding behavior.
+
+EXECUTED_THIS_RUN: scalar value/gradient/equal-sum wrong-side/extreme/bounds
+test1 PASS (0.00s, no model calls); full3840-row tape/binary test1 PASS (1.05s,
+no model calls); native objective writer-reader/default-resume rejection test1
+PASS (0.08s, no model calls). Actual TINY process regression1 PASS (65.29s):
+41 optimizer updates,561 generations and561 teachers, including27 setup
+observations of each kind. Continuous2 versus fresh1+1 weights/Adam match;
+pure reporting leaves files unchanged and mixed-intervention/failure blocks hold.
+Production P16 test1 PASS:16 exact outputs,160 tokens, errors0, optimizer0/
+teacher0, originals unchanged. No SMALL training at this verification stage.
+
+Rust/Cargo1.98.1, locked/offline, Accelerate/thread1. Release build and clippy
+exit0; clippy reports existing map-key and new nested return-type style warnings.
+Local commands, test lists, hashes and logs:
+`artifacts/side-margin-20260920-evidence/`. Test binary SHA256
+`bd97447c214bbcef99d440fdc607bfd59f895668e2acd317391f9bf3f762bae6`,
+process test binary `6dd63e61c41ecf32cc86f69857cd52c57463548cbdc2d2ca4777203b5995c6db`.
+The forthcoming1280-update bounded execution has no quality result yet.
+CODE_VERDICT=IMPLEMENTER_TESTED_PASS; MODEL_QUALITY_RECOVERED=false;
+FINAL200=NOT_OPENED; S4/S5/S6=NOT_RUN_PRECONDITION_FAILED;
+GOAL1_READY=false; GOAL1_ACCEPTED=false; independent review pending.
+
 ## 2026-09-20 Fixed train-pair margins independently recounted
 
 EXECUTED_THIS_RUN: existing seen-pair diagnostic, optional teacher-only mode,

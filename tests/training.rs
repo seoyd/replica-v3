@@ -3133,6 +3133,33 @@ fn fresh_paired_policies_match_continuous_and_split_processes() {
     call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),
         "--output",mixed.to_str().unwrap(),"--co-batch","--learning-rate-threefold"],None,false);
     assert!(!mixed.exists());
+    let side_roots=[d.path().join("side-continuous"),d.path().join("side-split")];
+    for (i,root) in side_roots.iter().enumerate() {
+        call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),
+            "--output",root.to_str().unwrap(),"--sidewise-contrast"],None,true);
+        let arm=root.join("SIDE");
+        if i==0 {call(&["fresh","fixture-full","--root",arm.to_str().unwrap()],None,true);}
+        else {for _ in 0..2 {call(&["fresh","run","--root",arm.to_str().unwrap()],None,true);}}
+        let before=hashes(root);
+        call(&["fresh","paired-report","--root",root.to_str().unwrap()],None,true);
+        assert_eq!(before,hashes(root));
+    }
+    let side=checkpoint::load(&side_roots[0].join("SIDE/segment-0000/final"),Device::Cpu,true).unwrap();
+    let split=checkpoint::load(&side_roots[1].join("SIDE/segment-0001/final"),Device::Cpu,true).unwrap();
+    assert_eq!(side.model.weight_hash().unwrap(),split.model.weight_hash().unwrap());
+    for (k,t) in &side.optimizer {assert_eq!(t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),split.optimizer[k].flatten_all().unwrap().to_vec1::<f32>().unwrap());}
+    let state=side.manifest.training.as_ref().unwrap();let old=a.manifest.training.as_ref().unwrap();
+    assert_eq!(state.config,old.config);assert_eq!(state.step,old.step);
+    assert_eq!(state.target_tokens,old.target_tokens);assert_eq!(state.consumed_tokens,old.consumed_tokens);
+    let binding=state.resume_binding.as_ref().unwrap();
+    assert_eq!(binding.family,4);assert_eq!(binding.normalizer,4);
+    assert_eq!(binding.span_alpha_bits,Some(0.1f64.to_bits()));assert!(binding.annotation.is_some());
+    assert!(checkpoint::ResumeBinding::require_default(state,&side.tokenizer).is_err());
+    assert_ne!(side.model.weight_hash().unwrap(),a.model.weight_hash().unwrap());
+    let mixed=d.path().join("mixed-side-rejected");
+    call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),
+        "--output",mixed.to_str().unwrap(),"--sidewise-contrast","--pair-contrast"],None,false);
+    assert!(!mixed.exists());
     let contrast_roots=[d.path().join("contrast-continuous"),d.path().join("contrast-split")];
     for (i,root) in contrast_roots.iter().enumerate() {
         call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),

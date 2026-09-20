@@ -160,9 +160,9 @@ wire1 state decodes with unknown objective; it is never implicitly defaulted.
 After the existing state losses, wire2 stores an option byte (writer requires1
 for RESUME), the following typed descriptor, and its32-byte domain-separated SHA:
 
-1. Four u8: semantic version1, family1 CE/2 span/3 paired divergence, normalizer1/2/3, execution0 generic/1 native.
+1. Four u8: semantic version1, family1 CE/2 span/3 summed pair divergence/4 per-side divergence, normalizer1/2/3/4, execution0 generic/1 native.
 2. first-target f64 IEEE bits u64LE.
-3. alpha option byte, then optional f64 bits u64LE (span coefficient1; family3 fixed pair coefficient0.1).
+3. alpha option byte, then optional f64 bits u64LE (span coefficient1; family3/4 fixed pair coefficient0.1).
 4. annotation option byte, then optional32-byte annotation digest.
 5. Eight32-byte digests in order: train order, tokenizer, framing, config, corpus,
    validation, executed policy, provenance.

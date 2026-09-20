@@ -1,5 +1,38 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: separate per-side margins at unchanged co-batch exposure
+
+Register one SIDE trial from P6144 under the user's continuing one-variable
+authorization. Reuse retained CONTRAST6400/7424 as the equal-budget control;
+never resume that closed trial. The96-teacher fixed train diagnosis found4/24
+pairs with sum margin>=1 but one side<=0. This motivates testing aggregation,
+not a claim that it uniquely explains heldout failure.
+
+Keep the same parent weights/Adam, tokenizer, all data and exact3840-row co-batch
+tape, batch8, LR3e-5, clipping/decay, first-target1 CE and decoding. Let da/db
+be each side's correct-minus-counterpart logit at the first divergent target
+under the common gold prefix. Replace only the auxiliary with
+`0.1 * mean_pair (softplus(1-da)+softplus(1-db))/2`, added to unchanged response
+CE. Margin1 now applies separately to each side, not their sum. This changes
+gradient magnitude and no longer cancels common token bias. Coefficient remains
+0.1; no tuning sweep, extra forwards or product annotations. Anchor-only batches
+add zero. Native objective family4/normalizer4 binds this equation, fixed
+coefficient and training pair-table digest in the existing descriptor layout.
+Family3 and all original checkpoints retain their original meaning.
+
+Maximum1280 new SMALL updates,12M input/1M target including discarded work,
+12000 generation/10000 own-model teacher,21600 active seconds;900s command/
+120s cleanup. TINY64 updates/768 generation/768 teacher, scalar optimizer0.
+Verify independent scalar loss/gradients, balanced versus wrong-side equal-sum
+case, finite extremes/malformed pairs, full finite tape, native objective binding
+and continuous2 versus fresh1+1. Production P16 parity precedes source freeze.
+Save the first real update and restore in a new process within this budget.
+Screens32/64/128/768; full train64/primary512/transfer128/selector192 at256/1280.
+Existing retention/plateau/cancel/numeric/storage/UNKNOWN guards and all joint
+quality gates remain unchanged. First joint pass freezes the candidate for
+independent S4 and conditional S5/S6; otherwise close at the registered stop/cap.
+No retroactive winner selection or extension of this trial.
+
 ## Closed: fixed train-pair margin diagnosis, no learning
 
 Completed96 own-model teachers, optimizer0/generation0. Independent raw recount

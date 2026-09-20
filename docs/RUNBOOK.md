@@ -1,5 +1,16 @@
 # Replica v3 B0 runbook
 
+## Separate side-margin research
+
+`replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT
+--parity NEW_PARITY_ROOT --output NEW_ROOT --sidewise-contrast` registers SIDE.
+Same P6144/Adam/LR3e-5/co-batch tape as CONTRAST; only the paired auxiliary
+aggregation becomes the mean of each side's margin1 softplus. Native family4
+binds that meaning, coefficient0.1 and train pair table. All other intervention
+flags conflict. Run `fresh run --root NEW_ROOT/SIDE`, then pure
+`fresh paired-report --root NEW_ROOT` with the frozen executable. Cap1280;
+no product inference or framing change and no automatic budget extension.
+
 ## Paired discrimination research
 
 `replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT

@@ -284,6 +284,7 @@ fn pair_contrast_loss(
     samples: &[Sample],
     indices: &[usize],
     pairs: &[(usize, usize)],
+    sidewise: bool,
 ) -> Result<Tensor> {
     let (rows, len, vocab) = logits.dims3()?;
     if rows != indices.len() || indices.iter().any(|&i| i >= samples.len()) {
@@ -313,10 +314,14 @@ fn pair_contrast_loss(
             return Err(Error::Invalid("paired loss position/token bounds".into()));
         }
         let at = |r,p,y| logits.narrow(0,r,1)?.narrow(1,p,1)?.narrow(2,y,1)?.reshape(());
-        let separation = ((at(a,pa,ya)? - at(a,pa,yb)?)? + (at(b,pb,yb)? - at(b,pb,ya)?)?)?;
-        let margin = (separation.neg()? + 1.)?;
-        // log(exp(0)+exp(margin)), using the backend's stable log-sum-exp.
-        losses.push(Tensor::stack(&[&zero,&margin],0)?.log_sum_exp(0)?);
+        let da = (at(a,pa,ya)? - at(a,pa,yb)?)?;
+        let db = (at(b,pb,yb)? - at(b,pb,ya)?)?;
+        // log(exp(0)+exp(1-d)), using the backend's stable log-sum-exp.
+        let penalty = |d: &Tensor| -> candle_core::Result<Tensor> {
+            Tensor::stack(&[&zero,&(d.neg()? + 1.)?],0)?.log_sum_exp(0)
+        };
+        losses.push(if sidewise { ((penalty(&da)? + penalty(&db)?)? * 0.5)? }
+            else { penalty(&(da + db)?)? });
     }
     Ok(if losses.is_empty() { zero } else { (Tensor::stack(&losses,0)?.mean_all()? * 0.1)? })
 }
@@ -1163,8 +1168,8 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                     config.first_target_weight,
                 )?;
                 if let Some((plan,_)) = fresh
-                    && let Some(pairs) = plan.contrast_pairs(&indices)? {
-                    objective = (objective + pair_contrast_loss(&logits,&train,&indices,&pairs)?)?;
+                    && let Some((sidewise,pairs)) = plan.contrast_pairs(&indices)? {
+                    objective = (objective + pair_contrast_loss(&logits,&train,&indices,&pairs,sidewise)?)?;
                 }
                 if fresh.is_some() {
                     let predictions=logits.argmax(2)?.to_vec2::<u32>()?;
@@ -1868,34 +1873,45 @@ mod tests {
         let values:Vec<f32>=(0..192).map(|i|(i%23) as f32*0.07-0.8).collect();
         let ix=|r:usize,p:usize,t:usize| (r*6+p)*16+t;
         let (aa,ab,ba,bb)=(ix(0,3,11),ix(0,3,12),ix(1,4,11),ix(1,4,12));
-        for shift in [0.,7.] {
+        for sidewise in [false,true] { for shift in [0.,7.] {
             let mut v=values.clone();v[aa]+=shift;v[ba]+=shift;
             let logits=Var::from_vec(v.clone(),(2,6,16),&device).unwrap();
-            let loss=pair_contrast_loss(&logits,&samples,&[0,1],&[(0,1)]).unwrap();
+            let loss=pair_contrast_loss(&logits,&samples,&[0,1],&[(0,1)],sidewise).unwrap();
             let x=1.-f64::from(v[aa]-v[ab]+v[bb]-v[ba]);
-            let expected=0.1*x.exp().ln_1p();
+            let xa=1.-f64::from(v[aa]-v[ab]);let xb=1.-f64::from(v[bb]-v[ba]);
+            let expected=if sidewise {0.05*(xa.exp().ln_1p()+xb.exp().ln_1p())}else{0.1*x.exp().ln_1p()};
             assert!((f64::from(loss.to_scalar::<f32>().unwrap())-expected).abs()<1e-6);
             let grad=loss.backward().unwrap().get(&logits).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap();
-            let g=0.1/(1.+(-x).exp());
+            let ga=if sidewise {0.05/(1.+(-xa).exp())}else{0.1/(1.+(-x).exp())};
+            let gb=if sidewise {0.05/(1.+(-xb).exp())}else{ga};
             for (i,actual) in grad.iter().enumerate() {
-                let expected=if i==aa||i==bb {-g}else if i==ab||i==ba {g}else{0.};
+                let expected=if i==aa {-ga}else if i==ab {ga}else if i==bb {-gb}else if i==ba {gb}else{0.};
                 assert!((f64::from(*actual)-expected).abs()<1e-6,"gradient at {i}");
             }
-            assert_eq!(loss.to_scalar::<f32>().unwrap(),pair_contrast_loss(&logits,&samples,&[0,1],&[(1,0)]).unwrap().to_scalar::<f32>().unwrap());
-            assert_eq!(pair_contrast_loss(&logits,&samples,&[0,1],&[]).unwrap().to_scalar::<f32>().unwrap(),0.);
+            assert_eq!(loss.to_scalar::<f32>().unwrap(),pair_contrast_loss(&logits,&samples,&[0,1],&[(1,0)],sidewise).unwrap().to_scalar::<f32>().unwrap());
+            assert_eq!(pair_contrast_loss(&logits,&samples,&[0,1],&[],sidewise).unwrap().to_scalar::<f32>().unwrap(),0.);
             for pairs in [vec![(0,0)],vec![(0,2)],vec![(0,1),(1,0)]] {
-                assert!(pair_contrast_loss(&logits,&samples,&[0,1],&pairs).is_err());
+                assert!(pair_contrast_loss(&logits,&samples,&[0,1],&pairs,sidewise).is_err());
             }
-            assert!(pair_contrast_loss(&logits,&samples,&[0,0],&[(0,1)]).is_err());
-            assert!(pair_contrast_loss(&logits,&samples,&[0,2],&[(0,1)]).is_err());
+            assert!(pair_contrast_loss(&logits,&samples,&[0,0],&[(0,1)],sidewise).is_err());
+            assert!(pair_contrast_loss(&logits,&samples,&[0,2],&[(0,1)],sidewise).is_err());
+        }}
+        // Same sum2: separate penalties must distinguish balanced1/1 from3/-1.
+        let mut aggregate=vec![];let mut separate=vec![];
+        for (da,db) in [(1.,1.),(3.,-1.)] {
+            let mut v=vec![0f32;192];v[aa]=da;v[bb]=db;
+            let logits=Tensor::from_vec(v,(2,6,16),&device).unwrap();
+            aggregate.push(pair_contrast_loss(&logits,&samples,&[0,1],&[(0,1)],false).unwrap().to_scalar::<f32>().unwrap());
+            separate.push(pair_contrast_loss(&logits,&samples,&[0,1],&[(0,1)],true).unwrap().to_scalar::<f32>().unwrap());
         }
-        for sign in [-1.,1.] {
+        assert_eq!(aggregate[0],aggregate[1]);assert!(separate[1]>separate[0]);
+        for sidewise in [false,true] { for sign in [-1.,1.] {
             let mut v=values.clone();for i in [aa,bb] {v[i]=sign*1000.;}for i in [ab,ba] {v[i]=-sign*1000.;}
             let logits=Var::from_vec(v,(2,6,16),&device).unwrap();
-            let loss=pair_contrast_loss(&logits,&samples,&[0,1],&[(0,1)]).unwrap();
+            let loss=pair_contrast_loss(&logits,&samples,&[0,1],&[(0,1)],sidewise).unwrap();
             assert!(loss.to_scalar::<f32>().unwrap().is_finite());
             assert!(loss.backward().unwrap().get(&logits).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap().iter().all(|v|v.is_finite()));
-        }
+        }}
         let b=batch(&samples,&[0,1],&device).unwrap();
         let logits=Tensor::from_vec(values,(2,6,16),&device).unwrap();
         let (ce,objective,count)=response_loss(&logits,&b,1.).unwrap();
