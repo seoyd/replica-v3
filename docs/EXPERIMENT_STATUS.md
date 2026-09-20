@@ -46,7 +46,19 @@ STRUCTURE_TREATMENT_ACTIVE=true; R3=STOPPED_STORAGE_FAILURE_BEFORE_UPDATE1;
 TRAIN_FIT/UNSEEN_BINDING/OLD_REFERENCE_AND_GATE=NOT_RUN; MODEL_QUALITY=NOT_MEASURED;
 S4/S5/S6=NOT_RUN; GOAL1_READY=false; GOAL1_ACCEPTED=false.
 이번 자료/구조 비교로 품질이 개선됐거나 어느 mask가 우월하다고 말할 근거는 없다.
-남은 항목은 수리 후보의 독립 확인과 실패 연구를 바꾸지 않는 별도 재실행 인가다.
+수리 후보936d42258a6143ae664fca71ef8294b760b1dffe는 별도 독립 검토도 PASS했다.
+`artifacts/identifiable-review-a-20260921-repair/REPORT.md`, SHA256
+77f0abac6152229244706db327a250787cc65056854498ed5d3ac76a29bc7bfd.
+검토자는 동일 native process 회귀를 직접 부모1/1·자식1/1 실행했고 모두 통과했다.
+추가 optimizer/forward/generation/teacher0. 이 수용은 코드 수리만이며 실패 연구의
+재시도 인가가 아니다. Source digest=f322766fb7ae198e1c5a6c8f6ad357676d35ebcdc529ca3f5b9a2083a92acb69,
+수리 binary=1eeea87e0c8d66fb5f99136e106c70fca37788422416b45478a94a45acc1e201.
+구현 source와 이 상태 보완의 report-only commit SHA는 구분한다.
+수리 source push 후 실제 원격936d42258a6143ae664fca71ef8294b760b1dffe 일치를 확인했다.
+종료 때 원본 GROUND/P native와 새 LOCAL5 initial physical hash도 변함없었다.
+학습 예산8192회는 사용0이지만 실패 연구에 자동 이월/재개하지 않는다.
+남은 항목은 별도 재실행 인가 이후 실제 두 군의 학습·품질 비교 및 조건부 S4/S5/S6다.
+최종 범위 판정은 PARTIAL이다. 자료/수리 검증을 학습 완료나 Goal1로 바꾸지 않는다.
 
 ## 2026-09-21 독립 A 지적 두 경계 수정 — 재검토 대기
 
