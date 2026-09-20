@@ -3008,11 +3008,16 @@ fn fresh_value_diversity_restores_identical_native_state() {
     value_exposure_native_resume(false, false, true);
 }
 
+#[test]
+fn fresh_four_view_coverage_restores_identical_native_state() {
+    value_exposure_native_resume(true, false, true);
+}
+
 fn value_exposure_native_resume(coverage: bool, wording: bool, diversity: bool) {
     use replica_v3::{binary,neural::checkpoint};
     use candle_core::Device;
     let d=tempfile::tempdir().unwrap();
-    let (mode,flag,steps,cycle)=if diversity {("DIVERSE","--diverse-pair-values",8,2)}else if coverage {("COVER","--cover-value-pairs",8,4)}else{("VALUE","--alternate-pair-values",4,2)};
+    let (mode,flag,steps,cycle)=if coverage&&diversity {("COVER4","--diverse-pair-values",16,4)}else if diversity {("DIVERSE","--diverse-pair-values",8,2)}else if coverage {("COVER","--cover-value-pairs",8,4)}else{("VALUE","--alternate-pair-values",4,2)};
     let call=|args:&[&str],success:bool| {
         let out=Command::new(env!("CARGO_BIN_EXE_replica-train")).args(args)
             .env("VECLIB_MAXIMUM_THREADS","1").env("RAYON_NUM_THREADS","1")
@@ -3032,8 +3037,11 @@ fn value_exposure_native_resume(coverage: bool, wording: bool, diversity: bool) 
     call(&["fresh","study-observe","--root",selector.to_str().unwrap()],true);
     let roots=[d.path().join("continuous"),d.path().join("split")];
     for (i,root) in roots.iter().enumerate() {
-        call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),
-            "--output",root.to_str().unwrap(),flag],true);
+        let source=selector.join("S-SELECT");
+        let mut args=vec!["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",source.to_str().unwrap(),
+            "--output",root.to_str().unwrap(),flag];
+        if coverage&&diversity {args.push("--cover-value-pairs");}
+        call(&args,true);
         let arm=root.join(mode);
         let plan:binary::Value=binary::from_slice(&std::fs::read(arm.join("plan.r3b")).unwrap()).unwrap();
         let rows=plan["paired"]["rows"].as_array().unwrap();assert_eq!(rows.len(),steps);
@@ -3065,7 +3073,7 @@ fn value_exposure_native_resume(coverage: bool, wording: bool, diversity: bool) 
     let bad=d.path().join("mixed");
     call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),
         "--output",bad.to_str().unwrap(),flag,"--fit-seen-pairs"],false);assert!(!bad.exists());
-    if coverage {
+    if coverage && !diversity {
         call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),
             "--output",bad.to_str().unwrap(),flag,"--alternate-pair-values"],false);assert!(!bad.exists());
         fn hashes(root:&std::path::Path)->std::collections::BTreeMap<std::path::PathBuf,String> {

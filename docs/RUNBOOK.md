@@ -1245,7 +1245,12 @@ combinations every16 updates. Two extra views each change just one record value
 using owned train donors. The separate hash-bound `training-values.r3cor` supplies
 training samples to both the trainer and update audit. Its unchanged validation
 copy satisfies the existing corpus schema and is never a training sample. Original
-evaluation files, anchors, LR and objective stay fixed. Flags cannot be combined.
+evaluation files, anchors, LR and objective stay fixed. The one allowed flag
+combination is `--diverse-pair-values --cover-value-pairs`: it registers COVER4,
+the same four-view pool with32 recurring scenes per C/D/E and a64-update view
+cycle. Run `fresh run --root NEW_ROOT/COVER4`, then `fresh paired-report --root
+NEW_ROOT`. Cap1280 updates,256 trained sides per C/D/E each5 exposures.
+It compares scene coverage with retained DIVERSE; other mixed interventions fail.
 
 `replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT
 --parity NEW_P16_ROOT --output NEW_ROOT --alternate-pair-values` registers the
@@ -1256,8 +1261,9 @@ The existing `paired_seen_train_diagnostic` production-feature test accepts
 `R3_TRAIN_PAIR_VALUE_SWAP=1` for the separate48-case changed-value observation;
 it cannot combine with margin mode and requires a new output directory.
 
-`--cover-value-pairs` is the separate COVER policy and cannot combine with other
-intervention flags. It uses the same commands with `NEW_ROOT/COVER`, original
+`--cover-value-pairs` alone is the separate COVER policy. Except for the explicit
+COVER4 combination above it cannot combine with other intervention flags.
+It uses the same commands with `NEW_ROOT/COVER`, original
 P6144 and preserved inputs, but widens the recurring prefix to32 scenes per
 C/D/E and alternates the two value views every64 updates. Maximum1280 updates;
 all old policies/closed budgets remain unchanged. The first8 pairs' final

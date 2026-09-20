@@ -1,5 +1,31 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 COVER4 scene-coverage preparation verified
+
+Continue0d503d88e45280c21fd53ec176048f4f74120103 under the user's single-variable
+quality authorization. DIVERSE's trained full178/192 versus development both0/192
+motivates widening recurring scenes8→32 per C/D/E at the same four value views.
+Existing `--diverse-pair-values --cover-value-pairs` combination registers the
+explicit COVER4 policy. Old single-flag policies remain separate. Native data
+format, tokenizer, model, loss, LR, Adam and other-five-task tape stay fixed.
+Study cap1280 SMALL updates; no closed DIVERSE budget or terminal is changed.
+
+Actual maximum3840-row tape writer/readback/exposure regression PASS1 (2.15s),
+model calls0. It verifies256 sides per C/D/E×5 exposures in first1280 updates,
+32 independent scenes, four views, paired gradients and unchanged anchor slots.
+Actual TINY process regression PASS1 (18.06s): continuous16 versus fresh1+15,
+identical native weights/Adam/step/counters; actual native-pool tamper rejected
+before command entry; incompatible intervention rejected. The fixture exercises
+all four views and uses the existing TINY EOS fixture, not quality evidence.
+Counts36 optimizer,129 generation,129 own-teacher (train controls102 each plus
+separate setup observations16+11). Scalar0. No failed test or unknown use.
+Release production build PASS (23.00s), locked/offline/Accelerate.
+Production executable d3d38d10f6cdeda4004a8bedaade47a09456c2733e21a9668c81cb46f0d5e94b;
+production-feature test executable615f743d64c64738b1585954b39954e27438d17711a69c8bd8cc0cdc52f0eabb.
+Evidence `artifacts/four-view-coverage-20260920-evidence/` tape/process/build logs.
+New SMALL parity/registration/learning NOT_RUN at this preparation entry.
+No whole-suite/Clippy PASS claimed. No new tracked source file or dependency.
+
 ## 2026-09-20 actual DIVERSE training-view fitting verified
 
 EXECUTED_THIS_RUN / DERIVED_EXISTING_RAW; independent acceptance not claimed.

@@ -1,5 +1,35 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: four-view scene coverage, bounded COVER4 preparation
+
+The user's continuing one-variable quality authorization covers a new P6144
+research, COVER4, with retained DIVERSE1280 as the matched control. Actual
+DIVERSE trained-view full178/192 versus development both0/192 motivates testing
+independent scene coverage rather than adding another memorization-only score.
+Only recurring C/D/E scenes increase8→32 per task; keep the same four value
+views/native training pool, phrase/selector side order, co-batch8 and exact
+other-five-task draws. Use the existing cover and diverse preparation options
+together as this explicitly defined policy. All other mixed interventions fail.
+The unchanged finite3840 tape consumes1280 updates; each of256 sides per C/D/E
+receives5 exposures instead of64 sides×20. Same update/draw budget, not equal
+FLOPs. Original parent/Adam/tokenizer/LR3e-5/first-target1 CE/SIDE family4
+auxiliary0.1/F32/Accelerate/thread1 remain fixed. No old run is reopened.
+
+SMALL cap1280 optimizer,12M input/1M target including discarded work,
+generation12000/own-teacher10000, active21600s, command900s/cleanup120s.
+Keep screens32/64/128/768 and complete256/1280, existing retention/no-progress
+and all unchanged joint gates. Stop at first joint pass and hand off independent
+final200; failure grants no automatic extension. No new heldout or donor values.
+
+Reuse direct maximum-tape/native-pool tests and actual TINY continuous16 versus
+fresh1+15 with all four views. TINY caps64 optimizer/768 generation/768 teacher,
+scalar0, no automatic retry after unknown use. Verify exact Adam/weights/cursor,
+pre-call pool-tamper rejection, immutable parent and other-task slots. Reuse
+existing pure mapping regression; no general harness or storage change.
+After checks, freeze/publish source and executable, run same-source P16 parity,
+verify physical inputs against DIVERSE, then register a new root and start SMALL.
+This section registers preparation and its caps, not an executed training run.
+
 ## Current: actual training-view fitting verified; scene transfer remains unresolved
 
 Fixed DIVERSE7424 has full178/192 across its four actual training views and
