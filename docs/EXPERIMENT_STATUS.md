@@ -1,5 +1,88 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 FIT1280 closed: seen-pair fitting succeeds, joint development fails
+
+EXECUTED_THIS_RUN, frozen source `2cbf5b5c9dc4f7a0491d839f6c969161ef695a2e`,
+compiled source digest97ddb3108ec9c8e51bbe720aaa30b46d617d4446cb887a61f7c7709b238876bf.
+Same original P6144 weights/Adam/tokenizer, LR3e-5, first-target1 response CE,
+SIDE family4 auxiliary0.1 and exact other-five-task slots. Only C/D/E recurrence
+changes to the first16 updates:24 train pairs/48 sides,80 exposures per side at1280.
+No new corpus, architecture, tokenizer, decoding policy or external learned model.
+
+| Native endpoint | New updates | Train64 | Primary512 | Transfer128 | Flipped192 | Both192 |
+|---|---:|---:|---:|---:|---:|---:|
+| 6400 | 256 | 57 | 415 | 77 | 3 | 0 |
+| 7424 | 1280 | 57 | 398 | 76 | 2 | 0 |
+
+Final primary buckets[53,64,44,36,20,60,57,64], transfer[7,9,7,4,1,16,16,16].
+Original100/192, both0 across all C/D/E, same normal answer164/192; pair counts
+[0,100,2,90]. Flipped body11/192 and selected citation16/192 are auxiliary counts,
+not whole-answer credit. All2144 planned evaluation generations ended with EOS,
+errors0. Screens32/64/128/768 scored46/47/48/47; final screen44. Final same-step
+joint gate=false. Decision NO_FURTHER_PROGRESS at the1280 ceiling, Finished,
+resume=false; underlying trainer also reached BUDGET_REACHED. Neither old runs
+nor this run are reopened, and this model is not adopted.
+
+Existing production seen-train diagnostic1 PASS(11.74s): fresh-process normal
+greedy48/48 full answers, both24/24, same0/24, EOS48/errors0. All48 first-token
+teacher argmax values equal generation and gold. Pure Rust recount verifies
+strict decoding, full expected equality, checkpoint/start/raw digests and all96
+generation/teacher resolution records. The exact cases and answers match the
+retained REPLAY observation18/48/both3/24; that old raw was reread without calls.
+The registered fitting47/48 and both23/24 criteria PASS, not the heldout gate.
+
+This demonstrates learnability of these48 seen sides under the existing model
+and equations. It does not establish general record-selection competence or a
+unique root cause. Together with the closed Rust/LibTorch256 comparison, the
+observed failure is poor transfer of learned conditions/value/citation selection,
+not evidence that replacing the numeric backend fixes quality. More recurrence
+on these few cases learned them while development primary fell from parent425
+to398 and both remained0. Shared data/design defects elsewhere remain unexcluded.
+
+Additional pure endpoint check(exit0, model calls0): the real native production
+6400 checkpoint matches the closed Rust diagnostic's9,513,408 weights and both
+Adam moments bit-for-bit (28,540,224 values). This connects the independent C++
+comparison to the actual production trainer, not only a diagnostic access probe.
+Local evidence `artifacts/libtorch-parity-20260920/production-endpoint.log`.
+
+Actual FIT usage:1280 SMALL optimizer,2,190,228 input/156,297 target tokens
+including1,776/157 discarded at the command deadline; committed2,188,452/156,140,
+padding788,788.10,240 draws,1280 per task. First update saved6145 and restored in
+a new process; segment0001 saved6921 at pure TIME_BUDGET/TrainingPending,
+then a new process performed the remaining503 updates. No UNKNOWN/cancel/save
+error. Final durable file `artifacts/pair-fit-20260920/FIT/segment-0002/final`,
+physical SHA2563e1f69b0ef1b49c8a4aba1772cf87511f877a278ad68023ea091e38ec71daed1,
+model9884c680639a1d77801d88601c3f210e8608147d905a1ea54092c0722801f0b8.
+Native policy a5cc598f8148c64bd889175984c57175bf8769f9919c1b84c57daee881e2d546.
+Executable504d1a5a86c409f63536dfdbeee4709d6d906902f222b339f0e4d6afd77e625b
+and source/parent hashes remained unchanged throughout actual learning.
+
+FIT generation2208 =2144 panels+16 production parity+48 seen; own-model
+teacher2192=2144+48. No additional optimizer for the fitting observation.
+Study control time1528.701314667s including prepare/parity, plus6.767095791s
+seen observation; diagnostic process wall11.74s includes setup/loading.
+Separate direct TINY regression73/723/723 optimizer/generation/teacher and
+closed Rust/LibTorch comparison514 SMALL/2 TINY optimizer/224 generation/0 teacher
+are not counted as FIT quality updates. Final segment peak sampled RSS1,434,256KiB;
+preceding segment1,493,248KiB, not a guaranteed OS peak or S6 measurement.
+
+Pure `fresh paired-report` exit0 independently verifies owned inputs, native
+lineage, actual exposure, full raw panels, guard decision and known usage.
+Evidence `artifacts/pair-fit-20260920-evidence/`: `segment-0000.log`,
+`segment-0001.log`, `segment-0002.log`, `paired-report.log`, `seen48.log`,
+`seen-recount.log`, `candidate.diff`; raw stays under the arm and `seen48/`.
+Seen raw SHA2569baf3f3fe7dc7168d55120f621740fd6b541d79815651536a21692929e16504e.
+No unrelated full tests rerun. Direct code/process checks PASS; strict Clippy
+still has the two pre-existing warnings recorded below, not an all-checks PASS.
+
+CODE_VERDICT=DIRECT_BOUNDARIES_PASS; LEARNING_EXECUTION=COMPLETE;
+SEEN_FITTING=PASS; DEVELOPMENT_JOINT_PASS=false; MODEL_QUALITY_RECOVERED=false.
+FINAL200=NOT_CREATED/NOT_OPENED; S4/S5/S6=NOT_RUN_PRECONDITION_FAILED;
+GOAL1_READY=false; GOAL1_ACCEPTED=false; independent acceptance remains external.
+The study budget is closed; any next one-variable intervention needs its own
+explicit policy/budget and must target the observed transfer gap, without
+changing this failed decision or treating memorization as Goal1 acceptance.
+
 ## 2026-09-20 FIT native preparation and direct regression closure
 
 The previously deferred implementation adds only FIT's first16 C/D/E recurrence

@@ -1,6 +1,26 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: complete the registered FIT learnability experiment
+## Current evidence: fitting is possible, joint transfer remains unresolved
+
+The registered FIT experiment completed1280 updates at7424 and is closed.
+The same48 seen answers are all correct, both24/24, normal EOS/errors0 after80
+exposures per side. Independent raw recount verifies the exact cases and receipts.
+Development is primary398/512, transfer76/128, flipped2/192, both0/192; no joint
+pass or candidate adoption. Final NO_FURTHER_PROGRESS, Finished/resume=false.
+Do not extend this recurrence run or repeat the closed C++ comparison.
+
+The actual native6400 weights and both Adam moments are bit-identical to the
+Rust diagnostic endpoint used in the LibTorch comparison. Thus its matching112
+outputs are connected to the production trainer. These observations support
+investigating learned-case to new-scene selection transfer and existing-capability
+retention; they do not uniquely identify data, objective or capacity as the cause.
+Increasing exposure on this narrow set succeeded at fitting without satisfying
+the development task. A future hypothesis must distinguish that transfer gap
+with one registered variable, preserve these results and the joint gate, and
+not assume a new framework, LR/tokenizer change or reinitialization is a remedy.
+No further experiment is registered by this closure. Goal1 remains unfinished.
+
+## Closed: native execution of the registered FIT learnability experiment
 
 The isolated Rust/LibTorch comparison is closed. Its same112 outputs and close
 numeric trajectories narrow the evidence against a backend-specific explanation;
