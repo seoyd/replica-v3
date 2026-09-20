@@ -1,5 +1,62 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Paired discrimination completed; joint quality still failed
+
+EXECUTED_THIS_RUN, source `725f152e5376118439e9b153579d529a5835bdf7`.
+All1280 registered SMALL updates completed from P6144 to7424. The exact data,
+batch8 tape, Adam at entry, tokenizer, LR3e-5 and model matched COBATCH; the sole
+intervention was the bound family3 paired auxiliary objective. First-update CE
+was exactly0.3667096794 in both, objective0.4954743385 in CONTRAST versus the
+unchanged CE control. The auxiliary is training-only and changes no generation.
+
+| Absolute step | New updates | Train64 | Primary512 | Transfer128 | Flipped192 | Both192 |
+|---|---:|---:|---:|---:|---:|---:|
+| 6400 | 256 | 47 | 368 | 70 | 16 | 3 |
+| 7424 | 1280 | 43 | 366 | 68 | 39 | 0 |
+
+Final original64/192, same normal output145/192, all C/D/E both0. Primary
+buckets `[53,60,23,28,13,64,61,64]`, transfer `[7,5,3,5,1,15,16,16]`.
+Matched pure-CE COBATCH was371/512,60/128,21/192,both0; original77 and same179.
+The256 both3 were D-only across2 bases; they disappeared at1280 and are not
+promoted retrospectively. Screens32/64/128/768:47/47/42/43, flip24:0/0/1/0.
+Every2144 evaluation generation had EOS/errors0. Improved flipped accuracy and
+fewer identical outputs did not yield joint selection. The objective is not adopted.
+
+Actual/committed input2,195,433 and target157,500, discarded0/0, padding780,759;
+10,240 draws,1280 per task and5120 per phrase form. Generation2160 including
+P16, teacher2144, active accounting1573.025655666s. A real900s stop at6912
+saved EvaluationPending with1220 generations/1220 teachers, TIME_BUDGET only.
+The fresh process completed the remaining28 observations before its512 updates;
+that segment had924 generations/924 teachers. Pure `paired-report` exit0
+verified native/raw/teacher/usage binding. Final Finished/BUDGET_REACHED,
+resume=false. No UNKNOWN/cancel/storage failure. Peak sampled RSS1,413,152KiB
+is not an S6 benchmark. TINY37/507/507 and scalar optimizer0 are separate.
+
+DERIVED_EXISTING_RAW, no model calls:110 flipped first-token teacher argmaxes
+incorrect, first mean NLL2.4091949819 and remaining mean NLL0.1480741784.
+DERIVED_NATIVE_INPUT_LAYOUT, no model calls: every one of192 selector prompts
+retains the full query inside the last local256-token window. Maximum prompt
+lengths C/D/E225/239/237; maximum distance from query start to answer position
+170/184/182. Thus simple query exclusion by that window does not explain these
+failures. This does not establish how attention actually uses the visible query.
+
+Executable `artifacts/pair-contrast-20260920-executable`, SHA256
+`dc79629673ceb7e917837f0dbfbb6c7c49f2bc40816c29ecbd92dfcfcbfa914f`;
+source digest `9d5b417a078d789d88683b28292dc105c9595e23773e19192bb4613f42af5f95`;
+policy `d3cd05fca28be81675a48a5bcd7aadafa0f73ee26e6f5420354bd850de152f35`.
+Final `artifacts/pair-contrast-20260920/CONTRAST/segment-0002/final`, physical
+SHA256 `602fcbbef3e3c9bb861d9a716641475e55ecf353adaec0fb8dd51a30e5ed8f43`,
+weights `e17058855e6d2e948922832a0cbdb46daecc6b972a7ab9f13341805bf2c47b15`.
+Raw/teachers/decisions are in the arm; hashes, candidate.patch, commands,
+direct tests, input proof, pure recount and Rust layout/error observations are
+under `artifacts/pair-contrast-20260920-evidence/`. Originals remain unpublished.
+
+CODE_VERDICT=IMPLEMENTER_TESTED_PASS; LEARNING_EXECUTION=COMPLETE;
+DEVELOPMENT_JOINT_PASS=false; FINAL200=NOT_CREATED/NOT_OPENED;
+S4/S5/S6=NOT_RUN_PRECONDITION_FAILED; GOAL1_READY=false; GOAL1_ACCEPTED=false.
+Independent current review pending. Further grounded work uses a new scope under
+the continuing user authorization; this study and its failed endpoint stay closed.
+
 ## 2026-09-20 Paired discrimination — implementation and direct verification
 
 The next user-authorized single-variable trial is CONTRAST, from the same P6144

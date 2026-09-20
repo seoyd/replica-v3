@@ -1,6 +1,15 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: paired discrimination objective at fixed co-batch exposure
+## Closed: paired discrimination objective at fixed co-batch exposure
+
+Completed1280 updates at7424: primary366/512, transfer68/128, flipped39/192,
+both0/192, errors0. Original64/192 and same output145/192. The matched pure-CE
+co-batch control was371/60/21/0, original77 and same output179. The intermediate
+both3/192 at256 did not persist; do not select it retrospectively. Stop
+BUDGET_REACHED, resume=false. This objective is not adopted as a quality fix.
+Before another intervention, inspect fixed seen train-pair margins without updates;
+the sum margin can mathematically be positive while one side is still incorrect.
+This is a limitation to investigate, not an established cause of these scores.
 
 The user's continuing one-variable authorization permits one new CONTRAST trial
 from P6144, retaining the exact COBATCH sample tape, batch8, Adam, LR3e-5,
