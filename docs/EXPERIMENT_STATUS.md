@@ -1,5 +1,33 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Two-block recurrence — implementation verified
+
+WIDE changes only the recurring C/D/E prefix from256 to512 updates relative to
+REPLAY. Same P6144, Adam, native corpus/tokenizer, SIDE family4 auxiliary0.1,
+response CE, batch8 and LR3e-5. Other five tasks retain exact update/slot identity.
+At1280 each selector bucket has512 exact cases across256 bases, with256 cases
+seen3 times and256 twice. Existing REPLAY failures and budgets remain closed.
+
+EXECUTED_THIS_RUN: full3840-row writer-reader/recurrence/anchor/partial-cycle/
+wrong-policy test1 PASS (1.44s, optimizer/generation/teacher0). Actual TINY
+process test1 PASS (87.86s):65 optimizer,669 generations/669 teachers including
+27 setup observations of each kind. Continuous8 equals fresh1+7 weights/Adam/
+cursor/token counters; native family4 and default-loss resume rejection hold.
+Pure report changes no files; incompatible flags and sticky failures are rejected.
+Production P16 test1 PASS (13.33s),16/16 and160 raw tokens, errors0,
+optimizer0/teacher0, original artifacts unchanged. This verifies implementation
+and parent parity, not model quality. Evidence remains local under
+`artifacts/pair-wide-20260920-evidence/`. SMALL learning is not yet executed.
+Locked/offline Rust1.98.1 release build and relevant clippy exit0; the two existing
+map-iteration/return-type style warnings remain. Test binaries SHA256
+`5c8f4aa2dd147bf6f5c4e539ea60299317687aa2aee98e97fb6a7e73eb59fe6d`
+(production tests) and `6098797dddd9daa3d08e2219f8b6aeff44c950f2ef34a0763486eb5b79fcdd97`
+(TINY process suite) are recorded separately from the learning executable.
+
+No new permanent files or storage/core changes. Source and executable will be
+frozen before the bounded1280-update trial. FINAL200 remains unopened;
+S4/S5/S6=NOT_RUN_PRECONDITION_FAILED; GOAL1_READY=false; GOAL1_ACCEPTED=false.
+
 ## 2026-09-20 Recurrence train-margin diagnostic verified
 
 EXECUTED_THIS_RUN: existing teacher-only diagnostic1 PASS (12.76s),96 own-model

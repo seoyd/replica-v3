@@ -1,5 +1,33 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: widen the recurring pair pool, one sampling variable
+
+Register one WIDE arm from the unchanged P6144 parent under the user's continuing
+one-variable authorization. Preserve the closed REPLAY trial and compare its
+matched6400/7424 endpoints read-only. Its train24 paired positive margins rose
+4→9 and heldout both2→6, while primary/transfer declined. This motivates a
+recurrence/coverage test; it does not identify a unique cause or prove a remedy.
+
+Only the recurring C/D/E prefix grows from256 to512 updates. Retain the SIDE
+family4 auxiliary0.1, response CE first-target1, batch8, constant LR3e-5, Adam,
+tokenizer, native pools, model and exact nonselector slots. At1280, each C/D/E
+has512 exact cases from256 bases: first256 cases appear3 times and the next256
+twice. REPLAY had256 cases/128 bases five times. Changed token totals are part
+of this sampling tradeoff; no new corpus or unseen question text is introduced.
+The first512 rows equal the nonrecurring SIDE tape. No period or seed sweep.
+
+Maximum1280 new SMALL updates,12M actual input/1M target,12000 generations/
+10000 own-model teachers,21600 active seconds,900s command/120s cleanup.
+TINY allowance96 optimizer/768 generation/768 teacher; scalar optimizer0.
+Verify the full3840-row writer-reader, partial final cycle, exact anchors,
+recurrence counts and wrong-policy rejection. Actual TINY continuous8 versus
+fresh1+7 crosses its4-update recurrence; production P16 parity precedes freeze.
+Save/restore the first real update within the same1280 budget. Screens32/64/128/
+768 and full train64/primary512/transfer128/selector192 at256/1280. Existing
+retention/plateau/cancel/numeric/storage/UNKNOWN guards and joint gates remain.
+Stop at first joint pass for independent final200/S4 and conditional S5/S6,
+otherwise close at the registered stop/cap. Never reopen an old failed budget.
+
 ## Closed: fixed train margins after recurrence, no learning
 
 Completed96 teachers, optimizer0/generation0; pure raw/call/receipt recount and

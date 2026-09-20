@@ -1,5 +1,15 @@
 # Replica v3 B0 runbook
 
+## Two-block recurrence research
+
+`replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT
+--parity NEW_PARITY_ROOT --output NEW_ROOT --repeat-two-blocks` registers WIDE.
+Only the recurring C/D/E prefix changes from256 to512 updates versus REPLAY.
+Same family4 objective, parent/Adam/tokenizer/LR and other five tasks. Mutually
+exclusive intervention flags; cap1280. Run `fresh run --root NEW_ROOT/WIDE`
+then pure `fresh paired-report --root NEW_ROOT` using the frozen executable.
+Incomplete last recurrence cycles preserve complete pairs and do not extend budget.
+
 ## Exact-pair recurrence research
 
 `replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT
