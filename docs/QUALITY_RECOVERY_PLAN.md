@@ -1,5 +1,21 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: complete the registered FIT learnability experiment
+
+The isolated Rust/LibTorch comparison is closed. Its same112 outputs and close
+numeric trajectories narrow the evidence against a backend-specific explanation;
+they do not prove the shared model/data/objective correct. Each256 endpoint still
+missed10/48 seen answers, six solely on citation, with fixed dev45/64 versus
+parent48/64. Use the already prepared FIT policy below in the native production
+trainer, beginning from original P6144, not the closed comparison outputs.
+The user's continuing one-variable improvement authorization applies to this
+separate registered experiment. No old receipt, terminal or budget is reopened.
+
+The1280 ceiling and all retention/numeric/storage/cancel guards below remain.
+This is the planned recurrence intervention versus preserved SIDE/REPLAY, not
+a new period/LR/seed search. The comparison's256 calls are historical diagnostic
+usage and are reported separately. No C++ calls or new corpus are needed here.
+
 ## Closed: removable independent LibTorch comparison
 
 Both independent backends completed256 diagnostic updates from P6144 and112
@@ -12,7 +28,8 @@ failures, not a proven root cause in any shared equation or data distribution.
 SMALL514/TINY2 optimizer,224 generation,0 teacher; budget closed without
 retry/extension or product adoption. Comparison execution PASS, quality
 recovery NOT_ESTABLISHED, final200 unopened and Goal1 not ready. The deferred
-FIT plan below has no new SMALL execution or implicit resume from this result.
+FIT plan below had no SMALL execution at comparison closure. The active section
+above registers its separate native execution; neither comparison arm resumes.
 
 The user explicitly authorized an isolated C++ LibTorch reference while keeping
 the product Rust-only, with deletion of the comparison directory having no effect
@@ -37,9 +54,9 @@ No own-model teacher calls, automatic retries, sweep or training extension.
 work. Numerical disagreement is investigated before learning. Preserve incomplete
 outputs and actual attempted/committed/discarded counts. This comparison cannot
 promote a product candidate or declare S4/Goal1. The separate FIT1280 implementation
-below has not started SMALL learning and remains deferred after this diagnostic.
+below was deferred during this diagnostic and has its own registration and budget.
 
-## Deferred: fixed seen-pair learnability diagnostic
+## Registered FIT policy: fixed seen-pair learnability diagnostic
 
 Under the user's continuing one-variable authorization, register one FIT arm
 from P6144. Completed REPLAY/WIDE observations scored18/48 and19/48 on the

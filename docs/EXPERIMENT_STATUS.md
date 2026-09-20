@@ -1,5 +1,31 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 FIT native preparation and direct regression closure
+
+The previously deferred implementation adds only FIT's first16 C/D/E recurrence
+to existing native paired planning/binding/usage/report paths. Other five tasks
+retain their exact per-update slots. SIDE family4/auxiliary0.1, P6144, Adam,
+tokenizer, first-target1 response CE and LR3e-5 are unchanged. Native max1280;
+training fit47/48 and both23/24 are diagnostic criteria, separate from joint gates.
+
+Executed before the LibTorch comparison and reused unchanged: full3840-row
+writer/reader/tape test1 PASS(1.58s); actual TINY continuous4 versus fresh1+3
+within existing paired process regression1 PASS(85.06s), including wrong-policy
+and mixed-flag rejection. TINY usage73 optimizer/723 generation/723 teacher
+includes retained controls and setup; it is not new SMALL quality evidence.
+Current source verification: release build PASS, production P6144 fixed parity
+test1 PASS(13.26s),16 generations/160 raw tokens,0 teacher/optimizer, originals
+unchanged. Strict Clippy exit101: two pre-existing for_kv_map/type_complexity
+warnings, matching the preceding WIDE check; strict whole-clippy PASS is not claimed.
+
+FIT source SHA is the commit containing this entry. Frozen production executable
+SHA256504d1a5a86c409f63536dfdbeee4709d6d906902f222b339f0e4d6afd77e625b.
+Evidence: `artifacts/pair-fit-20260920-evidence/`; planned native study
+`artifacts/pair-fit-20260920/`, retained executable
+`artifacts/pair-fit-20260920-executable`. Preparation is distinct from actual
+SMALL execution; training and quality results are recorded separately below.
+GOAL1_READY=false; final200 NOT_OPENED; S4/S5/S6 not yet eligible.
+
 ## 2026-09-20 Rust/LibTorch paired256 learning and112 generation comparison
 
 EXECUTED_THIS_RUN: same P6144 native weights/Adam/tokenizer, actual256 identical

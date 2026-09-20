@@ -1,5 +1,15 @@
 # Replica v3 B0 runbook
 
+## Fixed seen-pair fitting diagnostic
+
+`replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT
+--parity NEW_PARITY_ROOT --output NEW_ROOT --fit-seen-pairs` registers FIT.
+Repeat only the first eight seen pairs per C/D/E; same SIDE objective and
+P6144/Adam/tokenizer/LR3e-5, exact other-task rows. Cap1280 with unchanged
+guards. Run `fresh run --root NEW_ROOT/FIT`, then pure
+`fresh paired-report --root NEW_ROOT` using the frozen executable. This is
+train fitting, not heldout acceptance. Never combine intervention flags.
+
 ## Two-block recurrence research
 
 `replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT

@@ -3212,6 +3212,37 @@ fn fresh_paired_policies_match_continuous_and_split_processes() {
         "--output",mixed.to_str().unwrap(),"--repeat-two-blocks","--repeat-pair-block"],None,false);
     assert!(!mixed.exists());
     let mixed=d.path().join("mixed-side-rejected");
+    let fit_roots=[d.path().join("fit-continuous"),d.path().join("fit-split")];
+    for (i,root) in fit_roots.iter().enumerate() {
+        call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),
+            "--output",root.to_str().unwrap(),"--fit-seen-pairs"],None,true);
+        let arm=root.join("FIT");
+        let plan:binary::Value=binary::from_slice(&std::fs::read(arm.join("plan.r3b")).unwrap()).unwrap();
+        assert_eq!(plan["config"]["max_steps"],8);
+        let rows=plan["paired"]["rows"].as_array().unwrap();assert_eq!(rows.len(),4);
+        assert_eq!(rows[0].as_array().unwrap()[..6],rows[2].as_array().unwrap()[..6]);
+        if i==0 {call(&["fresh","fixture-full","--root",arm.to_str().unwrap()],None,true);}
+        else {for _ in 0..2 {call(&["fresh","run","--root",arm.to_str().unwrap()],None,true);}}
+        let before=hashes(root);call(&["fresh","paired-report","--root",root.to_str().unwrap()],None,true);assert_eq!(before,hashes(root));
+    }
+    let fit=checkpoint::load(&fit_roots[0].join("FIT/segment-0000/final"),Device::Cpu,true).unwrap();
+    let split=checkpoint::load(&fit_roots[1].join("FIT/segment-0001/final"),Device::Cpu,true).unwrap();
+    assert_eq!(fit.model.weight_hash().unwrap(),split.model.weight_hash().unwrap());
+    assert_eq!(fit.model.weight_hash().unwrap(),repeat.model.weight_hash().unwrap());
+    for (k,t) in &fit.optimizer {
+        assert_eq!(t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),split.optimizer[k].flatten_all().unwrap().to_vec1::<f32>().unwrap());
+        assert_eq!(t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),repeat.optimizer[k].flatten_all().unwrap().to_vec1::<f32>().unwrap());
+    }
+    let state=fit.manifest.training.as_ref().unwrap();let other=split.manifest.training.as_ref().unwrap();
+    assert_eq!((state.step,state.sampler_state,state.consumed_tokens,state.target_tokens),(other.step,other.sampler_state,other.consumed_tokens,other.target_tokens));
+    assert_eq!(state.step,8);assert_eq!(state.resume_binding.as_ref().unwrap().family,4);
+    assert_eq!(state.resume_binding.as_ref().unwrap().normalizer,4);
+    assert_eq!(state.config.lr.to_bits(),3e-5f64.to_bits());assert_eq!(state.config.first_target_weight,1.);
+    assert!(checkpoint::ResumeBinding::require_default(state,&fit.tokenizer).is_err());
+    let mixed_fit=d.path().join("mixed-fit-rejected");
+    call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),
+        "--output",mixed_fit.to_str().unwrap(),"--fit-seen-pairs","--repeat-pair-block"],None,false);
+    assert!(!mixed_fit.exists());
     call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),
         "--output",mixed.to_str().unwrap(),"--sidewise-contrast","--pair-contrast"],None,false);
     assert!(!mixed.exists());
