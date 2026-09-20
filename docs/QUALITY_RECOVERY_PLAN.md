@@ -1,5 +1,75 @@
 # Diagnostic repair and bounded quality recovery
 
+## Closed: removable independent LibTorch comparison
+
+Both independent backends completed256 diagnostic updates from P6144 and112
+normal generations each. Numerical one-step parity passed; all112 generated
+token sequences match. Both score train38/48, both15/24 and fixed dev45/64.
+The same parent dev64 raw recount is48/64. Train errors include six correct
+values with wrong citations; development C/D/E contains seven unsupported
+abstentions despite unique matching evidence. These are observed output
+failures, not a proven root cause in any shared equation or data distribution.
+SMALL514/TINY2 optimizer,224 generation,0 teacher; budget closed without
+retry/extension or product adoption. Comparison execution PASS, quality
+recovery NOT_ESTABLISHED, final200 unopened and Goal1 not ready. The deferred
+FIT plan below has no new SMALL execution or implicit resume from this result.
+
+The user explicitly authorized an isolated C++ LibTorch reference while keeping
+the product Rust-only, with deletion of the comparison directory having no effect
+on the product. All comparison code/library/builds/exports stay under ignored
+`artifacts/libtorch-parity-20260920/`; no Cargo or runtime linkage is added.
+No external learned model/tokenizer/teacher is used. Existing artifacts remain
+read-only. This narrow C++ diagnostic authorization does not change product scope.
+
+First compare one actual TINY and one P6144 SMALL optimizer step in each backend,
+using identical native weights/Adam and exact framed input/target/masks. Independently
+implemented ATen forward/autograd/Adam is checked against the actual Rust functions.
+Fixed element tolerances precede observations. Numerical PASS grants only the next
+diagnostic: at most256 updates per backend from original P6144, same first16 C/D/E
+recurrence and step-specific other-five-task rows, SIDE family4/CE/LR3e-5 unchanged.
+Export all256 batches; never repeat the other five tasks' first16 batches.
+
+Total SMALL cap514 (two numerical steps plus256 per backend), TINY2, scalar0.
+Then at most112 generations per backend: same seen48 and frozen primary screen64.
+Strict normal greedy/EOS/UTF-8/full-answer scoring; no new heldout or final200.
+No own-model teacher calls, automatic retries, sweep or training extension.
+900s command/120s cleanup, one heavy process; cancel/error/UNKNOWN blocks dependent
+work. Numerical disagreement is investigated before learning. Preserve incomplete
+outputs and actual attempted/committed/discarded counts. This comparison cannot
+promote a product candidate or declare S4/Goal1. The separate FIT1280 implementation
+below has not started SMALL learning and remains deferred after this diagnostic.
+
+## Deferred: fixed seen-pair learnability diagnostic
+
+Under the user's continuing one-variable authorization, register one FIT arm
+from P6144. Completed REPLAY/WIDE observations scored18/48 and19/48 on the
+same seen train sides, with both3/24 and1/24. Check fitting before further
+coverage changes; this does not prove a broken gradient or capacity limit.
+
+Keep SIDE family4 auxiliary0.1 plus first-target1 response CE, LR3e-5, Adam,
+tokenizer, model, native pools, batch8 and exact other-five-task update/slot rows.
+Only repeat the first16 adjacent C/D/E updates: eight pairs per bucket, the same
+24 pairs/48 sides already diagnosed. At1280 each side has80 exposures. This is
+a train-only fitting test with narrower base/view/phrase coverage; full-block
+phrase/first-side balance is not claimed for this prefix. Both sides and total
+eight-task counts remain balanced. No new corpus or label enters inference.
+
+Maximum1280 SMALL updates,12M actual input/1M target including discarded work,
+12000 generations/10000 own-model teachers,21600 active seconds,900s command/
+120s cleanup. TINY allowance96/768/768 optimizer/generation/teacher, scalar0.
+Reuse full3840-row writer-reader and TINY continuous4 versus fresh1+3; verify
+recurrence, exact anchors, objective binding and wrong-policy rejection.
+Production P16 parity precedes source freeze and first-update save/fresh restore.
+Existing screens32/64/128/768 and full256/1280, retention/plateau/unsafe-failure
+guards and joint quality thresholds remain unchanged. No automatic extension.
+
+After the final saved endpoint, run the existing same48 normal generations and
+48 own-model teachers once, within the above call budget. Train fitting success
+requires at least47/48 exact and23/24 both with errors0; this cannot grant any
+heldout/H3/S4/Goal1 promotion. If a safety/retention guard stops learning early,
+report actual exposure and incomplete fitting evidence without resetting it.
+Only the unchanged joint gate permits independent final200/S4 and S5/S6.
+
 ## Closed: normal generation on the already exposed pairs, no new learning
 
 Completed96 generations/96 teachers, optimizer0. On identical24 train pairs,

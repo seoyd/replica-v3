@@ -1,5 +1,99 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Rust/LibTorch paired256 learning and112 generation comparison
+
+EXECUTED_THIS_RUN: same P6144 native weights/Adam/tokenizer, actual256 identical
+batch8 tapes, constant LR3e-5, first-target1 CE plus unchanged SIDE auxiliary0.1.
+C/D/E repeat the same24 pairs/48 sides sixteen times; the other five tasks keep
+their step-specific original draws. Each backend completed256 optimizer calls,
+436940 input/31228 target tokens, ending at clock6400. No reset, additional
+corpus, output correction, teacher or external learned artifact. Original
+parent physical hash remains c4d6989fbcaad60516053dda206caf43abc08c4b388c3f765e4c446864f60e20.
+
+| Observation | Rust/Candle | C++/LibTorch2.14.0 |
+|---|---:|---:|
+| Train whole answers | 38/48 | 38/48 |
+| Both sides of train pair | 15/24 | 15/24 |
+| Same output despite changed selector | 4/24 | 4/24 |
+| Frozen development screen | 45/64 | 45/64 |
+| Normal EOS / generation errors | 112 / 0 | 112 / 0 |
+| Generated tokens, including EOS | 1445 | 1445 |
+
+Raw token sequences and finishes match112/112. Normal Rust bounded-KV generation
+and independent C++ full-prefix greedy both load their own saved256 endpoint in
+fresh processes. All generated text uses strict UTF-8, complete answer/citation
+equality and EOS; no trim or field-only promotion. Pure existing-parent recount
+on these exact64 IDs/inputs/expected answers gives48/64, buckets
+[7,8,4,4,5,8,4,8], versus both new endpoints [7,8,4,2,4,8,4,8]. The small fixed
+screen is developmental; it does not establish full512/transfer/selector quality.
+
+Mean training CE over first32 updates0.1937608917, last32 0.0300519866(Rust);
+the two overall token-weighted means are0.0670846510 and0.0670838631. Final weight
+RMS difference1.986363e-7, maximum3.236532e-5; each backend's parent-relative
+weight-change L2 is about1.69034. All256 clocks/input/target counts agree and
+all states are finite. Accumulated F32 drift is reported, not checked against a
+retroactively widened one-step tolerance. Read-only Rust receipt checks and
+C++ terminal counters confirm all attempted updates returned and were saved.
+
+Independent request-only selection on inspected train48+devC/D/E24 agrees with
+the frozen labels. Train10 errors: complete other-record answer3, correct value
+with wrong citation6, wrong value with selected citation1. DevC/D/E14 errors:
+seven ambiguity abstentions despite unique evidence, one malformed citation
+answer, one complete other-record answer, one correct value/wrong citation,
+four wrong value/selected citation. The raw classifier groups the first eight
+as answer-format/citation-syntax; this breakdown is direct raw inspection.
+These are output patterns, not proof of a single training/data/architecture
+cause. The tested native backend does not show a material independent numeric
+failure, and replacing it with LibTorch did not improve these responses.
+
+Recorded learning-loop elapsed: Rust227.328s, C++92.694s. Generation command
+observations4.784s/15.353s; C++ recomputes full prefixes and Rust uses KV.
+Different instrumentation/execution paths prevent a general speed claim.
+Total comparison usage SMALL514 optimizer(two numerical+256 per backend),
+TINY2, generation224, teacher0. No hidden retry, further update or final200.
+Earlier FIT regression usage is separate; its SMALL experiment remains deferred.
+
+Local evidence root: `artifacts/libtorch-parity-20260920/`; detailed local
+`REPORT.md`, separate `cpp/` and `rust-export/` source, `generation-grade.log`,
+`trajectory.log`, `verify-usage.log`, `parent-screen64.log`, `failure-cases.log`.
+Actual training executables: Rust8bdc336b1db06f458ba69f13ec88b0ed79cef97a1536292f6a3361773e8369d7;
+C++270cf34ee6e003d1d0f4bc929b4f32b1ebe4ac5e77ae1f01ef2ecc0e4bf26eec.
+Diagnostic endpoints (weights+Adam binary exports, not adopted .r3m):
+Rust `rust-train256/state.r3x` ee5320a273d6fbcd2ae4a85e516654eb03f9059272b2b41611de90f4e78d69dc;
+C++ `cpp-train256/state.r3x` 830edfd7d1129e207deda1e1f95ca117dc8acdb9102d5cc671ada429ad0fadd6.
+COMPARISON_EXECUTION=PASS; NUMERICAL_PARITY=PASS_FOR_TESTED_INPUTS;
+MODEL_QUALITY_RECOVERED=false; S4/S5/S6=NOT_RUN_PRECONDITION_FAILED;
+GOAL1_READY=false; GOAL1_ACCEPTED=false. Independent acceptance remains external.
+
+## 2026-09-20 Independent LibTorch one-step numerical parity
+
+EXECUTED_THIS_RUN: isolated C++ LibTorch2.14.0 arm64 CPU/F32/thread1 reference
+compared against the existing Rust forward/loss/Adam functions. Product/Cargo
+dependencies unchanged. TINY optimizer1 per backend; SMALL optimizer1 per
+backend from identical P6144/Adam, original artifacts read-only. Generation0,
+teacher0. The disposable Rust access wrapper changes only module paths and adds
+access to the probe; the copied Rust equation and optimizer bodies are unchanged.
+
+Five pure parser/tolerance tests PASS. TINY173,701 and SMALL48,646,085 numerical
+output elements all pass the limits registered before observation. SMALL's
+9,513,408 gradients, updated weights and both Adam moments are included.
+SMALL max absolute differences: logits1.5735626221e-5, normalized gradient
+6.1839818954e-7, updated weights7.4505805969e-9. Valid argmax disagreements0/1761;
+supervised0/153. Rust CE0.3667096794 versus C++0.3667092919. Each consumed1761
+input/153 target tokens for the diagnostic step; neither output replaces a
+native checkpoint. This is one tested batch, not proof that all paths are correct.
+
+Local evidence: `artifacts/libtorch-parity-20260920/` contains separate source,
+official library, build identities, input/output binary exports, comparison
+logs and the removable-layout diagram. `small-step/input.r3x` SHA256
+`7223b8d1e4ffebe4397dce94188d82a7b751a4321687427ae35e36f4bd8a9835`;
+Rust output `82b6918453a85344f4440d5e7d1ca7bad7f62b0139ad3faf74de2d1986c15adc`;
+C++ output `175e873c075dcae2eae5b29a09b11c2b27cd4d55e94d69e07bee81cd6d6a8a85`.
+Native parent physical hash remains
+`c4d6989fbcaad60516053dda206caf43abc08c4b388c3f765e4c446864f60e20`.
+Paired256 learning and generation comparison are NOT_RUN at this entry.
+NUMERIC_PARITY=PASS; MODEL_QUALITY_RECOVERED=false; GOAL1_READY=false.
+
 ## 2026-09-20 Seen-pair normal generation diagnosis, no updates
 
 EXECUTED_THIS_RUN: existing production diagnostic2 PASS,13.93s(REPLAY) and
