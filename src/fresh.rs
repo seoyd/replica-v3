@@ -713,6 +713,16 @@ impl Plan {
     pub(super) fn reuses_tokenizer_mapping(&self, tok: &ByteBpe) -> bool {
         self.identifiable.is_some() && self.tokenizer == tok.id()
     }
+    pub(super) fn new_state_tokenizer_provenance(&self, corpus: &str, tok: &ByteBpe) -> Vec<String> {
+        // The existing lineage slot also authenticates a frozen mapping's
+        // training source. This does not represent exposure of the new weights.
+        // Only new state construction calls this; never repair a resumed state.
+        if self.reuses_tokenizer_mapping(tok) && corpus != tok.train_hash {
+            vec![tok.train_hash.clone()]
+        } else {
+            Vec::new()
+        }
+    }
     #[cfg(feature = "test-support")]
     pub(super) fn is_tiny(&self) -> bool {
         self.tiny

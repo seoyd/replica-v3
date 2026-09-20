@@ -1,5 +1,53 @@
 # 진단 및 구현 상태
 
+## 2026-09-21 첫 실제 실행의 저장 실패 보존, tokenizer 출처 연결 수리
+
+독립 A는 교정 source10b8f46e2e16809dc0b5719b89fbed4670e8832a와 preparation
+e081286eeb1a345c8833f47e9961f77c2a079568ce03b4cc154d493aaaf8397d를 PASS로
+수용했다. 보고서 `artifacts/identifiable-review-a-20260921-r2/REPORT.md`의
+SHA256=f08588ad09c6517a8baa472a2c06472bf7ff12f8d89ba64c460ed9ca0cb196f4를
+기존 native 승인 기록에 연결한 후 고정 binary27a1dcfda2cd7c3b6b4afb9d9849f27ddaa4e64a3058c6b6abdfba8d57323898로
+LOCAL5 첫 command를 실행했다. A PASS는 자료/설계 사전수용이며 학습 성공이 아니다.
+
+EXECUTED_THIS_RUN: `fresh run --root artifacts/identifiable-baseline-20260921-r2/LOCAL5`
+는 exit1이었다. 첫 step0/start 저장과 보존용 final 저장이 모두
+`corruption: checkpoint training state`로 실패했다. 실제 optimizer0,
+input0/target0/padding0, generation0/teacher0, checkpoint_saved=false다.
+train-control elapsed0.912484459s/cleanup0.075905292s. 마지막 사용 가능 파일은
+학습 상태가 없는 initial.r3m이며, 성공한 step0 training checkpoint나 update1로
+부르지 않는다. GLOBAL6은 실행하지 않았다. 새로운 비교 품질은 NOT_MEASURED다.
+
+원인은 새 corpus/tokenizer 입구와 native 저장 불변식의 불일치였다. 새 연구는
+P의 tokenizer mapping만 재사용하는데 초기 TrainingState의 previous_corpora가
+비어 있어 native validator가 tokenizer 원본 corpus의 출처를 확인하지 못했다.
+기존 checkpoint 검증을 완화하지 않고, 명시적으로 mapping을 재사용하는 새 상태
+생성에만 그 출처를 기록했다. 이는 옛 corpus로 새 weights를 학습했다는 뜻이 아니다.
+기존 resume에는 자동 보충하지 않는다. corpus 로그에 mapping-only provenance를
+구분했고 모델 구조/손실/LR/저장 포맷/원본 파일은 변경하지 않았다.
+
+직접 회귀는 수정 전 native 저장에서 같은 오류로1 FAIL, 수정 후6/6 PASS 및
+그 안의 새 process exact test1 PASS다. child는 실제 native step0/zero Adam을
+재로드했고 출처 누락·잘못된 출처·다른 tokenizer를 거부했다. generic plan은
+재사용 출처를 자동 생성하지 않는다. 신규 optimizer/generation/teacher0이며
+수정 과정의 첫 test compile 오류는 별도 보존했고 test 실패와 혼동하지 않는다.
+failed SMALL root/started/control/빈 updates와 모든 raw는 그대로 보존했다.
+실패의 final/terminal을 만들거나 기존 study를 자동 재시작하지 않았다.
+
+허용 증거는 `artifacts/identifiable-baseline-20260921-evidence/`의
+local5-segment-0000.log, review-registration.log, tokenizer-provenance-red-test.log,
+tokenizer-provenance-green.log, build-provenance-fix.log 및 실패 root의
+LOCAL5/segment-0000/train-control.r3b다. 원자료는 게시하지 않는다.
+현재 누적 SMALL optimizer0, TINY optimizer0, generation16(P parity만), teacher0.
+구현자 수치 시험은 SMALL24 forward/6 backward(세 준비), TINY48/12;
+독립 A 두 실행의 TINY16/4는 별도다. tokenizer 출처 저장 시험에는 forward0.
+
+CODE_SCOPE=REPAIRED_WITH_DIRECT_REGRESSION; DATA_QUERY_NECESSITY=INDEPENDENT_A_PASS;
+STRUCTURE_TREATMENT_ACTIVE=true; R3=STOPPED_STORAGE_FAILURE_BEFORE_UPDATE1;
+TRAIN_FIT/UNSEEN_BINDING/OLD_REFERENCE_AND_GATE=NOT_RUN; MODEL_QUALITY=NOT_MEASURED;
+S4/S5/S6=NOT_RUN; GOAL1_READY=false; GOAL1_ACCEPTED=false.
+이번 자료/구조 비교로 품질이 개선됐거나 어느 mask가 우월하다고 말할 근거는 없다.
+남은 항목은 수리 후보의 독립 확인과 실패 연구를 바꾸지 않는 별도 재실행 인가다.
+
 ## 2026-09-21 독립 A 지적 두 경계 수정 — 재검토 대기
 
 독립 검토는 source20c282272169f71e2526e714c7559bf5f684d3e3을 FAIL로 닫았다.

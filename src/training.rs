@@ -1068,7 +1068,9 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
             sampler_state: config.seed,
             corpus_hash: corpus_hash.clone(),
             validation_hash: validation_hash.clone(),
-            previous_corpora: Vec::new(),
+            previous_corpora: fresh.map_or_else(Vec::new, |(p, _)| {
+                p.new_state_tokenizer_provenance(&corpus_hash, &loaded.tokenizer)
+            }),
             initial_weight_hash: loaded.manifest.initial_weight_hash.clone(),
             train_loss: None,
             validation_loss: None,
@@ -1139,6 +1141,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
             replica_v3::binary::record!({
                 "corpus":manifest,"source_directory":run.corpus,"tokenizer_sha256":loaded.tokenizer.id(),
                 "tokenizer_training_hash":loaded.tokenizer.train_hash,"previous_corpora":state.previous_corpora,
+                "tokenizer_mapping_only_provenance":fresh.is_some_and(|(p,_)|p.reuses_tokenizer_mapping(&loaded.tokenizer)),
                 "token_count_kind":"available framed samples before sampling/repetition; LM overlap context included"
             })
         );

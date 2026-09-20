@@ -1429,6 +1429,65 @@ pub(super) fn evaluate(
 mod tests {
     use super::*;
     #[test]
+    fn identifiable_tokenizer_provenance_native_process() -> Result<()> {
+        const CHILD: &str = "R3_IDENTIFIABLE_PROVENANCE_CHILD";
+        if let Ok(root) = std::env::var(CHILD) {
+            let path = Path::new(&root).join("step0.r3m");
+            let loaded = checkpoint::load(&path, Device::Cpu, true)?;
+            let state = loaded.manifest.training.as_ref().unwrap();
+            assert_eq!((state.step, state.consumed_tokens, state.target_tokens), (0, 0, 0));
+            assert_eq!(state.previous_corpora, vec![loaded.tokenizer.train_hash.clone()]);
+            assert_ne!(state.corpus_hash, loaded.tokenizer.train_hash);
+            for t in loaded.optimizer.values() {
+                assert!(t.flatten_all()?.to_vec1::<f32>()?.iter().all(|&v| v == 0.));
+            }
+            let mut bad = loaded.manifest.clone();
+            bad.training.as_mut().unwrap().previous_corpora.clear();
+            assert!(checkpoint::validate_metadata(&bad, &loaded.tokenizer).is_err());
+            bad.training.as_mut().unwrap().previous_corpora = vec![neural::hash(b"wrong-origin")];
+            assert!(checkpoint::validate_metadata(&bad, &loaded.tokenizer).is_err());
+            let other = ByteBpe::train(&[b"different".to_vec()], &neural::hash(b"different-origin"), loaded.tokenizer.vocab_size())?;
+            assert!(checkpoint::validate_metadata(&loaded.manifest, &other).is_err());
+            println!("TOKENIZER_PROVENANCE_CHILD step=0 optimizer=0 generation=0 teacher=0 load=PASS malformed=REJECTED");
+            return Ok(());
+        }
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().join("tiny");
+        super::super::prepare(&root, true)?;
+        let mut p: Plan = read(&root.join("plan.r3b"))?;
+        let initial = checkpoint::load(&root.join("initial.r3m"), Device::Cpu, false)?;
+        let tok = &initial.tokenizer;
+        let new_corpus = neural::hash(b"separate-identifiable-training-corpus");
+        assert!(p.new_state_tokenizer_provenance(&new_corpus, tok).is_empty());
+        p.identifiable = Some(Policy { study: root.clone(), arm: "LOCAL5".into(), dataset: DATASET.into(), rows: vec![] });
+        assert!(p.new_state_tokenizer_provenance(&tok.train_hash, tok).is_empty());
+        let mut wrong = p.clone(); wrong.tokenizer = neural::hash(b"wrong-mapping");
+        assert!(wrong.new_state_tokenizer_provenance(&new_corpus, tok).is_empty());
+        let mut state = TrainingState {
+            resume_binding: None, contrast16: false,
+            parent_checkpoint_hash: Some(initial.manifest.weights_sha256.clone()),
+            config: p.config.clone(), step: 0, consumed_tokens: 0, target_tokens: 0,
+            sampler_state: 0, corpus_hash: new_corpus.clone(),
+            validation_hash: neural::hash(b"separate-validation"),
+            previous_corpora: p.new_state_tokenizer_provenance(&new_corpus, tok),
+            initial_weight_hash: initial.manifest.initial_weight_hash.clone(),
+            train_loss: None, validation_loss: None,
+        };
+        state.resume_binding = Some(p.binding(&state, tok)?);
+        let mut manifest = initial.manifest.clone();
+        manifest.training = Some(state); manifest.status = "TRAINING".into();
+        let adam = Adam::new(&initial.model.vars)?;
+        checkpoint::save(&root.join("step0.r3m"), &initial.model, tok, manifest, &adam.moments)?;
+        let child = std::process::Command::new(std::env::current_exe()?)
+            .args(["--exact", "training::fresh::identifiable::tests::identifiable_tokenizer_provenance_native_process", "--nocapture"])
+            .env(CHILD, &root).output()?;
+        print!("{}", String::from_utf8_lossy(&child.stdout));
+        assert!(child.status.success(), "{}", String::from_utf8_lossy(&child.stderr));
+        assert!(String::from_utf8_lossy(&child.stdout).contains("1 passed"));
+        println!("TOKENIZER_PROVENANCE_PARENT optimizer=0 generation=0 teacher=0 native-save=PASS new-process=PASS");
+        Ok(())
+    }
+    #[test]
     fn identifiable_complementary_native_and_split() -> Result<()> {
         let (train, tm) = generate_balanced(8, 0, 20260921)?;
         let (dev, dm) = generate_balanced(8, 1, 20260921)?;

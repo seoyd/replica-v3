@@ -62,7 +62,21 @@ If actual mask difference is zero, omit GLOBAL6 and do not transfer its budget.
 The current prepared data has a small nonzero mask treatment, not evidence of
 question information being inaccessible through the residual/global layer.
 
-No new training has run under this study as of the R2 preparation entry. Existing
+The corrected preparation received independent A PASS. Its first LOCAL5 command
+then failed at step0 native save: the new state omitted the reused tokenizer's
+source-corpus provenance. Optimizer/input/target/generation/teacher were all0;
+GLOBAL6 was not started. Preserve that failed study and its missing final native;
+do not rewrite admission/terminal records or silently restart it.
+
+The narrow repair records the mapping's source corpus in the existing lineage
+slot only when constructing an explicitly mapping-reusing new state. This slot
+does not assert that the random weights learned the tokenizer's old corpus.
+Existing resume and checkpoint validators remain unchanged; a missing lineage
+on resume is still rejected. Direct TINY step0 save/new-process reload and
+negative-provenance checks exercise the boundary without optimizer calls.
+The actual two-arm learning comparison is NOT_RUN because the admitted attempt
+failed before update1. Any replacement needs its own explicit registration and
+review; the failed root cannot be made resumable by this code repair. Existing
 failed studies and the following historical entries remain unchanged.
 
 ## Paused by user: GROUND cancelled after490 updates
