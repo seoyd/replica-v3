@@ -1,6 +1,25 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: COVER, one bounded scene-coverage intervention
+## Current result: wider scenes remain underfit at the registered exposure
+
+COVER completed1280 updates and all final observations. Primary392/512,
+transfer68/128, flipped15/192, both3/192 across2 bases, errors0. Retained VALUE
+was393/72/2/0. Both gains are limited and do not satisfy retention or the joint
+gate. The same first8 train pairs per bucket score original23/48/both5/24 and
+value-exchanged24/48/both4/24, versus VALUE48/48/both24/24 on each. Ten exposures
+per side across the wider pool did not establish fitting, whereas40 across the
+narrower pool did. This does not isolate insufficient duration from interference,
+data coverage or shared model/objective limitations.
+
+The next single-variable hypothesis may test exposure at this same fixed scene
+pool, because its trained examples remain inaccurate. It requires a separate
+bounded registration, unchanged data/objective/LR/Adam/tokenizer, explicit parent
+lineage and retention guards. This closure grants no automatic extension and
+does not reopen COVER, change its resume=false or promote its checkpoint. Do not
+change several factors to chase the three development pairs. Final200 remains
+NOT_CREATED/NOT_OPENED; S4/S5/S6 and Goal1 are unfulfilled.
+
+## Closed: COVER, one bounded scene-coverage intervention
 
 Under the continuing one-variable authorization, register COVER from the original
 P6144, compared with retained VALUE at matched256/1280 updates. Increase the

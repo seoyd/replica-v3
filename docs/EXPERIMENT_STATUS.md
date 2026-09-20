@@ -1,5 +1,89 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 COVER1280 closed: limited selection gain, trained scenes underfit
+
+EXECUTED_THIS_RUN with frozen source `c0b23edf48853743d376eefdb91d46798351acde`,
+compiled digest5eaab31b873506014c3d45930267ec14f65f548ba2593f80fa7f4032f3677993.
+Original P6144 weights/Adam, same native inputs/tokenizer/LR3e-5/CE/SIDE family4.
+Only the recurring scene prefix grows8→32 pairs per C/D/E, both value views;
+384 sides get10 exposures each versus VALUE96 sides40 each. All other-five-task
+slots stay identical. No new corpus, model, storage or external learned artifact.
+
+| Same-model endpoint | New updates | Train64 | Primary512 | Transfer128 | Flipped192 | Both192 |
+|---|---:|---:|---:|---:|---:|---:|
+| COVER6400 | 256 | 55 | 380 | 67 | 7 | 0 |
+| COVER7424 | 1280 | 49 | 392 | 68 | 15 | 3 |
+| Retained VALUE7424 | 1280 | 57 | 393 | 72 | 2 | 0 |
+
+Final primary buckets[51,62,30,45,20,64,56,64], transfer[4,4,7,4,1,16,16,16].
+Selector original95/192, both C2/D1/E0 across2 independent bases, base4-complete0,
+same output159/192. Pair counts[3,92,12,85]; flipped body29 and selected citation56
+are auxiliary, not full-answer credit. Screens32/64/128/768:44/46/47/47; final49.
+All2144 planned panel generations ended normally with EOS, errors0. Final joint
+and admissible=false. The final point improves from its own256 point, so the
+plateau guard did not stop it: actual terminal is BUDGET_REACHED, Finished,
+resume=false. It is not a product candidate or a reopened old study.
+
+Fresh-process existing final diagnostic ran once on each view of the same first8
+train pairs per bucket, a subset of COVER's96 pairs. Original23/48 full,
+both5/24, same9/24; exchanged24/48 full, both4/24, same6/24. C/D/E full counts
+are9/10/4 and9/8/7 out of16 each. Errors0/EOS48 in each. The diagnostic tests
+PASS11.91s/11.87s mean successful execution, while fitting thresholds FAIL.
+First-token teacher and normal generation argmax agree96/96; first gold34/48
+and35/48, correct first token but later wrong11 in each. Exchanged outputs retain
+old pre-swap answers11/48 and the correct citation35/48. The retained VALUE
+control was48/48 and both24/24 on each view; it was reread, not regenerated.
+
+This intervention produced a small development both0→3 change, with worse
+transfer and much poorer fitting of the retained train subset. It cannot establish
+general selection, sufficient preservation or a unique root cause. The wider
+pool's10 exposures per side versus the narrow pool's40 is a material confound
+of the fixed-compute coverage tradeoff, disclosed before execution. Further
+exposure at fixed coverage is a possible separately registered hypothesis,
+not an automatic extension, acceptance or promise of improvement.
+
+Actual usage1280 SMALL optimizer;2,190,883 input/157,216 target tokens including
+1,631/116 discarded at the command deadline; committed2,189,252/157,100,
+padding784,493.10,240 committed draws,1280 per task. Generation2256=
+2144 panels+16 production parity+96 final diagnostics; own-model teacher2240.
+Direct TINY32 optimizer/258 generation/258 teacher, scalar0, are separate.
+First actual update saved6145 and reloaded. Segment0001 saved6924 under pure
+TIME_BUDGET/TrainingPending/resume=true; new process0002 executed the remaining500.
+No UNKNOWN, cancellation, numeric or save error. Source/binary/parent hashes
+were preserved. Study control1524.3499557080002s including preparation/parity;
+final diagnostic controls6.89300075s+6.871689959s. Segment0002 peak sampled
+RSS1,425,648KiB, preceding segment1,497,616KiB; not guaranteed OS peaks or S6.
+
+Durable native `artifacts/pair-cover-20260920/COVER/segment-0002/final`, physical
+9845a43db02f197fca6026db058c503c1fa8856ffd673267904103c03b2e98e0;
+modeld8b2472422605e9305f2a25d8c39cbac555161d65d1303ca4b149c392dc60403.
+Final receipt1dc10022b251bcfd8f1dc2f9ed0b60b9041055f61b6d016bb289e0f4d5cbc9e6;
+policy41a2bdf33be9c87fd11d8a41491c503884a27f60cb67828e24804142bfb801fb.
+Frozen executable254e7894d48a0ba109da04e5e640148664527525a90a25c6735346643d34219e,
+diagnostic executablec2d77bd51208675c2ba076c0a0ffd9f2620d189313c8c73521d65b488b29df7c.
+Pure `fresh paired-report` exit0 audits owned inputs, actual exposure, native
+lineage, complete raw panels/decisions and known usage, no model calls. Its log
+SHA256a6b5d4ce5a6c287abf22884c40c7deaa570366c5f562d7f4c7d6008813c34f9c.
+
+Pure Rust final recounts exit0 verify strict token decoding/EOS, scores, the
+retained exact cases and192 generation/teacher resolution records. The local
+value recount reuses the existing reader but independently scores the imperfect
+original outputs instead of assuming48/48; quality failure is not integrity
+failure. Original rawc45131f413fbd5133216a49983d47584941c1c2ca5d2085aa0a242b8469decc7;
+exchanged raw46869d60ab12e80ea7b28996bf8f277f55366c8e8c6076b824bf0f864200d63a.
+Evidence `artifacts/pair-cover-20260920-evidence/`: candidate diff, frozen
+executables, direct tests, input audit, segment0000–0002 logs, `paired-report.log`,
+`seen48.log`, `value48.log`, `seen-recount.log`, `value-recount.log`, and original
+binary raw/receipts. No model/corpus/private raw was published; no new tracked file.
+Strict Clippy retains the two pre-existing warnings and is not globally PASS.
+
+CODE_VERDICT=SCOPED_PASS; process/final source distinction is recorded below;
+LEARNING_EXECUTION=COMPLETE; TRAINED_SUBSET_FITTING=FAIL;
+DEVELOPMENT_JOINT_PASS=false; MODEL_QUALITY_RECOVERED=false;
+FINAL200=NOT_CREATED/NOT_OPENED; S4/S5/S6=NOT_RUN_PRECONDITION_FAILED;
+GOAL1_READY=false; GOAL1_ACCEPTED=false. Independent acceptance remains external.
+This registered learning/observation budget is closed without automatic extension.
+
 ## 2026-09-20 COVER implementation and input registration verified
 
 The next separately bounded P6144 fork widens the recurring VALUE prefix8→32
