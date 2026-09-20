@@ -1,5 +1,58 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Separate side margins completed; joint quality failed
+
+EXECUTED_THIS_RUN, source `4dfa81fc5a4e7c337872ef4d629976fbc75a8347`.
+All1280 registered SMALL updates completed from P6144 to7424. Same initial
+weights/Adam/tokenizer/corpus, exact3840-row tape and config as CONTRAST were
+verified before learning. Only the paired auxiliary aggregation changed.
+First-update CE0.36670968 matched the control; objective0.74849534,
+gradient norm3.23801079, actual weight delta L2 0.01703960.
+
+| Absolute step | New updates | Train64 | Primary512 | Transfer128 | Flipped192 | Both192 |
+|---|---:|---:|---:|---:|---:|---:|
+| 6400 | 256 | 47 | 367 | 69 | 6 | 0 |
+| 7424 | 1280 | 43 | 372 | 70 | 25 | 2 |
+
+Final primary buckets `[57,63,26,29,17,61,55,64]`, transfer
+`[4,8,7,1,2,16,16,16]`; both C0/D2/E0 across2 bases, base4=0.
+Original72/192 and same normal output168/192. Matched CONTRAST was366/68/39/0,
+original64 and same145. Better primary/transfer and two both-correct pairs are
+insufficient; flipped-only accuracy decreased. SIDE is not a quality recovery.
+Screens32/64/128/768:44/46/41/47 out of64, flip24:0/0/1/1. All2144 evaluation
+generations had normal EOS/errors0. No final200 was created or opened.
+
+Actual/committed input2,195,433, target157,500, discarded0/0, padding780,759;
+10,240 draws,1280 per task and5120 per phrase. Generation2160 including P16,
+teacher2144, active study accounting1558.679617875s. TINY41/561/561 separately.
+The first real update was saved at6145 and restored in a fresh process. A real
+900s TIME_BUDGET saved6912 as EvaluationPending:1214 generations/1213 teachers,
+no other condition, resume=true. The next process completed34 generations and35
+teachers before any further update, then512 updates and the final896/896 panel
+observations. Final segment930 generations/931 teachers; no returned row repeated.
+Final Finished/BUDGET_REACHED, resume=false. Pure paired-report exit0 verified
+all raw/native/teacher/usage bindings. No UNKNOWN/cancel/storage failure.
+Peak sampled RSS1,490,480KiB is not S6. Intermediate6400 raw is an observation,
+not a separately retained native endpoint.
+
+DERIVED_EXISTING_RAW, new model calls0:135/192 flipped first-token teacher
+argmaxes incorrect; first mean NLL1.9982523555, remaining mean NLL0.1726558861.
+These teacher metrics do not replace normal greedy scores. The fixed train-pair
+margin diagnosis is next, bounded separately without learning.
+
+Executable `artifacts/side-margin-20260920-executable`, SHA256
+`189ef8057517064b7023ed5c4de39416a6dd7cd84dc6e3b9482f89932814acd2`;
+source digest `a2a4c5d716bb9e313929ed5da1a08cba0fc6d33ad73fb0b5dc212a4154fec080`;
+policy `8767859d6e4fa2d0ae2406a2d6995c68289a5e2796347404ef976c7d948907ab`.
+Final `artifacts/side-margin-20260920/SIDE/segment-0002/final`, physical SHA256
+`38d2eb679a57f3aa74b3e7a6d1af687e39688d6b22a21e803381519bd887a2e9`, weights
+`ae949f151a87aa1585bd24748e08d7e638be240290785a885512db7984dbf849`.
+Commands/tests/hashes/candidate.patch/input equality/pure report/error recount:
+`artifacts/side-margin-20260920-evidence/`. Original artifacts stay unpublished.
+CODE_VERDICT=IMPLEMENTER_TESTED_PASS; LEARNING_EXECUTION=COMPLETE;
+DEVELOPMENT_JOINT_PASS=false; MODEL_QUALITY_RECOVERED=false;
+S4/S5/S6=NOT_RUN_PRECONDITION_FAILED; GOAL1_READY=false; GOAL1_ACCEPTED=false.
+
 ## 2026-09-20 Separate side-margin objective — direct verification
 
 One new SIDE registration compares separate per-side margins with the retained

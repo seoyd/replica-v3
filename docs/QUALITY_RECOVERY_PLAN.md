@@ -1,6 +1,23 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: separate per-side margins at unchanged co-batch exposure
+## Active: fixed train-pair margins after sidewise learning, no updates
+
+Use the existing optional teacher-only seen-pair diagnostic once in a new root
+for SIDE7424 and P6144: first8 actually seen train pairs per C/D/E, same selection
+as the earlier CONTRAST diagnosis. At most96 own-model teacher calls, generation0,
+optimizer0, one900s command/120s cleanup, no retry. Independently recount the raw
+and compare with retained CONTRAST margins on identical cases. Distinguish
+counterpart margin from vocabulary argmax and from normal generation accuracy;
+do not infer a unique cause from any one teacher statistic. No new learning yet.
+
+## Closed: separate per-side margins at unchanged co-batch exposure
+
+Completed1280 updates at7424: primary372/512, transfer70/128, flipped25/192,
+both2/192 (D2 across2 bases), errors0. Original72 and same output168/192.
+Matched CONTRAST was366/68/39/0, original64 and same145. The modest primary/
+transfer gains and two both-correct pairs do not meet the unchanged joint gate;
+SIDE is not adopted. BUDGET_REACHED, resume=false. Raw/native/teacher/usage
+recount passed. Inspect the fixed train margins before choosing another variable.
 
 Register one SIDE trial from P6144 under the user's continuing one-variable
 authorization. Reuse retained CONTRAST6400/7424 as the equal-budget control;
