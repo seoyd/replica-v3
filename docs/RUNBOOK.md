@@ -1200,3 +1200,10 @@ This keeps the FIT bases, anchors and training settings; cap1280 new updates.
 The existing `paired_seen_train_diagnostic` production-feature test accepts
 `R3_TRAIN_PAIR_VALUE_SWAP=1` for the separate48-case changed-value observation;
 it cannot combine with margin mode and requires a new output directory.
+
+`--cover-value-pairs` is the separate COVER policy and cannot combine with other
+intervention flags. It uses the same commands with `NEW_ROOT/COVER`, original
+P6144 and preserved inputs, but widens the recurring prefix to32 scenes per
+C/D/E and alternates the two value views every64 updates. Maximum1280 updates;
+all old policies/closed budgets remain unchanged. The first8 pairs' final
+observations are a subset of its train scenes, not a heldout quality gate.

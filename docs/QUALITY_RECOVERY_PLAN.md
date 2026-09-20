@@ -1,5 +1,36 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: COVER, one bounded scene-coverage intervention
+
+Under the continuing one-variable authorization, register COVER from the original
+P6144, compared with retained VALUE at matched256/1280 updates. Increase the
+recurring prefix from8 to32 paired train scenes per C/D/E. Both existing value
+views remain trained; each64-update pass alternates original/exchanged values.
+This pool-size change necessarily reduces exact-side exposures40→10 and lengthens
+the value-view recurrence16→64. These are disclosed consequences, not a claim
+of equal per-case exposure. Use no new corpus, no heldout training and no new
+model, LR, loss, Adam, tokenizer, decoding or storage setting. Preserve all
+other-five-task update/slot rows, SIDE family4 auxiliary0.1 and LR3e-5.
+
+The hypothesis is transfer across more independent scenes after successful
+fitting of both value views. It is not evidence that coverage is the unique cause.
+Retain all closed studies and decisions; no C++ calls or old resume are needed.
+Max1280 SMALL optimizer,12M actual input/1M target including discarded work,
+12000 generation/10000 own-model teacher,21600 active seconds,900s command/
+120s cleanup. Direct TINY cap40 optimizer/384 generation/384 teacher, scalar0.
+Run full3840-row tape roundtrip/bounds/exposure checks and both affected TINY
+continuous/split paths (COVER8 versus1+7, retained VALUE4 versus1+3).
+Production P16 precedes registration, commit/push and source/binary freeze.
+Save/reload the first actual update within the1280 allowance.
+
+Keep screens32/64/128/768 and full256/1280, original retention/plateau/numeric/
+storage/cancel/UNKNOWN guards and joint development/S4/S5/S6 gates. No automatic
+extension or additional arm. At a fully completed endpoint reuse the two48-case
+diagnostics once each,96 generation/teacher total within the budget; these are
+the retained first8 train pairs per bucket, not a census of all96 COVER pairs.
+Their47/48 full and23/24 both thresholds concern fitting only. Any joint pass
+freezes the candidate and proceeds to the authorized independent gates.
+
 ## Current result: changed-value fitting succeeds, transfer remains unresolved
 
 VALUE completed its registered1280 updates and is closed at7424,

@@ -1,5 +1,48 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 COVER implementation and input registration verified
+
+The next separately bounded P6144 fork widens the recurring VALUE prefix8→32
+train pairs per C/D/E, with both owned value views. At1280 its384 sides get10
+exposures each; VALUE96 sides got40. The pool-size intervention consequently
+lengthens the original/exchanged cycle16→64. All anchor update/slot rows, native
+inputs, parent/Adam/tokenizer, LR3e-5, CE/SIDE family4 and quality gates remain.
+No new corpus, framework, product oracle, storage or model change.
+
+Direct full3840-row writer/reader/tape test1 PASS1.88s on final source; it checks
+all anchor slots, exact32 bases/128 sides per selector bucket,10 exposures,
+pair/phrase/view identity, boundary positions and replaced/duplicated tapes.
+Initial test failed because its parent fixture still carried the preceding FIT
+tape; corrected to the original parent before testing expanded coverage. Original
+failure log retained, optimizer/generation/teacher0 for that failure.
+Two actual TINY process regressions PASS28.98s: COVER continuous8 versus1+7 and
+retained VALUE continuous4 versus1+3 match weights/Adam/cursor/tokens exactly.
+Mixed flags and default-objective resume rejected. TINY32 optimizer/258 generation/
+258 teacher, including54 setup observations; scalar0. Those process tests used
+source digest a389fdac4c4129635dfded6659f3a62b13d88934c3be70c6d5a670319c387459.
+Subsequent final source explicitly enforces COVER's existing8/1280 cap and includes
+its P16 in usage, two control checks with unchanged sampling/numeric/resume code.
+Final source tape test, production P16 and actual prepare/readback ran afterward;
+no duplicate TINY training was used for those two checks.
+
+Final production P16 test1 PASS13.48s,16 matching outputs/160 tokens,
+optimizer0/teacher0; original parent unchanged. Release build PASS19.59s.
+Strict Clippy exit101 retains the two prior for_kv_map/type_complexity warnings,
+not an all-checks PASS. Cargo locked/offline, Rust1.98.1, Accelerate/F32/thread1.
+
+Actual owned-input audit exit0: all10 native files match VALUE/SIDE byte-for-byte;
+all19,200 planned anchor slots match,11,520 selector slots include5,760 swapped
+views over the complete3840-row tape. Planned1280 phrase draws(original/P) are
+C760/520,D720/560,E640/640. A prefix is not claimed as a balanced full256 block.
+No optimizer has executed for COVER at this registration stage.
+Policy41a2bdf33be9c87fd11d8a41491c503884a27f60cb67828e24804142bfb801fb;
+compiled source5eaab31b873506014c3d45930267ec14f65f548ba2593f80fa7f4032f3677993;
+frozen executable254e7894d48a0ba109da04e5e640148664527525a90a25c6735346643d34219e.
+Study `artifacts/pair-cover-20260920/`, direct logs/input hashes and local Rust
+audit source in `artifacts/pair-cover-20260920-evidence/`. No new tracked files.
+Implementation/registration closes here; learning results must be recorded
+separately. Goal1 remains unmet, final200 NOT_CREATED/NOT_OPENED.
+
 ## 2026-09-20 VALUE1280 closed: trained value swaps fit, development does not recover
 
 EXECUTED_THIS_RUN. Frozen source `fb917e47016d26381288311ad217d8a30a1b8405`,

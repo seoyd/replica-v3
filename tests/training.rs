@@ -2990,9 +2990,19 @@ fn fresh_explicit_fork_matches_continuous_and_split_native_resume() {
 
 #[test]
 fn fresh_value_exposure_restores_identical_native_state() {
+    value_exposure_native_resume(false);
+}
+
+#[test]
+fn fresh_value_coverage_restores_identical_native_state() {
+    value_exposure_native_resume(true);
+}
+
+fn value_exposure_native_resume(coverage: bool) {
     use replica_v3::{binary,neural::checkpoint};
     use candle_core::Device;
     let d=tempfile::tempdir().unwrap();
+    let (mode,flag,steps,cycle)=if coverage {("COVER","--cover-value-pairs",8,4)}else{("VALUE","--alternate-pair-values",4,2)};
     let call=|args:&[&str],success:bool| {
         let out=Command::new(env!("CARGO_BIN_EXE_replica-train")).args(args)
             .env("VECLIB_MAXIMUM_THREADS","1").env("RAYON_NUM_THREADS","1")
@@ -3012,27 +3022,32 @@ fn fresh_value_exposure_restores_identical_native_state() {
     let roots=[d.path().join("continuous"),d.path().join("split")];
     for (i,root) in roots.iter().enumerate() {
         call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),
-            "--output",root.to_str().unwrap(),"--alternate-pair-values"],true);
-        let arm=root.join("VALUE");
+            "--output",root.to_str().unwrap(),flag],true);
+        let arm=root.join(mode);
         let plan:binary::Value=binary::from_slice(&std::fs::read(arm.join("plan.r3b")).unwrap()).unwrap();
-        let rows=plan["paired"]["rows"].as_array().unwrap();assert_eq!(rows.len(),4);
-        assert_ne!(rows[0].as_array().unwrap()[..6],rows[2].as_array().unwrap()[..6]);
+        let rows=plan["paired"]["rows"].as_array().unwrap();assert_eq!(rows.len(),steps);
+        assert_ne!(rows[0].as_array().unwrap()[..6],rows[cycle].as_array().unwrap()[..6]);
+        if coverage {assert_ne!(rows[0].as_array().unwrap()[..6],rows[2].as_array().unwrap()[..6]);}
         if i==0 {call(&["fresh","fixture-full","--root",arm.to_str().unwrap()],true);}
         else {for _ in 0..2 {call(&["fresh","run","--root",arm.to_str().unwrap()],true);}}
         call(&["fresh","paired-report","--root",root.to_str().unwrap()],true);
     }
-    let a=checkpoint::load(&roots[0].join("VALUE/segment-0000/final"),Device::Cpu,true).unwrap();
-    let b=checkpoint::load(&roots[1].join("VALUE/segment-0001/final"),Device::Cpu,true).unwrap();
+    let a=checkpoint::load(&roots[0].join(mode).join("segment-0000/final"),Device::Cpu,true).unwrap();
+    let b=checkpoint::load(&roots[1].join(mode).join("segment-0001/final"),Device::Cpu,true).unwrap();
     assert_eq!(a.model.weight_hash().unwrap(),b.model.weight_hash().unwrap());
     for (name,t) in &a.optimizer {assert_eq!(t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),b.optimizer[name].flatten_all().unwrap().to_vec1::<f32>().unwrap());}
     let x=a.manifest.training.as_ref().unwrap();let y=b.manifest.training.as_ref().unwrap();
     assert_eq!((x.step,x.sampler_state,x.consumed_tokens,x.target_tokens),(y.step,y.sampler_state,y.consumed_tokens,y.target_tokens));
-    assert_eq!(x.step,8);assert_eq!(x.resume_binding.as_ref().unwrap().family,4);
+    assert_eq!(x.step,4+steps);assert_eq!(x.resume_binding.as_ref().unwrap().family,4);
     assert_eq!(x.config.lr.to_bits(),3e-5f64.to_bits());assert_eq!(x.config.first_target_weight,1.);
     assert!(checkpoint::ResumeBinding::require_default(x,&a.tokenizer).is_err());
     let bad=d.path().join("mixed");
     call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),
-        "--output",bad.to_str().unwrap(),"--alternate-pair-values","--fit-seen-pairs"],false);assert!(!bad.exists());
+        "--output",bad.to_str().unwrap(),flag,"--fit-seen-pairs"],false);assert!(!bad.exists());
+    if coverage {
+        call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),
+            "--output",bad.to_str().unwrap(),flag,"--alternate-pair-values"],false);assert!(!bad.exists());
+    }
     let mut used=[0u64;3];
     fn count(root:&std::path::Path,used:&mut [u64;3]) {
         for entry in std::fs::read_dir(root).unwrap() {
