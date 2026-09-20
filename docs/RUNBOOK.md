@@ -1,5 +1,16 @@
 # Replica v3 B0 runbook
 
+## Joint pair packing research
+
+`replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT
+--parity NEW_PARITY_ROOT --output NEW_ROOT --co-batch` registers COBATCH:
+batch8, constant LR3e-5, coefficient1, max1280 new updates. Only grouping differs
+from the retained ADJACENT control; exact case multisets match every two updates.
+`--co-batch` conflicts with both coefficient4 and LR9e-5 interventions. Use
+`fresh run --root NEW_ROOT/COBATCH` and pure `fresh paired-report --root NEW_ROOT`
+with the same frozen production executable. Existing time/cancellation boundaries
+and unsafe-failure blocking apply.
+
 ## Bounded learning-rate research
 
 `replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT

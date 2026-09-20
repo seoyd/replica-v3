@@ -1,5 +1,43 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: joint pair packing at unchanged batch8
+
+The user authorized continuing evidence-based one-variable research. Neither
+first-target4 nor LR9e-5 recovered joint selection; keep their failures closed.
+Register `fresh paired-prepare --co-batch` as one new COBATCH arm from P6144,
+with the retained coefficient1/LR3e-5 ADJACENT control at matched6400/7424.
+Hypothesis: putting both query sides into one gradient may reduce preference
+oscillation across updates. This is not a proven optimizer defect. The LR trial
+still produced the same normal output on172/192 opposite-query pairs and both0.
+
+Only batch grouping changes. For each pair of adjacent eight-case tape rows,
+put the six original/flip C/D/E cases into one eight-case batch. Two remaining
+slots take the first side of two other tasks, rotating through A/B/F/G/H by pair
+ordinal. The other three first-side cases and all five second-side cases form
+the next eight-case batch. Every two updates retain the exact16-sample multiset;
+every256 updates retain256 draws per task, phrase and side counts and the same
+request/target bytes. Per-update task composition and padding do change; the
+five other tasks are no longer updatewise identical. Report this explicitly.
+Each sample still has independent attention; the opposite answer is never in
+its prompt. No paired oracle is exposed to generation. This is not batch16 or
+gradient accumulation. Native shapes/formats and the CE equation are unchanged;
+batch grouping naturally changes each batch's target-token normalizer/gradient.
+
+Same parent weights/Adam/tokenizer, seed, model, microbatch8/accumulation1,
+constant LR3e-5, first-target1, clipping/decay, corpus and whole-answer evaluation.
+No coefficient4/LR9e-5 combination, reset, new wording/data or decoding change.
+Existing native finite tape and sample table, RunControl and scorer are reused.
+Maximum1280 SMALL updates,12M input/1M target including discarded work,
+12000 generation/10000 own-model teacher,21600 active seconds,900s commands/
+120s cleanup. TINY64 updates/512 generation/512 teacher; scalar optimizer0.
+First actual update saved and resumed. Screens +32/64/128/768; full train64,
+primary512,transfer128,selector192 at+256/+1280. Original retention/plateau,
+cancel/numeric/storage/UNKNOWN guards and final joint thresholds remain intact.
+Verify exact two-update multiset, co-location, true task metadata,3840-row native
+readback and TINY continuous2 versus fresh1+1 before SMALL; verify P16 parity.
+Stop at the first joint pass for independent S4 and conditional S5/S6, otherwise
+close at the registered stop or cap without extending this run.
+
 ## Closed: bounded learning-rate intervention from P6144
 
 Completed1280 updates at7424: primary330/512, transfer60/128, flipped35/192,

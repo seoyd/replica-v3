@@ -1,5 +1,35 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Co-batch research — direct verification before SMALL
+
+The continuing user authorization permits a new bounded batch-grouping hypothesis.
+`fresh paired-prepare --co-batch` retains P6144/Adam, coefficient1, LR3e-5,
+microbatch8/accumulation1 and exact case multisets every two updates against the
+retained ADJACENT control. C/D/E opposite-query pairs share one batch; per-update
+task composition and padding change, while overall task/phrase/side exposure and
+request/target content do not. This is not batch16 or a different loss. True task
+IDs in traces/recounts now come from the existing sample mapping, not row slots.
+No product inference, native format, tokenizer or model equation changes.
+
+EXECUTED_THIS_RUN:3840-row writer-reader/bounds/multiset/co-location and true task
+mapping test1 PASS; actual process regression1 PASS (54.65s), TINY33 updates,
+453 generations/453 teachers including27 setup observations. It verifies
+continuous2 versus fresh1+1 exact weights/Adam/counters, equal learning config
+and input/target totals to control, changed trained weights, pure report no-write,
+and rejection of combined interventions before registration. An initial test
+listing build failed because the new test block was inserted in the wrong test;
+it was moved to the intended existing regression before any test model call.
+That failed build is retained and is not a passing test or an optimizer call.
+
+After the process test, equivalent `chunks_exact(2)` became `as_chunks::<2>()`
+to remove a new lint. Final-source tape regression ran again:1 PASS, no model
+update/generation/teacher. Production P6144 parity1 PASS:16/16,160 raw tokens,
+errors0, optimizer0/teacher0, original inventory unchanged (13.59s). Clippy exit0
+with only the pre-existing map-key warning. New SMALL learning is0 at this stage.
+Evidence and test/source/binary hashes remain local under
+`artifacts/cobatch-20260920-evidence/`. Current quality and Goal1 remain unaccepted;
+the subsequent1280-update experiment must be separately recorded with actual counts.
+
 ## 2026-09-20 Fixed LR9e-5 completed; no joint progress
 
 EXECUTED_THIS_RUN on source `58a8a3bd98174b56bc05372a9cad8193995bfa3f`.

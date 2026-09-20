@@ -3108,6 +3108,31 @@ fn fresh_paired_policies_match_continuous_and_split_processes() {
     call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),
         "--output",rejected.to_str().unwrap(),"--first-target-four","--learning-rate-threefold"],None,false);
     assert!(!rejected.exists());
+    let co_roots=[d.path().join("co-continuous"),d.path().join("co-split")];
+    for (i,root) in co_roots.iter().enumerate() {
+        call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),
+            "--output",root.to_str().unwrap(),"--co-batch"],None,true);
+        assert!(!root.join("ADJACENT").exists());
+        let arm=root.join("COBATCH");
+        if i==0 {call(&["fresh","fixture-full","--root",arm.to_str().unwrap()],None,true);}
+        else {for _ in 0..2 {call(&["fresh","run","--root",arm.to_str().unwrap()],None,true);}}
+        let before=hashes(root);
+        call(&["fresh","paired-report","--root",root.to_str().unwrap()],None,true);
+        assert_eq!(before,hashes(root));
+    }
+    let a=checkpoint::load(&co_roots[0].join("COBATCH/segment-0000/final"),Device::Cpu,true).unwrap();
+    let b=checkpoint::load(&co_roots[1].join("COBATCH/segment-0001/final"),Device::Cpu,true).unwrap();
+    assert_eq!(a.model.weight_hash().unwrap(),b.model.weight_hash().unwrap());
+    for (k,t) in &a.optimizer {assert_eq!(t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),b.optimizer[k].flatten_all().unwrap().to_vec1::<f32>().unwrap());}
+    let state=a.manifest.training.as_ref().unwrap();let old=control.manifest.training.as_ref().unwrap();
+    assert_eq!(state.config,old.config);assert_eq!(state.step,old.step);assert_eq!(state.target_tokens,old.target_tokens);
+    assert_eq!(state.consumed_tokens,old.consumed_tokens);
+    assert_eq!(state.resume_binding.as_ref().unwrap().first_target_weight_bits,1f64.to_bits());
+    assert_ne!(a.model.weight_hash().unwrap(),control.model.weight_hash().unwrap());
+    let mixed=d.path().join("mixed-packing-rejected");
+    call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),
+        "--output",mixed.to_str().unwrap(),"--co-batch","--learning-rate-threefold"],None,false);
+    assert!(!mixed.exists());
     // A saved quality stop permits the other preauthorized arm; failed publication does not.
     let quality=d.path().join("quality");
     call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),"--output",quality.to_str().unwrap()],None,true);

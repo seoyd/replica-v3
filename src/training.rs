@@ -1124,7 +1124,8 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                     for (row,&index) in indices.iter().enumerate() {
                         let (ce,count)=masked_loss(&logits.narrow(0,row,1)?,&b.target.narrow(0,row,1)?,&b.mask.narrow(0,row,1)?)?;
                         let correct=predictions[row].iter().zip(&labels[row]).zip(&masks[row]).filter(|((a,b),m)|a==b&&**m>0.).count();
-                        task_stats.push(replica_v3::binary::record!({"bucket":micro*config.microbatch+row,"index":index,"input":train[index].tokens.len()-1,"target":count,"ce":ce.to_scalar::<f32>()?,"correct_tokens":correct,"padding":b.input.dim(1)?-(train[index].tokens.len()-1)}));
+                        let bucket=fresh.map_or(micro*config.microbatch+row,|(plan,_)|plan.sample_bucket(index));
+                        task_stats.push(replica_v3::binary::record!({"bucket":bucket,"index":index,"input":train[index].tokens.len()-1,"target":count,"ce":ce.to_scalar::<f32>()?,"correct_tokens":correct,"padding":b.input.dim(1)?-(train[index].tokens.len()-1)}));
                     }
                 }
                 let value = f64::from(loss.to_scalar::<f32>()?);
