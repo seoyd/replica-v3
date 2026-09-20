@@ -2,6 +2,17 @@
 
 ## 2026-09-20 fixed DIVERSE actual-training-view diagnosis registered
 
+Initial source26420784c80152c2ad0f70dfffc47b9ab931eb13 matched remote/main.
+View1 test failed before model calls/output creation on an over-strict physical
+file equality check. Evaluation and final files have different resume metadata;
+the existing audit_panel verifies the evaluated physical/state while terminal
+history verifies final. Corrected code additionally compares actual model hash
+and step, retaining both physical bindings. Original failed log/executable remain.
+Corrected pure mapping test PASS1 in0.28s, calls0. Corrected executable
+df13be5a0b0974e3669ae6c4c21337cd9cb4264650aaffa8f283a6673421b8e5.
+Only the explicitly registered preparation correction uses new output paths;
+the total143 generation/143 teacher/optimizer0 cap is unchanged.
+
 DERIVED_EXISTING_RAW: the bound first1280 tape exposes48 selected sides per
 value view exactly20 times. Original48 already covers view0 (44 correct).
 Verified endpoint train64 overlaps two view0 and one view1 inputs; views2/3

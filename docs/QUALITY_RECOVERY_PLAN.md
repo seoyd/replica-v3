@@ -23,6 +23,14 @@ Source/executable and selection/native hashes freeze before observations.
 This measures fitting of actual training views, not heldout quality or approval.
 No new learning is registered; use the results to justify a next single variable.
 
+Pre-call view1 preparation failed because the diagnostic incorrectly required
+evaluation and final native files to have identical physical hashes. No output
+directory or model call was created. Preserve that failure; narrowly reuse the
+existing audit_panel physical/state checks and terminal model/step comparison.
+Freeze the corrected executable and use new `view1-verified` through
+`view3-verified` outputs once each. This explicit preparation correction adds no
+generation/teacher budget and permits no retry of an attempted model call.
+
 ## Current: value diversity closed; selection remains unresolved
 
 DIVERSE reached its1280-update cap at7424 with primary399/512, transfer70/128,

@@ -4957,10 +4957,15 @@ mod tests {
             let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
             let original=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?.train;
             let (train,metadata)=subset(&original,&tm,8);
-            audit_panel(&root,&p,end.step,"train64",&train,&metadata,&tok)?;
+            let score=audit_panel(&root,&p,end.step,"train64",&train,&metadata,&tok)?;
             let raw=root.join(format!("eval-{:04}-train64.r3rows",end.step));
             let rows=binary::read_value_records(&raw)?;
-            if rows[0]["physical"]!=end.checkpoint_hash {return Err(bad("reused train observation endpoint"));}
+            // Finalization changes resume metadata, not the evaluated weights.
+            // audit_panel verifies the evaluated file/state; history binds final.
+            let endpoint=checkpoint::load(&root.join(&end.checkpoint),Device::Cpu,false)?;
+            if endpoint.manifest.trained_steps!=end.step || score.model!=endpoint.model.weight_hash()? {
+                return Err(bad("reused train observation endpoint"));
+            }
             let mut pending=vec![];let mut pending_meta=vec![];
             for (e,m) in es.into_iter().zip(ms) {
                 let prompt=tok.prepare(&e.request,p.architecture.context as u32,&p.architecture.id()?)?;
@@ -4973,7 +4978,7 @@ mod tests {
             es=pending;ms=pending_meta;
             if reused.len()!=usize::from(actual_view==Some(1)) {return Err(bad("actual view reuse differs from registered coverage"));}
             let references=reused.iter().map(|(id,row)|Ok(binary::record!({"selected_id":id,"original_id":row["id"],"row_digest":digest(row)?}))).collect::<Result<Vec<_>>>()?;
-            reuse_binding=Some(binary::record!({"source":raw,"raw_hash":file_hash(&raw)?,"rows":references}));
+            reuse_binding=Some(binary::record!({"source":raw,"raw_hash":file_hash(&raw)?,"evaluated_physical":rows[0]["physical"],"model":score.model,"step":end.step,"rows":references}));
         }
         if recombine {
             es=recombine_train_values(&es,&all)?;
