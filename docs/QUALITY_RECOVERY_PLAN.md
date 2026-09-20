@@ -1,5 +1,36 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: exact-pair recurrence at unchanged SIDE objective
+
+Register one REPLAY arm from P6144 under the continuing user authorization.
+Retained SIDE6400/7424 is the matched control. Pure tape recount found each of
+the48 probed train sides was seen exactly once in1280 updates, despite weak
+conditional teacher discrimination. Test recurring exact cases before further
+loss changes. This is a sampling hypothesis, not a proven cause of failure.
+
+Only C/D/E selection in the finite co-batch tape changes: repeat their first
+256-update block throughout the trial. Other five tasks retain their exact
+update/slot sample IDs; same eight-task counts, batch8 and pair co-location.
+The first256 updates are identical to SIDE. At1280 each C/D/E bucket has256
+exact samples seen5 times, rather than1280 samples seen once. This reduces
+distinct base/view coverage (128 bases/view0 instead of256 bases/multiple views)
+and changes actual token/padding totals. It is a recurrence/diversity tradeoff,
+not isolated causal proof about repetition. Phrase forms and both selector sides
+remain balanced. No new corpus/labels, answer-conditioned sampler or oracle.
+
+Same parent weights/Adam/tokenizer/model, LR3e-5, family4 sidewise auxiliary0.1
+and response CE. Reuse the existing native descriptor/tape/policy/RunControl;
+no storage/core changes. Maximum1280 new SMALL updates,12M input/1M target
+including discarded work,12000 generation/10000 own-model teacher,21600 active
+seconds,900s command/120s cleanup. TINY64 updates/768 generation/768 teacher.
+Test3840-row writer-reader and exact recurrence/anchor preservation, then actual
+TINY continuous4 versus fresh1+3 so recurrence crosses its2-update fixture block.
+P16 production parity before source freeze; save/restore the first real update.
+Screens32/64/128/768 and full train64/primary512/transfer128/selector192 at256/1280.
+Existing retention/plateau/unsafe-failure guards and joint quality thresholds
+remain intact. Stop at first joint pass for independent final200/S4 and conditional
+S5/S6, otherwise close at the registered stop/cap. No old budget or failed run resumes.
+
 ## Closed: fixed train-pair margins after sidewise learning, no updates
 
 Completed96 teachers, generation0/optimizer0, errors0; pure recount passed.

@@ -1,5 +1,34 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Exact-pair recurrence — implementation verified
+
+REPLAY is one new P6144 research registration. Same SIDE family4 loss, parent
+weights/Adam, tokenizer, native corpus, batch8 and LR3e-5. Only C/D/E sample
+recurrence changes: repeat their first256-update block. Other tasks remain
+identical at every update/slot. At1280,256 exact samples per C/D/E get5 exposures
+instead of1280 samples once. Reduced base/view coverage and changed token totals
+are intrinsic to this sampling tradeoff; no stronger causal isolation is claimed.
+No corpus expansion, core/format change or product oracle. Cap1280 remains explicit.
+
+EXECUTED_THIS_RUN: full3840-row writer-reader/recurrence/anchor-preservation/
+malformed-block test1 PASS (1.23s, optimizer/generation/teacher0). Actual TINY
+process regression1 PASS (70.40s):49 optimizer calls,615 generations/615 teachers,
+including27 setup observations of each kind. New recurrence uses a2-update
+fixture block twice: continuous4 equals fresh1+3 weights/Adam. Native family4,
+constant LR, pure reporting, mixed-intervention rejection and sticky failures
+remain checked. Earlier tape run also passed; it is not added to model call counts.
+
+Production P16 test1 PASS (13.91s):16/16 exact,160 raw tokens, errors0,
+optimizer0/teacher0, originals unchanged. Locked/offline Rust1.98.1 release build
+and clippy exit0; existing map-key/nested-return-type style warnings remain.
+No SMALL learning at this verification stage. Local evidence:
+`artifacts/pair-replay-20260920-evidence/`, test binary SHA256
+`28f0d7a4d8da0d8e7d58efa3c3e1220aea586d54da81f015c657d813ce706487`,
+process binary `856538db08ecfd604539388d460105710b0756bfcf0d63eda413c95757f61225`.
+CODE_VERDICT=IMPLEMENTER_TESTED_PASS; QUALITY=NOT_YET_EVALUATED_FOR_REPLAY;
+FINAL200=NOT_OPENED; S4/S5/S6=NOT_RUN_PRECONDITION_FAILED;
+GOAL1_READY=false; GOAL1_ACCEPTED=false.
+
 ## 2026-09-20 SIDE train margins and exact exposure, no learning
 
 EXECUTED_THIS_RUN: existing teacher-only diagnostic1 PASS (10.88s),96 own-model

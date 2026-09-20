@@ -1,5 +1,14 @@
 # Replica v3 B0 runbook
 
+## Exact-pair recurrence research
+
+`replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT
+--parity NEW_PARITY_ROOT --output NEW_ROOT --repeat-pair-block` registers REPLAY.
+Same SIDE family4 loss and P6144/Adam/LR3e-5; repeat first C/D/E block only,
+preserving other tasks updatewise. It conflicts with other intervention flags.
+Use `fresh run --root NEW_ROOT/REPLAY` and pure `fresh paired-report --root NEW_ROOT`
+with the frozen executable. Cap1280, existing failure/retention gates apply.
+
 ## Separate side-margin research
 
 `replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT
