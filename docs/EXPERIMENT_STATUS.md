@@ -1,5 +1,85 @@
 # 진단 및 구현 상태
 
+## 2026-09-21 Foundation orbit 준비 — D0~D2 검증, 학습 전 source 동결
+
+R3-FOUNDATION-ORBIT-1.0으로 별도 자료 개입을 준비한다. 시작 HEAD는
+76f296c95c2c66b0536bc4ce71a766a52b5f251d이고 기준 sourcea4267d3 이후 변경은
+상태/계획 문서2개뿐이었다. 미추적 .DS_Store를 보존했으며 학습 process0,
+Rust1.98.1/locked/offline/Accelerate/thread1을 확인했다.
+기존 A512와 모든 역사 run의 종료/예산/가중치/원자료를 수정하지 않는다.
+
+D0 independent native reader의 source/data 검산은 EXECUTED_THIS_REVIEW다.
+최종 A 파일0630aa0ad8a576351df0beb7a7467e3610715daffb94ab69eb2ad099b05566ba와
+지정 원본/기존 독립 보고의 hash가 일치했다. 실제 A train256 모두 framed
+prompt+digit+EOS146이다. 저장 순서 첫8 base 원 raw는 full14/16,both6/8;
+값만 교환할 때 actual prompt 차이는 index87/139의 두 digit뿐임을 확인했다.
+아직 swap generation 점수가 아니며 모델/optimizer/teacher 호출0.
+계획 FIXED256unique×16/BOTH512unique×8의 동일 input593920/target8192는
+무학습 tape 계산값이며 실제 학습 사용량과 구분한다.
+
+독립 D0/설계 보고는 artifacts/foundation-orbit-20260921-review/D0_DESIGN_REPORT.md,
+SHA25663a2aa8409b9cf019f4ef786f2f8b1af6e033cee85c3348a90d2021c126afe75.
+실제 준비물 사전 수용은 별도다. 수학 초안 검토는 SOURCE_ONLY이며
+artifacts/foundation-orbit-20260921-math-review/DRAFT-SOURCE-REVIEW.md,
+SHA256d7ddb26a2dcfe3521681a79d39ebb59c3d44fa9001282bdb6dbc9dd65b07d9e9.
+사용자 전달 PM 해석은 USER_SUPPLIED_REVIEW로 구분한다. 별도 전문을 실제로
+읽었다고 주장하지 않으며 접근 가능한 지정 프로젝트 리뷰만 재사용한다.
+
+직접 회귀 T1~T6를 세 고유 테스트로 실행했다:
+foundation_t1_t2_t3_values_split_and_finite_tape,
+foundation_t4_t6_native_process_resume_and_peer_authorization,
+foundation_t5_strict_orbit_scores_and_seen_mask.
+Release/locked/offline/accelerate replica-train의 정확한 foundation_ 필터에서
+3 PASS/exit0, 0-test0이다. 실제 TINY 두 arm의 연속2 vs 새process1+1에
+optimizer8/generation64/teacher64를 썼고 scalar/finite-difference0이다.
+자료·마지막512 tape/native batch·gold/foil/형식/미완료/ALL4·인가 검사를 했다.
+초기3건은 confirmation의 빈 train 슬롯을 기존 native reader가 거부해
+실행 전 실패했다(model calls0). 기존 common train 슬롯을 보존하도록 고쳤다.
+dev/step0 exposed 표시와 일반 준비 경로의 confirmation 내용 목록 노출도
+독립 지적 후 실제 tape prefix 및 reviewer 전용 생성으로 수정했다.
+초기 실패 로그를 버리거나 통과 수에 합산하지 않았다.
+
+Production executable artifacts/foundation-orbit-20260921-executable의 SHA256은
+5745c440536e5046518dad97b450a78a3c8d9f14e5680a88a2b382e809f3fea1이다.
+Test-support/fixture 없이 빌드했다. 첫 swap CLI는 상대 parent와 원본 plan의
+절대 study 경로 불일치로 자료/모델 호출 전 exit1이었다(output root 미생성).
+원본에 등록된 절대경로를 사용했고 원본 plan·검증 규칙은 수정하지 않았다.
+
+D1 실제 값 교환16: original full14/16,both6/8 → swapped full4/16,both0/8.
+원래 both였던6개 중 swap both0/6, 동일 output9/16. Gold4/foil11/기타숫자1/
+malformed+error0이며 generation16/teacher0/optimizer0. Query/IDs/order/time를
+유지한 고정 표본의 관측이다. 전체 원인이나 질문을 전혀 쓰지 않는다는
+전역 단정을 하지 않는다. Raw SHA256
+b635ae79cbf4b442cb17abb275d6f1a7e1271fc006093e341cb724d77e0bcaa6.
+
+실제 준비 root: artifacts/foundation-orbit-20260921-study.
+Preparation SHA256 a93c975fb97a02d6914b6f0b6c951e5253e8153c5f9d0bf039c5549451fb5c1d.
+FIXED policy file bb604a5f3627cdac5b2dc0474e0297e8a2f138b0ce6ebd74fef50ebc47444df1,
+BOTH c4849e0311836b4d408a841034b4ac317f23fceba948c70a3f9044c53a12c644.
+두 initial 파일은 원 A의 a58b1d3ff6ac7e4597f886b0450f84d0230911ab900a5c367547f7198a15faaa를
+그대로 복사했다. Metadata에 새 seed나 초기값 탐색은 없다.
+독립 reviewer가 별도 confirmation256을 학습 전에 봉인했다.
+본문/정답은 구현자에게 전달하지 않으며 아직 모델로 평가하지 않았다.
+이 시점 새 SMALL optimizer0/generation16/teacher0이며 실제 학습 결과는
+별도로 기록한다. 모든 실제 명령/초기 실패/통과 stdout은
+artifacts/foundation-orbit-20260921-evidence에 보존한다.
+
+D2 실제 준비물 독립 검산 두 건은 모두 PASS다. 데이터 검토의
+artifacts/foundation-orbit-20260921-review/ACTUAL_PREREVIEW.md SHA256은
+4130e75f57fa8e82dad2c72e2c4348a9ca4f464ce82474a9f261d4aa32bc6cfd이며,
+수학/실제 tape 검토의 artifacts/foundation-orbit-20260921-math-review/FINAL-PREPARED-REVIEW.md는
+a568b8ea01719ffb44f638e9383c86ed4ec728142ffea854cdce2d17383968db다.
+기존 reviewer publisher로 두 보고서와 실제 preparation/source digest를
+review-a.r3b에 결속했다(exit0, physical SHA256
+5471605289c438fef7d39301247ae6dfb0e9c734b1045b471d1f40a1c95156b3).
+독립 reviewer의 신규 optimizer/generation/teacher는 모두0이다.
+Confirmation seal SHA256은
+55524d144ec83d584703b42d7a952774fb5b8c48a4d5430ea78a9aaf68d36056이며,
+구현자는 봉인 내용/정답을 읽지 않았다. Confirmation 모델 평가는 NOT_RUN이다.
+동결 compiled source digest는
+3ad507da91a8fcc32ac0fb490a720c7cc8d21c5157102e9a5b1fcaadcf11e74a다.
+이는 자료/실행 준비 수용이며 모델 품질이나 Goal1 수용이 아니다.
+
 ## 2026-09-21 최소 선택 A512 종료 — 실행 검산 PASS, 양성대조 미확립
 
 R3-BINDING-LEARNABILITY-1.0의 L0/L1 독립 사전검토 후 A(K1-V)를 실제512회

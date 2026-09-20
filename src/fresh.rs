@@ -27,6 +27,18 @@ pub enum Command {
     BindingParity { #[arg(long)] root: PathBuf },
     /// Once-only held-out names after the registered K8 development gate.
     BindingProbe { #[arg(long)] root: PathBuf },
+    /// One values-only A512 diagnostic; creates a separate study root.
+    OrbitSwap { #[arg(long)] parent: PathBuf, #[arg(long)] output: PathBuf },
+    /// Same initial tensor and native pool; only assignment exposure differs.
+    OrbitPrepare { #[arg(long)] parent: PathBuf, #[arg(long)] output: PathBuf },
+    /// Independent preparation of the reserved, never-trained confirmation panel.
+    OrbitSeal { #[arg(long)] study: PathBuf },
+    /// Read-only paired endpoint recount, including orbit-unit uncertainty.
+    OrbitCompare { #[arg(long)] study: PathBuf },
+    /// Fixed16 endpoint reproduction by the independent reviewer (separate ledger).
+    OrbitReviewParity { #[arg(long)] root: PathBuf },
+    /// Gate-bound single-candidate independent confirmation, without training.
+    OrbitConfirm { #[arg(long)] study: PathBuf },
     /// Read frozen research corpora and executed tapes without model calls.
     IdentifiableAudit {
         #[arg(long, required = true, num_args = 1..)] roots: Vec<PathBuf>,
@@ -1181,6 +1193,12 @@ pub fn execute(command: Command) -> Result<()> {
         Command::BindingReport { root } => identifiable::binding::report(&root),
         Command::BindingParity { root } => identifiable::binding::parity(&root),
         Command::BindingProbe { root } => identifiable::binding::probe(&root),
+        Command::OrbitSwap { parent, output } => identifiable::binding::orbit_swap(&parent, &output),
+        Command::OrbitPrepare { parent, output } => identifiable::binding::orbit_prepare(&parent, &output, false),
+        Command::OrbitSeal { study } => identifiable::binding::orbit_seal(&study),
+        Command::OrbitCompare { study } => identifiable::binding::orbit_compare(&study),
+        Command::OrbitReviewParity { root } => { let p=plan_read(&root)?; identifiable::binding::orbit_parity(&root,&p,true) },
+        Command::OrbitConfirm { study } => identifiable::binding::orbit_confirm(&study),
         Command::IdentifiableAudit { roots, diagnostics, output } => identifiable::audit(&roots, &diagnostics, &output),
         Command::IdentifiablePrepare { parent, output } => identifiable::prepare(&parent, &output),
         Command::PairedContinue { parent, output, frozen_executable, fixed_cover_exposure, selector_phrase_exposure, parity } => paired_continue(&parent, &output, &frozen_executable, fixed_cover_exposure || selector_phrase_exposure, selector_phrase_exposure, parity.as_deref()),
@@ -1280,7 +1298,7 @@ fn plan_read_bound(root: &Path, source: &str, executable: &str) -> Result<Plan> 
     }
     let expected = if p.identifiable.is_some() {
         identifiable::verify_plan(root, &p)?;
-        if identifiable::binding::is(&p) { identifiable::binding::evaluation(p.tiny) } else { identifiable::evaluation() }
+        if identifiable::binding::is(&p) { identifiable::binding::evaluation_for(&p) } else { identifiable::evaluation() }
     } else if let Some(f) = &p.fork {
         let study: Study = read(&f.study.join("study.r3b"))?;
         if file_hash(&f.study.join("study.r3b"))? != f.study_hash
@@ -2033,7 +2051,11 @@ fn teacher_prefix(
         let attempt = prepare_call(root, prefix, "teacher", binding, e, i)?;
         #[cfg(feature = "test-support")]
         call_fixture(l, control, prefix, "teacher", i);
-        let t = match recovery::fresh_teacher(l, e, control) {
+        let observed = if e.family.starts_with("foundation-orbit-v1/") {
+            let foil = identifiable::binding::orbit_foil(e)?;
+            recovery::fresh_teacher_with_foil(l, e, Some(&foil), control)
+        } else { recovery::fresh_teacher(l, e, control) };
+        let t = match observed {
             recovery::ObservedCall::NotInvoked(result) => {
                 if let Err(ref error) = result {
                     control.classify_error(error);

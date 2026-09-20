@@ -1329,7 +1329,7 @@ pub(super) fn fresh_teacher_with_foil(
             &[],
             control,
             foil,
-            e.family.starts_with("binding-learnability-v1/"),
+            e.family.starts_with("binding-learnability-v1/") || e.family.starts_with("foundation-orbit-v1/"),
             true,
             &mut entered,
         )
@@ -1477,6 +1477,13 @@ fn teacher_observation(
     let foil_difference = foil.map(|foil| -> Result<Value> {
         let mut other=l.tokenizer.encode(foil.as_bytes())?; other.push(EOS);
         let i=gold.iter().zip(&other).position(|(a,b)|a!=b).ok_or_else(||Error::Invalid("foil must differ from gold".into()))?;
+        if e.family.starts_with("foundation-orbit-v1/") {
+            let raw=logits.get(i)?.to_vec1::<f32>()?;
+            let g=f64::from(raw[gold[i] as usize]); let f=f64::from(raw[other[i] as usize]); let delta=g-f;
+            if !g.is_finite() || !f.is_finite() { return Err(Error::Model("nonfinite gold/foil logits".into())); }
+            let binary_nll=(-delta).max(0.)+(-delta.abs()).exp().ln_1p();
+            return Ok(record!({"index":i,"gold":gold[i],"foil":other[i],"gold_logit":g,"foil_logit":f,"margin":delta,"binary_nll":binary_nll,"scope":"gold/foil renormalized diagnostic only; decoding unchanged","prefix":"identical gold/foil token prefix; one full gold teacher forward"}));
+        }
         Ok(record!({"index":i,"gold":gold[i],"foil":other[i],"margin":lp[i][gold[i] as usize]-lp[i][other[i] as usize],"prefix":"identical gold/foil token prefix; one full gold teacher forward"}))
     }).transpose()?;
     let complete_stop = control.check("teacher_completed");
@@ -1484,7 +1491,7 @@ fn teacher_observation(
         complete_stop?;
     }
     Ok(
-        record!({"target_token_observation":e.family.starts_with("binding-learnability-v1/").then(||record!({"gold":gold,"nll":nll,"argmax":predicted,"scope":"gold-prefix teacher; separate from free generation"})),"conditional_foil":foil_difference,"target_tokens_including_eos":gold.len(),"mean_nll":nll.iter().sum::<f64>()/gold.len() as f64,"first_target_nll":nll[0],
+        record!({"target_token_observation":(e.family.starts_with("binding-learnability-v1/") || e.family.starts_with("foundation-orbit-v1/")).then(||record!({"gold":gold,"nll":nll,"argmax":predicted,"scope":"gold-prefix teacher; separate from free generation"})),"conditional_foil":foil_difference,"target_tokens_including_eos":gold.len(),"mean_nll":nll.iter().sum::<f64>()/gold.len() as f64,"first_target_nll":nll[0],
         "remaining_mean_nll":nll.iter().skip(1).sum::<f64>()/(gold.len()-1).max(1) as f64,"objective":(nll.iter().sum::<f64>()+(w-1.)*nll[0])/gold.len() as f64,"first_target_weight":w,
         "objective_scope":"per-example first-target-weighted response CE; batch/pair/span auxiliary not measured here",
         "teacher_forced_correct_tokens":gold.iter().zip(&predicted).filter(|(a,b)|a==b).count(),"first_target_correct":gold[0]==predicted[0],"last_content_correct":gold.len()>1 && gold[gold.len()-2]==predicted[gold.len()-2],"eos_correct":predicted.last()==Some(&EOS),

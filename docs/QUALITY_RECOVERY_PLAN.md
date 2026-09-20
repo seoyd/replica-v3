@@ -1,5 +1,80 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: foundation orbit — assignment diversity at fixed skeleton exposure
+
+R3-FOUNDATION-ORBIT-1.0 preserves closed A512/LOCAL5/GLOBAL6 models, all source,
+raw failures and native state. Base source a4267d308c233f7bab47e1c4bcf39f4f4e21d3cb;
+base report76f296c95c2c66b0536bc4ce71a766a52b5f251d. No storage/core/tokenizer,
+loss, LR search or old-run restart. Existing Rust trainer, immutable receipts,
+RunControl, scorer and preparation authorization are reused.
+
+D0 verifies existing A initial/final, corpus/tape/metadata/raw and independent
+evidence. D1 takes the first8 train bases in saved order, both queries, and changes
+only two evidence value digits. Query/IDs/order/metadata/system/limits are identical.
+Reuse original raw; new normal-greedy generation16/teacher0/optimizer0. Report
+original/swapped full/both, same output, gold/foil/other and swapped both within
+the originally-both subset with its actual denominator. No score-based reselection.
+This small observation does not impose an arbitrary score gate before learning.
+
+Semantic skeleton means sorted key set plus sorted value set, four distinct
+digits, excluding assignment/query/IDs/order/time. It differs from the old
+digit-rotation helper. Finite universe1260 skeletons/2520 mapping scenes.
+Retain actual old train128 skeletons and variant0 requests. Variant1 changes only
+two value bytes and target digit. Same512-row pool in each arm:128×2assignments×2queries.
+FIXED consumes256 original rows16 times; BOTH consumes512 rows8 times.
+Unique-example/repetition differences are part of the assignment intervention.
+
+Same old A512-update base/query order,4 skeletons×2queries/batch8,16 visits/base.
+BOTH alternates assignment with64/64 initial directions; FIXED always variant0.
+Actual input differences only at two framed value spans, target digit only,
+same EOS/length/padding/tokens. Unselected pool rows never enter a gradient.
+New dev128 skeletons×4=512 excludes all train skeletons. Independent confirmation
+reserves another64×4=256. Finite greedy incremental squared marginal frequency
+with fixed hash tie break selects each split without model scores/seed search.
+Report actual frequencies/rule baselines. Individual digits/edges may overlap;
+full skeletons cannot. IDs are split-independent; both assignments share IDs/order/
+times. Physical and query positions balance. All actual prompt+target/EOS<=256,
+provided2/excluded0. Independent sealing creates confirmation content before
+training. Ordinary prepare/verify sees only its reservation policy/count and
+later file digests. Existing transfer loader slot contains common dev, never
+confirmation. Native confirmation train slot preserves the common training pool.
+
+D2 independent actual preparation review precedes source/binary freeze, normal
+commit/push and full remote SHA verification. D3 uses preserved untrained A
+initial in both arms, fresh Adam0/clock0; no new random search. Same LOCAL5 SMALL,
+tokenizer, CPU/F32/Accelerate/thread1, response CE/first-target1, accumulation1,
+Adam beta.9/.999/epsilon1e-8/decay.01/clip1, warmup32→3e-4 constant. Each512
+includes first1-save→new process511 without clock/warmup replay. Normal low-score
+FIXED completion permits BOTH; cancel, I/O/numerical/integrity failure, UNKNOWN
+or unfinished command blocks the peer. No automatic retry or extension.
+
+Each arm step0/128/256 evaluates train16 skeletons×4 and dev16×4; step512 evaluates
+train512+dev512. Each1408 generation/teacher; two arms1024 updates/target16384.
+Total input<=2M/target<=20k including discarded work; generation<=4096
+(planned2816+swap16+implementer parity32+reviewer parity32+confirmation256=3152);
+self-teacher<=3072. TINY separately<=128 optimizer/512 generation/512 teacher.
+Scalar/finite-difference calls separately counted. Active7200s, segment900s/
+cleanup120s. Initial random EOS failures remain in raw; only accepted pure-time
+continuation resumes, without regenerating returned rows.
+
+D4 independently recounts FULL, QUERY_BOTH256, SWAP_BOTH256, ALL4 128 per512,
+actual exposed train fit, gold/foil/other/error, same outputs and digit/EOS NLL.
+Raw gold/foil delta and softplus(-delta) are separate binary-renormalized
+diagnostics; only that NLL compares to ln2. No decoding restriction. Same-dev
+gain/loss and uncertainty use128 skeleton units, not512 independent rows.
+Old dev55/256 is a different split, not the new improvement baseline.
+
+Candidate gate at one saved endpoint: common train512 full>=508/queryboth>=252/
+ALL4>=124, dev512 full>=488/queryboth>=232/ALL4>=116, errors0/EOS all, fresh
+parity16/16 and independent recount. FIXED exposed256 fit is separate; its
+candidate gate is not reduced to256. If both qualify choose dev ALL4, FULL,
+recorded segment cost, then deterministic arm name. Durably fix candidate before
+reading independent confirmation; never switch candidate after its result.
+D5 sealed256 requires full>=244/queryboth>=116/ALL4>=58/errors0. Passing grants
+MINIMAL_BINDING_BASELINE_VERIFIED only for K1-V/two records/familiar digits/new
+key-value sets. Failure closes the study. B/C/D/new names/fullQA/S4/memory/S5/
+INT4/S6/Goal1 remain separate. No operating-model promotion or budget transfer.
+
 ## Closed: bounded selection learnability — A positive control not established
 
 R3-BINDING-LEARNABILITY-1.0 completed its authorized A512 branch. Independent
