@@ -1,6 +1,31 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: one value-exposure intervention from original P6144
+## Current result: changed-value fitting succeeds, transfer remains unresolved
+
+VALUE completed its registered1280 updates and is closed at7424,
+Finished/resume=false/NO_FURTHER_PROGRESS. Original48 and exchanged48 both score
+48/48, both24/24, errors0 in fresh processes. The old FIT control scores48/48
+and10/48 respectively. These are training scenes: VALUE explicitly trained both
+views,40 exposures per side, whereas FIT trained only the original80 times.
+This proves fitting of the introduced variation, not unseen-value generalization.
+
+The same VALUE endpoint scores primary393/512, transfer72/128, flipped2/192,
+both0/192, errors0. Matched FIT was398/76/2/0; parent was425/79/2/0. The narrow
+intervention did not recover joint development quality and is not adopted.
+Pure native report and strict raw/call-receipt recount pass. No execution,
+numeric, storage or UNKNOWN failure was observed; neither this result nor the
+closed Rust/LibTorch parity proves all shared model/data assumptions correct.
+
+The next useful single-variable hypothesis is coverage of independent scenes
+while preserving the learned original/value-exchanged pairing. It must explicitly
+measure the coverage/repetition tradeoff against these retained controls; simply
+adding more exposure to the same96 sides is not supported as a quality solution.
+This is a hypothesis, not a registered experiment or a proven root cause. Do not
+reopen VALUE, FIT or the C++ comparison. A new bounded policy must precede any
+further optimizer calls under the user's continuing one-variable authorization.
+Final200 remains NOT_CREATED/NOT_OPENED; S4/S5/S6 and Goal1 remain unmet.
+
+## Closed: one value-exposure intervention from original P6144
 
 Register VALUE under the continuing one-variable authorization, comparing with
 the retained matched-budget FIT execution. The fixed FIT model fits48/48 but

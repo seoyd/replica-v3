@@ -1,5 +1,90 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 VALUE1280 closed: trained value swaps fit, development does not recover
+
+EXECUTED_THIS_RUN. Frozen source `fb917e47016d26381288311ad217d8a30a1b8405`,
+source digest1a2c8a9eccd7e70408cbfddc3e86dd67ab6f850fc2293df73ef4555895e405f9.
+Same original P6144 weights/Adam/tokenizer, native SMALL, LR3e-5,
+first-target1 CE and SIDE family4 auxiliary0.1 as the retained FIT control.
+Only alternate existing view0/view1 every16 updates on its same24 C/D/E pairs.
+All other-five-task slots and all10 owned native input files remain identical.
+VALUE96 sides each40 exposures versus FIT48 sides each80 is an explicit
+coverage/repetition tradeoff, not matched per-example exposure. Corpus edits0.
+
+| Same-model endpoint | New updates | Train64 | Primary512 | Transfer128 | Flipped192 | Both192 |
+|---|---:|---:|---:|---:|---:|---:|
+| VALUE6400 | 256 | 57 | 411 | 75 | 2 | 0 |
+| VALUE7424 | 1280 | 57 | 393 | 72 | 2 | 0 |
+| Retained FIT7424 | 1280 | 57 | 398 | 76 | 2 | 0 |
+
+Final primary buckets[53,61,34,41,18,61,61,64], transfer[4,8,7,4,1,16,16,16].
+Selector original93/192, flipped2/192(D1/E1), both0 in every bucket,
+same normal output153/192; pair counts[0,93,2,97]. Auxiliary flipped body18,
+selected citation27/192 do not count as full correctness. Screens32/64/128/768
+scored47/46/45/51, final screen47. All2144 planned panel generations have EOS,
+errors0. Final joint=false, NO_FURTHER_PROGRESS at the1280 ceiling,
+Finished/resume=false, underlying trainer BUDGET_REACHED. No candidate adoption.
+
+Fresh-process final observations use the existing production-feature
+`paired_seen_train_diagnostic`: normal48/48, both24/24; value-exchanged48/48,
+both24/24; same0/24 and errors0 in each. Two executed tests PASS11.82s/11.84s,
+48 generation/48 own-model teacher each, optimizer0. First-token teacher and
+normal generation agree with gold96/96. Pure reused Rust recount verifies
+strict tokenizer decode/EOS, exact cases/answers, checkpoint/raw hashes and
+all192 generation/teacher resolution records. Exit0 for both recounts.
+Value-swapped outputs repeat an old pre-swap answer0/48 and cite correctly48/48.
+Raw hashes4481ab99099f29a553a8f3555a34f7245fd2a50d651e261f0c97558e934e1cd3
+and2f911d592d92d469c7e478dd219da0f68db96f907035d4be4129adcab36df3f1.
+
+The retained FIT observations were normal48/48 but value-exchanged10/48,
+both0/24 with24 old answers. They were reread, not regenerated. VALUE trained
+both variants, so its96 correct answers establish fitting of those supplied
+variations, not heldout generalization. The development both0 and lower primary/
+transfer remain the decisive failure. This narrows the observed problem to
+transfer/retention despite successful seen-case optimization; a unique data,
+objective or capacity cause is not proven. Closed Rust/LibTorch comparison still
+has112/112 identical outputs, so switching backend alone did not fix these cases.
+
+Actual VALUE usage:1280 SMALL optimizer;2,190,312 input/156,284 target tokens
+including1,860/144 discarded at the command deadline; committed2,188,452/156,140,
+padding788,344.10,240 committed draws,1280 per task. Generation2256=
+2144 panels+16 production parity+96 final diagnostics; own-model teacher2240=
+2144+96. Separate direct TINY12 optimizer/129 generation/129 teacher; scalar0.
+Closed fixed-FIT value diagnosis48/48 generation/teacher and closed backend
+comparison514 SMALL/2 TINY optimizer/224 generation/0 teacher remain separate.
+
+First update saved6145 and restored. Segment0001 saved6922 at pure TIME_BUDGET,
+TrainingPending/resume=true; new process0002 completed the remaining502 updates.
+No UNKNOWN/cancel/save error. Study control1524.463255125s including preparation/
+parity; final observation controls6.806514709s+6.855052209s. Segment0002 peak
+sampled RSS1,449,360KiB, preceding segment1,493,056KiB; not an OS guaranteed peak
+or S6 measurement. All three training commands, pure report and final tests exit0.
+
+Durable native `artifacts/pair-value-20260920/VALUE/segment-0002/final`, physical
+09b0f972cebf37cd0ea1006a1a606176282c4a79d722374aa305ca9949a1e1b1;
+model47041bd2a94075abc5e214fa110b91bb9eeaa76ae46dedf148371d2c83892a8e.
+Final receipt4791b36722a1b0a66ddd4b7c3491391421c5f283b3557d94078d952ce6dfb7b2;
+policy0898b4bca43435b2e27c77c8eeea5ddb297f7b01a682e63469eb6d875f61a59a.
+Frozen executable09c5a3ec8626ba6b85092dcc04ce354b192f01b7f3d777a42e96183ad40b490e,
+diagnostic executablee8dd0fbd8e95a3faa49f3aca5a036690309b6200a2168cff2691273efef7015a.
+Source files, executable and original parent hashes unchanged after execution.
+`fresh paired-report` exit0 revalidates owned inputs, actual exposure, complete
+raw panels, same-step decision, native lineage and usage without model calls.
+Its log SHA256a2ca12266067b3332f049bc4cbb52b09009aa01014ffe13894c6d7a3ebede8e2.
+
+Evidence `artifacts/pair-value-20260920-evidence/`: `candidate.diff`, frozen
+executables, direct test logs, `segment-0000.log` through `segment-0002.log`,
+`paired-report.log`, `seen48.log`, `value48.log`, `seen-recount.log`,
+`value-recount.log` and their original binary rows/receipts. No new tracked file,
+product model pointer, Cargo dependency, core, storage or SQLite change.
+Strict Clippy remains non-PASS on the two pre-existing warnings below.
+
+CODE_VERDICT=DIRECT_BOUNDARIES_PASS; LEARNING_EXECUTION=COMPLETE;
+TRAINED_VALUE_PAIR_FITTING=PASS; DEVELOPMENT_JOINT_PASS=false;
+MODEL_QUALITY_RECOVERED=false; FINAL200=NOT_CREATED/NOT_OPENED;
+S4/S5/S6=NOT_RUN_PRECONDITION_FAILED; GOAL1_READY=false; GOAL1_ACCEPTED=false.
+The execution/observation budget is closed. Independent acceptance is external.
+
 ## 2026-09-20 VALUE exposure implementation and registration verified
 
 New explicit P6144 fork, same SIDE objective/LR3e-5/Adam/tokenizer and exact
