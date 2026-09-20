@@ -1,6 +1,25 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: fixed DIVERSE actual-view fitting diagnosis
+## Current: actual training-view fitting verified; scene transfer remains unresolved
+
+Fixed DIVERSE7424 has full178/192 across its four actual training views and
+both83/96 pairs. Every side had20 executed exposures. Original/view1/view2/view3
+full44/42/45/47 of48 and both21/18/21/23 of24; generation errors0.
+This includes143 new observations and one verified train64 reuse; original48
+is retained evidence. Diagnostic calls are exhausted and its optimizer count0.
+These are trained scenes, not development192 or independent acceptance.
+Development both0/192 and recombination both4/24 remain unchanged.
+
+The trained/unseen scene gap motivates a single next coverage comparison:
+increase independent C/D/E scenes from8 to32 while retaining the four value
+combinations, P6144/Adam/LR/objective/tokenizer and exact other-task draws.
+Do not infer a unique architecture/storage defect or that repeating eight scenes
+alone will achieve the unchanged joint gates. A new bounded registration and
+direct input/tape/resume checks must precede any such learning. Existing closed
+DIVERSE/VALUE/COVER endpoints and their no-progress decisions remain immutable.
+No additional optimizer run is registered by this diagnostic closure.
+
+## Closed: fixed DIVERSE actual-view fitting diagnosis
 
 Read-only tape/raw audit found48 actually trained sides per C/D/E value view,
 twenty exposures each. Prior original48 covers view0; train64 overlaps just two

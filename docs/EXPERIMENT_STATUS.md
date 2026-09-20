@@ -1,5 +1,57 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 actual DIVERSE training-view fitting verified
+
+EXECUTED_THIS_RUN / DERIVED_EXISTING_RAW; independent acceptance not claimed.
+Corrected sourceee39f92843732de1be8e131ec0dedad747fae985 was pushed and matched
+origin/main before calls. Retained executable
+df13be5a0b0974e3669ae6c4c21337cd9cb4264650aaffa8f283a6673421b8e5.
+Three separate process tests each executed1/PASS1 (13.53/13.61/13.63s).
+No training, new model or original rewrite. The failed pre-call preparation and
+its source2642078/executable remain preserved, never counted as a passing run.
+
+| Actual trained value view | Whole answer /48 | Both sides /24 | New generation/teacher | Reused |
+|---|---:|---:|---:|---:|
+| Original0, prior evidence |44|21|0/0|48|
+| Exchanged1 |42|18|47/47|1|
+| First record changed2 |45|21|48/48|0|
+| Second record changed3 |47|23|48/48|0|
+
+Total trained-scene full178/192, both83/96. Each selected input/target matches
+the actual frozen tape and was exposed20 times. New view1 C/D/E12/16/14,
+view2 15/16/14, view3 16/16/15 (denominator16 each). Correct citations46/47/48
+of48. Seven of the ten new-view errors copy the opposite supplied record's body;
+the remaining three differ otherwise. No output normalization or repair.
+All143 new raw rows have normal completion/EOS/strict UTF-8, generation errors0.
+The separate Rust reader rechecked selected/pending inputs, reused provenance,
+prompt/target/tape/model hashes, per-call prepared/returned receipts, raw decode
+and exact/both totals. It performed no model calls.
+
+Actual SMALL optimizer0, generation143, own-model teacher143, generated tokens
+2079, teacher target tokens including EOS2079. RunControl active20.6335635s;
+TINY/scalar/C++ calls0. Command/error/UNKNOWN conditions absent on these three
+observations. Pure mapping tests before/after correction each PASS1, no calls.
+No automatic retry after model entry and no budget extension.
+
+Native physical remains
+60c772b9ff71ae20438c4e33f535d53e73b1d4ef885ef3d041da704f6ebb5416,
+modela0c36fc9aac19696d245eca60dfb130de290bb798eb25948f65d1e501c6c7a1c.
+Evidence `artifacts/diverse-fit-20260920-evidence/`: original failure log,
+mapping logs, frozen executables, `view1-verified`/`view2-verified`/`view3-verified`
+binary cases/raw/calls/receipts and `recount.rs`/`recount.log`.
+Recount log SHA256d676c245e2137e367646c2ba6f54a2466ac8f43b5930ac8760491d47abe23607.
+Raw view hashes62bb824655d6daf80c97654520ae16bb304c23ecc258f2a6423c8beb0abe8402,
+48a1877ad8ff4b0c4f218d834e56981696046c4b276e072e81e30a616e705d97,
+f85f9de3ded1fec1e6f393f5a57ddad06f18b68d7caccf6276d2ca1372435224.
+
+Fitting remains imperfect but substantially exceeds unseen scene selection;
+this evidence does not establish a unique optimizer/tokenizer/storage cause.
+Next testable variable is independent scene coverage at fixed four value views.
+No new learning is registered here. Development stays399/512 primary,
+70/128 transfer, both0/192. CODE_DIAGNOSTIC=PASS; MODEL_QUALITY_RECOVERED=false;
+FINAL200=NOT_CREATED/NOT_OPENED; S4/S5/S6 prerequisites unmet;
+GOAL1_READY=false; GOAL1_ACCEPTED=false. No new tracked files/dependencies.
+
 ## 2026-09-20 fixed DIVERSE actual-training-view diagnosis registered
 
 Initial source26420784c80152c2ad0f70dfffc47b9ab931eb13 matched remote/main.
