@@ -1,6 +1,26 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: fixed VALUE endpoint, unseen value-combination diagnostic
+## Current diagnosis: correspondence fails on new values in familiar scenes
+
+Fixed VALUE7424 original48 remains exact with byte-identical raw token output.
+Changing only to disjoint values already present elsewhere in owned training
+drops full48→22/48 and both24→3/24, while citation remains45/48. Sixteen errors
+copy the other supplied record's value, whereas only1 repeats the complete old
+selected answer. First teacher/greedy argmax agrees48/48. All generation errors0,
+SMALL optimizer0;96 generation/96 teacher completed within the registered cap.
+These observed cases support testing value-to-record correspondence across more
+training combinations, not simply changing storage, backend or question wording.
+They do not prove a unique mathematical cause or establish heldout improvement.
+
+Next narrow hypothesis is training value-association diversity at fixed scene,
+selector pair, phrase exposure, anchor rows, parent/Adam/LR/objective/tokenizer.
+A separate bounded policy must retain a matched control, verify changed-value
+labels from requests, freeze train-only donors and keep this diagnostic out of
+training. Do not reopen the closed VALUE/wording budgets or treat these48 cases
+as a substitute for primary/transfer/selector/final200. No new optimizer run is
+registered by this diagnostic closure. Goal1 gates remain unmet and unchanged.
+
+## Closed: fixed VALUE endpoint, unseen value-combination diagnostic
 
 Register a read-only diagnostic before any further learning. Parent is the closed
 VALUE7424 native at `artifacts/pair-value-20260920/VALUE/segment-0002/final`,

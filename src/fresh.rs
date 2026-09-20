@@ -4721,7 +4721,7 @@ mod tests {
     fn recombine_train_values(es:&[Episode],donors:&[Episode])->Result<Vec<Episode>> {
         if es.is_empty() || !es.len().is_multiple_of(2) {return Err(bad("value diagnostic pair count"));}
         let mut out=vec![];
-        for pair in es.chunks_exact(2) {
+        for pair in es.as_chunks::<2>().0 {
             let a=&pair[0].request.evidence.items; let b=&pair[1].request.evidence.items;
             if a.len()!=2 || b.len()!=2 || a.iter().zip(b).any(|(a,b)|a.original_excerpt!=b.original_excerpt)
                 || resolve(&pair[0].request)?!=pair[0].answer || resolve(&pair[1].request)?!=pair[1].answer

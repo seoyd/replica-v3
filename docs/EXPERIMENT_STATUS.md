@@ -1,5 +1,79 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Fixed VALUE recombination diagnosis closed: values and citations separate
+
+EXECUTED_THIS_RUN with source10ebba3ed3ef1a1bd1b14399b8158a1a16a80e8e,
+compiled digestec6424f43b5c6a13cd497aba2741c1f681a3a856d66fc4ad13c290f055ad89ad.
+Frozen production-feature test executable
+bd03d74718e31462cda67725fcba30ed66c348c7c93fb4199f3adc7f8fadaa0a.
+Only the preserved closed VALUE7424 model was loaded, never resumed for learning.
+Its native physical09b0f972cebf37cd0ea1006a1a606176282c4a79d722374aa305ca9949a1e1b1
+and model47041bd2a94075abc5e214fa110b91bb9eeaa76ae46dedf148371d2c83892a8e
+remain unchanged. No corpus, Adam, original receipt or product pointer changed.
+
+| Actual observation | Full48 | Both24 | Citation48 | EOS48 | Errors |
+|---|---:|---:|---:|---:|---:|
+| Original train cases, new process |48|24|48|48|0|
+| Same selectors, disjoint owned-train value combinations |22|3|45|48|0|
+
+The original raw token/text/finish/prompt/expected sequence matches retained
+raw48/48 exactly. Recombined full C6/D6/E10 of16 each, same-output0/24. All48
+changed prompts are absent from the combined owned train sources. Donor values
+already occur in training; only their binding to these fixed scenes is new.
+This is a derived train-scene diagnostic, not an independent heldout score.
+
+First body-error classification: exact22, supplied other-record value16, old
+other-record value2, old selected value1, other output7. Only1 output repeats
+the complete old selected answer. Correct citation45/48 does not establish that
+the model correctly binds that record to its value. These cases expose a failure
+to transfer value/record correspondence, beyond simply repeating old answers.
+Teacher and greedy first-token argmax agree48/48; first token gold30/48, including
+8 later full-answer failures. This does not prove an optimizer, tokenizer or
+architecture root cause and does not change development/S4 scoring.
+
+SMALL optimizer0, generation96, own-model teacher96; TINY/scalar/C++ calls0.
+All calls RETURNED, errors/cancellation/UNKNOWN0. Generated output tokens
+696+699=1395 including EOS; teacher targets696+696=1392. Observation controls
+6.962069791s and6.999441083s; whole exact tests12.37s/13.08s include loading and
+input validation. Both tests execute exactly1 and PASS; no calls repeated.
+Registered generation and teacher budgets are exhausted, not renewed.
+
+Pure fixture192 cases and the previous value-swap fixture pass. Final strict
+Clippy (including test targets) is not PASS: existing map/type/chunk-style and
+journal test import warnings remain. One new constant-chunk loop warning was
+fixed afterward by equivalent `as_chunks`; the final-source pure fixture was
+rebuilt and rerun successfully with0 model calls. Actual observations above
+remain bound to the retained executable/source, not relabelled as a later build.
+The initial0-test listing is retained as NOT_EXECUTED, not a test PASS.
+
+The reused local Rust recount independently verifies strict token decode/EOS,
+derived cases hash/labels, actual checkpoint, panel/raw and96 generation/teacher
+resolution bindings. Exit0 with scores above. Two earlier read-only recount
+attempts failed: one looked for case identity in raw instead of its prepared
+receipt; another wrongly assumed every actual answer had a citation. Both logs
+remain; the reader now follows the actual schema and classifies missing-citation
+text without altering strict full correctness. These caused no model calls or
+changes to original observations. No malformed output was normalized to pass.
+
+Evidence `artifacts/value-combination-20260920-evidence/`: candidate.diff,
+build-list/exact-list, value-fixture/old-value-fixture/final-source-fixture logs,
+original48 and recombined48 raw/teacher/call/start/finished receipts, parity.log,
+recount.log and recount-verified.log (failed reader attempts), recount-final.log,
+recount-with-usage.log and the retained executable. Private originals stay local.
+Original raw1d27b881a7ec207bba728094aaa40341a9522b5e3ef2f00a4098a379115cc53d;
+recombined rawa7bd80339e762a2fe764e2c75c17ca5f396b0332fb74cf91020c6ac442a02a89.
+Derived cases0266411ae2bce6c801984ca207c8a05d6ab5c8137705953d3c1f796bd78da44a;
+final observation receipt23ab322a62a875c66b6f80884d699403ec03304d276e8e3bc9e0762f58b3fe6b.
+
+DIAGNOSTIC_EXECUTION=COMPLETE; ORIGINAL_OUTPUT_PARITY=48/48;
+VALUE_COMBINATION_TRANSFER=BELOW_FITTING_GATE; NEW_SMALL_UPDATES=0;
+DEVELOPMENT_JOINT_PASS=false; S4/S5/S6=NOT_RUN_PRECONDITION_FAILED;
+FINAL200=NOT_CREATED/NOT_OPENED; GOAL1_READY=false; GOAL1_ACCEPTED=false.
+Next single-variable hypothesis: increase independent value associations per
+fixed training scene, keeping selector sides, question exposure, anchor draws,
+parent/Adam/LR/objective/tokenizer fixed. This requires a separately bounded
+registration and untouched diagnostic/final panels; no learning run starts here.
+
 ## 2026-09-20 New value-combination diagnostic prepared; observations not yet run
 
 Extend only the existing test-scoped `paired_seen_train_diagnostic`; no product
