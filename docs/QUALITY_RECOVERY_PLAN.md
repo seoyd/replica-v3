@@ -1,5 +1,34 @@
 # Diagnostic repair and bounded quality recovery
 
+## Closed: normal generation on the already exposed pairs, no new learning
+
+Completed96 generations/96 teachers, optimizer0. On identical24 train pairs,
+REPLAY18/48 full, both3/24; WIDE19/48, both1/24. Normal generation and teacher
+first argmax agree for all96 sides. REPLAY14 first-token errors plus16 errors
+after a correct first token; WIDE15 plus14. Both have normal EOS/errors0.
+This demonstrates incomplete learning of these seen cases, not solely heldout
+transfer failure. Three/five exposures do not establish a numerical defect or
+an architectural capacity limit. A next diagnostic should test learnability of
+these exact paired conditions with substantially repeated exposure, keeping
+the model/objective/Adam/LR fixed; no additional coverage/period sweep.
+
+The closed REPLAY/WIDE trials retain weak heldout both6/5 respectively. Before
+another training intervention, distinguish inability on seen examples from
+transfer failure using the existing `paired_seen_train_diagnostic` normal mode.
+For each closed7424 endpoint, select the same first8 seen original/flip pairs
+per C/D/E from the first frozen block (24 pairs/48 sides). These are the same
+cases used in earlier margin observations: REPLAY5 exposures, WIDE3. No new
+examples, alternate seeds, candidate adoption or replay of earlier failed runs.
+
+Two new diagnostic roots, maximum96 normal greedy generations and96 required
+own-model teachers total, optimizer0/TINY0, one900s command/120s cleanup each,
+1800 active seconds total, no retries. Production features and unchanged
+tokenizer/native weights/policy. Preserve full raw/call/finish receipts and
+check identical case identities/expected content across the two observations.
+Recount whole-answer both, same-output, EOS/errors and first-token teacher
+agreement separately. This train-only diagnostic cannot pass development/S4.
+Do not choose another learning variable until the actual results are available.
+
 ## Closed: widen the recurring pair pool, one sampling variable
 
 Completed1280 updates at7424: primary375/512, transfer69/128, flipped32/192,

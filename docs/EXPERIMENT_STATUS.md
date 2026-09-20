@@ -1,5 +1,38 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Seen-pair normal generation diagnosis, no updates
+
+EXECUTED_THIS_RUN: existing production diagnostic2 PASS,13.93s(REPLAY) and
+11.76s(WIDE). Each generated48 full answers and ran48 required own-model
+teachers; total96/96, optimizer0/TINY0. Accounted control time6.829093458+
+6.803203958s excludes setup/loading. All calls returned; normal EOS96/errors0.
+Same first8 seen train pairs per C/D/E, frozen before calls; cases/expected
+content identities match across endpoints and earlier margin observations.
+
+| Closed7424 model | Exact48 | Both24 | Same output24 | First-token wrong48 | Correct first, later wrong48 |
+|---|---:|---:|---:|---:|---:|
+| REPLAY,5 exposures | 18 | 3 | 15 | 14 | 16 |
+| WIDE,3 exposures | 19 | 1 | 16 | 15 | 14 |
+
+First teacher argmax and actual generation agree on all96 sides. Teacher both
+first-gold10/24 and9/24 exceed whole-answer both3/24 and1/24 respectively.
+This is incomplete learning on the observed train cases, not only failure to
+generalize. Low aggregate CE and positive counterpart margins do not establish
+complete answer mastery. Three/five exposures alone do not prove a gradient
+defect or that9.5M parameters cannot learn the task. No model-quality promotion.
+
+Pure Rust recount exit0 checks strict tokenizer decoding, raw exact/EOS,
+physical checkpoint and start/raw digests, all192 generation/teacher resolution
+records and their row/prepared digests, pair totals and case/expected equality.
+Existing training-only resolver validated labels before observation; no labels
+or oracle entered model generation. Raw remains local:
+`artifacts/pair-wide-20260920-evidence/replay-seen48/eval-7424-seen-train48.r3rows`,
+SHA256 `6de896f08778e7319dfe945d3fb09f4ccf51206aa85f896690f2debe7d40bf02`;
+`artifacts/pair-wide-20260920-evidence/wide-seen48/eval-7424-seen-train48.r3rows`,
+SHA256 `cc46189164aaab515d565d427be215ffbdb8f45c6d8c0be204f5549fb0a8bc18`.
+Same verified production test binary/source as WIDE; earlier receipts untouched.
+This is a train-only diagnostic, not heldout/S4/Goal1 acceptance.
+
 ## 2026-09-20 Two-block recurrence completed; joint quality remains unmet
 
 EXECUTED_THIS_RUN, source `def394b19426f49fe34074a84640bc3084dc6ad9`.
