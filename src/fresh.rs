@@ -5334,6 +5334,103 @@ mod tests {
         Ok(())
     }
     #[test]
+    #[ignore = "explicit closed paired arm/new output; existing raw only, optimizer/generation/teacher0"]
+    fn paired_raw_selection_strata() -> Result<()> {
+        let env = |name| std::env::var(name).map(PathBuf::from).map_err(|_| bad("explicit raw diagnostic paths required"));
+        let root = env("R3_RAW_PAIR_ROOT")?;
+        let output = env("R3_RAW_PAIR_OUTPUT")?;
+        let executable = env("R3_RAW_PAIR_EXECUTABLE")?;
+        let p: Plan = read(&root.join("plan.r3b"))?;
+        plan_read_bound(&root, &p.source, &file_hash(&executable)?)?;
+        let end = history(&root, &p)?.pop().ok_or_else(|| bad("closed endpoint missing"))?;
+        if end.resume || end.phase.as_deref() != Some("Finished") || end.step != p.config.max_steps {
+            return Err(bad("raw diagnostic requires a completed endpoint"));
+        }
+        let f = p.fork.as_ref().ok_or_else(|| bad("paired fork missing"))?;
+        let s: Study = read(&f.study.join("study.r3b"))?;
+        if file_hash(&f.study.join("study.r3b"))? != f.study_hash
+            || file_hash(&f.study.join("diagnostic.r3b"))? != s.diagnostic_hash {
+            return Err(bad("raw diagnostic study binding"));
+        }
+        let dev = verified_corpus(&root.join("corpus.r3cor"), &p.corpus)?.validation;
+        let (_, dm, _) = verified_metadata(&root, &p)?;
+        let (flips, fm): (Vec<Episode>, Vec<Meta>) = read(&f.study.join("diagnostic.r3b"))?;
+        posthoc_mapping(&dev, &dm, &flips, &fm)?;
+        let tok = ByteBpe::load(&root.join("tokenizer.r3b"))?;
+        // Finalization changes resume metadata after evaluation, so its physical
+        // file may differ. audit_panel verifies each physical file and full state;
+        // require the same model as the already verified terminal at this step.
+        let endpoint = checkpoint::load(&root.join(&end.checkpoint), Device::Cpu, false)?;
+        let model = endpoint.model.weight_hash()?;
+        let mut scores = vec![];
+        let mut panels = vec![];
+        for (name, es, ms) in [("dev512", &dev, &dm), ("selector192", &flips, &fm)] {
+            let score = audit_panel(&root, &p, end.step, name, es, ms, &tok)?;
+            let raw = binary::read_value_records(&root.join(format!("eval-{:04}-{name}.r3rows", end.step)))?;
+            if score.model != model || score.errors != 0 {
+                return Err(bad("strata endpoint binding or generation failure"));
+            }
+            scores.push(score); panels.push(raw);
+        }
+        let mut strata: BTreeMap<String, [usize; 5]> = BTreeMap::new();
+        let mut error_classes: BTreeMap<String, usize> = BTreeMap::new();
+        let mut duplicates = [0usize; 2];
+        let mut outcomes = vec![];
+        for ((e, m), r) in flips.iter().zip(&fm).zip(&panels[1][1..]) {
+            let source = m.source_id.as_ref().unwrap();
+            let at = dev.iter().position(|e| &e.id == source).ok_or_else(|| bad("source missing"))?;
+            let original = &dev[at]; let old = &panels[0][at + 1];
+            if resolve(&original.request)? != original.answer || resolve(&e.request)? != e.answer {
+                return Err(bad("request-only selection disagrees with frozen answer"));
+            }
+            let a = old["exact_match"] == true; let b = r["exact_match"] == true;
+            let position = |e: &Episode| -> Result<usize> {
+                let ids = citations(&e.answer)?;
+                if ids.len() != 1 { return Err(bad("one selected record required")); }
+                e.request.evidence.items.iter().position(|v| v.event_id == ids[0]).ok_or_else(|| bad("selected record absent"))
+            };
+            let digits = original.request.evidence.items[position(original)?].original_excerpt
+                .split_whitespace().next().unwrap_or("").chars().filter(char::is_ascii_digit).count();
+            let numeric = original.answer.chars().next().is_some_and(|c| c.is_ascii_digit());
+            for key in ["all".to_owned(), format!("bucket:{}", m.bucket), format!("view:{}", m.view),
+                format!("bucket:{}:view:{}", m.bucket, m.view), format!("entity_digits:{digits}"),
+                format!("bucket:{}:digits:{digits}", m.bucket), format!("numeric:{numeric}"),
+                format!("original_position:{}", position(original)?), format!("bucket:{}:original_position:{}", m.bucket, position(original)?)] {
+                let counts = strata.entry(key).or_default();
+                for (v, add) in counts.iter_mut().zip([usize::from(a), usize::from(b), usize::from(a && b), usize::from(old["actual"] == r["actual"]), 1]) { *v += add; }
+            }
+            if m.view == 2 {
+                let zero = dev.iter().zip(&dm).find(|(_, z)| z.base == m.base && z.view == 0).unwrap().0;
+                duplicates[1] += 1;
+                duplicates[0] += usize::from(zero.request.input == original.request.input && zero.request.evidence == original.request.evidence);
+            }
+            for (side, row, target, other) in [("original", old, &original.answer, &e.answer), ("flip", r, &e.answer, &original.answer)] {
+                let actual = row["actual"].as_str().ok_or_else(|| bad("normal text missing"))?;
+                let body = |s: &str| s.split_once(" [event:").map(|(x, _)| x.to_owned());
+                let class = if actual == target { "exact" } else if actual == other { "other_record_whole" }
+                    else if actual.contains("근거") && !actual.contains("[event:") { "abstention" }
+                    else if citations(actual).is_ok_and(|ids| !ids.is_empty() && Some(ids) == citations(target).ok()) { "selected_citation_wrong_body" }
+                    else if body(actual).is_some() && body(actual) == body(target) { "selected_body_wrong_citation" }
+                    else { "other_format_or_content" };
+                *error_classes.entry(format!("{side}:{class}")).or_default() += 1;
+            }
+            outcomes.push(binary::record!({"id":e.id,"source":source,"bucket":m.bucket,"view":m.view,"original":a,"flipped":b,"both":a&&b}));
+        }
+        let pairs = posthoc_pairs(&panels[0][1..], &panels[1][1..], &flips, &fm)?;
+        if strata["all"][2] != pairs["pairs"][0].as_u64().unwrap() as usize { return Err(bad("pair recount disagreement")); }
+        let result = binary::record!({"scope":"DERIVED_EXISTING_RAW_DEVELOPMENT","source":source_digest()?,
+            "binary":file_hash(&std::env::current_exe()?)?,"policy":digest(&p)?,"step":end.step,
+            "checkpoint":end.checkpoint_hash,"metadata":p.metadata,"diagnostic":s.diagnostic_hash,
+            "panel_checkpoint_files":panels.iter().map(|r| &r[0]["physical"]).collect::<Vec<_>>(),
+            "scores":scores,"stratum_fields":["original","flip","both","same_output","planned"],
+            "strata":strata,"first_error_classes":error_classes,"view2_same_as_view0":duplicates,
+            "pairs":outcomes,"optimizer":0,"generation":0,"teacher":0,"candidate_promotion":false});
+        publish_confirmed(&output, &result)?;
+        println!("RAW_STRATA step={} full={} flipped={} groups={strata:?} error_classes={error_classes:?} view2_duplicate={duplicates:?} optimizer=0 generation=0 teacher=0 output_sha256={}",
+            end.step, scores[0].exact, scores[1].exact, file_hash(&output)?);
+        Ok(())
+    }
+    #[test]
     #[ignore = "explicit closed study/output/mode; register/report are read-only on originals; observe has at most416 SMALL generations"]
     fn posthoc_equal_step_selector() -> Result<()> {
         if cfg!(feature = "test-support") || !cfg!(feature = "accelerate")

@@ -1,5 +1,54 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Closed COVER raw selection strata, no model calls
+
+DERIVED_EXISTING_RAW, EXECUTED_THIS_RUN: reuse the production corpus loader,
+checkpoint/state audit, strict tokenizer/raw scorer, call/teacher verifier and
+request-only selector mapping in one explicitly ignored diagnostic test. No
+canonical score/receipt or product inference changes. Verified both full512 and
+flipped192 panels at7424 and9984 against each endpoint's frozen data and model.
+
+| Development pairs | COVER7424 original / flip / both | COVER9984 original / flip / both |
+|---|---:|---:|
+| All192 |95 /15 /3|76 /20 /9|
+| Nonnumeric96 |53 /6 /3|52 /14 /9|
+| Numeric96 |42 /9 /0|24 /6 /0|
+| View0,48 |24 /3 /1|18 /8 /4|
+| View1,48 |17 /5 /1|17 /7 /4|
+| View2,48 |23 /6 /1|19 /5 /1|
+| View3,48 |31 /1 /0|22 /0 /0|
+
+Final both C3/D6/E0 and same-output114/192 match the existing report. First-error
+classification for flipped rows: exact20, other-record whole50, abstention53,
+selected citation/wrong body39, selected body/wrong citation16, other format or
+content14. Parent counts15/81/34/41/14/7. These categories describe raw output;
+they do not establish one underlying cause. View3 wording has no flipped success
+despite the successful train subset. View2 input/order equals view0 in24/48
+scenes, confirmed from owned episodes; the fixed evaluation is not rewritten.
+Numeric length, value type and scene metadata are correlated in this corpus.
+
+Two exact raw diagnostic executions PASS (6.86s,8.11s); existing independent
+mapping/binary-pair fixture PASS0.05s, with malformed/order/label/null/citation
+cases. All optimizer/generation/teacher calls0, including TINY/scalar.
+Locked/offline release build and exact --list resolved one test; no zero-test
+PASS. The first diagnostic attempt rejected an overly strict physical-file
+equality in the new test: pre-evaluation and finalized checkpoint metadata
+legitimately differ. The test now reuses native physical/state checks and also
+compares the terminal model hash at the same step. Failed log retained; no old
+raw, checkpoint, terminal or training source was changed to pass.
+
+Local evidence `artifacts/selection-strata-20260920-evidence/`: build-list.log,
+cover7424.log (failed test attempt), cover7424-verified.log, cover9984.log,
+mapping-fixture.log and two typed recount records. Test binary SHA256
+54c5b61e335cb5a66ea93f9d7862724c198aae80fe3067b2cda081fb1031a73d.
+Record physical hashes:7424
+`6fb3f4ff057464b2e35717f7fc2272df643123a117111b2d741b1d24c4eaf882`;
+9984 `2096989f7721bb72c64d34181f293656fc566dcb59bae6edfb4360a29ae0bb9f`.
+Original trained artifacts remain under their existing roots; no private raw
+is published. Next single-variable wording-coverage hypothesis is recorded in
+the active plan, not yet registered/executed. MODEL_QUALITY_RECOVERED=false;
+final200 NOT_CREATED/NOT_OPENED; S4/S5/S6 unmet; GOAL1_READY/ACCEPTED=false.
+
 ## 2026-09-20 Fixed COVER exposure closed: fitting improves, development fails
 
 EXECUTED_THIS_RUN with source336cf18d2903878d3c387e337c205f106bdd1aaf,

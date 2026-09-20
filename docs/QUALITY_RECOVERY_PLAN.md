@@ -1,5 +1,25 @@
 # Diagnostic repair and bounded quality recovery
 
+## Current diagnosis: selection does not transfer across wording and numeric values
+
+Read-only recount of the closed COVER7424 and9984 endpoints confirms their
+primary392→376, flipped15→20 and both3→9. At9984, both is9/96 for nonnumeric
+values and0/96 for numeric values. View3 has0/48 flipped and0/48 both, whereas
+views0/1/2 have8/7/5 flipped and4/4/1 both. All required raw/teacher/call/native
+bindings and request-only labels validate; no model calls or optimizer updates.
+View2 duplicates view0 input/order in24/48 scenes; it is not always an order
+reversal. Preserve the frozen panel and its denominator. These are correlated
+development strata, not independent tests or proof of a tokenizer/format cause.
+
+The narrow next hypothesis is missing selector wording exposure: reuse the
+owned train view3 wording on a deterministic subset of the same COVER scenes,
+preserving facts, answers, value-view exposure, evidence order, phrase diversity,
+anchors, parent, Adam, LR and loss. A separate bounded registration and direct
+input/resume checks must precede any optimizer call; compare with the retained
+same-parent fixed-exposure control. Do not add order/value/architecture changes
+or repeat the closed experiment unchanged. No new learning is registered by
+this diagnostic entry. Numeric-value generalization remains unresolved.
+
 ## Current result: exposure helps fitting but fails development recovery
 
 The separate2560-update research is closed at9984, BUDGET_REACHED/Finished/
