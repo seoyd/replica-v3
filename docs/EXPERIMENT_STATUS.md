@@ -1,5 +1,36 @@
 # 진단 및 구현 상태
 
+## 2026-09-21 독립 A 지적 두 경계 수정 — 재검토 대기
+
+독립 검토는 source20c282272169f71e2526e714c7559bf5f684d3e3을 FAIL로 닫았다.
+512점수에 고정된 회귀 guard와 동일 입력인 G/H 두 view가 이유다. 기존 준비
+자료와 FAIL 보고서는 보존했으며 그 자료로 SMALL 학습을 시작하지 않았다.
+
+기존 raw-panel 검사/고정64 subset을 재사용해 attained-best>=32, 감소>=12,
+CE>=1.2배, 연속2회라는 기존 guard 의미를 복구했다. Step0의32문항은 제외한다.
+1024에서 향상한 뒤2048/4096 하락, 중간 회복, 미학습 초기값 보호를 직접 검사했다.
+G는 근거 추가/대상 일치/관측 동률 해소 중 한 관계를 변경한다. H는 관측시각을
+교환해도 인과 유보를 유지한다. 모델 입력이 동일한 두 view는 검증에서 거부한다.
+
+수정 후 관련 test5/5 PASS(0-test 아님), optimizer/generation/teacher0.
+새 별도 준비 root는 `artifacts/identifiable-baseline-20260921-r2/`다.
+기존 tokenizer/seed17/초기 tensor 내용은 유지했다. 새 corpus physical
+0dbc6824f6b5ef3e56de88eb86827b7dd66221ea1cd35f5c85b6bb1770e383d7,
+preparation e081286eeb1a345c8833f47e9961f77c2a079568ce03b4cc154d493aaaf8397d.
+실제 input>256은 train164/8192, primary9/512, transfer3/128이며 층당
+제거 edge는2234/121/7이다. 같은 고정 tape의 arm당 계획 input6883740,
+target598104는 실행량이 아니다. 수정 준비의 SMALL 수치8 forward/2 backward,
+optimizer0; 직접 TINY 수치8 forward/2 backward, optimizer0을 별도 기록했다.
+기존 고정 P16은 재실행하지 않았다.
+
+Compiled source920500d09431c3f525bf6d5526d6b25fa25182052387f5d5a00f87a74e3a6e43,
+production binary27a1dcfda2cd7c3b6b4afb9d9849f27ddaa4e64a3058c6b6abdfba8d57323898.
+허용 증거는 기존 evidence root의 tests-correction/build-correction/prepare-correction/
+summary-correction 로그와 `artifacts/identifiable-review-a-20260921/REPORT.md`다.
+해당 FAIL 보고서 SHA256은06e4684a57cc7d82658a485c1e4df433ca085ffd91d42906d035beb6f468413c.
+INDEPENDENT_A=REVIEW_REQUIRED_FOR_CORRECTED_CANDIDATE; NEW_SMALL_UPDATES=0;
+MODEL_QUALITY=NOT_RUN; S4/S5/S6=NOT_RUN; GOAL1_READY/ACCEPTED=false.
+
 ## 2026-09-21 Identifiable baseline R0–R2 준비, 독립 A 대기
 
 CONTRACT=R3-IDENTIFIABLE-BASELINE-1.0. 시작 HEAD는

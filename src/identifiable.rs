@@ -640,7 +640,9 @@ fn generate_balanced(bases: usize, split: usize, seed: u64) -> Result<(Vec<Episo
             }
             for view in 0..2 {
                 let mut items = records.clone();
-                let entity = if bucket == 2 {
+                let entity = if bucket == 6 && subtypes[base] == 1 && view == 1 {
+                    &entities[1]
+                } else if bucket == 2 {
                     &entities[view]
                 } else {
                     &entities[0]
@@ -650,10 +652,21 @@ fn generate_balanced(bases: usize, split: usize, seed: u64) -> Result<(Vec<Episo
                 } else {
                     &context[0]
                 };
-                if bucket == 4 && view == 1 {
+                if (bucket == 4 || bucket == 7) && view == 1 {
                     let a = items[0].observed_at;
                     items[0].observed_at = items[1].observed_at;
                     items[1].observed_at = a;
+                }
+                if bucket == 6 && view == 1 {
+                    match subtypes[base] {
+                        0 => {
+                            let mut r = record(entity, context_query, &pair[0], ids[0], time, "current");
+                            r.recorded_at = rt[0];
+                            items.push(r);
+                        }
+                        1 => {} // Query now names the otherwise unchanged supplied record.
+                        _ => items[0].observed_at = Some(time + 1),
+                    }
                 }
                 if bucket < 2 && view == 1 {
                     items[0].original_excerpt =
@@ -703,7 +716,7 @@ fn generate_balanced(bases: usize, split: usize, seed: u64) -> Result<(Vec<Episo
                         "{} [event:{}]",
                         request.evidence.items[0].original_excerpt, ids[0]
                     ),
-                    6 => [
+                    6 if view == 0 => [
                         "근거가 없습니다.",
                         "요청한 대상의 근거가 없습니다.",
                         "근거가 모호하여 확정할 수 없습니다.",
@@ -766,6 +779,9 @@ fn validate_balanced(es: &[Episode], ms: &[Meta]) -> Result<()> {
             if resolve(&e.request)? != e.answer {
                 return Err(bad("request-only resolver disagrees"));
             }
+        }
+        if a.request.input == b.request.input && a.request.evidence == b.request.evidence {
+            return Err(bad("complementary views have identical model inputs"));
         }
         if (2..=4).contains(&bucket) {
             if a.answer == b.answer || citations(&a.answer)? == citations(&b.answer)? {
@@ -1329,6 +1345,28 @@ pub(super) fn remaining_input(p: &Plan) -> Result<u64> {
         .checked_sub(used)
         .ok_or_else(|| bad("balanced per-arm input exhausted"))
 }
+// Preserve the existing attained-best screen64 / two-consecutive-regressions
+// rule. The step0 screen has only32 rows and cannot enter this comparison.
+fn regression_streak(e: &EvaluationPolicy, screens: &[(usize, Option<f64>)]) -> usize {
+    let mut best = 0;
+    let mut best_ce = None;
+    let mut streak = 0;
+    for &(exact, ce) in screens {
+        if best >= 32
+            && exact + e.regression_exact_loss <= best
+            && ce.zip(best_ce).is_some_and(|(a, b)| a >= b * e.regression_ce_ratio)
+        {
+            streak += 1;
+        } else {
+            streak = 0;
+        }
+        if exact > best {
+            best = exact;
+            best_ce = ce;
+        }
+    }
+    streak
+}
 pub(super) fn evaluate(
     p: &Plan,
     root: &Path,
@@ -1373,17 +1411,16 @@ pub(super) fn evaluate(
                 "BALANCED_DEVELOPMENT_PASS_OLD_REFERENCE_REQUIRED".into(),
             ));
         }
-        // Random initialization is not compared with P's trained score. Large
-        // regressions require an actually attained >=50% score and increased CE.
-        if step > 512 {
-            let previous: PanelResult = read_confirmed(&root.join("eval-0512-dev512.r3b"))?;
-            if previous.exact >= 256
-                && a.exact + 96 <= previous.exact
-                && a.ce.zip(previous.ce).is_some_and(|(a, b)| a >= b * 1.2)
-            {
-                return Ok(Some("QUALITY_REGRESSION".into()));
-            }
-        }
+    }
+    let mut screens = vec![];
+    for n in [256, 512, 1024, 2048, 4096].into_iter().filter(|&n| n <= step) {
+        // Reuse the existing raw-panel verifier/subsetter. Full evaluations
+        // contain the same fixed64; no new generation or teacher calls occur.
+        let r = paired_screen(p, root, n)?;
+        screens.push((r.exact, r.ce));
+    }
+    if regression_streak(&p.evaluation, &screens) >= 2 {
+        return Ok(Some("QUALITY_REGRESSION".into()));
     }
     Ok(None)
 }
@@ -1444,6 +1481,28 @@ mod tests {
         let i = tm.iter().position(|m| m.bucket == 2).unwrap();
         broken[i + 1].answer = broken[i].answer.clone();
         assert!(validate_balanced(&broken, &tm).is_err());
+        for bucket in [6, 7] {
+            let i = tm.iter().position(|m| m.bucket == bucket).unwrap();
+            let mut duplicate = train.clone();
+            duplicate[i + 1].request.input = duplicate[i].request.input.clone();
+            duplicate[i + 1].request.evidence = duplicate[i].request.evidence.clone();
+            duplicate[i + 1].answer = duplicate[i].answer.clone();
+            assert!(validate_balanced(&duplicate, &tm).is_err());
+            for pair in train.iter().zip(&tm).filter(|(_, m)| m.bucket == bucket)
+                .collect::<Vec<_>>().chunks_exact(2) {
+                let a = pair[0].0; let b = pair[1].0;
+                if bucket == 6 { assert_ne!(a.answer, b.answer); }
+                else {
+                    assert_eq!(a.answer, b.answer);
+                    assert_eq!(a.request.input, b.request.input);
+                    let mut swapped = a.request.evidence.clone();
+                    let t = swapped.items[0].observed_at;
+                    swapped.items[0].observed_at = swapped.items[1].observed_at;
+                    swapped.items[1].observed_at = t;
+                    assert_eq!(swapped, b.request.evidence);
+                }
+            }
+        }
         assert!(different_pair(&mut Rng::new(17), 1).is_err());
         Ok(())
     }
@@ -1485,6 +1544,17 @@ mod tests {
         q.input = format!("장치12 구역1700 {}", familiar(Intent::Cause));
         assert_eq!(resolve(&q)?, "시간순서만으로 원인은 확정되지 않습니다.");
         Ok(())
+    }
+    #[test]
+    fn identifiable_attained_best_consecutive_guard() {
+        let e = evaluation();
+        let r = |xs: &[(usize, f64)]| regression_streak(&e, &xs.iter().map(|&(n, c)| (n, Some(c))).collect::<Vec<_>>());
+        //512 was weak,1024 improves,2048 and4096 both regress: must stop.
+        assert_eq!(r(&[(4, 3.0), (8, 2.0), (48, 0.5), (36, 0.6), (35, 0.7)]), 2);
+        assert_eq!(r(&[(48, 0.5), (36, 0.6)]), 1);
+        assert_eq!(r(&[(48, 0.5), (36, 0.6), (40, 0.7), (35, 0.7)]), 1);
+        assert_eq!(r(&[(31, 0.5), (0, 1.0), (0, 1.0)]), 0);
+        assert_eq!(r(&[(48, 0.5), (36, 0.59), (35, 0.59)]), 0);
     }
     #[test]
     fn identifiable_finite_tape_and_schedule() -> Result<()> {

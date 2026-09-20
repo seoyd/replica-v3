@@ -14,7 +14,10 @@ steps and independently re-scores raw; R5 records the bounded design decision.
 
 The new dataset has8192 train,512 primary,128 transfer examples, eight tasks and
 two views per family. C/D keep identical evidence and change the query; E swaps
-observed timestamps only. All names in a pair have equal digit length. Value
+observed timestamps only. G changes missing-to-present evidence, the requested
+entity from absent to present, or tied-to-ordered observation times. H swaps
+observation times while retaining causal uncertainty. No pair repeats the same
+model input. All names in a pair have equal digit length. Value
 types share one distribution; event ranks, physical order, entity/value lengths
 and numeric streams are separately assigned. Context keys are hash-partitioned
 before families across the three splits; both record sides use the same finite
@@ -44,8 +47,11 @@ Evaluation:0 train32+screen32;256 screen64;512 and1024 train64+primary512+transf
 2048 screen64;4096 full panels again. Each arm2304 generations. Extend both after
 1024 only if one arm improves512→1024 primary by16, CDE both by8, or fixed train
 CE by10%. Otherwise INCONCLUSIVE_AT_REGISTERED_BUDGET; no automatic search.
-Attained primary>=256 followed by loss>=96 and CE growth>=20% is a registered
-severe regression guard, not a comparison with P's425 historical score.
+The existing regression rule uses an attained best>=32/64, loss>=12 and
+CE>=1.2 times the CE at that best, at two consecutive observations. Full-panel
+raw/teacher rows supply the same fixed64 screen without extra model calls.
+Step0 has32 cases and is excluded from this comparison. This preserves the
+attained-best guard rather than comparing random initialization with P425.
 
 New gate: primary>=487/512, every task>=58/64, transfer>=116/128, errors0,
 CDE both>=87/96. Old primary/transfer gates and selector both>=173/192 remain
