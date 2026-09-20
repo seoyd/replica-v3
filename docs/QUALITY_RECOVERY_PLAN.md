@@ -1,6 +1,22 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: four-view scene coverage, bounded COVER4 preparation
+## Current: COVER4 closed; joint quality not recovered
+
+COVER4 completed1280 updates at7424 and closed BUDGET_REACHED/Finished,
+resume=false. Same-source pure report verifies native state, tape, raw, usage
+and terminal binding. Primary375/512, transfer67/128, flipped15/192, both2/192
+(C0/D2/E0), generation errors0. Matched DIVERSE control is399/70/4/0;
+primary gain/loss24/48, transfer4/7. Both admission and joint gates fail.
+The observed trade-off does not establish a transferable selector or justify
+reopening this budget. Final200 NOT_CREATED/NOT_OPENED; S4/S5/S6 and Goal1 unmet.
+
+Actual SMALL1280 optimizer,2160 generation,2144 own-teacher includes entry P16.
+Actual input2190995/target157238 includes discarded1743/138; active1683.29954275s.
+TINY36/129/129 and scalar0 are separate. No posthoc generation in this study.
+The next action is a bounded fixed-weight diagnosis grounded in actual failed
+selector inputs; no further learning is registered by this closure.
+
+## Closed: four-view scene coverage, bounded COVER4 preparation
 
 The user's continuing one-variable quality authorization covers a new P6144
 research, COVER4, with retained DIVERSE1280 as the matched control. Actual
@@ -28,7 +44,7 @@ pre-call pool-tamper rejection, immutable parent and other-task slots. Reuse
 existing pure mapping regression; no general harness or storage change.
 After checks, freeze/publish source and executable, run same-source P16 parity,
 verify physical inputs against DIVERSE, then register a new root and start SMALL.
-This section registers preparation and its caps, not an executed training run.
+These were the preparation caps; the completed execution is recorded above.
 
 ## Current: actual training-view fitting verified; scene transfer remains unresolved
 

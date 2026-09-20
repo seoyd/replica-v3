@@ -1,5 +1,74 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 COVER4 finalized: more scenes did not recover joint quality
+
+EXECUTED_THIS_RUN / DERIVED_EXISTING_RAW; independent acceptance not claimed.
+Source a132f3aa4888690447b3c59a63970a16062e6903 was pushed and remote-matched
+before execution. Frozen production binary
+d3d38d10f6cdeda4004a8bedaade47a09456c2733e21a9668c81cb46f0d5e94b and compiled
+source digest32869df388d83d6696c91a5fdb09d31f5617a2e8c539cfa9975a65679b13d48d
+remained unchanged. Policyc1d6be31dbf61da308fd50c0297358d0cda6c952806f769e770cdd2b23c1dfc6
+binds the same P6144/Adam/tokenizer/LR3e-5/SIDE-family4 with scene coverage8→32.
+Same-source P16 PASS1 (15.00s), sixteen outputs matched,160 generated tokens.
+
+Native pool physical hashes differ because `converted_at` is a creation time.
+The initial over-strict physical-equality check failed before learning; a local
+reader compile error and an oversized whole-pool R3BIN comparison failure also
+remain preserved. Final rowwise native verification passed: all32768 train and
+512 validation episodes, manifest/content/provenance fields are identical to
+DIVERSE. Ten other input files and the paired-sample table are byte-identical;
+all19200 other-task draws in the full3840 tape are unchanged. First1280 uses
+256 selector sides per C/D/E five times each. No failed check is counted PASS.
+COVER4 pool physical860512b523eae4c47d74a1bf50bc03f9950f617736af59bf04073982a13e1ba6.
+
+| Same step7424 | DIVERSE control | COVER4 | Paired gain / loss |
+|---|---:|---:|---:|
+| train64 |59|47|0 /12|
+| primary512 |399|375|24 /48|
+| transfer128 |70|67|4 /7|
+| flipped192 |4|15|13 /2|
+| both192 |0|2|2 /0|
+
+Primary buckets54/56/32/36/10/63/60/64 of64;
+transfer4/4/8/4/1/16/16/14 of16. Original selector78/192;
+both/original-only/flip-only/neither2/76/13/101, normal same-output155/192.
+Both C0/D2/E0 spans one independent base, complete-base count0.
+At6400, train50/primary347/transfer67/flipped10/both0; screens32/64/128/768
+are44/46/47/47 of64, flips0/24 each. Final required panels are complete with
+normal EOS and generation errors0. Admission=false, development_joint_pass=false.
+
+Three native segments performed1+666+613=1280 optimizer calls. The middle
+segment ended with pure TIME_BUDGET and a durable step6811; the next process
+continued its exact cursor/Adam. Last durable absolute7424 is
+`artifacts/four-view-coverage-20260920/COVER4/segment-0002/final`, physical
+a55895a2e833c1d90196e654c58bbb92a04f10575e2f705c9c0cb2423c9c9151,
+weightsa0f3a93970b498d1c7e6c862dc2dd2add2e6e705f44470c7dcb050befc7e27cd.
+Final phase Finished, BUDGET_REACHED, resume=false. No new retry/extension.
+Actual input2190995/target157238 includes discarded1743/138;
+committed2189252/157100, padding785245. SMALL generation2160/teacher2144 includes
+entry16 parity; TINY36/129/129 is separate, scalar/C++0. Registered active usage
+1683.29954275s; maximum sampled RSS1535056KiB, not an OS high-water measurement.
+No unknown calls, cancellation, numeric or save errors in learning.
+
+Same frozen CLI `fresh paired-report --root artifacts/four-view-coverage-20260920`
+was read-only rechecked, exit0, no model calls; output bytes match the first
+report. Rust raw comparator redecodes EOS/tokens and verifies frozen inputs and
+same-step paired scores, exit0. Logs under
+`artifacts/four-view-coverage-20260920-evidence/` include all preparation failures,
+`inputs-rows-verified.log`, segment0000–0002, `compare6400.log`, `compare7424.log`,
+and `paired-report-verified.log`. Report SHA256
+1246d1ba267725084337ae38bdf2ca730ecc469328c874dc0222bd48537ec16b;
+final comparison64e0becc99de812c5960f08acb7c842d36b84d5e5c48d7a461e7fb85fe904a8e;
+input audit4e73192eee7e92599f3cb660133d930dd4376c22342f8d32f27deca1aec745d0.
+
+CODE_VERDICT=PASS for the scoped direct regressions; LEARNING_EXECUTION=COMPLETE;
+MODEL_QUALITY_RECOVERED=false; DEVELOPMENT_JOINT_PASS=false;
+FINAL200=NOT_CREATED/NOT_OPENED; S4/S5/S6 prerequisites unmet;
+GOAL1_READY=false; GOAL1_ACCEPTED=false. New tracked files0. Do not interpret
+fewer repeats per scene and worse aggregate scores as proof of an attention,
+optimizer or binary-storage defect. Next diagnosis must separate those claims
+before any new one-variable learning registration.
+
 ## 2026-09-20 COVER4 scene-coverage preparation verified
 
 Continue0d503d88e45280c21fd53ec176048f4f74120103 under the user's single-variable
