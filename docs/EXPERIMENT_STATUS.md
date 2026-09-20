@@ -1,5 +1,91 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Fixed COVER exposure closed: fitting improves, development fails
+
+EXECUTED_THIS_RUN with source336cf18d2903878d3c387e337c205f106bdd1aaf,
+compiled digestfcba7275128f528b52372cef392e7d238347dac1c1f8c173640e4701114e691a.
+The separately registered COVER7424 research completed2560 new native updates,
+same weights/Adam lineage,9 unchanged native inputs, absolute tape1280..3840,
+LR3e-5/CE/SIDE family4/tokenizer/F32. Each384 trained selector sides gains20
+exposures,30 ancestral. No old terminal, budget, corpus or model was rewritten.
+
+| Same-model endpoint | New updates | Train64 | Primary512 | Transfer128 | Flipped192 | Both192 |
+|---|---:|---:|---:|---:|---:|---:|
+| Retained parent COVER7424 | 0 | 49 | 392 | 68 | 15 | 3 |
+| COVER8448 | 1024 | 47 | 373 | 74 | 19 | 7 |
+| COVER9472 | 2048 | 46 | 367 | 74 | 31 | 5 |
+| COVER9984 | 2560 | 46 | 376 | 64 | 20 | 9 |
+
+Final primary buckets[55,64,30,29,17,63,54,64], transfer[4,7,4,1,3,16,13,16].
+Both C3/D6/E0 across4 bases, base4-complete0; pair counts[9,67,11,105].
+Original selection76/192 and same-output114/192 versus parent's95 and159.
+Flipped body36/citation59 are auxiliary, not full-answer credit. Original C/D/E
+drop95→76 accounts for19 lost primary answers, while the other five buckets
+improve297→300/320. Thus the aggregate decline does not establish generalized
+anchor forgetting or storage damage. It remains a selection/generalization failure.
+Screens32/64/128/512/1536 score47/48/48/46/44; final derived screen48.
+All3128 panel generations finish normally with EOS, errors0. Final both9 exceeds
+the previous best7, so the existing plateau rule does not stop this endpoint.
+Actual terminal is BUDGET_REACHED/Finished/resume=false, joint/admissible=false.
+
+Fresh-process final original48 diagnostic improves23→44/48, both5→20/24;
+value-exchanged48 improves24→45/48, both4→22/24. Both use the identical retained
+first8 train pairs per C/D/E, a subset of the96 COVER pairs, not heldout. Each
+has same-output1/24, EOS48/errors0. These still fail the47/48 and23/24 fitting
+thresholds. First teacher token and normal generation argmax agree96/96; first
+gold45/48 and46/48, correct first token followed by an error1 each. Exchanged
+outputs repeat an old pre-swap answer2/48 and cite correctly47/48. The two tests
+PASS13.01s/12.71s mean execution integrity, not a fitting or quality PASS.
+
+Exposure alone substantially improves this trained subset, but does not recover
+development performance. It is not proof of a unique root cause or permission
+to continue this run. More repeats on the same pool are not established as a
+Goal1 solution. Further hypotheses must address transfer of conditional selection
+while retaining original answers; a next single intervention remains unregistered.
+The closed independent Rust/LibTorch comparison is unchanged, with0 new C++ calls.
+
+Actual usage2560 SMALL optimizer,4,382,970 input/314,521 target tokens including
+5,074/321 discarded before updates at deadlines. Committed4,377,896/314,200,
+padding1,565,238.20,480 draws,2560 per task. Generation3240=3128 panels+16 entry
+parity+96 final diagnostics; own-model teacher3224=3128+96. Separate direct
+TINY48 optimizer/312 generation/312 teacher, scalar0. Study control elapsed
+3083.7953910009996s includes preparation/parity; diagnostic controls7.070986667s
+and6.812254208s are additional. Model evaluation timing excludes compilation.
+Segment0000 saves7425, then fresh processes confirm TIME_BUDGET saves8233,
+8965,9806 and final9984; optimizer calls1+808+732+841+178. Failed/cancelled/
+UNKNOWN/numeric/save conditions0. Peak sampled segment RSS1,542,304KiB,
+not an OS-guaranteed peak or S6 measurement. All five training commands exit0.
+
+Pure `fresh paired-report` exit0 rechecks native/terminal/model binding, complete
+owned panels, raw scores/decisions and actual exposures/counters. Log SHA256
+b3255a75fe5d25a08e5242169ff3e56d143ca8d3ec328ab7d3dd6cc76de95f59.
+The reused local Rust recount readers verify strict tokenizer/EOS/full scores and
+the generation/teacher resolution hashes. Only the endpoint lookup changes to
+read the actual step; original and new case IDs/content/expected remain equal.
+No normalization or oracle enters generation. Original final raw SHA256
+9a32eb31e85f24063666f154af4fac9e225960b1e460dc57eda8294d8a2731f6;
+value rawed90d0b021ae7938af010cc4298986df497811c4260fa78650bc360f40e3bff9.
+
+Durable native `artifacts/cover-exposure-20260920/COVER/segment-0004/final`,
+physicala4a4ceee379d2d8830b9c09e347337afbecb8f315ae40a1757513acc0fdafca0,
+model6b3c827701aec25584bc8323105d4ed0b40567ba49381a28d5c36c34fd91c985.
+Final receiptd68d81642042c032a1e9368038d651028febc8ab475e3832fd0346b1123a6191;
+policy1c0d5c62eacb38f3a55efd02ed76d25e734570d94a73d80f780fe373f694a46d.
+Source, frozen CLI55edf16fe2c9de460d75c6b109bef373b980efec6f0434f2fd2b05f9e8388907
+and diagnostic binary4f4012e6c5707d7614e33c9c375387806721844feaac5e1cf08a118370e1fafe
+remain unchanged. Retained TINY binary6d65b5ae3c07d2e48cdd21af8ecfed742e91742a013cad26778a4f06c7a166b7
+matches the process log. Evidence `artifacts/cover-exposure-20260920-evidence/`
+contains the candidate diff, test/segment/report logs, local recount source and
+binary raw/receipts. No original data/checkpoints/private logs are published.
+Scoped strict Clippy exit101 retains only the two preceding for_kv_map and
+type_complexity warnings; it is not a global PASS. No new tracked file.
+
+CODE_VERDICT=SCOPED_PASS; LEARNING_EXECUTION=COMPLETE;
+TRAINED_SUBSET_FITTING=IMPROVED_BUT_BELOW_GATE; DEVELOPMENT_JOINT_PASS=false;
+MODEL_QUALITY_RECOVERED=false; FINAL200=NOT_CREATED/NOT_OPENED;
+S4/S5/S6=NOT_RUN_PRECONDITION_FAILED; GOAL1_READY=false; GOAL1_ACCEPTED=false.
+The bounded research is closed. Independent acceptance remains external.
+
 ## 2026-09-20 Fixed COVER exposure registration verified; learning not yet run
 
 Reuse `fresh paired-continue` for a separate schema16 research from the intact

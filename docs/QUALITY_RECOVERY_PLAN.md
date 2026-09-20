@@ -1,6 +1,25 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: fixed COVER exposure, separate bounded research
+## Current result: exposure helps fitting but fails development recovery
+
+The separate2560-update research is closed at9984, BUDGET_REACHED/Finished/
+resume=false. Same trained subset improves original23→44/48 and exchanged24→45/48,
+both5→20 and4→22/24, errors0. It still misses47/48 and23/24 fitting gates.
+Development primary392→376/512, transfer68→64/128, both3→9/192, all errors0.
+Other-five-task primary297→300/320; original selection95→76/192 accounts for
+the aggregate decline. Both C3/D6/E0, independent bases4, no complete base4.
+This is limited selection change with worse total development, not adoption.
+
+Actual2560 optimizer,3240 generations and3224 own-model teachers include entry
+parity and final diagnostics; direct TINY48/312/312 are separate. Pure native
+recount and strict raw/call verification pass. Model quality and Goal1 do not.
+No C++ calls or changes to original parents/closed budgets occurred. Do not
+resume this endpoint or automatically add exposure. The next unresolved question
+is transfer of conditional selection beyond the trained scenes while retaining
+original answers; no next learning intervention is registered here. Keep the
+unchanged joint/S4/S5/S6 gates and final200 NOT_CREATED/NOT_OPENED.
+
+## Closed: fixed COVER exposure, separate bounded research
 
 Under the user's continuing one-variable authorization, test exposure duration
 from the intact closed COVER7424 endpoint. Parent physical SHA256
