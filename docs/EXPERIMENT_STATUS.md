@@ -1,5 +1,31 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Recurrence train-margin diagnostic verified
+
+EXECUTED_THIS_RUN: existing teacher-only diagnostic1 PASS (12.76s),96 own-model
+teacher calls, optimizer0/generation0, errors0. Control-accounted6.291378042s
+excludes setup/loading. Pure Rust recount verifies97 raw rows, all96 call records,
+receipt digests/completion and aggregates. Case digest and all48 P6144 teacher
+records match the earlier SIDE observation exactly; no selection change.
+
+On the same24 train pairs, both-positive margins4→9 and both>=1 margins1→5 from
+SIDE to REPLAY. Mean sum0.3379638443→2.4854617119; REPLAY sum>=1 is15/24, of which
+6 still have a nonpositive side. For46 sides diverging at token0, gold argmax
+26→32 and both-first-gold pairs4→9; positive-margin/wrong-argmax1→0. The2 sides
+with a later divergence are not inferred from token0. These are teacher facts,
+not free whole-answer generation or heldout quality. Five exact exposures improved
+this training discrimination but did not recover development/transfer quality.
+
+Raw `artifacts/pair-replay-20260920-evidence/train-margin96/margins.r3rows`, SHA256
+`c472eb9a8d468adb0f44c00b006064a41f237c8df93bb9888ed941b61633d6b2`;
+start `ef4ee89668309b50866706bc57846cb263df3e9f08979cfcf0cc1001cf6dcf8d`.
+margin96.log, margin-recount.log and margin-comparison.log preserve commands and
+evidence locally. DIAGNOSTIC=VERIFIED; MODEL_QUALITY_RECOVERED=false;
+S4/S5/S6=NOT_RUN_PRECONDITION_FAILED; FINAL200=NOT_OPENED; GOAL1_READY=false.
+Next research may test a two-block recurring pool under the same1280-update cap,
+with all other conditions fixed. This requires a new registration, not extension
+or reopening of REPLAY.
+
 ## 2026-09-20 Exact-pair recurrence completed; joint gate failed
 
 EXECUTED_THIS_RUN, source `c34f6b40d9a02591823db8657774c4d42c28260d`.

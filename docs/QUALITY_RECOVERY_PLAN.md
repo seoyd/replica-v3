@@ -1,6 +1,13 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: fixed train margins after recurrence, no learning
+## Closed: fixed train margins after recurrence, no learning
+
+Completed96 teachers, optimizer0/generation0; pure raw/call/receipt recount and
+case/parent equality passed. REPLAY both-positive train margins9/24 versus SIDE4;
+both>=1 is5 versus1. On46 token0-divergence sides, gold vocabulary argmax32 versus26,
+both-first-gold pairs9 versus4; two nonzero-divergence sides are not inferred.
+This supports a recurrence/coverage tradeoff test; it is not whole-answer train
+success or an explanation of every heldout failure. Closed run budgets stay closed.
 
 Use the existing teacher-only seen-pair diagnostic once for P6144 and REPLAY7424,
 same first8 actually seen pairs per C/D/E as SIDE. New root, at most96 own-model
