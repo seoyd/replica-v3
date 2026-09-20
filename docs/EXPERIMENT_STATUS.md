@@ -1,5 +1,41 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Fixed FIT value-exchange diagnosis
+
+EXECUTED_THIS_RUN: reuse the existing production evaluation path on the closed
+FIT7424 weights. Same first8 pairs per C/D/E, existing owned view1 instead of
+view0, same question/phrase/entity/context/citation IDs/order/status/times;
+only the two supplied values exchange. Runtime prevalidation rejects any other
+semantic input change or invalid target before generation. No new corpus or
+model update, product oracle, decoder correction or hidden retry.
+
+Original seen48/48/both24/24 becomes10/48/both0/24, C7/D2/E1 out of16 each.
+Normal EOS48/errors0, same answer on the two questions5/24.24/48 outputs equal
+the old pre-swap answer; citation remains correct38/48. Teacher/generation first
+argmax agreement48/48, first gold16/48, correct first token but later wrong6.
+This is direct evidence that perfect fitting did not guarantee reading changed
+values in the same scenes; it motivates a controlled value-exposure intervention,
+not a framework change or a claim that all quality failures share one cause.
+
+Direct test `seen_value_swap_changes_only_values_and_rejects_other_changes`:
+1 PASS,48 positive combinations spanning original/flip and phrase styles, plus
+wrong label/order/time/question/missing-record/no-op rejection. Release build
+14.03s, locked/offline/Accelerate/Rust1.98.1. Existing actual generation test
+`paired_seen_train_diagnostic`:1 PASS,11.66s; SMALL generation48/teacher48,
+optimizer0/TINY0, control6.830406916s. Pure Rust raw/token/EOS/receipt recount
+exit0, no model calls. Dynamic check PASS does not mean its quality result PASS.
+
+Source file SHA2565e78e44a0655398f0a588c466f1a7efb9af1caa12a551970df06e61b76dc13cb;
+frozen diagnostic binary04c3fcb28cc61580753885eaf152f0b7ef7405a4cb65f9c044cc982ecbdef55d.
+Original native physical3e1f69b0ef1b49c8a4aba1772cf87511f877a278ad68023ea091e38ec71daed1,
+model9884c680639a1d77801d88601c3f210e8608147d905a1ea54092c0722801f0b8.
+Evidence `artifacts/pair-value-probe-20260920-evidence/`: frozen executable,
+source diff, `unit.log`, `value48.log`, `recount.log`, `value48/` raw/receipts.
+Raw SHA2563608d1489526e5606e378c858570929433a79a50c3f3147870ebd9ce08facf5a.
+Original fitting raw was reused read-only, not regenerated. Observation budget
+closed. Quality/Goal1 remain unmet; final200 NOT_CREATED/NOT_OPENED, S4/S5/S6
+NOT_RUN_PRECONDITION_FAILED. No independent acceptance is claimed.
+
 ## 2026-09-20 FIT1280 closed: seen-pair fitting succeeds, joint development fails
 
 EXECUTED_THIS_RUN, frozen source `2cbf5b5c9dc4f7a0491d839f6c969161ef695a2e`,

@@ -4500,14 +4500,68 @@ mod tests {
         assert!(!no_further_progress(&[(367,70,0),(366,69,0),(365,68,1)]));
         assert!(!no_further_progress(&[(367,70,0),(368,68,0),(367,69,0)]));
     }
+    // Diagnostic-only: the owned view1 must differ from fitted view0 solely in
+    // the two supplied values. Labels validate the test; they never enter generation.
+    fn verify_seen_value_swap(before: &Episode, after: &Episode) -> Result<()> {
+        let a=&before.request.evidence.items; let b=&after.request.evidence.items;
+        if a.len()!=2 || b.len()!=2 || before.family!=after.family || before.category!=after.category
+            || before.binding!=after.binding || before.sequence!=after.sequence {
+            return Err(bad("seen value swap scene/count"));
+        }
+        for i in 0..2 {
+            let (entity,context,value)=parsed_record(&a[i])?;
+            let (new_entity,new_context,new_value)=parsed_record(&b[i])?;
+            if entity!=new_entity || context!=new_context || value==new_value
+                || new_value!=parsed_record(&a[1-i])?.2 {
+                return Err(bad("seen value swap must exchange different values only"));
+            }
+        }
+        let mut restored=after.request.clone();
+        restored.request_id=before.request.request_id.clone();
+        for (record,old) in restored.evidence.items.iter_mut().zip(a) {
+            record.original_excerpt=old.original_excerpt.clone();
+        }
+        if digest(&restored)?!=digest(&before.request)? || resolve(&before.request)?!=before.answer
+            || resolve(&after.request)?!=after.answer || before.answer==after.answer
+            || citations(&before.answer)?!=citations(&after.answer)? {
+            return Err(bad("seen value swap changed another input field or label"));
+        }
+        Ok(())
+    }
     #[test]
-    #[ignore = "explicit completed arm/new output; normal48/48 or margins0/96 generation/teacher; optimizer0"]
+    fn seen_value_swap_changes_only_values_and_rejects_other_changes() -> Result<()> {
+        let (all,metadata)=generate(4,0,19)?;
+        let mut checked=0;
+        for (e,m) in all.iter().zip(&metadata).filter(|(_,m)|(2..=4).contains(&m.bucket)&&m.view==0) {
+            let at=metadata.iter().position(|n|n.base==m.base&&n.view==1).unwrap();
+            for variant in [false,true] {
+                let (a,b)=if variant {(changed_question(e,phrases(Intent::Current)[0])?,
+                    changed_question(&all[at],phrases(Intent::Current)[0])?)}else{(e.clone(),all[at].clone())};
+                for flipped in [false,true] {
+                    let (a,b)=if flipped {(flip_selection(&a,m)?.0,flip_selection(&b,&metadata[at])?.0)}else{(a.clone(),b.clone())};
+                    verify_seen_value_swap(&a,&b)?;checked+=1;
+                    let mut wrong=b.clone();wrong.answer=a.answer.clone();assert!(verify_seen_value_swap(&a,&wrong).is_err());
+                    let mut wrong=b.clone();wrong.request.evidence.items.reverse();assert!(verify_seen_value_swap(&a,&wrong).is_err());
+                    let mut wrong=b.clone();wrong.request.evidence.items[0].recorded_at+=1;assert!(verify_seen_value_swap(&a,&wrong).is_err());
+                    let mut wrong=b.clone();wrong.request.input.push(' ');assert!(verify_seen_value_swap(&a,&wrong).is_err());
+                    let mut wrong=b.clone();wrong.request.evidence.items.pop();assert!(verify_seen_value_swap(&a,&wrong).is_err());
+                    assert!(verify_seen_value_swap(&a,&a).is_err());
+                }
+            }
+        }
+        assert_eq!(checked,48);Ok(())
+    }
+    #[test]
+    #[ignore = "explicit completed arm/new output; normal or value-swap48/48, margins0/96 generation/teacher; optimizer0"]
     fn paired_seen_train_diagnostic() -> Result<()> {
         if cfg!(feature = "test-support") || !cfg!(feature = "accelerate") {
             return Err(bad("train diagnostic requires production features"));
         }
         let root = PathBuf::from(std::env::var("R3_TRAIN_PAIR_ROOT").map_err(|_|bad("explicit arm required"))?);
         let output = PathBuf::from(std::env::var("R3_TRAIN_PAIR_OUTPUT").map_err(|_|bad("new diagnostic output required"))?);
+        let value_swap=std::env::var("R3_TRAIN_PAIR_VALUE_SWAP").as_deref()==Ok("1");
+        let margin_only=std::env::var("R3_TRAIN_PAIR_MARGIN_ONLY").as_deref()==Ok("1");
+        if value_swap && margin_only {return Err(bad("choose one train diagnostic"));}
         let p: Plan = read(&root.join("plan.r3b"))?;
         let end = history(&root, &p)?.pop().ok_or_else(||bad("completed arm missing"))?;
         if end.resume || end.phase.as_deref()!=Some("Finished") || end.step!=p.config.max_steps {
@@ -4529,7 +4583,15 @@ mod tests {
                 if !seen.insert(base) { continue; }
                 for i in [base, base+2*n] {
                     if !tape.rows[..tape.block].iter().flatten().any(|&j|j==i) { return Err(bad("unseen train pair")); }
-                    let e = all[i].clone(); let mut m=tm[i%n].clone();
+                    let mut e = all[i].clone(); let mut m=tm[i%n].clone();
+                    if value_swap {
+                        if m.view!=0 {return Err(bad("seen value diagnostic requires fitted view0"));}
+                        let j=tm.iter().position(|candidate|candidate.base==m.base&&candidate.bucket==m.bucket&&candidate.view==1)
+                            .ok_or_else(||bad("owned value-swap view missing"))?;
+                        let swapped=&all[(i/n)*n+j];
+                        verify_seen_value_swap(&e,swapped)?;
+                        e=swapped.clone();m=tm[j].clone();
+                    }
                     m.id=e.id.clone(); m.source_id=None;
                     if resolve(&e.request)?!=e.answer {return Err(bad("train pair label"));}
                     es.push(e); ms.push(m);
@@ -4538,7 +4600,7 @@ mod tests {
             }
         }
         if es.len()!=48 {return Err(bad("train pair denominator"));}
-        if std::env::var("R3_TRAIN_PAIR_MARGIN_ONLY").as_deref()==Ok("1") {
+        if margin_only {
             let study:Study=read(&f.study.join("study.r3b"))?;
             if file_hash(&f.study.join("study.r3b"))?!=f.study_hash {return Err(bad("margin study binding"));}
             std::fs::create_dir(&output)?;
@@ -4602,13 +4664,14 @@ mod tests {
         }
         std::fs::create_dir(&output)?;
         let checkpoint = root.join(&end.checkpoint);
-        write(&output.join("started.r3b"), &binary::record!({"source":source_digest()?,"binary":file_hash(&std::env::current_exe()?)?,"policy":digest(&p)?,"checkpoint":checkpoint,"physical":file_hash(&checkpoint)?,"cases":digest(&es)?,"scope":"TRAIN_DIAGNOSTIC_NOT_HELDOUT","generation_limit":48,"teacher_limit":48,"optimizer_limit":0}))?;
+        let panel=if value_swap {"seen-value-swap48"}else{"seen-train48"};
+        write(&output.join("started.r3b"), &binary::record!({"source":source_digest()?,"binary":file_hash(&std::env::current_exe()?)?,"policy":digest(&p)?,"checkpoint":checkpoint,"physical":file_hash(&checkpoint)?,"cases":digest(&es)?,"scope":if value_swap {"SAME_SCENE_VALUE_SWAP_DIAGNOSTIC_NOT_HELDOUT"}else{"TRAIN_DIAGNOSTIC_NOT_HELDOUT"},"generation_limit":48,"teacher_limit":48,"optimizer_limit":0}))?;
         let mut control = recovery::RunControl::command(false)?;
         control.set_call_limits(48,48);
-        let result = evaluate_panel(&p,&output,&checkpoint,end.step,"seen-train48",&es,&ms,&mut control);
+        let result = evaluate_panel(&p,&output,&checkpoint,end.step,panel,&es,&ms,&mut control);
         if let Err(e)=&result {control.classify_error(e);}
         let result=control.seal_terminal().and(result);
-        let rows=binary::read_value_records(&output.join(format!("eval-{:04}-seen-train48.r3rows",end.step)))?;
+        let rows=binary::read_value_records(&output.join(format!("eval-{:04}-{panel}.r3rows",end.step)))?;
         let both=rows[1..].chunks_exact(2).filter(|r|r[0]["exact_match"]==true&&r[1]["exact_match"]==true).count();
         let same=rows[1..].chunks_exact(2).filter(|r|r[0]["generation_completed"]==true&&r[1]["generation_completed"]==true&&r[0]["actual"]==r[1]["actual"]).count();
         let receipt=binary::record!({"start":file_hash(&output.join("started.r3b"))?,"control":control.receipt(),"score":result.as_ref().ok(),"both":both,"same":same,"error":result.as_ref().err().map(ToString::to_string),"optimizer":0});

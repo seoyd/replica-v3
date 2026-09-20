@@ -1,5 +1,37 @@
 # Diagnostic repair and bounded quality recovery
 
+## Closed: fixed-weight value exchange on the fitted train scenes
+
+Executed48 normal generations/48 own-model teachers, optimizer0. Original
+fitted answers48/48 become10/48 after exchanging only the two evidence values,
+both0/24, EOS48/errors0.24/48 repeat the old exact answer;38/48 retain the correct
+citation. First teacher token agrees with generation48/48, gold16/48. These
+observations expose failure to follow changed values even in familiar scenes.
+They do not establish a defect in a particular tensor equation or decoder.
+Next investigate one training variable: alternate the already-owned value-swap
+view with the original view, keeping the same fitted bases/conditions and all
+other training settings. No old budget or endpoint is resumed.
+
+Before registering another optimizer intervention, distinguish learned answer
+associations from reading changed evidence. On the closed FIT7424 checkpoint,
+select the same first8 fitted pairs per C/D/E and use their already-owned view1
+instead of view0. Both supplied values exchange; question, entities, contexts,
+IDs, record order/status/times and phrase stay identical. Expected values change
+with the records; citations stay the same. Reject a no-op or any other semantic
+input change before calling a model. This is a diagnostic on train scenes, not
+new heldout data or a candidate selection score.
+
+Reuse `paired_seen_train_diagnostic` and the actual existing evaluation/RunControl
+path, with an explicit value-swap mode and a new output root. No new corpus,
+model/core/storage policy, framework, external model or product oracle.
+Max48 SMALL normal generations and48 own-model teachers, optimizer0/TINY0,
+one900s command/120s cleanup, no automatic retry. Preserve the closed FIT and
+LibTorch budgets. Compare with the already verified normal48/48 raw without
+regenerating it. Pure validation tests exercise both sides/phrase styles and
+reject wrong labels, reordered records, changed times/questions and missing
+records. Result determines the next single-variable hypothesis; no new learning
+is registered by this observation. Development/independent gates stay unchanged.
+
 ## Current evidence: fitting is possible, joint transfer remains unresolved
 
 The registered FIT experiment completed1280 updates at7424 and is closed.
