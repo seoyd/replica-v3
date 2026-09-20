@@ -2990,34 +2990,39 @@ fn fresh_explicit_fork_matches_continuous_and_split_native_resume() {
 
 #[test]
 fn fresh_value_exposure_restores_identical_native_state() {
-    value_exposure_native_resume(false, false, false);
+    value_exposure_native_resume(false, false, false, false);
 }
 
 #[test]
 fn fresh_value_coverage_restores_identical_native_state() {
-    value_exposure_native_resume(true, false, false);
+    value_exposure_native_resume(true, false, false, false);
 }
 
 #[test]
 fn fresh_cover_phrase_restores_identical_native_state() {
-    value_exposure_native_resume(true, true, false);
+    value_exposure_native_resume(true, true, false, false);
 }
 
 #[test]
 fn fresh_value_diversity_restores_identical_native_state() {
-    value_exposure_native_resume(false, false, true);
+    value_exposure_native_resume(false, false, true, false);
 }
 
 #[test]
 fn fresh_four_view_coverage_restores_identical_native_state() {
-    value_exposure_native_resume(true, false, true);
+    value_exposure_native_resume(true, false, true, false);
 }
 
-fn value_exposure_native_resume(coverage: bool, wording: bool, diversity: bool) {
+#[test]
+fn fresh_record_grounding_restores_identical_native_state() {
+    value_exposure_native_resume(true, false, true, true);
+}
+
+fn value_exposure_native_resume(coverage: bool, wording: bool, diversity: bool, grounding: bool) {
     use replica_v3::{binary,neural::checkpoint};
     use candle_core::Device;
     let d=tempfile::tempdir().unwrap();
-    let (mode,flag,steps,cycle)=if coverage&&diversity {("COVER4","--diverse-pair-values",16,4)}else if diversity {("DIVERSE","--diverse-pair-values",8,2)}else if coverage {("COVER","--cover-value-pairs",8,4)}else{("VALUE","--alternate-pair-values",4,2)};
+    let (mode,flag,steps,cycle)=if grounding {("GROUND","--diverse-pair-values",2,4)}else if coverage&&diversity {("COVER4","--diverse-pair-values",16,4)}else if diversity {("DIVERSE","--diverse-pair-values",8,2)}else if coverage {("COVER","--cover-value-pairs",8,4)}else{("VALUE","--alternate-pair-values",4,2)};
     let call=|args:&[&str],success:bool| {
         let out=Command::new(env!("CARGO_BIN_EXE_replica-train")).args(args)
             .env("VECLIB_MAXIMUM_THREADS","1").env("RAYON_NUM_THREADS","1")
@@ -3041,10 +3046,11 @@ fn value_exposure_native_resume(coverage: bool, wording: bool, diversity: bool) 
         let mut args=vec!["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",source.to_str().unwrap(),
             "--output",root.to_str().unwrap(),flag];
         if coverage&&diversity {args.push("--cover-value-pairs");}
+        if grounding {args.push("--ground-selected-record");}
         call(&args,true);
         let arm=root.join(mode);
         let plan:binary::Value=binary::from_slice(&std::fs::read(arm.join("plan.r3b")).unwrap()).unwrap();
-        let rows=plan["paired"]["rows"].as_array().unwrap();assert_eq!(rows.len(),steps);
+        let rows=plan["paired"]["rows"].as_array().unwrap();assert_eq!(rows.len(),if grounding {16}else{steps});
         assert_ne!(rows[0].as_array().unwrap()[..6],rows[cycle].as_array().unwrap()[..6]);
         if coverage {assert_ne!(rows[0].as_array().unwrap()[..6],rows[2].as_array().unwrap()[..6]);}
         if diversity {
@@ -3067,9 +3073,33 @@ fn value_exposure_native_resume(coverage: bool, wording: bool, diversity: bool) 
     for (name,t) in &a.optimizer {assert_eq!(t.flatten_all().unwrap().to_vec1::<f32>().unwrap(),b.optimizer[name].flatten_all().unwrap().to_vec1::<f32>().unwrap());}
     let x=a.manifest.training.as_ref().unwrap();let y=b.manifest.training.as_ref().unwrap();
     assert_eq!((x.step,x.sampler_state,x.consumed_tokens,x.target_tokens),(y.step,y.sampler_state,y.consumed_tokens,y.target_tokens));
-    assert_eq!(x.step,4+steps);assert_eq!(x.resume_binding.as_ref().unwrap().family,4);
+    assert_eq!(x.step,4+steps);assert_eq!(x.resume_binding.as_ref().unwrap().family,if grounding {5}else{4});
     assert_eq!(x.config.lr.to_bits(),3e-5f64.to_bits());assert_eq!(x.config.first_target_weight,1.);
     assert!(checkpoint::ResumeBinding::require_default(x,&a.tokenizer).is_err());
+    if grounding {
+        // The EOS tensor fixture has zero Q/K, so its attention derivative is
+        // zero. Check actual objective inclusion here; random-model gradients
+        // are tested independently without this degenerate process fixture.
+        let control=d.path().join("control");
+        call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),
+            "--output",control.to_str().unwrap(),"--cover-value-pairs","--diverse-pair-values"],true);
+        let arm=control.join("COVER4");
+        let control_plan:binary::Value=binary::from_slice(&std::fs::read(arm.join("plan.r3b")).unwrap()).unwrap();
+        let grounded_plan:binary::Value=binary::from_slice(&std::fs::read(roots[1].join(mode).join("plan.r3b")).unwrap()).unwrap();
+        assert_eq!(control_plan["paired"]["rows"],grounded_plan["paired"]["rows"]);
+        assert!(grounded_plan["grounding"].as_str().is_some());
+        call(&["fresh","run","--root",arm.to_str().unwrap()],true);
+        let plain=checkpoint::load(&arm.join("segment-0000/final"),Device::Cpu,true).unwrap();
+        let ground=checkpoint::load(&roots[1].join(mode).join("segment-0000/final"),Device::Cpu,true).unwrap();
+        assert_eq!(plain.manifest.training.as_ref().unwrap().step,5);
+        assert_eq!(ground.manifest.training.as_ref().unwrap().step,5);
+        assert_eq!(plain.model.weight_hash().unwrap(),ground.model.weight_hash().unwrap());
+        let a=binary::read_value_records(&arm.join("segment-0000/updates.r3rows")).unwrap();
+        let b=binary::read_value_records(&roots[1].join(mode).join("segment-0000/updates.r3rows")).unwrap();
+        assert_eq!(a.len(),1);assert_eq!(b.len(),1);
+        for key in ["sample_indices","ce","input","target","lr_bits"] {assert_eq!(a[0][key],b[0][key]);}
+        assert!(b[0]["objective"].as_f64().unwrap()>a[0]["objective"].as_f64().unwrap());
+    }
     let bad=d.path().join("mixed");
     call(&["fresh","paired-prepare","--parent",p.to_str().unwrap(),"--source-data",selector.join("S-SELECT").to_str().unwrap(),
         "--output",bad.to_str().unwrap(),flag,"--fit-seen-pairs"],false);assert!(!bad.exists());

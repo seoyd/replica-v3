@@ -325,6 +325,70 @@ fn pair_contrast_loss(
     }
     Ok(if losses.is_empty() { zero } else { (Tensor::stack(&losses,0)?.mean_all()? * 0.1)? })
 }
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub(super) struct RecordGrounding {
+    query: usize,
+    records: [(usize, usize); 2],
+    selected: usize,
+}
+impl RecordGrounding {
+    pub(super) fn from_sample(sample: &Sample, selected: usize) -> Result<Self> {
+        let prefix = sample.tokens.get(..sample.response_start)
+            .ok_or_else(|| Error::Invalid("grounding response boundary".into()))?;
+        let roles: Vec<_> = prefix.iter().copied().filter(|&t|t < neural::SPECIALS as u32).collect();
+        if selected > 1 || roles != [BOS,neural::SYSTEM_ROLE,neural::END_ROLE,neural::USER_ROLE,
+            neural::END_ROLE,neural::EVIDENCE_ROLE,neural::END_ROLE,neural::EVIDENCE_ROLE,
+            neural::END_ROLE,neural::ASSISTANT_ROLE] || sample.tokens.last()!=Some(&EOS) {
+            return Err(Error::Invalid("grounding requires exact two-record prompt framing".into()));
+        }
+        let spans: Vec<_> = prefix.iter().enumerate().filter(|(_,t)|**t==neural::EVIDENCE_ROLE)
+            .map(|(i,_)| {
+                let end=i+1+prefix[i+1..].iter().position(|&t|t==neural::END_ROLE).unwrap();
+                (i+1,end)
+            }).collect();
+        let value=Self{query:prefix.len()-1,records:[spans[0],spans[1]],selected};
+        value.validate(prefix.len())?;
+        Ok(value)
+    }
+    fn validate(&self, len: usize) -> Result<()> {
+        if self.selected>1 || self.query>=len || self.records.iter().any(|&(a,b)|a>=b || b>self.query)
+            || self.records[0].1>self.records[1].0 {
+            return Err(Error::Invalid("grounding annotation position/span bounds".into()));
+        }
+        Ok(())
+    }
+}
+// The existing last-layer attention at the first response query supplies this
+// training-only loss. Labels never change token input, masks or inference.
+fn record_grounding_loss(q:&Tensor,k:&Tensor,allowed:&Tensor,labels:&[Option<RecordGrounding>]) -> Result<Tensor> {
+    let (batch,heads,len,dim)=q.dims4()?;
+    let (kb,kh,kl,kd)=k.dims4()?;
+    if labels.len()!=batch || kb!=batch || kl!=len || kd!=dim || dim==0 || kh==0
+        || heads==0 || !heads.is_multiple_of(kh) || allowed.dims()!=[batch,1,len,len] {
+        return Err(Error::Invalid("grounding attention shape".into()));
+    }
+    let mut losses=vec![];
+    for (row,label) in labels.iter().enumerate() {
+        let Some(label)=label else {continue;};label.validate(len)?;
+        let mask=allowed.narrow(0,row,1)?.narrow(2,label.query,1)?;
+        let visible=mask.flatten_all()?.to_vec1::<f32>()?;
+        if label.records.iter().any(|&(a,b)|visible[a..b].iter().any(|&v|v!=1.)) {
+            return Err(Error::Invalid("grounding selected evidence masked or padded".into()));
+        }
+        let keys=neural::transformer::repeat_kv(&k.narrow(0,row,1)?,heads)?;
+        let scores=(q.narrow(0,row,1)?.narrow(2,label.query,1)?.contiguous()?
+            .matmul(&keys.transpose(2,3)?.contiguous()?)?/(dim as f64).sqrt())?
+            .broadcast_add(&((&mask-1.)?*1e9)?)?;
+        let attention=candle_nn::ops::softmax(&scores,candle_core::D::Minus1)?.broadcast_mul(&mask)?;
+        let mass=|slot:usize| {let (a,b)=label.records[slot];attention.narrow(3,a,b-a)?.sum_all()};
+        let a=mass(label.selected)?;let b=(&a+mass(1-label.selected)?)?;
+        let denominator=b.to_scalar::<f32>()?;
+        if !denominator.is_finite() || denominator<=0. {return Err(Error::Model("nonfinite/zero grounding record mass".into()));}
+        losses.push((a/b)?.clamp(1e-8,1.)?.log()?.neg()?);
+    }
+    Ok(if losses.is_empty() {Tensor::zeros((),DType::F32,q.device())?}
+        else {(Tensor::stack(&losses,0)?.mean_all()?*0.1)?})
+}
 fn validation_loss(
     model: &Transformer,
     samples: &[Sample],
@@ -947,6 +1011,10 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
         train.extend(p.additional_samples(root,&loaded.tokenizer)?);
         p.apply_training_values(root,&loaded.tokenizer,&mut train)?;
     }
+    let grounding = match fresh {
+        Some((p,root))=>p.grounding_labels(root,&loaded.tokenizer,&train)?,
+        None=>None,
+    };
     if train.iter().any(|s| s.tokens.len() > config.seq_len + 1) {
         return Err(Error::Invalid("training sample context".into()));
     }
@@ -1164,7 +1232,16 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                     aborted = true;
                     break;
                 }
-                let logits = loaded.model.forward(&b.input, Some(&b.valid))?;
+                let labels=grounding.as_ref().map(|all|indices.iter().map(|&i|all[i].clone()).collect::<Vec<_>>());
+                let mut ground_loss=None;
+                let logits = if let Some(labels)=labels.as_ref().filter(|ls|ls.iter().any(Option::is_some)) {
+                    let last=loaded.model.config.layers-1;
+                    loaded.model.forward_observed(&b.input,Some(&b.valid),&mut |layer,q,k,mask| {
+                        control.check("grounding_layer")?;
+                        if layer==last {ground_loss=Some(record_grounding_loss(q,k,mask,labels)?);}
+                        Ok(())
+                    })?
+                } else { loaded.model.forward(&b.input, Some(&b.valid))? };
                 let (loss, mut objective, n) = response_loss(
                     &logits,
                     &b,
@@ -1173,6 +1250,9 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                 if let Some((plan,_)) = fresh
                     && let Some((sidewise,pairs)) = plan.contrast_pairs(&indices)? {
                     objective = (objective + pair_contrast_loss(&logits,&train,&indices,&pairs,sidewise)?)?;
+                }
+                if labels.as_ref().is_some_and(|ls|ls.iter().any(Option::is_some)) {
+                    objective=(objective+ground_loss.ok_or_else(||Error::Model("missing last-layer grounding loss".into()))?)?;
                 }
                 if fresh.is_some() {
                     let predictions=logits.argmax(2)?.to_vec2::<u32>()?;
@@ -1396,6 +1476,79 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn record_grounding_matches_scalar_gradient_and_mask_contract() -> Result<()> {
+        let device=Device::Cpu;
+        let qv:Vec<f32>=(0..48).map(|i|(i%13) as f32*0.17-0.9).collect();
+        let kv:Vec<f32>=(0..24).map(|i|(i%11) as f32*0.13-0.5).collect();
+        let q=Var::from_vec(qv.clone(),(2,2,6,2),&device)?;
+        let k=Var::from_vec(kv.clone(),(2,1,6,2),&device)?;
+        let mask:Vec<f32>=(0..72).map(|i|f32::from(i%6<=i/6%6)).collect();
+        let allowed=Tensor::from_vec(mask.clone(),(2,1,6,6),&device)?;
+        let label=RecordGrounding{query:4,records:[(1,2),(2,4)],selected:0};
+        let scalar=|q:&[f32],k:&[f32],selected:usize| {
+            let mut mass=[0f64;2];
+            for head in 0..2 {
+                let scores:Vec<_>=(0..5).map(|p|(0..2).map(|d|f64::from(q[(head*6+4)*2+d])*f64::from(k[p*2+d])).sum::<f64>()/2f64.sqrt()).collect();
+                let norm=scores.iter().map(|s|s.exp()).sum::<f64>();
+                mass[0]+=scores[1].exp()/norm;
+                mass[1]+=(scores[2].exp()+scores[3].exp())/norm;
+            }
+            -0.1*(mass[selected]/(mass[0]+mass[1])).max(1e-8).ln()
+        };
+        for selected in 0..2 {
+            let mut l=label.clone();l.selected=selected;
+            let loss=record_grounding_loss(&q,&k,&allowed,&[Some(l),None])?;
+            assert!((f64::from(loss.to_scalar::<f32>()?)-scalar(&qv,&kv,selected)).abs()<1e-7);
+            let grads=loss.backward()?;
+            for (var,values,is_q) in [(&q,&qv,true),(&k,&kv,false)] {
+                let got=grads.get(var).unwrap().flatten_all()?.to_vec1::<f32>()?;
+                assert!(got.iter().any(|g|g.abs()>1e-5));
+                for (i,g) in got.iter().enumerate() {
+                    let mut lo=values.clone();let mut hi=values.clone();lo[i]-=0.001;hi[i]+=0.001;
+                    let eval=|v:&[f32]|if is_q {scalar(v,&kv,selected)}else{scalar(&qv,v,selected)};
+                    let expected=(eval(&hi)-eval(&lo))/f64::from(hi[i]-lo[i]);
+                    assert!((f64::from(*g)-expected).abs()<2e-6,"q={is_q} index={i}: {g} != {expected}");
+                    if i>=values.len()/2 || (!is_q && i/2==5) || (is_q && i/2%6!=4) {assert_eq!(*g,0.);}
+                }
+            }
+        }
+        assert_eq!(record_grounding_loss(&q,&k,&allowed,&[None,None])?.to_scalar::<f32>()?,0.);
+        for l in [RecordGrounding{selected:2,..label.clone()},RecordGrounding{query:6,..label.clone()},
+            RecordGrounding{records:[(1,1),(2,4)],..label.clone()},RecordGrounding{records:[(1,3),(2,4)],..label.clone()},
+            RecordGrounding{records:[(1,2),(2,5)],..label.clone()}] {
+            assert!(record_grounding_loss(&q,&k,&allowed,&[Some(l),None]).is_err());
+        }
+        let mut hidden=mask;hidden[4*6+1]=0.;
+        assert!(record_grounding_loss(&q,&k,&Tensor::from_vec(hidden,(2,1,6,6),&device)?,&[Some(label.clone()),None]).is_err());
+        assert!(record_grounding_loss(&q,&k,&allowed,&[Some(label)]).is_err());
+        assert!(record_grounding_loss(&q,&k.narrow(3,0,1)?,&allowed,&[None,None]).is_err());
+        println!("GROUNDING_SCALAR backward=2 optimizer=0 model_forward=0 generation=0 teacher=0");
+        Ok(())
+    }
+    #[test]
+    fn record_grounding_reaches_random_native_parameters_without_changing_logits() -> Result<()> {
+        let model=Transformer::init(neural::transformer::Config::tiny(264),93,Device::Cpu)?;
+        let ids=Tensor::new(&[[8u32,9,10,11,12,13]],&Device::Cpu)?;
+        let label=RecordGrounding{query:4,records:[(1,2),(2,4)],selected:0};
+        let before=model.weight_hash()?;
+        let ordinary=model.forward(&ids,None)?;
+        let mut auxiliary=None;
+        let observed=model.forward_observed(&ids,None,&mut |layer,q,k,allowed| {
+            if layer+1==model.config.layers {auxiliary=Some(record_grounding_loss(q,k,allowed,&[Some(label.clone())])?);}
+            Ok(())
+        })?;
+        assert_eq!(ordinary.flatten_all()?.to_vec1::<f32>()?,observed.flatten_all()?.to_vec1::<f32>()?);
+        let auxiliary=auxiliary.unwrap();assert!(auxiliary.to_scalar::<f32>()?>0.);
+        let gradients=auxiliary.backward()?;
+        for name in ["embedding","layer.1.q","layer.1.k","layer.1.q_norm","layer.1.k_norm"] {
+            let g=gradients.get(&model.vars[name]).unwrap().flatten_all()?.to_vec1::<f32>()?;
+            assert!(g.iter().all(|v|v.is_finite()));assert!(g.iter().any(|v|v.abs()>1e-8),"{name}");
+        }
+        assert_eq!(before,model.weight_hash()?);
+        println!("GROUNDING_NATIVE model_forward=2 backward=1 optimizer=0 generation=0 teacher=0 logits=EXACT gradients=NONZERO");
+        Ok(())
+    }
     #[test]
     fn decode_failure_preserves_generated_tokens_and_eos_receipt() {
         let tok =

@@ -1252,6 +1252,16 @@ cycle. Run `fresh run --root NEW_ROOT/COVER4`, then `fresh paired-report --root
 NEW_ROOT`. Cap1280 updates,256 trained sides per C/D/E each5 exposures.
 It compares scene coverage with retained DIVERSE; other mixed interventions fail.
 
+With both COVER4 flags, `--ground-selected-record` registers GROUND instead.
+Use `fresh run --root NEW_ROOT/GROUND` and the same pure `paired-report` command.
+This retains the complete COVER4 data/tape/parent/Adam/LR/CE/SIDE loss and adds
+only the fixed training-only selected-record attention penalty documented in
+the active quality plan. Native resume family5 binds its exact annotation and
+policy; missing annotation cannot fall back to the ordinary objective. No label
+enters normal inference. SMALL cap1280; the explicit TINY process fixture uses
+two updates with a16-row tape, independently verified across all four views.
+This is a bounded hypothesis, not model adoption or a quality-gate change.
+
 `replica-train fresh paired-prepare --parent P_ROOT --source-data S_SELECT_ROOT
 --parity NEW_P16_ROOT --output NEW_ROOT --alternate-pair-values` registers the
 bounded original/value-exchanged-view study. Run `fresh run --root NEW_ROOT/VALUE`
@@ -1262,7 +1272,7 @@ The existing `paired_seen_train_diagnostic` production-feature test accepts
 it cannot combine with margin mode and requires a new output directory.
 
 `--cover-value-pairs` alone is the separate COVER policy. Except for the explicit
-COVER4 combination above it cannot combine with other intervention flags.
+COVER4/GROUND combinations above it cannot combine with other intervention flags.
 It uses the same commands with `NEW_ROOT/COVER`, original
 P6144 and preserved inputs, but widens the recurring prefix to32 scenes per
 C/D/E and alternates the two value views every64 updates. Maximum1280 updates;

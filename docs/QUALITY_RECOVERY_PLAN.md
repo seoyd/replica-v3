@@ -1,6 +1,6 @@
 # Diagnostic repair and bounded quality recovery
 
-## Next: bounded train-only record grounding preparation
+## Current: bounded train-only record grounding ready for registration
 
 Under the user's continuing one-variable authorization, prepare GROUND from the
 same P6144 parent as COVER4. This is a hypothesis about learning record selection,
@@ -31,6 +31,15 @@ continuous versus fresh-process resume must pass before any SMALL run. Verify
 normal inference parity, same parent/Adam/data/tape, and freeze source/binary.
 Preparation caps TINY64 optimizer/768 generation/768 own-teacher, scalar16;
 actual direct forward/backward calls are separately reported. No new framework.
+
+Preparation is now verified, including two preserved failed process executions.
+Actual TINY totals50 optimizer/333 generation/333 teacher; scalar optimizer0,
+direct random-native forward2/backward1 and scalar backward4. Corrected process
+regression uses2 versus1+1 updates and the same16-row four-view tape; the prior
+16 versus1+15 state comparison also completed before its separate, invalid
+EOS-fixture weight-difference assertion failed. The final test instead checks
+real objective inclusion and independently proves random-native gradients.
+Production P16 parity matches16/16; no SMALL optimizer calls yet.
 
 Proposed registered SMALL cap1280 updates,12M input/1M target including discarded
 work,12000 generation/10000 own-teacher,21600s active,900s command/120s cleanup.

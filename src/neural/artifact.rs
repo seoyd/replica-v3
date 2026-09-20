@@ -1196,7 +1196,7 @@ mod tests {
         );
         // The fixed paired objective reuses the descriptor bytes, but can never
         // silently resume as default CE or lose its coefficient/annotation.
-        for family in [3,4] {
+        for family in [3,4,5] {
         let mut contrast = full.manifest.clone();
         let state = contrast.training.as_mut().unwrap();
         let binding = state.resume_binding.as_mut().unwrap();

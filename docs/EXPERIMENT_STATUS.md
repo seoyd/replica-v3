@@ -1,5 +1,50 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 GROUND preparation verified; learning not yet executed
+
+Under the continuing one-variable authorization, the existing trainer now adds
+the preregistered record-attention loss only for GROUND training. It uses actual
+last-layer Q/K/mask tensors from the same forward, first-response queries and
+verified owned train-record spans. No labels or generation changes enter the
+product. Native objective family5 binds exact annotation/policy using the
+existing descriptor layout. All input, stop, usage and pure-report entry points
+include the new policy. No new framework, tensor format or tracked file.
+
+Direct checks executed with installed Rust1.98.1, locked/offline/Accelerate and
+thread1: scalar loss/finite-difference gradients/mask/no-selector boundaries;
+random native parameter-gradient and identical-logit check; train annotation
+and native input equality; full3840-row tape writer/reader; native objective
+roundtrip/default-loss rejection; actual TINY process resume. Each named check
+executed at least one test. Final process test PASS1 in15.40s, comparing two
+updates continuously with1+1 in separate processes, exact weights/Adam/cursor.
+The16-row TINY tape/all views are validated separately without repeated learning.
+
+Two failed process executions remain in local evidence, never counted PASS:
+first exit101 after4 setup updates rejected an omitted schema allow-list before
+GROUND training; second exit101 after37 updates passed16 versus1+15 state
+equality but failed a wrongly asserted weight difference in the degenerate EOS
+fixture. That fixture sets Q/K to0; its auxiliary derivative is0. The corrected
+test checks increased objective with identical draw/CE/LR and uses a separate
+random native model to prove nonzero Q/K/norm/embedding gradients. This fixture
+explanation does not diagnose the SMALL model or claim quality recovery.
+
+Preparation totals including failures: TINY optimizer4+37+9=50; generation/
+own-teacher75+129+129=333 each, below64/768/768 caps. Scalar optimizer0;
+direct random-model forward2/backward1 and scalar backward4 are separate.
+Production release build PASS21.58s. P6144 fixed16 parity PASS1 in14.44s,
+16/16 exact raw outputs,160 tokens, SMALL optimizer0/teacher0, originals unchanged.
+Frozen production executable SHA256
+e826ba0076151ed708f8e2e7972d14432f185f5c942f38740ddb5dac160e763f;
+diagnostic executable28e3e16badd8240739c0bdcbf0c5e3783066c2dba922083a6595b888fceab190.
+Evidence: `artifacts/record-grounding-20260920-evidence/`, including both failed
+process logs, final process/numeric/annotation/tape/native/build/P16 logs and
+preserved executable. Existing full-suite/clippy acceptance is not claimed.
+
+CODE_PREPARATION=PASS, SMALL_LEARNING=NOT_RUN. Next register the separate
+GROUND1280 policy and verify exact COVER4 content/tape/parent/Adam/LR before
+the first update. Quality unchanged; final200 NOT_CREATED/NOT_OPENED;
+S4/S5/S6 and GOAL1_READY/GOAL1_ACCEPTED remain false.
+
 ## 2026-09-20 selector attention observed; mask-loss explanation unsupported here
 
 Corrected source58a6f97583a545b50ace20c7a936af16ad769276 was pushed and matched
