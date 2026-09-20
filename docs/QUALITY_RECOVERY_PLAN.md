@@ -1,5 +1,47 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: one bounded selector-wording exposure study
+
+The user's continuing one-variable authorization covers a new schema17 research
+from the intact COVER7424 parent, physical
+9845a43db02f197fca6026db058c503c1fa8856ffd673267904103c03b2e98e0.
+Retained schema16 fixed exposure is the matched-parent/budget control. Neither
+closed run resumes or changes its candidate status. New root is
+`artifacts/selector-phrase-20260920-final/`; internal arm remains COVER to reuse its
+unchanged objective. Register only once after direct checks and parent16 parity.
+The earlier preparation root is retained with optimizer0: final Clippy found a
+new style warning, fixed by the equivalent integer divisibility method before
+learning. It is not an additional learning arm. Two parent16 source-parity runs
+are counted32 total against the same generation allowance; only the final root
+may perform the2560 optimizer calls. No model execution failure is reopened.
+
+Only question-wording exposure changes. Keep the same32 C/D/E scenes per bucket,
+both value views, paired selector sides and all anchor update/slot rows. In the
+remaining tape1280..3840, cycles satisfying `(cursor/64)%4==0` substitute owned
+view3 for view0, using that scene's original question wording and preserving the
+side. This changes1920 of20,480 draws; all answers, evidence, order and times are
+identical for every replacement. Each original-value side receives10 existing
+wording and10 view3 exposures; exchanged-value sides retain20. P wording remains
+in the other cycles; no balanced three-wording exposure is claimed. Use only
+already-owned train episodes, not development questions, new facts or a new
+corpus. Native readers and request-only label checks verify each replacement.
+
+Keep weights/Adam/tokenizer/F32/model, LR3e-5, first-target1 CE and SIDE family4
+auxiliary0.1. Max2560 SMALL optimizer,7424→9984; actual input12M/target1M,
+generation12000/own-model teacher10000, active21600s, command900s/cleanup120s.
+Carry the same prior retention streak and full-point history as schema16.
+Same screens32/64/128/512/1536 and full1024/2048/2560. Numeric/save/cancel/
+UNKNOWN and no-progress guards remain. No automatic extension. Same checkpoint
+must meet the unchanged joint gate before independent final200/S4/S5/S6.
+
+Direct regression limits: TINY96 optimizer/768 generation/768 teacher, scalar0.
+Reuse actual COVER setup and continuous8 versus fresh1+7 for existing and changed
+tapes. TINY starts a new eight-row fixture cycle explicitly; SMALL preserves the
+full tape cursor. Pure full3840 writer/reader and changed-question invariants
+must pass. Source/executable freeze and publication precede actual SMALL learning.
+Final comparisons use complete same-step raw and strict full/citation/EOS;
+wording-stratum gains alone cannot replace overall quality or numeric selection.
+
 ## Current diagnosis: selection does not transfer across wording and numeric values
 
 Read-only recount of the closed COVER7424 and9984 endpoints confirms their

@@ -2990,15 +2990,20 @@ fn fresh_explicit_fork_matches_continuous_and_split_native_resume() {
 
 #[test]
 fn fresh_value_exposure_restores_identical_native_state() {
-    value_exposure_native_resume(false);
+    value_exposure_native_resume(false, false);
 }
 
 #[test]
 fn fresh_value_coverage_restores_identical_native_state() {
-    value_exposure_native_resume(true);
+    value_exposure_native_resume(true, false);
 }
 
-fn value_exposure_native_resume(coverage: bool) {
+#[test]
+fn fresh_cover_phrase_restores_identical_native_state() {
+    value_exposure_native_resume(true, true);
+}
+
+fn value_exposure_native_resume(coverage: bool, wording: bool) {
     use replica_v3::{binary,neural::checkpoint};
     use candle_core::Device;
     let d=tempfile::tempdir().unwrap();
@@ -3055,17 +3060,22 @@ fn value_exposure_native_resume(coverage: bool) {
             }out
         }
         let follow=[d.path().join("exposure-continuous"),d.path().join("exposure-split")];
+        let continuation_flag=if wording {"--selector-phrase-exposure"}else{"--fixed-cover-exposure"};
         for (i,root) in follow.iter().enumerate() {
             let parent=roots[i].join(mode);let before=hashes(&parent);
             call(&["fresh","paired-continue","--parent",parent.to_str().unwrap(),"--output",bad.to_str().unwrap(),
                 "--frozen-executable",env!("CARGO_BIN_EXE_replica-train")],false);assert!(!bad.exists());
             call(&["fresh","paired-continue","--parent",parent.to_str().unwrap(),"--output",root.to_str().unwrap(),
-                "--frozen-executable",env!("CARGO_BIN_EXE_replica-train"),"--fixed-cover-exposure"],true);
+                "--frozen-executable",env!("CARGO_BIN_EXE_replica-train"),continuation_flag],true);
             assert_eq!(before,hashes(&parent));
             let arm=root.join(mode);
             let old:binary::Value=binary::from_slice(&std::fs::read(parent.join("plan.r3b")).unwrap()).unwrap();
             let new:binary::Value=binary::from_slice(&std::fs::read(arm.join("plan.r3b")).unwrap()).unwrap();
-            assert_eq!(old["paired"]["rows"],new["paired"]["rows"]);
+            if wording {
+                assert_ne!(old["paired"]["rows"],new["paired"]["rows"]);
+                assert_eq!(old["paired"]["rows"][4],new["paired"]["rows"][4]);
+                assert_eq!(old["paired"]["rows"][7],new["paired"]["rows"][7]);
+            } else {assert_eq!(old["paired"]["rows"],new["paired"]["rows"]);}
             assert_eq!(new["paired"]["first_step"],12); // Explicit TINY cycle, not the SMALL cursor.
             for key in ["tokenizer","corpus","transfer","order","metadata"] {assert_eq!(old[key],new[key]);}
             if i==0 {call(&["fresh","fixture-full","--root",arm.to_str().unwrap()],true);}
@@ -3073,7 +3083,7 @@ fn value_exposure_native_resume(coverage: bool) {
             let finished=hashes(root);
             call(&["fresh","paired-report","--root",root.to_str().unwrap()],true);assert_eq!(finished,hashes(root));
             call(&["fresh","paired-continue","--parent",arm.to_str().unwrap(),"--output",bad.to_str().unwrap(),
-                "--frozen-executable",env!("CARGO_BIN_EXE_replica-train"),"--fixed-cover-exposure"],false);assert!(!bad.exists());
+                "--frozen-executable",env!("CARGO_BIN_EXE_replica-train"),continuation_flag],false);assert!(!bad.exists());
             assert_eq!(before,hashes(&parent));
         }
         let a=checkpoint::load(&follow[0].join("COVER/segment-0000/final"),Device::Cpu,true).unwrap();

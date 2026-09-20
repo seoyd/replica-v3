@@ -93,6 +93,15 @@ features, thread1, fresh output paths and prior confirmed resume checks below ap
 
 ## Explicit paired follow-through
 
+The selector-wording comparison uses `fresh paired-continue
+--selector-phrase-exposure --parent CLOSED_COVER_ROOT --output NEW_ROOT
+--frozen-executable COVER_RETAINED_EXECUTABLE --parity NEW_PARITY_ROOT`.
+This is exclusive with `--fixed-cover-exposure`. It accepts the same closed
+COVER7424 parent, preserves its native inputs, and changes only the registered
+train-wording draws in the new `NEW_ROOT/COVER` tape. Budget2560, inherited guards
+and all quality gates remain; no repeated continuation from this new study.
+Use the retained fixed-exposure run as control, never relabel it as a fresh run.
+
 The separately registered fixed-COVER exposure study uses
 `fresh paired-continue --fixed-cover-exposure --parent CLOSED_COVER_ROOT
 --output NEW_ROOT --frozen-executable COVER_RETAINED_EXECUTABLE --parity NEW_PARITY_ROOT`.

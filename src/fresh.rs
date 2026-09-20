@@ -20,8 +20,10 @@ pub enum Command {
         #[arg(long)] output: PathBuf,
         #[arg(long)] frozen_executable: PathBuf,
         /// Explicit exposure-only research from closed COVER1280; no old resume.
-        #[arg(long)] fixed_cover_exposure: bool,
-        #[arg(long, requires = "fixed_cover_exposure")] parity: Option<PathBuf>,
+        #[arg(long, conflicts_with = "selector_phrase_exposure")] fixed_cover_exposure: bool,
+        /// Same COVER parent/tape budget, adding only owned selector question wording.
+        #[arg(long)] selector_phrase_exposure: bool,
+        #[arg(long)] parity: Option<PathBuf>,
     },
     /// Register the bounded pair-spacing comparison from preserved native train pools.
     PairedPrepare {
@@ -1088,7 +1090,7 @@ fn source_digest() -> Result<String> {
 }
 pub fn execute(command: Command) -> Result<()> {
     match command {
-        Command::PairedContinue { parent, output, frozen_executable, fixed_cover_exposure, parity } => paired_continue(&parent, &output, &frozen_executable, fixed_cover_exposure, parity.as_deref()),
+        Command::PairedContinue { parent, output, frozen_executable, fixed_cover_exposure, selector_phrase_exposure, parity } => paired_continue(&parent, &output, &frozen_executable, fixed_cover_exposure || selector_phrase_exposure, selector_phrase_exposure, parity.as_deref()),
         Command::PairedPrepare { parent, source_data, output, parity, first_target_four, learning_rate_threefold, co_batch, pair_contrast, sidewise_contrast, repeat_pair_block, repeat_two_blocks, fit_seen_pairs, alternate_pair_values, cover_value_pairs } => paired_prepare(&parent, &source_data, &output, parity.as_deref(), [first_target_four, learning_rate_threefold, co_batch, pair_contrast, sidewise_contrast, repeat_pair_block, repeat_two_blocks, fit_seen_pairs, alternate_pair_values, cover_value_pairs]),
         Command::PairedReport { root } => paired_report(&root).map(|r| println!("PAIRED_REPORT {r}")),
         Command::StudyPrepare { parent, output, selector } => study_prepare(&parent, &output, selector),
@@ -1203,7 +1205,7 @@ fn plan_read_bound(root: &Path, source: &str, executable: &str) -> Result<Plan> 
             || ([7,8,9,10].contains(&study.schema) && study.updates!=if p.tiny {2}else{1280})
             || ([11,13,14].contains(&study.schema) && study.updates!=if p.tiny {4}else{1280})
             || ([12,15].contains(&study.schema) && study.updates!=if p.tiny {8}else{1280})
-            || (study.schema==16 && study.updates!=if p.tiny {8}else{2560})
+            || ([16,17].contains(&study.schema) && study.updates!=if p.tiny {8}else{2560})
             || p.corpus != f.original_corpus
             || p.tokenizer != study.tokenizer
         {
@@ -1221,7 +1223,7 @@ fn plan_read_bound(root: &Path, source: &str, executable: &str) -> Result<Plan> 
         }
         if let Some(tape) = &p.paired {
             let n = p.order.iter().map(Vec::len).sum::<usize>();
-            if ![4,5,6,7,8,9,10,11,12,13,14,15,16].contains(&study.schema) || !["SPACED", "ADJACENT", "COBATCH", "CONTRAST", "SIDE", "REPLAY", "WIDE", "FIT","VALUE","COVER"].contains(&tape.mode.as_str())
+            if ![4,5,6,7,8,9,10,11,12,13,14,15,16,17].contains(&study.schema) || !["SPACED", "ADJACENT", "COBATCH", "CONTRAST", "SIDE", "REPLAY", "WIDE", "FIT","VALUE","COVER"].contains(&tape.mode.as_str())
                 || (study.schema==8) != (tape.mode=="COBATCH")
                 || (study.schema==9) != (tape.mode=="CONTRAST")
                 || (study.schema==10) != (tape.mode=="SIDE")
@@ -1229,26 +1231,30 @@ fn plan_read_bound(root: &Path, source: &str, executable: &str) -> Result<Plan> 
                 || (study.schema==12) != (tape.mode=="WIDE")
                 || (study.schema==13) != (tape.mode=="FIT")
                 || (study.schema==14) != (tape.mode=="VALUE")
-                || ([15,16].contains(&study.schema)) != (tape.mode=="COVER")
-                || tape.mode != f.arm || (![5,16].contains(&study.schema) && tape.first_step != f.origin_step)
+                || ([15,16,17].contains(&study.schema)) != (tape.mode=="COVER")
+                || tape.mode != f.arm || (![5,16,17].contains(&study.schema) && tape.first_step != f.origin_step)
                 || tape.block != if p.tiny { 2 } else { 256 }
-                || tape.rows.len() != if p.tiny { if [12,15,16].contains(&study.schema) {8}else if [11,13,14].contains(&study.schema) {4}else{2} } else { 3840 }
+                || tape.rows.len() != if p.tiny { if [12,15,16,17].contains(&study.schema) {8}else if [11,13,14].contains(&study.schema) {4}else{2} } else { 3840 }
                 || f.origin_step + study.updates > tape.first_step + tape.rows.len()
                 || tape.samples != file_hash(&root.join("paired-samples.r3rows"))?
-                || tape.rows.iter().any(|r| r.iter().enumerate().any(|(b, i)| *i >= 4*n || (![8,9,10,11,12,13,14,15,16].contains(&study.schema) && !p.order[b].contains(&(i%n)))))
+                || tape.rows.iter().any(|r| r.iter().enumerate().any(|(b, i)| *i >= 4*n || (![8,9,10,11,12,13,14,15,16,17].contains(&study.schema) && !p.order[b].contains(&(i%n)))))
             { return Err(bad("paired policy/tape boundary")); }
             let parent: Plan = read(&study.parent.join("plan.r3b"))?;
             let (tm, _, _) = verified_metadata(root, &p)?;
-            if [5,16].contains(&study.schema) {
+            if [5,16,17].contains(&study.schema) {
                 let mut expected=parent.paired.clone().ok_or_else(||bad("continuation parent tape"))?;
                 if p.tiny {expected.first_step=f.origin_step;}
+                if study.schema==17 {
+                    expected.rows=selector_phrase_rows(&expected.rows,&tm,
+                        f.origin_step-expected.first_step,if p.tiny {4}else{64})?;
+                }
                 if expected!=*tape || f.origin_step!=parent.config.max_steps
                     || p.config.max_steps!=tape.first_step+tape.rows.len() {
                     return Err(bad("continuation must preserve its exact parent tape/cursor"));
                 }
                 plan_read_bound(&study.parent, &parent.source, &parent.binary)?;
             } else { verify_pair_tape(&parent, &tm, tape)?; }
-        } else if [4,5,6,7,8,9,10,11,12,13,14,15,16].contains(&study.schema) { return Err(bad("paired study missing finite tape")); }
+        } else if [4,5,6,7,8,9,10,11,12,13,14,15,16,17].contains(&study.schema) { return Err(bad("paired study missing finite tape")); }
         for (name, h) in [
             ("selectors.r3cor", &f.selector),
             ("selector-metadata.r3b", &f.selector_metadata),
@@ -2978,7 +2984,7 @@ fn paired_decision(p: &Plan, root: &Path, step: usize) -> Result<binary::Value> 
     let parent: binary::Value = read(&f.study.join("parent-audit.r3b"))?;
     let baseline: PanelResult = binary::from_value(parent["baseline_screen"].clone())?;
     let study:Study=read(&f.study.join("study.r3b"))?;
-    let prior = if study.schema==16 {Some(read::<binary::Value>(&f.study.join("research-authorization.r3b"))?)} else {None};
+    let prior = if [16,17].contains(&study.schema) {Some(read::<binary::Value>(&f.study.join("research-authorization.r3b"))?)} else {None};
     let mut streak = match &prior {
         Some(a) => a["prior_decision"]["guard_streak"].as_u64().ok_or_else(||bad("prior guard UNKNOWN"))?,
         None => 0,
@@ -3014,8 +3020,8 @@ fn paired_decision(p: &Plan, root: &Path, step: usize) -> Result<binary::Value> 
         primary = Some(a.exact); transfer = Some(b.exact);
         if joint { stop = Some("DEVELOPMENT_JOINT_PASS_FINAL_NOT_RUN"); }
         let study:Study=read(&f.study.join("study.r3b"))?;
-        if [5,6,7,8,9,10,11,12,13,14,15,16].contains(&study.schema) && !joint && stop.is_none() && !p.tiny {
-            let prior=if [5,16].contains(&study.schema) {
+        if [5,6,7,8,9,10,11,12,13,14,15,16,17].contains(&study.schema) && !joint && stop.is_none() && !p.tiny {
+            let prior=if [5,16,17].contains(&study.schema) {
                 let authorization:binary::Value=read(&f.study.join("research-authorization.r3b"))?;
                 authorization["prior_decision"].clone()
             } else {
@@ -3025,7 +3031,7 @@ fn paired_decision(p: &Plan, root: &Path, step: usize) -> Result<binary::Value> 
             let mut values=vec![(prior["primary"].as_u64().ok_or_else(||bad("prior primary missing"))?,
                 prior["transfer"].as_u64().ok_or_else(||bad("prior transfer missing"))?,
                 prior["pairs"]["pairs"][0].as_u64().ok_or_else(||bad("prior both missing"))?)];
-            if study.schema==16 {
+            if [16,17].contains(&study.schema) {
                 let authorization:binary::Value=read(&f.study.join("research-authorization.r3b"))?;
                 values=binary::from_value(authorization["prior_progress"].clone())?;
                 if values.is_empty() {return Err(bad("prior progress UNKNOWN"));}
@@ -3188,6 +3194,41 @@ fn value_exchange_rows(rows: &[[usize;8]], tm: &[Meta], cycle: usize) -> Result<
         }
     }
     Ok(out)
+}
+// Same scene/value/order/selector sides; one in four COVER cycles uses the
+// already-owned view3 wording. P variants and view0 still occur in other cycles.
+fn selector_phrase_rows(rows: &[[usize;8]], tm: &[Meta], start:usize, cycle:usize) -> Result<Vec<[usize;8]>> {
+    if tm.is_empty() || cycle<2 || !cycle.is_multiple_of(2) || start>=rows.len() || !start.is_multiple_of(cycle) {
+        return Err(bad("selector phrase cursor/cycle"));
+    }
+    let n=tm.len();let mut views=BTreeMap::new();
+    for (i,m) in tm.iter().enumerate().filter(|(_,m)|m.view==3) {
+        if views.insert((&m.base,m.bucket),i).is_some() {return Err(bad("duplicate wording view"));}
+    }
+    let mut out=rows.to_vec();let mut changes=0;
+    for (step,row) in out.iter_mut().enumerate().skip(start) {
+        for index in row {
+            if *index>=4*n {return Err(bad("wording sample bound"));}
+            let m=&tm[*index%n];
+            if !(2..=4).contains(&m.bucket) || !(step/cycle).is_multiple_of(4) {continue;}
+            if m.view!=0 {return Err(bad("wording cycle must use unchanged value view0"));}
+            let other=*views.get(&(&m.base,m.bucket)).ok_or_else(||bad("owned wording view missing"))?;
+            *index=(*index/(2*n))*(2*n)+other;changes+=1;
+        }
+    }
+    if changes==0 {return Err(bad("wording intervention changed no samples"));}
+    Ok(out)
+}
+fn verify_selector_phrase_change(a:&Episode,b:&Episode)->Result<()> {
+    let mut expected=a.clone();
+    expected.id=b.id.clone();expected.request.request_id=b.request.request_id.clone();
+    expected.request.input=b.request.input.clone();
+    if digest(&expected)?!=digest(b)? || a.request.input==b.request.input
+        || question_intent(&a.request.input)?!=question_intent(&b.request.input)?
+        || resolve(&a.request)?!=a.answer || resolve(&b.request)?!=b.answer {
+        return Err(bad("selector phrase must change only wording and case identity"));
+    }
+    Ok(())
 }
 fn paired_prepare(parent: &Path, source_data: &Path, output: &Path, parity: Option<&Path>, interventions: [bool;10]) -> Result<()> {
     let [first_target_four, learning_rate_threefold, co_batch, pair_contrast, sidewise_contrast, repeat_pair_block, repeat_two_blocks, fit_seen_pairs, alternate_pair_values, cover_value_pairs] = interventions;
@@ -3367,13 +3408,13 @@ fn verified_parent_parity(p:&Plan, checkpoint:&Path, parity:Option<&Path>)->Resu
     }
     Ok(proof)
 }
-fn paired_continue(parent:&Path, output:&Path, executable:&Path, cover:bool, parity:Option<&Path>)->Result<()> {
+fn paired_continue(parent:&Path, output:&Path, executable:&Path, cover:bool, phrase:bool, parity:Option<&Path>)->Result<()> {
     let started=Instant::now();
     let parent=parent.canonicalize()?;
     let pp:Plan=read(&parent.join("plan.r3b"))?;
     let pf=pp.fork.as_ref().ok_or_else(||bad("paired continuation parent fork"))?;
     let old=study_read_bound(&pf.study,Some(executable))?;
-    let (schema,arm)=if cover {(16,"COVER")}else{(5,"ADJACENT")};
+    let (schema,arm)=if phrase {(17,"COVER")}else if cover {(16,"COVER")}else{(5,"ADJACENT")};
     if old.schema!=if cover {15}else{4} || pf.arm!=arm {return Err(bad("unregistered continuation parent"));}
     plan_read_bound(&parent,&old.source,&old.binary)?;
     let h=history(&parent,&pp)?;
@@ -3395,6 +3436,19 @@ fn paired_continue(parent:&Path, output:&Path, executable:&Path, cover:bool, par
     let updates=if pp.tiny {if cover {8}else{2}}else{(tape.first_step+tape.rows.len()).checked_sub(state.step).ok_or_else(||bad("continuation tape exhausted"))?};
     if updates!=if pp.tiny {if cover {8}else{2}}else if cover {2560}else{3584} {return Err(bad("continuation fixed remaining tape length"));}
     let parity_receipt=if cover {verified_parent_parity(&pp,&cp,parity)?}else{binary::Value::Null};
+    let mut next_tape=tape.clone();
+    if pp.tiny {next_tape.first_step=state.step;}
+    if phrase {
+        let (tm,_,_)=verified_metadata(&parent,&pp)?;
+        next_tape.rows=selector_phrase_rows(&tape.rows,&tm,state.step-next_tape.first_step,if pp.tiny {4}else{64})?;
+        let mut all=verified_corpus(&parent.join("corpus.r3cor"),&pp.corpus)?.train;
+        all.extend(verified_corpus(&parent.join("variants.r3cor"),pf.variants.as_ref().unwrap())?.train);
+        all.extend(verified_corpus(&parent.join("selectors.r3cor"),pf.selector.as_ref().unwrap())?.train);
+        let changed:std::collections::BTreeSet<_>=tape.rows.iter().flatten().zip(next_tape.rows.iter().flatten())
+            .filter(|(a,b)|a!=b).map(|(a,b)|(*a,*b)).collect();
+        for (a,b) in &changed {verify_selector_phrase_change(&all[*a],&all[*b])?;}
+        println!("PHRASE_INPUT_CHANGED_PAIRS={} only_owned_train_question_wording=VERIFIED optimizer=0",changed.len());
+    }
     let mut prior_progress=vec![];
     if cover && !pp.tiny {
         let baseline:binary::Value=read(&pf.study.join("parent-audit.r3b"))?;
@@ -3414,7 +3468,7 @@ fn paired_continue(parent:&Path, output:&Path, executable:&Path, cover:bool, par
     for name in ["diagnostic.r3b","parent-audit.r3b"] {
         neural::write_new(&output.join(name),&std::fs::read(pf.study.join(name))?)?;
     }
-    write(&output.join("research-authorization.r3b"),&binary::record!({"scope":if cover {"USER_REQUESTED_FIXED_COVER_EXPOSURE_20260920"}else{"USER_REQUESTED_BOUNDED_FOLLOW_THROUGH_20260920"},"prior_study":file_hash(&pf.study.join("study.r3b"))?,"prior_terminal":file_hash(&parent.join(format!("segment-{:04}-finished.r3b",h.len()-1)))?,"prior_decision":decision,"prior_progress":prior_progress,"entry_parity":parity_receipt,"prior_candidate_promoted":false,"new_optimizer_limit":updates,"hypothesis":"additional fixed-pool exposure; all mathematical and data policies unchanged","generation_limit":12000,"teacher_limit":10000,"active_seconds":21600,"input_limit":12000000,"target_limit":1000000}))?;
+    write(&output.join("research-authorization.r3b"),&binary::record!({"scope":if phrase {"USER_AUTHORIZED_SELECTOR_PHRASE_COVERAGE_20260920"}else if cover {"USER_REQUESTED_FIXED_COVER_EXPOSURE_20260920"}else{"USER_REQUESTED_BOUNDED_FOLLOW_THROUGH_20260920"},"prior_study":file_hash(&pf.study.join("study.r3b"))?,"prior_terminal":file_hash(&parent.join(format!("segment-{:04}-finished.r3b",h.len()-1)))?,"prior_decision":decision,"prior_progress":prior_progress,"entry_parity":parity_receipt,"prior_candidate_promoted":false,"new_optimizer_limit":updates,"hypothesis":if phrase {"same COVER7424 parent and2560 updates; one in four cycles exposes owned train view3 wording, same facts/values/order/answers/anchors/math; retained fixed-exposure control"}else{"additional fixed-pool exposure; all mathematical and data policies unchanged"},"generation_limit":12000,"teacher_limit":10000,"active_seconds":21600,"input_limit":12000000,"target_limit":1000000}))?;
     let study=Study {schema,source:source_digest()?,binary:file_hash(&std::env::current_exe()?)?,parent:parent.clone(),
         parent_plan:file_hash(&parent.join("plan.r3b"))?,parent_checkpoint:cp.clone(),parent_file:file_hash(&cp)?,
         parent_model:l.model.weight_hash()?,parent_adam:optimizer_hash(&l.optimizer)?,parent_state:digest(state)?,
@@ -3428,7 +3482,8 @@ fn paired_continue(parent:&Path, output:&Path, executable:&Path, cover:bool, par
     }
     neural::write_new(&root.join("initial.r3m"),&std::fs::read(&cp)?)?;
     let mut p=pp.clone();p.source=study.source.clone();p.binary=study.binary.clone();
-    if p.tiny {p.paired.as_mut().unwrap().first_step=state.step;}
+    p.paired=Some(next_tape);
+    p.train_order=digest(&p.paired.as_ref().unwrap().rows)?;
     p.initial=study.parent_file.clone();p.initial_weights=study.parent_model.clone();
     p.config.budget_start_step=state.step;p.config.budget_start_tokens=state.consumed_tokens;
     p.config.max_steps=state.step+updates;p.config.max_tokens=state.consumed_tokens+12_000_000;
@@ -3459,11 +3514,11 @@ fn paired_work(root:&Path)->Result<(u64,u64,u64)> {
             used.2+=r["optimizer_calls"].as_u64().ok_or_else(||bad("paired updates UNKNOWN"))?;
         }
     }
-    if used.0>12_000_000||used.1>1_000_000||used.2>if [5,6,7,8,9,10,11,12,13,14,15,16].contains(&study.schema) {study.updates as u64}else{4096}{return Err(bad("paired global learning budget"));}
+    if used.0>12_000_000||used.1>1_000_000||used.2>if [5,6,7,8,9,10,11,12,13,14,15,16,17].contains(&study.schema) {study.updates as u64}else{4096}{return Err(bad("paired global learning budget"));}
     Ok(used)
 }
 fn paired_usage(root:&Path)->Result<(f64,usize,usize)> {
-    let s=study_read(root)?;if ![4,5,6,7,8,9,10,11,12,13,14,15,16].contains(&s.schema){return Err(bad("paired study schema"));}
+    let s=study_read(root)?;if ![4,5,6,7,8,9,10,11,12,13,14,15,16,17].contains(&s.schema){return Err(bad("paired study schema"));}
     let (mut elapsed,mut generation,teacher)=study_usage_bound(root,false,&s)?;
     for arm in &s.tie_break {
         let a=root.join(arm);let p=plan_read(&a)?;
@@ -3480,7 +3535,7 @@ fn paired_usage(root:&Path)->Result<(f64,usize,usize)> {
         generation+=16;
         elapsed+=baseline["parity"]["control"]["elapsed_seconds"].as_f64().ok_or_else(||bad("parity time UNKNOWN"))?;
     }
-    if !s.tiny && s.schema==16 {
+    if !s.tiny && [16,17].contains(&s.schema) {
         let authorization:binary::Value=read(&root.join("research-authorization.r3b"))?;
         generation+=16;
         elapsed+=authorization["entry_parity"]["control"]["elapsed_seconds"].as_f64().ok_or_else(||bad("entry parity time UNKNOWN"))?;
@@ -3536,10 +3591,10 @@ fn paired_report(root:&Path)->Result<binary::Value> {
         both_gain_loss=Some(binary::record!({"gain":outcomes[0].iter().zip(&outcomes[1]).filter(|(a,b)| !**a && **b).count(),
             "loss":outcomes[0].iter().zip(&outcomes[1]).filter(|(a,b)| **a && !**b).count()}));
     }
-    if s.schema==16 {
+    if [16,17].contains(&s.schema) {
         return Ok(binary::record!({"source":s.source,"binary":s.binary,"results":results,"same_budget":endpoints,
-            "effect":"FIXED_COVER_EXPOSURE_NOT_MATCHED_COMPUTE_COMPARISON","usage":usage,"training_usage":paired_work(root)?,
-            "result":"FIXED_COVER_EXPOSURE_CLOSED_CHECK_JOINT_RESULT","GOAL1_READY":false}));
+            "effect":if s.schema==17 {"WORDING_COVERAGE_RETAINED_SAME_PARENT_EXPOSURE_CONTROL"}else{"FIXED_COVER_EXPOSURE_NOT_MATCHED_COMPUTE_COMPARISON"},"usage":usage,"training_usage":paired_work(root)?,
+            "result":if s.schema==17 {"WORDING_COVERAGE_CLOSED_CHECK_JOINT_RESULT"}else{"FIXED_COVER_EXPOSURE_CLOSED_CHECK_JOINT_RESULT"},"GOAL1_READY":false}));
     }
     Ok(binary::record!({"source":s.source,"binary":s.binary,"results":results,"same_budget":endpoints,
         "paired_gain_loss":comparisons,"both_gain_loss":both_gain_loss,"effect":if s.schema==15 {"VALUE_COVERAGE_RETAINED_VALUE_CONTROL_SEPARATE"}else if s.schema==14 {"VALUE_EXPOSURE_RETAINED_FIT_CONTROL_SEPARATE"}else if s.schema==13 {"SEEN_PAIR_FITTING_DIAGNOSTIC_NOT_HELDOUT"}else if s.schema==12 {"RECURRENCE_COVERAGE_RETAINED_REPLAY_CONTROL_SEPARATE"}else if s.schema==11 {"PAIR_RECURRENCE_RETAINED_SIDE_CONTROL_SEPARATE"}else if s.schema==10 {"SIDE_MARGIN_RETAINED_SUM_CONTROL_SEPARATE"}else if s.schema==9 {"PAIR_CONTRAST_RETAINED_COBATCH_CONTROL_SEPARATE"}else if s.schema==8 {"COBATCH_RETAINED_CONTROL_COMPARISON_SEPARATE"}else if s.schema==7 {"LR9E5_RETAINED_CONTROL_COMPARISON_SEPARATE"}else if s.schema==6 {"FIRST_TARGET4_RETAINED_CONTROL_COMPARISON_SEPARATE"}else if s.schema==5 {"SINGLE_ARM_EXPOSURE_NOT_COMPARISON"}else if endpoints {"EQUAL_BUDGET"}else if endpoint_steps[0]==endpoint_steps[1]{"EARLY_STOPS_NO_256_COMPARISON"}else{"UNEQUAL_BUDGET_NOT_ESTABLISHED"},
@@ -4031,7 +4086,7 @@ fn study_read_bound(root: &Path, frozen_executable: Option<&Path>) -> Result<Stu
         12 => vec!["WIDE"],
         13 => vec!["FIT"],
         14 => vec!["VALUE"],
-        15 | 16 => vec!["COVER"],
+        15..=17 => vec!["COVER"],
         _ => return Err(bad("study schema")),
     };
     if s.tie_break != names {
@@ -4046,7 +4101,7 @@ fn study_read_bound(root: &Path, frozen_executable: Option<&Path>) -> Result<Stu
         return Err(bad("study registration incomplete/changed"));
     }
     let executable = frozen_executable.map_or_else(std::env::current_exe, |p| Ok(p.to_path_buf()))?;
-    if ![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,14,15,16].contains(&s.schema)
+    if ![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,14,15,16,17].contains(&s.schema)
         || (frozen_executable.is_none() && s.source != source_digest()?)
         || s.binary != file_hash(&executable)?
         || s.parent_plan != file_hash(&s.parent.join("plan.r3b"))?
@@ -4056,7 +4111,7 @@ fn study_read_bound(root: &Path, frozen_executable: Option<&Path>) -> Result<Stu
     {
         return Err(bad("frozen study binding"));
     }
-    if [5,6,7,8,9,10,11,12,13,14,15,16].contains(&s.schema)
+    if [5,6,7,8,9,10,11,12,13,14,15,16,17].contains(&s.schema)
         && (s.inventory.len()!=1 || s.inventory[0].0!=Path::new("research-authorization.r3b")
             || s.inventory[0].1!=file_hash(&root.join("research-authorization.r3b"))?
             || s.inventory[0].2!=std::fs::metadata(root.join("research-authorization.r3b"))?.len()) {
@@ -4975,6 +5030,28 @@ mod tests {
             assert_eq!(seen.len(),128);assert!(seen.iter().all(|(_,c)|**c==20));
         }
         assert_eq!(paired_evaluation(7424,2560,false).primary_steps,vec![8448,9472,9984]);
+        let wording=selector_phrase_rows(&cover,&tm,1280,64).unwrap();
+        assert_eq!(wording[..1280],cover[..1280]);
+        let phrase_tape=PairTape {rows:wording.clone(),..restored.clone()};
+        let back:PairTape=binary::from_slice(&binary::to_vec(&phrase_tape).unwrap()).unwrap();
+        assert_eq!(back,phrase_tape);
+        let mut changed=0;let mut phrase_bases=[BTreeSet::new(),BTreeSet::new(),BTreeSet::new()];
+        for step in 1280..3840 {
+            assert_eq!(back.at(6144+step).unwrap(),wording[step]);
+            for (&before,&after) in cover[step].iter().zip(&wording[step]) {
+                if before==after {continue;}
+                let (a,b)=(&tm[before%n],&tm[after%n]);
+                assert!((2..=4).contains(&a.bucket));assert_eq!(a.bucket,b.bucket);
+                assert_eq!(a.base,b.base);assert_eq!((a.view,b.view),(0,3));
+                assert_eq!(before/(2*n),after/(2*n));assert_eq!((step/64)%4,0);
+                phrase_bases[a.bucket-2].insert(&a.base);changed+=1;
+            }
+        }
+        assert_eq!(changed,1920);assert!(phrase_bases.iter().all(|s|s.len()==32));
+        assert!(selector_phrase_rows(&cover,&tm,1281,64).is_err());
+        assert!(selector_phrase_rows(&cover,&tm,3840,64).is_err());
+        let mut missing_view=tm.clone();missing_view.retain(|m|m.view!=3);
+        assert!(selector_phrase_rows(&cover,&missing_view,1280,64).is_err());
         assert!(!no_further_progress(&[(425,79,0),(380,67,0),(392,68,3),(400,70,4)]));
         assert!(no_further_progress(&[(425,79,0),(380,67,0),(392,68,3),(392,68,3),(392,68,3)]));
         let mut wrong=restored.clone();wrong.rows=values.clone();assert!(verify_pair_tape(&cover_parent,&tm,&wrong).is_err());
@@ -5332,6 +5409,23 @@ mod tests {
         assert_eq!(mixed["same_output"], 0);
         println!("POSTHOC_FIXTURE mapping_faults=4 full_pairs=12 null_pairs=12 mixed_citations=1 optimizer=0 generation=0 teacher=0");
         Ok(())
+    }
+    #[test]
+    fn selector_phrase_only_keeps_serialized_facts_and_targets() -> Result<()> {
+        let (es,ms)=generate(8,0,20260920)?;let mut checked=0;
+        for (a,m) in es.iter().zip(&ms).filter(|(_,m)|(2..=4).contains(&m.bucket)&&m.view==0) {
+            let j=ms.iter().position(|n|n.base==m.base&&n.view==3).unwrap();
+            for variant in [false,true] { for flip in [false,true] {
+                let a=if variant {changed_question(a,phrases(Intent::Current)[0])?}else{a.clone()};
+                let (a,b)=if flip {(flip_selection(&a,m)?.0,flip_selection(&es[j],&ms[j])?.0)}else{(a,es[j].clone())};
+                verify_selector_phrase_change(&a,&b)?;checked+=1;
+                let mut broken=b.clone();broken.answer.push(' ');assert!(verify_selector_phrase_change(&a,&broken).is_err());
+                let mut broken=b.clone();broken.request.evidence.items.reverse();assert!(verify_selector_phrase_change(&a,&broken).is_err());
+                let mut broken=b.clone();broken.request.evidence.items[0].observed_at=Some(0);assert!(verify_selector_phrase_change(&a,&broken).is_err());
+                assert!(verify_selector_phrase_change(&a,&a).is_err());
+            }}
+        }
+        assert_eq!(checked,96);println!("PHRASE_CASES=96 malformed=384 optimizer=0 generation=0 teacher=0");Ok(())
     }
     #[test]
     #[ignore = "explicit closed paired arm/new output; existing raw only, optimizer/generation/teacher0"]

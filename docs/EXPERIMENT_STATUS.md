@@ -1,5 +1,55 @@
 # 진단 및 구현 상태
 
+## 2026-09-20 Selector-wording exposure implementation and registration verified
+
+Reuse `fresh paired-continue --selector-phrase-exposure` for schema17, same
+COVER7424 parent as the closed fixed-exposure control. Only1920/20,480 planned
+draws change: C/D/E each640 substitute already-owned train view3 wording in
+one of four64-update cycles. Actual registration checks192 unique replacements
+against original serialized facts/answers/order/time and request-only labels.
+Pure input comparison confirms all ten native input files, parent/Adam/config,
+tokenizer, evaluation policy and all20,480 target digests equal the control.
+No corpus creation, product oracle, new framework or model/storage equation.
+
+Direct native TINY process tests: changed8 continuous versus fresh1+7 PASS22.25s;
+unchanged COVER control PASS22.13s, exact weights/Adam/clock/tokens. Semantic
+fixture96 valid cases/384 malformed cases PASS0.02s, optimizer/generation0.
+Full3840 tape writer-reader/bounds/anchor/wording test PASS1.88s and final-source
+repeat PASS1.90s. Parent parity16/16 PASS twice (14.43s,13.87s),162 raw tokens
+each. SMALL optimizer0/teacher0/generation32. TINY actual92 optimizer and495
+generation/teacher include the failed process's20/129/129 and both completed
+processes36/183/183; setup observations are included, scalar0.
+
+The failed process caught the missing updated `train_order` digest before new
+wording learning. Its original log remains. An initial compile error was also
+fixed before calls. Strict Clippy then caught one new divisibility-style warning;
+the equivalent integer method fixed it, with final full tape/parity rechecked.
+Final strict Clippy exit101 retains only the existing for_kv_map and
+type_complexity warnings; no global Clippy PASS. Final release build PASS19.66s,
+Rust/Cargo1.98.1, locked/offline/Accelerate/F32/thread1. No dependencies updated.
+
+Only `artifacts/selector-phrase-20260920-final/` is registered for learning,
+optimizer cap2560 total. The earlier preparation root is retained with no
+optimizer calls or command segments; it used the preceding source before the
+style fix and is not a second learning arm. Both parity16 calls are reported
+against the total generation allowance. Closed studies/terminals are untouched.
+New policy `daf68f5a2effdf757baec2cc6db48e5fe40bab6f5af6b37c36035276adc809b2`,
+study physical `e1bc179dca9e95da41deb857c61d0e80b82f9c4428d9b57c4aa030167f25fc22`.
+Frozen executable `artifacts/selector-phrase-20260920-final-executable`, SHA256
+70aa6568fba1f0d30520feec0a43f38ed5376f1c298c3354b31eb157fb009bc3;
+compiled source digest879d697e8364ccd54a8cd24fbdc7961c226376ac555d1f9ccaa9bd8edc8105a3.
+Parent physical9845a43db02f197fca6026db058c503c1fa8856ffd673267904103c03b2e98e0,
+weightsd8b2472422605e9305f2a25d8c39cbac555161d65d1303ca4b149c392dc60403,
+Adam90c945663b2905c62af87a46a7bfcaf9aca0971480986cc1cf9b3d07c877c626.
+
+Evidence `artifacts/selector-phrase-20260920-evidence/`: exact test logs,
+retained test binaries, input-binding reader/source, initial/final preparation,
+parity, Clippy and build logs. Final diagnostic binary
+9a1b8e50c731e8a781d55f5d54172cc2e68188fcb3ef634f7d17c9055d160ec2;
+TINY process binarya0bc3407de4a2cf3bca6325076a046f79cbdebd9a4ef12f2161614fd50b8b5ce.
+SCOPED_CODE_VERIFICATION=PASS; SMALL_LEARNING=NOT_RUN_AT_THIS_ENTRY;
+QUALITY_RECOVERY/GOAL1_READY/GOAL1_ACCEPTED=false; final200 NOT_CREATED/NOT_OPENED.
+
 ## 2026-09-20 Closed COVER raw selection strata, no model calls
 
 DERIVED_EXISTING_RAW, EXECUTED_THIS_RUN: reuse the production corpus loader,
