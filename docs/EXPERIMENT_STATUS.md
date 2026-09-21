@@ -1,6 +1,6 @@
 # 진단 및 구현 상태
 
-## 2026-09-22 인용 continuation — C3 학습 상한 완료, 공동 품질 미달
+## 2026-09-22 인용 continuation — 학습·독립 B 검증 완료, 공동 품질 미달
 
 Code source `c9c121077bbe1aadc546e344ab237d38728e3d3e`의 독립 A가 실제 PASS했다.
 별도 A 보고서 commit/확인한 remote는 `8d1c2ff42e90094cd168ccc504baa1521f142af2`다.
@@ -40,8 +40,10 @@ VC ALL4>=116 조건에 미달한다. FULL이95%를 넘었다고 공동 합격으
 V12,160/VC0 6,080/VC1 6,080 노출이며 상속32를 더한 전체 citation 계보에서
 V1536 각8회, VC0/VC1 각1536은4회다. 종료 누적 input8,710,144/target303,104.
 폐기 optimizer/input/target0이며 SMALL diagnostic backward0이다.
-B 전 실제 generation4128=부모32+평가4096, teacher4096이다.
-canonical 관측 active1621.653515375초; command wall/컴파일/순수 검산은 별도다.
+최종 실제 generation4160=부모32+평가4096+독립 B32, teacher4096이다.
+생성 token49,872=부모64+평가49,504+B304이며 진단 gradient/optimizer 추가0이다.
+부모·학습 segment·B 관측의 active 합계1624.452319209초이며,
+command wall/컴파일/진입 전 검증/순수 검산은 별도다.
 최대 관측 training RSS6,305,008KiB; `/usr/bin/time -l`의 최대 process RSS는
 7,225,114,624bytes이며 단위·측정 범위가 다르다.16GiB 제한 내였다.
 
@@ -57,12 +59,26 @@ canonical 관측 active1621.653515375초; command wall/컴파일/순수 검산�
   `9f150bf0d5855c2956db8802ee91f3038389765afaaeddf1d336cd2868981d31`.
 - Preparation SHA256 `5be75f097064ac5156409adaab0ebfe23c5321e59534fc0aa35422f7af8205f2`;
   source digest `65cee12e4d3c0c4149a7b02c7026614eb93206c2c61f6bdcab97ce33d92bd0c8`.
-- Evidence: `artifacts/citation-continuation-20260922-review/`; `candidate-02.diff`,
+- Evidence: `artifacts/citation-continuation-20260922-review/`; `implementation.diff`,
   `A2-quick/`, `parent-*.stdout`, `train-segment-*.stdout/stderr`,
-  `final-report-before-b.stdout/stderr`를 보존한다. 최종 순수 report는 exit0,
+  `final-report-before-b.stdout/stderr`, `B-recount-01.log`, `B-parity-recount.log`를
+  보존한다. `implementation.diff`는 시작 HEAD `a4e113ee3a04fbc176cf6690c6ec9c3f70f66374`
+  대비 code candidate의 이번 변경이며 SHA256
+  `52aea6f4a827d58755c908359e9e1d43d78ae95e79336d414ca2f7d43b00d5b7`다.
+  기준 source70d933 대비 `candidate-02.diff`도 별도 보존한다. 최종 순수 report는 exit0,
   모델/teacher/optimizer0이며 실제 terminal/raw/trace와 일치했다.
 
-C3 실행은 완료, 독립 B는 진행 중이다. 적격 후보가 없어 citation confirmation은
+독립 B는 실제3040 update trace,11 native checkpoint,7 guard 판정,
+generation4096/teacher4096행 및8192 prepared/resolved 쌍을 전수 검산했다.
+최종 native의 새 process V16/VC16은 raw token·EOS·오류가32/32 일치했다.
+실행·원자료·재현은 PASS이며 인용 공동 품질은 FAIL이다.
+[독립 B 보고서](CITATION_CONTINUATION_REVIEW_B_2026-09-22.md)의 SHA256은
+`cb117ebddd55c1d9e7090f687264751746e1d00c67654e013b3179da56482c1e`이며,
+report-only commit/확인한 remote는 `79cc30c20a6dd50ddbe4c93b04a4b4fbbb8e446d`다.
+Reviewed source는 위 `c9c1210`이며 보고서 commit과 구분한다.
+보호 원본11607파일과 독립 A 보고서·승인은 변경되지 않았다.
+
+이번 구현·학습·독립 B 검증은 완료했다. 적격 후보가 없어 citation confirmation은
 미개봉이며 QA gap640도 NOT_RUN이다. 기존 scalar4352와 TOKEN/ANSWER4384 실패,
 원본·Adam·corpus·사용자 기억은 보존한다. 코드 수용, 값 보존, 인용 공동 품질과
 S4/S5/S6·Goal1을 분리한다. 값 dev 보존은 관측됐지만 전체 train gate 미측정,

@@ -14,8 +14,14 @@ At7424, V dev511/512 (ALL4127), citation492/512 (ALL4113) and renamed495/512
 miss508; valid foreign IDs17/15 miss0. Citation ALL4113 misses116. Thus no
 eligible candidate exists despite better value/citation output than at4384.
 Conditional full-train4608, confirmation512 and broader QA640 are NOT_RUN because
-their common development prerequisite failed. B independently verifies this
-complete negative endpoint; it cannot promote it or reopen its budget.
+their common development prerequisite failed. Independent B verified all3040
+updates,11 checkpoints and4096 generation/teacher rows, then reproduced V16/VC16
+in fresh processes (32/32 parity). Execution/raw/reproduction passed; citation
+quality failed. The [B report](CITATION_CONTINUATION_REVIEW_B_2026-09-22.md) was
+published separately at79cc30c20a6dd50ddbe4c93b04a4b4fbbb8e446d, with that full
+remote SHA verified. It does not promote the endpoint or reopen its budget.
+Final SMALL usage is3040 updates/4160 generations/4096 teacher calls. Code and
+independent execution acceptance do not imply S4/S5/S6 or Goal1 acceptance.
 
 The next required quality step is to obtain an independently eligible value+
 citation candidate before S4. The remaining observed gap is exact event-ID
