@@ -1,6 +1,36 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: query signal convergence — explicit QE512 continuation
+## Closed: query signal convergence — delayed train fit, joint gate unmet
+
+Source a8c7f0fa261b2bf6804e02783d6f78bdcb0c7b28 was independently approved,
+pushed and frozen before the single QE continuation. Actual new1536 updates
+completed as1/511/512/512 in separate processes, from preserved QE512 to2048.
+Input1781760/target24576,24 additional visits per row and every tape/Adam clock
+were verified. ConstantLR3e-4, inherited Adam, QE/BOTH/CE and the production
+binary remained fixed. No EQ, new seed, warmup, reset or additional search ran.
+
+Final train FULL472/512, QUERY_BOTH216/256, SWAP_BOTH217/256, ALL4 96/128;
+dev294/512,77/256,101/256,21/128. Both have errors0 and normal EOS but fail
+the registered full gates. Final decision is FINAL_QUALITY_FAIL, Finished,
+resume=false. The old512 decision remains closed and unchanged. No further
+learning is authorized by this completed plan.
+
+Train query discrimination improved after1024; full train mean d rose from
+0.001144 at512 to3.602308 at2048. Dev mean d also rose to1.074871 but dev digit
+NLL worsened from0.959152 to1.400022, with46 other-value responses. Thus train
+selection and dev success remain distinct. Observation-only gS/Adam-delta probes
+did not change CE or optimizer state; local linear agreement is not long-term
+causal proof. Complete distributions and actual counts are in the status record.
+
+Parent, implementer endpoint and independent endpoint fresh-process parity
+each match16/16. Production raw/decision recount succeeds. New SMALL totals
+2352 generation,2432 teacher/sample rows,16 diagnostic microbatch forwards,
+6 diagnostic backwards; no unknown/discarded work. Confirmation remains sealed
+and NOT_RUN_PREREQUISITE. CODE_LOW_FIX and observation noninterference pass;
+TRAIN_BINDING/DEV_BINDING fail; minimal baseline,S4/S5/S6 and Goal1 remain
+unaccepted. Product default is unchanged. Original files and failed tests remain.
+
+The following is the closed study's registered design, not a new run permission.
 
 R3-QUERY-SIGNAL-CONVERGENCE-1.0 preserves source32df6dcb1c86020b9fc5402ff3b8bc32f3180f0e
 and the closed QE/EQ comparison. Its old decision and all endpoint receipts are

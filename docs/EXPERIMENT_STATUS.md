@@ -1,5 +1,143 @@
 # 진단 및 구현 상태
 
+## 2026-09-21 Query signal2048 — 제한 실행 완료, 학습 적합 개선·공동 품질 미달
+
+R3-QUERY-SIGNAL-CONVERGENCE-1.0의 실제 source는
+**a8c7f0fa261b2bf6804e02783d6f78bdcb0c7b28**이다. 독립 A를 받은 뒤 정상 push와
+원격 SHA 일치를 확인했고, 아래 SMALL 실행 동안 source/binary 변경은0이다.
+1024에서 full gate가 미달해 사전등록한2048까지 진행했다. 최종
+**FINAL_QUALITY_FAIL / Finished / resume=false**이며 추가 예산은 없다.
+실행·저장 성공과 모델 품질을 구분한다. 아래 준비 기록의 NOT_RUN은 당시 상태다.
+
+|실제 identity|값|
+|---|---|
+|Source / compiled-source digest|a8c7f0fa261b2bf6804e02783d6f78bdcb0c7b28 / 1892e1c5575658e41c6318b32018e1a8f3d052e325931b778da999c57fae2f7e|
+|Production executable SHA256|c037ec25664e4a2945628bff0724a2ddf96a4da7e5a1a2f648a327857305d49f|
+|Parent QE512 physical SHA256|e6895cbe02ab5ecdef0f300d953b60749358e0d6f8ba2d4d31344eece8f15fbb|
+|BOTH corpus physical SHA256|e73fddef722c4cd1c249d9896b49dd7e1dcae96bc39ad0eb1e3438ee6c5a51ac|
+|Tokenizer content ID|ec945ee5f3cbd87992bdfa13f199de2a671b94b64337dff04d85e01d982ab9ef|
+|Plan physical SHA256|c7a6d0605e31e7714b15f3391250636dc7f6ed52934bdc0d3a1db74d62d0ab7c|
+|Canonical native/receipt policy digest|a427cf693094f790736874c5bb2b005bb998e20b1dcf9dae916ae75fbf97c04d|
+|Serialized2048-row tape digest|df3ea0fd4867e3df355a9badc9ad68fe737d1c269b9ab790b52767461b6f9cd8|
+|Framing / objective|QE native-role-bytes-v1 / unchanged full-vocabulary digit+EOS CE, first-target1|
+|Tape / optimizer|original512 tape repeated3 times; actual1536 traces; inherited Adam clock512→2048; constantLR3e-4|
+|Final native physical SHA256|e9b6c796bf7eccf292b46b040592450339dbe679014cbee46c5bf2952c9e1ab0|
+|Final tensor content ID|341577e026a62675c670199f59e0c198203684f983a65d7d0f2eed6c7157b231|
+|Final evaluation weight ID|0111e4df7f0efe06aa9147b660da1e39221ec25daf92a785ec1f4a0cceb354fc|
+|Final Adam136 digest|5d3b93835657a75ae44b27a27fdd105a8258a5fec6db2760bac89c5b30c66762|
+|Final decision SHA256|8daf8ca1c5715a61960a7d7e55b706d1303b2be686f01789960fa5fc5eb3995d|
+|Final segment receipt SHA256|8112280bb73907c378a283af9f25a6702a225eaaef6e958ae98ceb5b3ad6e70f|
+
+### 같은 endpoint의 전수 결과
+
+|Step / panel|FULL /512|QUERY_BOTH /256|SWAP_BOTH /256|ALL4 /128|Gold / foil / other|EOS / errors|
+|---|---:|---:|---:|---:|---|---|
+|512 parent train|256|0|31|0|256 /256 /0|512 /0|
+|512 parent dev|255|1|28|0|255 /257 /0|512 /0|
+|1024 train|269|17|35|1|269 /243 /0|512 /0|
+|1024 dev|253|10|31|0|253 /259 /0|512 /0|
+|2048 train|472|216|217|96|472 /38 /2|512 /0|
+|2048 dev|294|77|101|21|294 /172 /46|512 /0|
+
+Train gate는 FULL508/QB252/ALL4 124, dev gate는488/232/116이며 둘 다 미달이다.
+512의 원래 결과는 기존 raw를 재사용했다. 이번 최종 정상 생성은 별도 연구의
+저장된 동일2048 모델이다. 원본 framing512 decision과 EQ 결과를 수정하지 않았다.
+
+아래는 같은 metadata 고정64만의 경과다. 위 전수와 분모를 섞지 않는다.
+
+|Step|Train FULL /64, QB /32, SB /32, ALL4 /16|Dev FULL /64, QB /32, SB /32, ALL4 /16|
+|---|---|---|
+|512 parent|32 /0 /5 /0|31 /0 /7 /0|
+|768|32 /0 /3 /0|32 /1 /4 /0|
+|1024|33 /1 /4 /0|34 /3 /6 /0|
+|1536|52 /20 /22 /7|36 /8 /11 /2|
+|2048|59 /27 /27 /12|40 /11 /14 /3|
+
+### 질문 신호와 실제 갱신
+
+|전수 panel|Mean abs(c)|Mean d|Mean min margin|Digit NLL|EOS NLL|Binary NLL|
+|---|---:|---:|---:|---:|---:|---:|
+|512 train|0.969794|0.001144|-0.968650|0.924161|0.000330|0.848874|
+|512 dev|0.957095|0.000483|-0.956613|0.959152|0.000328|0.848460|
+|1024 train|0.815976|0.076844|-0.739132|0.805237|0.000093|0.775571|
+|1024 dev|0.802243|-0.005127|-0.807371|0.854602|0.000092|0.809708|
+|2048 train|1.503517|3.602308|2.098791|0.222023|0.000024|0.198583|
+|2048 dev|2.155598|1.074871|-1.080727|1.400022|0.000024|1.090279|
+
+이번에는 train의 질문 판별·공동 정답이 늦게 크게 늘었다. 따라서512의 낮은
+공동 정답만으로 학습 불가능이나 구조 한계를 확정할 수 없다. Dev 공동 정답도
+1→77, ALL4 0→21로 늘었지만 train보다 크게 낮고, digit NLL은 부모보다 악화됐다.
+전체 후보 밖으로 간 정상 오답도 dev46개다. EOS만 좋아진 결과는 아니지만,
+일반화 기준선은 여전히 미확립이다. 동일 정책의 시간·노출 관측이며 QE/EQ의
+동등 예산 비교나 장기 인과 증명이 아니다.
+
+2048의 두 margin 양수는 train218쌍/dev91쌍, 실제 QUERY_BOTH는216/77이다.
+양수 all4는97/28, 실제 ALL4는96/21이다. 두 후보 diagnostic을 정상 전체
+vocabulary 점수로 대체하지 않았다. c/d/m0/m1/최소 margin의 전체 분포·orientation은
+독립 scratch의 panel-2048.log와 pair-details TSV에 보존했다.
+
+|새 update / 절대 step|S before → after|gS·delta|실제 S 변화 − 1차 근사|
+|---|---|---:|---:|
+|1 /513|0.002266467 → 0.002301425|0.0000374422|-0.0000024841|
+|8 /520|0.002264887 → 0.002313793|0.0000614670|-0.0000125613|
+|32 /544|0.002262443 → 0.002295613|0.0000323299|0.0000008401|
+|128 /640|0.003302604 → 0.003284752|NOT_RUN backward|NOT_APPLICABLE|
+
+고정 train16의 별도 graph를 사용했고 관측 gradient를 optimizer에 넣지 않았다.
+첫 세 국소 update의 dot/실제 S 변화는 양수이나 이것이2048까지의 원인을
+증명하지는 않는다. 독립 검토는 저장된 요약의 수치·trace delta norm 연결과
+source를 검산했다. 원 gradient tensor를 새 forward로 재생성한 검증은 아니다.
+
+### 실제 사용량·검증·남은 범위
+
+SMALL은 old512 + **new1536 = absolute2048**. 네 새 process의 optimizer는
+1/511/512/512이며 첫1회 저장 후 복원했다. 새 committed/executed input
+**1,781,760**, target**24,576**, padding/discarded/uncommitted0이다. 각 train행
+24회 추가 노출, 부모 포함32회이며 tape 순서를 실제 trace와 대조했다.
+
+예정 평가 generation2304 + parent16 + 구현자 final16 + 독립 final16 = **2352**.
+Teacher/sample-forward **2432** = 평가2304 + train 관측128이다. 후자는16개
+microbatch forward, 추가 backward6이며 정상 training forward/backward1536과
+별도다. 모든 생성/teacher 호출은 반환됐고 UNKNOWN0이다. TINY 누적13 updates,
+generation56, teacher sample200 및 scalar finite-difference16은 실패 시험까지
+포함한 별도 회귀 비용이다. SMALL/TINY를 합쳐 모델 학습량이라고 하지 않는다.
+
+예정 학습/평가/관측의 source-derived forward10,768, backward1,542도 독립
+검산했다. Generation 경로의 두 prefill과 한 decode, teacher 한 forward를
+실제 반환 token/행 수에 적용한 호출 집계이며 kernel 계측은 아니다.
+부모/최종/독립 parity와 TINY는 이 subtotal에 포함하지 않는다.
+Parity48회까지 포함한 SMALL source-derived forward는10,912, backward는1,542다.
+
+학습 segment의 receipt elapsed 합864.304263166초는 평가·저장을 포함한다.
+최대 관측 RSS2,762,864KiB, 각 segment900초+cleanup120초와 총7200초 내 종료했다.
+이것은 학습만의 처리량이나 전체 forward별 성능 측정이 아니다. 마지막 durable
+checkpoint는 `artifacts/query-signal-20260921-study/QE/segment-0003/final`이다.
+세 parity command까지 합한 실제 receipt elapsed는868.223972583초다.
+
+직접 관련 고유 회귀5개 최종 PASS, 독립 순수 지정 실행3개 각각1 PASS.
+초기 compile 실패와 첫 TINY process 실패는 보존했고 PASS로 세지 않았다.
+실제 네 학습 command, 부모16/최종16/독립16 parity, production signal-report는
+모두 exit0이며 parity는 각각16/16이다. Source 수리와 독립 A 이후의 실제
+SMALL 실행에서 취소·저장 실패·NaN·UNKNOWN은 없었다.
+
+독립 B는 실제 raw/native/tape/호출 원장과 최종 재생성을 검증해
+INDEPENDENT_RESULT_INTEGRITY=PASS, QUALITY_GATE=FAIL로 닫았다.
+`artifacts/query-signal-20260921-review/FINAL_B_REPORT.md` SHA256은
+c27c14e3aeb657a17dba2171f7af43a95965afb60b0077b631d7effb628ba445,
+실제 review-b.r3b는1cb68d99b5069c88123fe1f0e1df6de78e453d2eec5c4832fccbd24fa7ffa9e7이다.
+별도 수학 검산 FINAL2048-MATH-REVIEW.md의 SHA256은
+c8e43d369051fb9a9fdd372db10e6dd94e0b0f01ecd933c0c2768a6f57f8df37이다.
+두 검토 모두 새 SMALL 학습0이며 독립 생성은 B의 지정16회뿐이다.
+
+CODE_LOW_FIX=PASS, OBSERVATION_NONINTERFERENCE=PASS, STUDY_EXECUTION=COMPLETE.
+TRAIN_BINDING=FAIL, DEV_BINDING=FAIL, CONFIRMATION=NOT_RUN_PREREQUISITE(미개봉),
+MINIMAL_BASELINE=NOT_ESTABLISHED, S4/S5/S6=NOT_ACCEPTED,
+GOAL1_READY=false, GOAL1_ACCEPTED=false. 제품 기본 모델은 교체하지 않았다.
+
+실제 candidate diff, 준비물·native·raw·로그·검토 위치는 로컬
+`artifacts/query-signal-20260921-evidence/HANDOFF.md`에 정리한다. 새 추적 파일은0이며
+source4개와 기존 상태/계획2개만 변경했다. 모델·corpus·큰 raw·scratch는 게시하지 않는다.
+
 ## 2026-09-21 Query signal — QE512 보존 확인 및 제한 continuation 준비
 
 R3-QUERY-SIGNAL-CONVERGENCE-1.0은 기존 framing512 종료를 고치지 않는 별도
