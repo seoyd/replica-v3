@@ -1,5 +1,47 @@
 # 진단 및 구현 상태
 
+## 2026-09-22 문항 평균 CE — 준비·직접 회귀 완료, 독립 A 대기
+
+현재 연구는 같은4352 부모에서 TOKEN32와 ANSWER 최대3072의 reduction만
+비교한다. 기존4384 QUALITY_REGRESSION/resume=false 및 모든 원본은 보존한다.
+관련 quick5개 PASS이며 SMALL 새 학습·모델 품질 개선은 아직 NOT_RUN이다. 기존 값 선택 수용254/256은
+4352의 역사 결과이며 새 모델의 점수로 사용하지 않는다.
+
+M0 독립 입력 감사는 부모4352와 실패4384의 native/Adam/자료·128개 보존
+hash를 재확인했다. 최신 독립 V16/VC16 실제 재현도 확인했으며 이전 CLI의
+NOT_RUN과 구분했다. 이번 M0 generation/teacher/optimizer는0이다.
+변경 없는 실제 tape의32회 비용은 input38144/target2432/padding1024,
+3072회는3661824/233472/98304다. 새 합계3104회 최대는3699968/235904/99328다.
+답변 길이2/17의 계수 변화는 수학적 reduction이며 실제 gradient 영향비가 아니다.
+
+수리 범위를 반복하지 않고 기존 trainer에 ANSWER 평균과 별도 누적 분모,
+native family6 objective/policy binding을 연결했다. 신규 연구와 순수 report는
+기존 citation 하네스·publisher·native 파일을 재사용한다. 기존 seal은 재생성하지
+않고 새로운 검증된 연결 객체만 기록한다. 직접 회귀 및 독립 A를 완료한 뒤에만
+TOKEN 대조와 ANSWER를 실행한다. 실행 evidence는 로컬
+`artifacts/answer-mean-citation-20260922-evidence/`, 독립 입력·준비 검토는
+`artifacts/answer-mean-citation-20260922-review/`에 보존한다.
+
+최종 `replica-check quick --answer-mean`은4개 trainer 테스트와1개 native
+objective 테스트를 실행해 모두 통과했다. 무작위 TINY의 F64/logit 기준,
+8/4+4/3+5/2+6 gradient/Adam, random native2 대 새process1+1 bitwise와
+별도 EOS tensor fixture의 실제 fresh2/1+1/평가-only2+0을 구분해 확인했다.
+옮겨진 ANSWER native는 범용 trainer에서 optimizer0으로 거부됐다.
+첫 process 시도는 TINY12행을8행으로 잘못 기대한 테스트 오류로 실패했고,
+기록을 보존한 뒤 실제 분모12로 수정했다. 최종 quick까지 실패 포함 TINY
+optimizer60/generation356/teacher288/finite-difference32이며 SMALL은0이다.
+컴파일 오류2회는 테스트 PASS로 세지 않는다. 자세한 실행·실패 원장은
+`artifacts/answer-mean-citation-20260922-evidence/M1-EXECUTION-LEDGER.md`다.
+
+동결 source digest는 `c1e876f97339cc8e5fec3422c3d2670bdb03d4b0db439829c6d318083043a736`,
+실행물은 `artifacts/answer-mean-citation-20260922-executable`, SHA256
+`351abbcb522d894a54e241f8d9b7dfd5c4c9fc3c0da750ae7a4d875cad45e549`다.
+신규 준비 root는 `artifacts/answer-mean-citation-20260922-study`이며
+preparation hash는 `7116514763d4dff682ffeb817f149da4877f0759b51339c488c72fc7b3cc7be0`다.
+양군의 원 native/corpus/tokenizer는 byte-identical, 기존 seal은 새 연결로만
+묶었으며 새 seal·모델 호출은0이다. 독립 A와 parent16 전제 충족 후에만
+TOKEN32→ANSWER32의 실제 비교를 시작한다. 코드 PASS를 모델 품질로 해석하지 않는다.
+
 ## 2026-09-21 값·선택사건 인용 — 32회 실제 학습 후 보존 guard 중단
 
 **코드·자료 독립 A PASS / 실제 학습32회 / 값 보존 FAIL / 인용 수용 FAIL.**

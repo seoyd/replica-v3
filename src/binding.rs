@@ -51,7 +51,7 @@ fn is_orbit(p: &Plan) -> bool {
             .is_some_and(|x| x.dataset == ORBIT_DATA)
 }
 fn arms(p: &Plan) -> &'static [&'static str] {
-    if citation::is(p) { return &[citation::ARM]; }
+    if citation::is(p) { return citation::arms(p); }
     if is_consolidation(p) {
         &[CONTINUE_ARM]
     } else if is_expansion(p) {
@@ -944,6 +944,8 @@ fn work(p: &Plan) -> Result<(f64, usize, usize, u64, u64)> {
             "review-REPEAT", "review-REBIND", "parent-new", "review-parent", "review-REBIND-CONTINUE",
             "citation-parent", "citation-review-value", "citation-review-citation",
             "citation-parity-value", "citation-parity-citation",
+            "mean-parent", "mean-review-TOKEN-CONTROL-value", "mean-review-TOKEN-CONTROL-citation",
+            "mean-review-ANSWER-MEAN-value", "mean-review-ANSWER-MEAN-citation",
         ] {
             let study = &own(p).study;
             if study.join(format!("{name}-started.r3b")).exists() {
@@ -966,7 +968,9 @@ pub(in super::super) fn usage(p: &Plan) -> Result<(f64, usize, usize)> {
 }
 pub(in super::super) fn remaining(p: &Plan, target: bool) -> Result<u64> {
     let w = work(p)?;
-    let (cap, n) = if citation::is(p) {
+    let (cap, n) = if citation::is_mean(p) {
+        if target {(260_000u64,w.4)} else {(4_000_000u64,w.3)}
+    } else if citation::is(p) {
         if target {(800_000u64,w.4)} else {(6_300_000u64,w.3)}
     } else if is_consolidation(p) {
         if target {(30_000u64,w.4)} else {(2_100_000u64,w.3)}

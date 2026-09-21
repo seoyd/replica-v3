@@ -8,6 +8,21 @@ pub(super) const ARM: &str = "VALUE-CITATION";
 const ORIGIN: usize = 4352;
 const UPDATES: usize = 3072;
 const POOL: usize = 1536;
+const MEAN_DATA: &str = "answer-mean-citation-v1";
+const MEAN_CONTRACT: &str = "R3-ANSWER-MEAN-CITATION-1.0";
+const MEAN_ARMS: [&str;2] = ["TOKEN-CONTROL", "ANSWER-MEAN"];
+pub(in super::super::super) fn is_mean(p: &Plan) -> bool {
+    p.identifiable.as_ref().is_some_and(|o|o.dataset == MEAN_DATA)
+}
+pub(in super::super::super) fn answer_mean(p: &Plan) -> bool {
+    is_mean(p) && own(p).arm == MEAN_ARMS[1]
+}
+pub(super) fn arms(p: &Plan) -> &'static [&'static str] {
+    if is_mean(p) { &MEAN_ARMS } else { &[ARM] }
+}
+fn selected_root(study: &Path) -> PathBuf {
+    study.join(if study.join(MEAN_ARMS[1]).is_dir() { MEAN_ARMS[1] } else { ARM })
+}
 fn terminal_path(root: &Path, end: &Segment) -> Result<PathBuf> {
     let segment = Path::new(&end.checkpoint)
         .parent()
@@ -24,7 +39,7 @@ fn terminal_path(root: &Path, end: &Segment) -> Result<PathBuf> {
 }
 
 pub(in super::super::super) fn is(p: &Plan) -> bool {
-    p.identifiable.as_ref().is_some_and(|v| v.dataset == DATA)
+    is_mean(p) || p.identifiable.as_ref().is_some_and(|v| v.dataset == DATA)
 }
 pub(super) fn evaluation(p: &Plan) -> EvaluationPolicy {
     let mut e = super::evaluation(p.tiny);
@@ -37,6 +52,7 @@ pub(super) fn evaluation(p: &Plan) -> EvaluationPolicy {
     e.generation_limit = 16384;
     e.teacher_limit = 16384;
     e.active_seconds = 10800;
+    e.train_steps.retain(|&s|s<=p.config.max_steps);
     e
 }
 pub(in super::super::super) fn endpoint(p: &Plan, step: usize, pending: bool) -> Result<usize> {
@@ -572,6 +588,7 @@ fn prepare_inner(
     Ok(())
 }
 pub(super) fn verify_plan(root: &Path, p: &Plan) -> Result<()> {
+    if is_mean(p) { return verify_mean_plan(root,p); }
     let o = own(p);
     let s: binary::Value = read(&o.study.join("selection.r3b"))?;
     let parent = Path::new(
@@ -654,6 +671,15 @@ struct CitationScore {
 }
 fn value(text: &str) -> Option<u8> {
     text.as_bytes().first().copied().filter(u8::is_ascii_digit)
+}
+fn valid_outside_ids(es: &[Episode], rows: &[binary::Value]) -> usize {
+    es.iter().zip(rows).filter(|(e,r)| {
+        let text=r["actual"].as_str().unwrap_or("");
+        text.match_indices("[event:").any(|(start,_)| {
+            text[start..].find(']').is_some_and(|end|citations(&text[start..=start+end]).is_ok_and(|ids|
+                ids.iter().any(|id|!e.request.evidence.items.iter().any(|event|event.event_id==*id))))
+        })
+    }).count()
 }
 fn score_citation(
     es: &[Episode],
@@ -905,6 +931,26 @@ fn read_score(root: &Path, p: &Plan, step: usize, panel: &Panel) -> Result<binar
     } else {
         binary::to_value(score_citation(es, ms, &raw[1..], &tok)?)?
     };
+    if is_mean(p) {
+        let mut first=0;let mut extra=0;let mut length=0;let mut parsed=0;let mut runtime=0;
+        for (e,r) in es.iter().zip(&raw[1..]) {
+            let actual=r["actual"].as_str().unwrap_or("");
+            let good=value(actual).is_some() && value(actual)==value(&e.answer);
+            first+=usize::from(good);extra+=usize::from(good && is_v && actual.len()>1);
+            length+=usize::from(r["finish_reason"]=="length");runtime+=usize::from(!r["error"].is_null());
+            if let Ok(ids)=citations(actual) { if ids.len()==1 {
+                parsed+=1;
+            }}
+        }
+        out["first_value_correct"]=binary::record!(first);out["wrong_first_value"]=binary::record!(es.len()-first);
+        out["correct_value_with_extra_output"]=binary::record!(extra);out["length"]=binary::record!(length);
+        out["runtime_errors"]=binary::record!(runtime);
+        if !is_v {
+            out["parsed_single_id"]=binary::record!(parsed);out["citation_parse_failures"]=binary::record!(es.len()-parsed);
+            out["valid_outside_id"]=binary::record!(valid_outside_ids(es,&raw[1..]));
+        }
+        out["teacher_objective"]=binary::record!("gold-prefix token CE diagnostic; not answer-mean training objective");
+    }
     let teachers =
         binary::read_value_records(&root.join(format!("eval-{step:04}-{name}-teachers.r3rows")))?;
     let mut value_nll = 0.;
@@ -978,7 +1024,7 @@ fn dev_pass(scores: &BTreeMap<String, binary::Value>) -> Result<bool> {
             && v["citation_support_correct"]
                 .as_u64()
                 .is_some_and(|v| v >= 508)
-            && v["outside_id"] == 0)
+            && if v["valid_outside_id"].is_null() {v["outside_id"]==0}else{v["valid_outside_id"]==0})
     };
     Ok(pass(&joint, 512, 488, 232, 116) && citation("citation512")? && citation("renamed512")?)
 }
@@ -1129,6 +1175,7 @@ fn trace(root: &Path, p: &Plan, end: &Segment) -> Result<binary::Value> {
     let mut counts = vec![0usize; c.train.len()];
     let mut task = [[0usize; 3]; 3];
     let mut files = BTreeMap::new();
+    let mut mean_steps = Vec::new();
     for index in 0..128 {
         let terminal = root.join(format!("segment-{index:04}-finished.r3b"));
         if !terminal.exists() {
@@ -1168,6 +1215,30 @@ fn trace(root: &Path, p: &Plan, end: &Segment) -> Result<binary::Value> {
                 {
                     return Err(bad("citation actual trace/LR/token/gradient mismatch"));
                 }
+                if is_mean(p) {
+                    let stats=r["tasks"].as_array().ok_or_else(||bad("mean trace examples"))?;
+                    let mut token=0.;let mut answer=0.;let mut actual_targets=0;let mut contributions=[0.;3];
+                    for (s,&i) in stats.iter().zip(&draw) {
+                        let ce=s["ce"].as_f64().ok_or_else(||bad("mean sample CE"))?;
+                        let n=s["target"].as_u64().ok_or_else(||bad("mean sample targets"))? as usize;
+                        if s["index"]!=i || n!=samples[i].tokens.len()-samples[i].response_start || n==0 || !ce.is_finite() {return Err(bad("mean sample trace binding"));}
+                        token+=ce*n as f64;answer+=ce;actual_targets+=n;
+                        contributions[i/POOL]+=ce*if answer_mean(p){1.}else{n as f64};
+                    }
+                    token/=actual_targets as f64;answer/=stats.len() as f64;
+                    let objective=if answer_mean(p){answer}else{token};
+                    if stats.len()!=draw.len() || actual_targets!=nt || r["examples"]!=stats.len()
+                        || r["target_tokens"]!=nt || r["objective_denominator"]!=if answer_mean(p){stats.len()}else{nt}
+                        || [("token_ce",token),("answer_mean_ce",answer),("effective_training_objective",objective),("objective",objective)]
+                            .iter().any(|(k,v)|r[*k].as_f64().is_none_or(|a|!a.is_finite()||(a-v).abs()>2e-5*(1.+v.abs()))) {
+                        return Err(bad("mean trace reduction/usage denominator"));
+                    }
+                    let denominator=if answer_mean(p){stats.len()}else{nt};
+                    for c in &mut contributions {*c/=denominator as f64;}
+                    mean_steps.push(binary::record!({"step":cursor,"token_ce":token,"answer_mean_ce":answer,"effective_training_objective":objective,
+                        "objective_denominator":denominator,"target_tokens":nt,"examples":stats.len(),"V_VC0_VC1_scalar_contribution":contributions,
+                        "grad_norm":r["grad_norm"],"clip":r["clip"],"delta_norm":r["delta_norm"],"scope":"scalar contributions, not task gradient norms"}));
+                }
                 input += ni as u64;
                 target += nt as u64;
             }
@@ -1184,12 +1255,23 @@ fn trace(root: &Path, p: &Plan, end: &Segment) -> Result<binary::Value> {
     {
         return Err(bad("citation native cumulative trace mismatch"));
     }
-    Ok(
-        binary::record!({"files":files,"updates":cursor-p.origin_step(),"step":cursor,"input":input,"target":target,
-        "counts":counts,"tasks_V_VC0_VC1_samples_input_target":task,"unique_V_VC0_VC1":counts.chunks(POOL).map(|c|c.iter().filter(|&&n|n>0).count()).collect::<Vec<_>>()}),
-    )
+    let mut result=binary::record!({"files":files,"updates":cursor-p.origin_step(),"step":cursor,"input":input,"target":target,
+        "counts":counts,"tasks_V_VC0_VC1_samples_input_target":task,"unique_V_VC0_VC1":counts.chunks(POOL).map(|c|c.iter().filter(|&&n|n>0).count()).collect::<Vec<_>>()});
+    if is_mean(p) {result["reduction_steps"]=binary::record!(mean_steps);}
+    Ok(result)
 }
 fn seal_receipt(study: &Path) -> Result<binary::Value> {
+    let selection:binary::Value=read(&study.join("selection.r3b"))?;
+    if selection["contract"]==MEAN_CONTRACT {
+        let link:binary::Value=read_confirmed(&study.join("confirmation-link.r3b"))?;
+        let previous=Path::new(selection["previous_study"].as_str().ok_or_else(||bad("mean seal source"))?);
+        if link["preparation"]!=file_hash(&study.join("preparation.r3b"))?
+            || link["source_study"]!=binary::record!(previous)
+            || link["source_seal"]!=selection["source_seal"]
+            || link["source_seal"]!=file_hash(&previous.join("confirmation-seal.r3b"))?
+            || link["status"]!="VERIFIED_UNUSED" {return Err(bad("mean inherited seal binding"));}
+        return unused_seal(previous);
+    }
     let s: binary::Value = read_confirmed(&study.join("confirmation-seal.r3b"))?;
     if s["preparation"] != file_hash(&study.join("preparation.r3b"))?
         || s["selection"] != file_hash(&study.join("selection.r3b"))?
@@ -1239,6 +1321,7 @@ fn observed(
     Ok(rows[1..].to_vec())
 }
 pub(super) fn authorize(root: &Path, p: &Plan) -> Result<()> {
+    if is_mean(p) { return mean_authorize(root,p); }
     let study = &own(p).study;
     if root.canonicalize()? != study.join(ARM).canonicalize()? {
         return Err(bad("citation registered root"));
@@ -1526,13 +1609,13 @@ pub(in super::super::super) fn seal(study: &Path, private: &Path) -> Result<()> 
 fn comparison(study: &Path, p: &Plan, end: &Segment, d: &binary::Value) -> Result<binary::Value> {
     let endpoint = binary::record!({"policy":digest(p)?,"checkpoint":end.checkpoint_hash,"step":end.step,"decision":d});
     Ok(
-        binary::record!({"contract":CONTRACT,"source":p.source,"preparation":file_hash(&study.join("preparation.r3b"))?,
-        "endpoints":BTreeMap::from([(ARM,endpoint)]),"selected":if d["eligible"]==true {Some(ARM)}else{None},"goal1_ready":false}),
+        binary::record!({"contract":if is_mean(p){MEAN_CONTRACT}else{CONTRACT},"source":p.source,"preparation":file_hash(&study.join("preparation.r3b"))?,
+        "endpoints":BTreeMap::from([(own(p).arm.as_str(),endpoint)]),"selected":if d["eligible"]==true {Some(own(p).arm.as_str())}else{None},"goal1_ready":false}),
     )
 }
 pub(in super::super::super) fn confirm(study: &Path) -> Result<()> {
     let study = study.canonicalize()?;
-    let root = study.join(ARM);
+    let root = selected_root(&study);
     let p = plan_read(&root)?;
     let (end, d) = close(&root, &p)?;
     if d["eligible"] != true || p.tiny {
@@ -1554,8 +1637,8 @@ pub(in super::super::super) fn confirm(study: &Path) -> Result<()> {
     }
     let c = verified_corpus(&root.join("corpus.r3cor"), &p.corpus)?;
     for (name, es) in [
-        ("citation-review-value", &c.validation[..16]),
-        ("citation-review-citation", &c.validation[512..528]),
+        (if is_mean(&p){"mean-review-ANSWER-MEAN-value"}else{"citation-review-value"}, &c.validation[..16]),
+        (if is_mean(&p){"mean-review-ANSWER-MEAN-citation"}else{"citation-review-citation"}, &c.validation[512..528]),
     ] {
         observed(&study, name, &p, &end.checkpoint_hash, es, true)?;
     }
@@ -1563,15 +1646,15 @@ pub(in super::super::super) fn confirm(study: &Path) -> Result<()> {
     write(
         &study.join("confirmation-candidate.r3b"),
         &binary::record!({"checkpoint":end.checkpoint_hash,"comparison":comparison,
-        "seal":file_hash(&study.join("confirmation-seal.r3b"))?,"review":file_hash(&study.join("review-b.r3b"))?,"framing":p.framing()}),
+        "seal":file_hash(&seal_owner(&study)?.join("confirmation-seal.r3b"))?,"review":file_hash(&study.join("review-b.r3b"))?,"framing":p.framing()}),
     )?;
     let c = verified_corpus(
-        &study.join("sealed/confirmation.r3cor"),
+        &seal_owner(&study)?.join("sealed/confirmation.r3cor"),
         seal["corpus"]
             .as_str()
             .ok_or_else(|| bad("citation seal corpus"))?,
     )?;
-    let ms: Vec<Meta> = read(&study.join("sealed/metadata.r3b"))?;
+    let ms: Vec<Meta> = read(&seal_owner(&study)?.join("sealed/metadata.r3b"))?;
     let es = c.validation;
     if es.len() != 512 || ms.len() != 512 {
         return Err(bad("complete V256/VC256 confirmation required"));
@@ -1594,7 +1677,7 @@ pub(in super::super::super) fn confirm(study: &Path) -> Result<()> {
         && pass(&vc.joint, 256, 244, 116, 58)
         && vc.value_correct >= 254
         && vc.citation_support_correct >= 254
-        && vc.outside_id == 0;
+        && if is_mean(&p) {valid_outside_ids(&es[256..],&rows[256..])==0}else{vc.outside_id == 0};
     publish_confirmed(
         &study.join("confirmation-result.r3b"),
         &binary::record!({"checkpoint":end.checkpoint_hash,"V":v,"VC":vc,
@@ -1607,6 +1690,253 @@ pub(in super::super::super) fn confirm(study: &Path) -> Result<()> {
     );
     Ok(())
 }
+// Same existing citation harness with a separately bound reduction comparison.
+// Historical files remain inputs; no collector or missing receipt is synthesized.
+fn mean_plan(previous: &Plan, study: &Path, s: &binary::Value, arm: &str) -> Result<Plan> {
+    if !MEAN_ARMS.contains(&arm) { return Err(bad("unknown reduction arm")); }
+    let mut p=previous.clone();
+    p.source=s["source"].as_str().ok_or_else(||bad("mean source"))?.into();
+    p.binary=s["binary"].as_str().ok_or_else(||bad("mean binary"))?.into();
+    let origin=p.origin_step();
+    p.config.max_steps=origin+if p.tiny {2}else if arm==MEAN_ARMS[0] {32}else{UPDATES};
+    p.config.max_tokens=p.config.budget_start_tokens+4_000_000;
+    let o=p.identifiable.as_mut().ok_or_else(||bad("mean tape missing"))?;
+    o.study=study.into();o.arm=arm.into();o.dataset=MEAN_DATA.into();
+    o.rows.truncate(p.config.max_steps);
+    p.train_order=digest(&o.rows)?;
+    let f=p.fork.as_mut().ok_or_else(||bad("mean parent missing"))?;
+    f.study=study.into();f.study_hash=file_hash(&study.join("selection.r3b"))?;
+    f.arm=arm.into();f.target_limit=260_000;
+    p.evaluation=evaluation(&p);
+    Ok(p)
+}
+fn unused_seal(study:&Path)->Result<binary::Value> {
+    let seal=seal_receipt(study)?;
+    if seal["new_optimizer"]!=0 || seal["generation"]!=0 || seal["teacher"]!=0 {
+        return Err(bad("citation seal creation usage unknown"));
+    }
+    // Examine every registered observation trace, not only a result path.
+    for entry in std::fs::read_dir(study)? {
+        let name=entry?.file_name(); let name=name.to_string_lossy();
+        if name.starts_with("confirmation-candidate") || name.starts_with("confirmation-started")
+            || name.starts_with("confirmation-finished") || name.starts_with("confirmation-result")
+            || name.starts_with("confirmation-generation") || name.starts_with("confirmation.r3rows")
+            || name=="confirmation" || name.starts_with("confirmation-call") {
+            return Err(bad("citation confirmation already attempted or ambiguous"));
+        }
+    }
+    Ok(seal)
+}
+fn seal_owner(study:&Path)->Result<PathBuf> {
+    let s:binary::Value=read(&study.join("selection.r3b"))?;
+    if s["contract"]==MEAN_CONTRACT {
+        Ok(PathBuf::from(s["previous_study"].as_str().ok_or_else(||bad("mean seal owner"))?))
+    }else{Ok(study.into())}
+}
+pub(in super::super::super) fn mean_prepare(previous:&Path,output:&Path,tiny:bool)->Result<()> {
+    if tiny != cfg!(all(test,feature="test-support")) {
+        return Err(bad("explicit mean production/TINY profile"));
+    }
+    let previous=previous.canonicalize()?;let output=std::path::absolute(output)?;
+    let oldroot=previous.join(ARM);let old=historical_plan(&oldroot)?;
+    if own(&old).dataset!=DATA || old.tiny!=tiny {return Err(bad("original citation data required"));}
+    let (end,decision)=close(&oldroot,&old)?;
+    if end.step!=old.origin_step()+if tiny {2}else{32}
+        || (!tiny && end.stop!="QUALITY_REGRESSION") {
+        return Err(bad("expected closed citation32 reference"));
+    }
+    let prior:binary::Value=read(&previous.join("selection.r3b"))?;
+    unused_seal(&previous)?;
+    let c=verified_corpus(&oldroot.join("corpus.r3cor"),&old.corpus)?;
+    let tok=ByteBpe::load(&oldroot.join("tokenizer.r3b"))?;
+    let full=tape_cost(&suffix(),&c.train,&tok)?;
+    let first=tape_cost(&suffix()[..32],&c.train,&tok)?;
+    if (!tiny && (first["input"]!=38144 || first["target"]!=2432 || first["padding"]!=1024
+        || full["input"]!=3661824 || full["target"]!=233472 || full["padding"]!=98304))
+        || own(&old).rows[old.origin_step()..] != suffix()[..if tiny {2}else{UPDATES}] {
+        return Err(bad("frozen citation tape/cost mismatch"));
+    }
+    let generated=16+128+2*128+2*192+2*1664+2*4608+64+512;
+    let teachers=128+2*128+2*192+2*1664+2*4608;
+    if generated>16384 || teachers>16384 {return Err(bad("mean panel budget"));}
+    std::fs::create_dir(&output)?;
+    let mut s=prior.clone();
+    s["contract"]=binary::record!(MEAN_CONTRACT);s["source"]=binary::record!(source_digest()?);
+    s["binary"]=binary::record!(file_hash(&std::env::current_exe()?)?);
+    s["previous_study"]=binary::record!(previous);
+    s["previous_preparation"]=binary::record!(file_hash(&previous.join("preparation.r3b"))?);
+    s["previous_selection"]=binary::record!(file_hash(&previous.join("selection.r3b"))?);
+    s["previous_plan"]=binary::record!(file_hash(&oldroot.join("plan.r3b"))?);
+    s["reference_terminal"]=binary::record!(file_hash(&terminal_path(&oldroot,&end)?)?);
+    s["reference_endpoint"]=binary::to_value(&end)?;s["reference_decision"]=decision;
+    s["source_seal"]=binary::record!(file_hash(&previous.join("confirmation-seal.r3b"))?);
+    s["costs32"]=first;s["costs3072"]=full;
+    s["objective"]=binary::record!(checkpoint::ANSWER_MEAN_OBJECTIVE);
+    s["new_updates"]=binary::record!(3104);s["input_limit"]=binary::record!(4_000_000);
+    s["target_limit"]=binary::record!(260_000);
+    s["planned_generation_upper"]=binary::record!(generated);s["planned_teacher_upper"]=binary::record!(teachers);
+    s["scalar_tolerance"]=binary::record!(2e-6);s["native_gradient_tolerance"]=binary::record!(2e-5);
+    s["control_raw_tolerance"]=binary::record!("exact tokens/text/finish/EOS/errors; tensor/Adam bitwise");
+    write(&output.join("selection.r3b"),&s)?;
+    let mut plans=BTreeMap::new();
+    for arm in MEAN_ARMS {
+        let root=output.join(arm);std::fs::create_dir(&root)?;
+        for name in ["corpus.r3cor","transfer.r3cor","metadata.r3b","tokenizer.r3b","initial.r3m"] {
+            copy_native(&oldroot.join(name),&root.join(name))?;
+        }
+        let p=mean_plan(&old,&output,&s,arm)?;write(&root.join("plan.r3b"),&p)?;
+        verify_mean_plan(&root,&p)?;
+        plans.insert(arm,binary::record!({"policy":file_hash(&root.join("plan.r3b"))?,"initial":p.initial,"corpus":p.corpus,
+            "metadata":p.metadata,"tokenizer":p.tokenizer,"tape":p.train_order,"objective":if answer_mean(&p){checkpoint::ANSWER_MEAN_OBJECTIVE}else{"response_ce_token_mean"}}));
+    }
+    publish_confirmed(&output.join("preparation.r3b"),&binary::record!({"contract":MEAN_CONTRACT,"source":s["source"],"binary":s["binary"],
+        "selection":file_hash(&output.join("selection.r3b"))?,"arms":plans,"source_seal":s["source_seal"],"optimizer":0,"generation":0,"teacher":0}))?;
+    publish_confirmed(&output.join("confirmation-link.r3b"),&binary::record!({"preparation":file_hash(&output.join("preparation.r3b"))?,
+        "source_study":previous,"source_seal":s["source_seal"],"status":"VERIFIED_UNUSED"}))?;
+    println!("ANSWER_MEAN_PREPARED TOKEN32 ANSWER3072 actual_plan_input3699968 target235904 padding99328 model_calls0 A_PENDING");
+    Ok(())
+}
+fn verify_mean_plan(root:&Path,p:&Plan)->Result<()> {
+    let o=own(p);let s:binary::Value=read(&o.study.join("selection.r3b"))?;
+    let previous=Path::new(s["previous_study"].as_str().ok_or_else(||bad("previous citation root"))?);
+    let oldroot=previous.join(ARM);let old=historical_plan(&oldroot)?;
+    let end:Segment=binary::from_value(s["reference_endpoint"].clone())?;
+    if !is_mean(p) || root!=o.study.join(&o.arm) || *p!=mean_plan(&old,&o.study,&s,&o.arm)?
+        || s["contract"]!=MEAN_CONTRACT || s["objective"]!=checkpoint::ANSWER_MEAN_OBJECTIVE
+        || s["previous_preparation"]!=file_hash(&previous.join("preparation.r3b"))?
+        || s["previous_selection"]!=file_hash(&previous.join("selection.r3b"))?
+        || s["previous_plan"]!=file_hash(&oldroot.join("plan.r3b"))?
+        || s["reference_terminal"]!=file_hash(&terminal_path(&oldroot,&end)?)?
+        || end.checkpoint_hash!=file_hash(&oldroot.join(&end.checkpoint))?
+        || s["source_seal"]!=file_hash(&previous.join("confirmation-seal.r3b"))? {
+        return Err(bad("answer-mean immutable source/parent/policy"));
+    }
+    for name in ["corpus.r3cor","transfer.r3cor","metadata.r3b","tokenizer.r3b","initial.r3m"] {
+        if file_hash(&root.join(name))?!=file_hash(&oldroot.join(name))? {return Err(bad("mean frozen owned bytes"));}
+    }
+    let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;
+    let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
+    if s["costs32"]!=tape_cost(&suffix()[..32],&c.train,&tok)? || s["costs3072"]!=tape_cost(&suffix(),&c.train,&tok)? {
+        return Err(bad("mean immutable costs"));
+    }
+    unused_seal(previous)?;
+    Ok(())
+}
+fn reference_match(study:&Path)->Result<binary::Value> {
+    let root=study.join(MEAN_ARMS[0]);let p=historical_plan(&root)?;
+    let h=history(&root,&p)?;let e=h.last().ok_or_else(||bad("TOKEN reference not run"))?;
+    if !mean_reference_complete(e,p.config.max_steps) {
+        return Err(bad("TOKEN reference incomplete/cancelled/unknown"));
+    }
+    let s:binary::Value=read(&study.join("selection.r3b"))?;
+    let prior=Path::new(s["previous_study"].as_str().ok_or_else(||bad("reference path"))?).join(ARM);
+    let oldend:Segment=binary::from_value(s["reference_endpoint"].clone())?;
+    let d=evaluation_result(&root,&p,e.step)?;
+    if read_confirmed::<binary::Value>(&root.join(format!("citation-decision-{:04}.r3b",e.step)))?!=d || d["stop"]!=e.stop {
+        return Err(bad("TOKEN reference decision mismatch"));
+    }
+    trace(&root,&p,e)?;
+    let a=checkpoint::load(&root.join(&e.checkpoint),Device::Cpu,true)?;
+    let b=checkpoint::load(&prior.join(&oldend.checkpoint),Device::Cpu,true)?;
+    if a.model.weights_content_id()?!=b.model.weights_content_id()? || optimizer_hash(&a.optimizer)?!=optimizer_hash(&b.optimizer)? {
+        return Err(bad("TOKEN reference tensor/Adam mismatch"));
+    }
+    let mut count=0;
+    for (name,es,_) in panels(&root,&p,e.step)? {
+        let path=format!("eval-{:04}-{name}.r3rows",e.step);
+        let a=binary::read_value_records(&root.join(&path))?;let b=binary::read_value_records(&prior.join(&path))?;
+        if a.len()!=es.len()+1 || a.len()!=b.len() {return Err(bad("TOKEN reference raw count"));}
+        for (a,b) in a[1..].iter().zip(&b[1..]) {
+            for k in ["actual","raw_tokens","finish_reason","generation_completed","error","error_class","expected","question","generated_evidence"] {
+                if a[k]!=b[k] {return Err(bad("TOKEN reference raw parity mismatch"));}
+            }
+            count+=1;
+        }
+    }
+    Ok(binary::record!({"matched":count,"tensor":a.model.weights_content_id()?,"adam":optimizer_hash(&a.optimizer)?,"step":e.step,
+        "candidate":null,"resume":false,"reference_only":true,"quality":false}))
+}
+fn mean_reference_complete(e:&Segment,maximum:usize)->bool {
+    !e.resume && e.phase.as_deref()==Some("Finished") && e.step==maximum
+        && (e.stop=="QUALITY_REGRESSION" || e.stop==format!("FINAL_QUALITY_FAIL_AT_{}",e.step))
+}
+fn mean_authorize(root:&Path,p:&Plan)->Result<()> {
+    let study=&own(p).study;
+    if root.canonicalize()?!=study.join(&own(p).arm).canonicalize()? {return Err(bad("mean root"));}
+    let prep:binary::Value=read_confirmed(&study.join("preparation.r3b"))?;
+    if prep["selection"]!=file_hash(&study.join("selection.r3b"))? {return Err(bad("mean preparation binding"));}
+    seal_receipt(study)?;
+    let token=historical_plan(&study.join(MEAN_ARMS[0]))?;
+    let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;
+    observed(study,"mean-parent",&token,&token.initial,&c.validation[..if p.tiny {4}else{16}],true)?;
+    if answer_mean(p) {reference_match(study)?;}
+    // An incomplete/cancelled peer never inherits the reference-only exception.
+    for arm in MEAN_ARMS {
+        let peer=study.join(arm);let pp=historical_plan(&peer)?;let hh=history(&peer,&pp)?;
+        if hh.last().is_some_and(|e|!e.resume && (e.phase.as_deref()!=Some("Finished")
+            || !["QUALITY_REGRESSION".to_string(),format!("FINAL_QUALITY_FAIL_AT_{}",e.step),format!("CANDIDATE_FIXED_AT_{}",e.step)].contains(&e.stop))) {
+            return Err(bad("mean failed peer execution"));
+        }
+    }
+    Ok(())
+}
+pub(in super::super::super) fn mean_parent(study:&Path)->Result<()> {
+    let study=study.canonicalize()?;let root=study.join(MEAN_ARMS[0]);let p=plan_read(&root)?;
+    expansion_review(&p)?;
+    for arm in MEAN_ARMS {if !history(&study.join(arm),&plan_read(&study.join(arm))?)?.is_empty() {return Err(bad("mean parent must precede updates"));}}
+    let s:binary::Value=read(&study.join("selection.r3b"))?;
+    let prior=Path::new(s["parent"].as_str().ok_or_else(||bad("mean parent path"))?);
+    let old:Plan=read(&prior.join("plan.r3b"))?;
+    let raw=binary::read_value_records(&prior.join(format!("eval-{:04}-{}.r3rows",p.origin_step(),if old.tiny {"dev4"}else{"dev512"})))?;
+    let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;
+    let n=if p.tiny {4}else{16};
+    orbit_observe(&study,"mean-parent",&root.join("initial.r3m"),&c.validation[..n],
+        &binary::record!({"policy":digest(&p)?,"checkpoint":p.initial}),Some(&raw[1..n+1]),observation_control(&p,n,0)?)?;
+    println!("ANSWER_MEAN_PARENT matched{n} generation{n} optimizer0 teacher0");Ok(())
+}
+pub(in super::super::super) fn mean_report(study:&Path)->Result<()> {
+    let study=study.canonicalize()?;
+    for arm in MEAN_ARMS {
+        let root=study.join(arm);let p=historical_plan(&root)?;
+        let h=history(&root,&p)?;
+        if let Some(end)=h.last() {
+            println!("ANSWER_MEAN_TRACE arm={arm} {}",trace(&root,&p,end)?);
+            for &step in p.evaluation.train_steps.iter().filter(|&&s|s<=end.step) {
+                if step==end.step && end.phase.as_deref()==Some("EvaluationPending") {continue;}
+                let d=evaluation_result(&root,&p,step)?;
+                if d!=read_confirmed::<binary::Value>(&root.join(format!("citation-decision-{step:04}.r3b")))? {return Err(bad("mean report decision"));}
+                println!("ANSWER_MEAN_PANEL arm={arm} {d}");
+            }
+            println!("ANSWER_MEAN_STATE arm={arm} step={} stop={} resume={} checkpoint={} usage={:?}",end.step,end.stop,end.resume,end.checkpoint_hash,work(&p)?);
+            if answer_mean(&p) && !end.resume && end.phase.as_deref()==Some("Finished") {
+                let (_,d)=close(&root,&p)?;
+                println!("ANSWER_MEAN_COMPARISON {}",comparison(&study,&p,end,&d)?);
+                if study.join("confirmation-result.r3b").exists() {
+                    println!("ANSWER_MEAN_CONFIRMATION {}",verified_confirmation(&study,&p,end,&d)?);
+                }
+            }
+        }else {println!("ANSWER_MEAN_STATE arm={arm} NOT_RUN");}
+    }
+    if !history(&study.join(MEAN_ARMS[0]),&historical_plan(&study.join(MEAN_ARMS[0]))?)?.is_empty() {
+        println!("TOKEN_REFERENCE {}",reference_match(&study)?);
+    }
+    println!("GOAL1_READY=false GOAL1_ACCEPTED=false");Ok(())
+}
+pub(in super::super::super) fn mean_review(root:&Path,citation:bool)->Result<()> {
+    let root=root.canonicalize()?;let p=historical_plan(&root)?;
+    if !is_mean(&p) {return Err(bad("mean reviewer scope"));}
+    let (end,_)=close(&root,&p)?;
+    if !["QUALITY_REGRESSION".to_string(),format!("FINAL_QUALITY_FAIL_AT_{}",end.step),format!("CANDIDATE_FIXED_AT_{}",end.step)].contains(&end.stop) {
+        return Err(bad("mean reviewer requires complete quality endpoint"));
+    }
+    let panel=panels(&root,&p,end.step)?.into_iter().find(|(n,_,_)|n.starts_with(if citation {"citation"}else{"value"})).ok_or_else(||bad("mean reproduction panel"))?;
+    let raw=binary::read_value_records(&root.join(format!("eval-{:04}-{}.r3rows",end.step,panel.0)))?;
+    let n=if p.tiny {4}else{16};let name=format!("mean-review-{}-{}",own(&p).arm,if citation {"citation"}else{"value"});
+    orbit_observe(&own(&p).study,&name,&root.join(&end.checkpoint),&panel.1[..n],
+        &binary::record!({"policy":digest(&p)?,"checkpoint":end.checkpoint_hash}),Some(&raw[1..n+1]),observation_control(&p,n,0)?)?;
+    println!("ANSWER_MEAN_REVIEW arm={} matched{n} generation{n} optimizer0 teacher0 candidate_permission=false",own(&p).arm);Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1766,6 +2096,174 @@ mod tests {
             cost["input"], cost["target"], audit["original_distinct_ids"]
         );
         Ok(())
+    }
+    #[test]
+    fn answer_mean_parsed_outside_id_is_not_malformed_prefix() -> Result<()> {
+        let (es,_)=generate("C",0,&[])?;let e=&es[0];
+        let row=|text:&str|binary::record!({"actual":text});
+        for text in ["4입니다. [event:","4입니다. [event:xx]","4",e.answer.as_str()] {
+            assert_eq!(valid_outside_ids(std::slice::from_ref(e),&[row(text)]),0);
+        }
+        let outside=(10_000_000..100_000_000).find(|id|!e.request.evidence.items.iter().any(|r|r.event_id==*id)).unwrap();
+        assert_eq!(valid_outside_ids(std::slice::from_ref(e),&[row(&format!("4입니다. [event:{outside}]"))]),1);
+        assert_eq!(valid_outside_ids(std::slice::from_ref(e),&[row(&format!("{} [event:{outside}]",e.answer))]),1);
+        assert_eq!(valid_outside_ids(std::slice::from_ref(e),&[row(&format!("[event:{outside}] [event:"))]),1);
+        println!("ANSWER_CITATION_PARSE malformed/provided/single-and-multiple-valid-outside model_calls0");Ok(())
+    }
+    #[test]
+    fn answer_mean_native_process_resume() -> Result<()> {
+        const CHILD:&str="R3_MEAN_CHILD";
+        // Random native numeric continuation supplements the full fresh/evaluation
+        // process fixture below. It does not generate, force EOS or claim quality.
+        fn random_updates(input:&Path,output:&Path,root:&Path,steps:usize)->Result<()> {
+            let p=historical_plan(root)?;let mut l=checkpoint::load(input,Device::Cpu,true)?;
+            let mut s=l.manifest.training.clone().ok_or_else(||bad("random native state"))?;
+            if s.resume_binding!=Some(p.binding(&s,&l.tokenizer)?) {return Err(bad("random native exact objective policy"));}
+            let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;
+            let ss=samples(&c.train,&l.tokenizer,p.config.seq_len)?;
+            let mut adam=Adam{moments:l.optimizer};
+            for _ in 0..steps {
+                let ids=p.training_draw(s.step);let b=batch(&ss,&ids,&Device::Cpu)?;
+                let logits=l.model.forward(&b.input,Some(&b.valid))?;
+                let (ce,loss,n,den)=crate::training::response_objective(&logits,&b,1.,true)?;
+                assert_eq!(den,ids.len());let grads=loss.backward()?;
+                let gs=l.model.vars.iter().map(|(name,v)|Ok((name.clone(),grads.get(v).ok_or_else(||bad("random native gradient"))?.detach()))).collect::<Result<BTreeMap<_,_>>>()?;
+                adam.step_constant(&l.model.vars,&gs,&p.config,s.step+1,p.learning_rate(s.step+1))?;
+                s.step+=1;s.sampler_state=s.step as u64;s.consumed_tokens+=b.tokens as u64;s.target_tokens+=n as u64;
+                s.train_loss=Some(f64::from(ce.to_scalar::<f32>()?));s.validation_loss=None;
+            }
+            l.model.refresh_identity()?;l.manifest.training=Some(s);
+            checkpoint::save(output,&l.model,&l.tokenizer,l.manifest,&adam.moments)?;
+            println!("RANDOM_ANSWER_NATIVE optimizer={steps} forward={steps} backward={steps} generation0 teacher0");Ok(())
+        }
+        if let Ok(root)=std::env::var(CHILD) {
+            let root=Path::new(&root);
+            return match std::env::var("R3_MEAN_ACTION").as_deref() {
+                Ok("old-v")=>parent_observe(root,false),Ok("old-vc")=>parent_observe(root,true),
+                Ok("parent")=>mean_parent(root),Ok("review-v")=>mean_review(root,false),Ok("review-vc")=>mean_review(root,true),
+                Ok("generic")=>{
+                    let loaded=checkpoint::load(root,Device::Cpu,true)?;
+                    assert_eq!(loaded.manifest.training.as_ref().unwrap().resume_binding.as_ref().unwrap().family,checkpoint::ANSWER_MEAN_FAMILY);
+                    let output=root.with_extension("blocked-output");
+                    let result=crate::training::train(crate::training::Run{checkpoint:root,corpus:None,output:&output,resume:true,
+                        numeric_probe:false,config:loaded.manifest.training.as_ref().unwrap().config.clone(),stop_after:None,measure_rss:false,
+                        extend_steps:None,extend_microbatch:None,extend_sample_group_size:None,extend_curriculum_steps:None,
+                        extend_first_target_weight:None,extend_lr:None,extend_warmup:None,source_id:None,replace_corpus:false},
+                        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
+                    assert!(result.unwrap_err().to_string().contains("OBJECTIVE_POLICY_UNSUPPORTED"));assert!(!output.exists());
+                    println!("MOVED_ANSWER_GENERIC rejected optimizer0 generation0");Ok(())
+                },
+                Ok("random")=>random_updates(&root.join("../random-one.r3m"),&root.join("../random-split.r3m"),root,1),
+                _=>run(root,std::env::var("R3_MEAN_CONTINUOUS").as_deref()==Ok("1")),
+            };
+        }
+        if !cfg!(feature="test-support"){return Err(bad("explicit TINY process profile"));}
+        let tmp=tempfile::tempdir()?;
+        let base=std::env::var_os("R3_MEAN_TEST_ROOT").map(PathBuf::from).unwrap_or_else(||tmp.path().join("evidence"));
+        std::fs::create_dir(&base)?;let base=base.canonicalize()?;
+        let child=|root:&Path,action:&str,continuous:bool,fault:bool,label:&str|->Result<()> {
+            let mut cmd=std::process::Command::new(std::env::current_exe()?);
+            cmd.args(["--exact","training::fresh::identifiable::binding::citation::tests::answer_mean_native_process_resume","--nocapture"])
+                .env(CHILD,root).env("R3_MEAN_ACTION",action).env("R3_MEAN_CONTINUOUS",if continuous {"1"}else{"0"})
+                .env("VECLIB_MAXIMUM_THREADS","1").env("OMP_NUM_THREADS","1");
+            if fault {cmd.env("R3_FRESH_CALL_STOP","eval-0004-citation4/generation/1/fresh_panel_row_durable");}
+            let out=cmd.output()?;std::fs::write(base.join(format!("{label}.stdout")),&out.stdout)?;
+            std::fs::write(base.join(format!("{label}.stderr")),&out.stderr)?;
+            assert!(out.status.success(),"{label}: {} {}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));
+            assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));Ok(())
+        };
+        let parents=super::super::tests::orbit_fixture(&base)?;
+        child(&parents.join("FIXED"),"run",true,false,"base-fixed")?;
+        child(&parents.join("BOTH"),"run",true,false,"base-both")?;
+        let parent=parents.join("BOTH");let (public,private,used)=fixture_reservation(&parent,&base)?;
+        let old=base.join("reference");prepare_inner(&parent,&old,&public,&used,true)?;seal(&old,&private)?;
+        super::super::tests::fixture_review(&old)?;
+        child(&old,"old-v",false,false,"old-parent-v")?;child(&old,"old-vc",false,false,"old-parent-vc")?;
+        child(&old.join(ARM),"run",false,false,"old-1")?;child(&old.join(ARM),"run",true,false,"old-2")?;
+        let mut totals=[0usize,8,0]; // Completed old-parent observations; updates and evaluations come from receipts.
+        for root in [parents.join("FIXED"),parents.join("BOTH"),old.join(ARM)] {
+            let p=historical_plan(&root)?;for e in history(&root,&p)? {
+                let ctl:binary::Value=read(&root.join(&e.checkpoint).parent().unwrap().join("train-control.r3b"))?;
+                totals[0]+=ctl["optimizer_calls"].as_u64().unwrap() as usize;totals[1]+=e.generations;totals[2]+=e.teachers;
+            }
+        }
+        let mut ends=vec![];let mut outputs=vec![];
+        for mode in ["continuous","split","evaluation-only"] {
+            let study=base.join(mode);mean_prepare(&old,&study,true)?;super::super::tests::fixture_review(&study)?;
+            let token=study.join(MEAN_ARMS[0]);let answer=study.join(MEAN_ARMS[1]);
+            assert!(authorize(&answer,&plan_read(&answer)?).is_err());
+            child(&study,"parent",false,false,&format!("{mode}-parent"))?;totals[1]+=4;
+            assert!(authorize(&answer,&plan_read(&answer)?).is_err());
+            child(&token,"run",false,false,&format!("{mode}-token1"))?;
+            assert!(authorize(&answer,&plan_read(&answer)?).is_err());
+            child(&token,"run",true,false,&format!("{mode}-token2"))?;
+            assert_eq!(reference_match(&study)?["matched"],12);
+            let tp=historical_plan(&token)?;let mut te=history(&token,&tp)?.last().unwrap().clone();
+            te.stop="QUALITY_REGRESSION".into();assert!(mean_reference_complete(&te,tp.config.max_steps));
+            for failure in ["CANCELLED","UNKNOWN","SAVE_ERROR","INTEGRITY_FAIL"] {
+                te.stop=failure.into();assert!(!mean_reference_complete(&te,tp.config.max_steps));
+            }
+            te.stop="QUALITY_REGRESSION".into();te.phase=Some("EvaluationPending".into());
+            assert!(!mean_reference_complete(&te,tp.config.max_steps));
+            let ap=plan_read(&answer)?;authorize(&answer,&ap)?;
+            let mut wrong=ap.clone();wrong.identifiable.as_mut().unwrap().arm=MEAN_ARMS[0].into();
+            assert!(verify_mean_plan(&answer,&wrong).is_err());
+            child(&answer,"run",mode!="split",mode=="evaluation-only",&format!("{mode}-answer0"))?;
+            let prefix=if mode=="evaluation-only" {
+                let h=history(&answer,&ap)?;assert_eq!(h.last().unwrap().phase.as_deref(),Some("EvaluationPending"));
+                Some(binary::read_value_records(&answer.join("eval-0004-citation4.r3rows"))?)
+            }else{None};
+            if mode!="continuous" {child(&answer,"run",true,false,&format!("{mode}-answer1"))?;}
+            if let Some(prefix)=prefix {
+                let rows=binary::read_value_records(&answer.join("eval-0004-citation4.r3rows"))?;assert_eq!(rows[..prefix.len()],prefix);
+                let ctl:binary::Value=read(&answer.join("segment-0001/train-control.r3b"))?;assert_eq!(ctl["optimizer_calls"],0);
+            }
+            let (end,decision)=close(&answer,&ap)?;assert_eq!(decision["eligible"],false);assert!(!end.resume);
+            let loaded=checkpoint::load(&answer.join(&end.checkpoint),Device::Cpu,true)?;
+            let state=loaded.manifest.training.as_ref().unwrap();assert_eq!(state.resume_binding,Some(ap.binding(state,&loaded.tokenizer)?));
+            ends.push((loaded.model.weights_content_id()?,optimizer_hash(&loaded.optimizer)?,state.step,state.sampler_state,state.consumed_tokens,state.target_tokens));
+            let mut rows=vec![];
+            for (name,_,_) in panels(&answer,&ap,end.step)? {
+                let raw=binary::read_value_records(&answer.join(format!("eval-{:04}-{name}.r3rows",end.step)))?;
+                for row in &raw[1..] {rows.push(binary::record!({"actual":row["actual"],"tokens":row["raw_tokens"],"finish":row["finish_reason"],"error":row["error"]}));}
+            }outputs.push(rows);
+            for root in [&token,&answer] {
+                let p=historical_plan(root)?;for e in history(root,&p)? {
+                    let ctl:binary::Value=read(&root.join(&e.checkpoint).parent().unwrap().join("train-control.r3b"))?;
+                    totals[0]+=ctl["optimizer_calls"].as_u64().unwrap() as usize;totals[1]+=e.generations;totals[2]+=e.teachers;
+                }
+            }
+            if mode=="continuous" {
+                let model=Transformer::init(loaded.model.config.clone(),93,Device::Cpu)?;
+                let mut manifest=loaded.manifest.clone();let mut state=manifest.training.clone().unwrap();
+                state.step=ap.origin_step();state.sampler_state=state.step as u64;
+                state.consumed_tokens=ap.fork.as_ref().unwrap().origin_input;state.target_tokens=ap.fork.as_ref().unwrap().origin_target;
+                state.train_loss=None;state.validation_loss=None;state.initial_weight_hash=model.weight_hash()?;
+                state.resume_binding=Some(ap.binding(&state,&loaded.tokenizer)?);
+                manifest.initial_weight_hash=model.weight_hash()?;manifest.init_seed=93;manifest.training=Some(state);
+                let initial=study.join("random-initial.r3m");let adam=Adam::new(&model.vars)?;
+                checkpoint::save(&initial,&model,&loaded.tokenizer,manifest,&adam.moments)?;
+                random_updates(&initial,&study.join("random-continuous.r3m"),&answer,2)?;
+                random_updates(&initial,&study.join("random-one.r3m"),&answer,1)?;
+                child(&answer,"random",false,false,"random-split")?;totals[0]+=4;
+                let a=checkpoint::load(&study.join("random-continuous.r3m"),Device::Cpu,true)?;
+                let b=checkpoint::load(&study.join("random-split.r3m"),Device::Cpu,true)?;
+                assert_eq!(a.model.weights_content_id()?,b.model.weights_content_id()?);
+                assert_eq!(optimizer_hash(&a.optimizer)?,optimizer_hash(&b.optimizer)?);
+                assert_eq!(a.manifest.training,b.manifest.training);
+                let moved=base.join("moved-answer-native");copy_native(&answer.join(&end.checkpoint),&moved)?;
+                child(&moved,"generic",false,false,"moved-generic")?;
+                child(&answer,"review-v",false,false,"review-value")?;child(&answer,"review-vc",false,false,"review-citation")?;totals[1]+=8;
+            }
+            assert!(confirm(&study).is_err());assert!(run(&answer,false).is_err());
+            if mode=="continuous" {mean_report(&study)?;}
+        }
+        assert!(ends.windows(2).all(|v|v[0]==v[1]));assert!(outputs.windows(2).all(|v|v[0]==v[1]));
+        // An unresolved peer segment remains blocking even after a valid negative reference.
+        let study=base.join("split");let answer=study.join(MEAN_ARMS[1]);let token=study.join(MEAN_ARMS[0]);
+        write(&token.join("segment-0002-started.r3b"),&binary::record!({"started":true}))?;
+        assert!(authorize(&answer,&plan_read(&answer)?).is_err());
+        println!("ANSWER_TINY_PROCESS optimizer{} generation{} teacher{} EOS-tensor-fixture actual fresh2 vs1+1 vs2+0 native/Adam/raw equal; separate random native2 vs newprocess1+1 bitwise, last-step resume optimizer0, moved objective blocked; evidence={}",totals[0],totals[1],totals[2],base.display());Ok(())
     }
     #[test]
     fn value_citation_native_process_resume() -> Result<()> {
@@ -1978,20 +2476,20 @@ fn verified_confirmation(
     }
     let candidate: binary::Value = read(&study.join("confirmation-candidate.r3b"))?;
     if candidate
-        != binary::record!({"checkpoint":end.checkpoint_hash,"comparison":comparison,"seal":file_hash(&study.join("confirmation-seal.r3b"))?,
+        != binary::record!({"checkpoint":end.checkpoint_hash,"comparison":comparison,"seal":file_hash(&seal_owner(study)?.join("confirmation-seal.r3b"))?,
         "review":file_hash(&study.join("review-b.r3b"))?,"framing":p.framing()})
     {
         return Err(bad("citation candidate changed"));
     }
     let seal = seal_receipt(study)?;
     let corpus = verified_corpus(
-        &study.join("sealed/confirmation.r3cor"),
+        &seal_owner(study)?.join("sealed/confirmation.r3cor"),
         seal["corpus"]
             .as_str()
             .ok_or_else(|| bad("citation seal corpus"))?,
     )?;
     let es = corpus.validation;
-    let ms: Vec<Meta> = read(&study.join("sealed/metadata.r3b"))?;
+    let ms: Vec<Meta> = read(&seal_owner(study)?.join("sealed/metadata.r3b"))?;
     if es.len() != 512 || ms.len() != 512 {
         return Err(bad("citation confirmation full denominator"));
     }
@@ -2000,7 +2498,7 @@ fn verified_confirmation(
     if header["identity"]["candidate"] != file_hash(&study.join("confirmation-candidate.r3b"))? {
         return Err(bad("citation opening identity"));
     }
-    let tok = ByteBpe::load(&study.join(ARM).join("tokenizer.r3b"))?;
+    let tok = ByteBpe::load(&selected_root(study).join("tokenizer.r3b"))?;
     orbit_validate(&es[..256], &ms[..256], &tok, 256)?;
     check_variant(&es[..256], &es[256..], &ms[256..], &tok, true)?;
     let v = orbit_score(&es[..256], &ms[..256], &rows[..256], &tok)?;
@@ -2009,7 +2507,7 @@ fn verified_confirmation(
         && pass(&vc.joint, 256, 244, 116, 58)
         && vc.value_correct >= 254
         && vc.citation_support_correct >= 254
-        && vc.outside_id == 0;
+        && if is_mean(p) {valid_outside_ids(&es[256..],&rows[256..])==0}else{vc.outside_id == 0};
     let expected = binary::record!({"checkpoint":end.checkpoint_hash,"V":v,"VC":vc,"value_citation_baseline_verified":passed,
         "scope":"two current records, one-digit key/value, fixed grammar, eight-digit event ID","goal1_ready":false,"goal1_accepted":false,"s4":false,"s5":false,"s6":false});
     if read_confirmed::<binary::Value>(&study.join("confirmation-result.r3b"))? != expected {

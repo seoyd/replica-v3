@@ -284,6 +284,37 @@ fn response_loss(logits: &Tensor, batch: &Batch, weight: f64) -> Result<(Tensor,
     };
     Ok((ce, objective, n))
 }
+// Response masks, including EOS, define each example's mass. This reduction has
+// no task/token/annotation-dependent weights. Keep the historical TOKEN path's
+// arithmetic and its target-count accumulation unchanged.
+fn answer_mean_loss(logits: &Tensor, batch: &Batch) -> Result<Tensor> {
+    let examples = batch.mask.dim(0)?;
+    if examples == 0 { return Err(Error::Invalid("empty answer batch".into())); }
+    let mut means = Vec::with_capacity(examples);
+    for row in 0..examples {
+        let mask = batch.mask.narrow(0, row, 1)?;
+        if mask.to_vec2::<f32>()?.iter().flatten().any(|&v| v != 0. && v != 1.) {
+            return Err(Error::Invalid("answer mask must contain only zero or one".into()));
+        }
+        let (ce, n) = masked_loss(&logits.narrow(0,row,1)?, &batch.target.narrow(0,row,1)?, &mask)?;
+        if n == 0 || !ce.to_scalar::<f32>()?.is_finite() {
+            return Err(Error::Invalid("empty/nonfinite supervised answer".into()));
+        }
+        means.push(ce);
+    }
+    Ok(Tensor::stack(&means,0)?.mean_all()?)
+}
+fn response_objective(logits: &Tensor, batch: &Batch, weight: f64, answer: bool)
+    -> Result<(Tensor, Tensor, usize, usize)> {
+    let (ce, token_objective, targets) = response_loss(logits,batch,weight)?;
+    if !ce.to_scalar::<f32>()?.is_finite() { return Err(Error::Invalid("nonfinite response CE".into())); }
+    if batch.mask.sum(1)?.to_vec1::<f32>()?.iter().any(|n|*n<=0. || !n.is_finite()) {
+        return Err(Error::Invalid("empty supervised answer".into()));
+    }
+    if !answer { return Ok((ce,token_objective,targets,targets)); }
+    if weight != 1. { return Err(Error::Invalid("answer mean requires unweighted response CE".into())); }
+    Ok((ce,answer_mean_loss(logits,batch)?,targets,batch.mask.dim(0)?))
+}
 // Training-only paired supervision. The two targets share their prefix up to
 // the first divergence, so neither teacher prefix reveals the selected side.
 // No extra forward, generated answer correction, or product inference oracle.
@@ -1240,6 +1271,9 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
             let mut gradients: BTreeMap<String, Tensor> = BTreeMap::new();
             let mut loss_sum = 0f64;
             let mut objective_sum = 0f64;
+            let mut objective_denominator = 0usize;
+            let mut examples = 0usize;
+            let mut answer_ce_sum = 0f64;
             let mut targets = 0usize;
             let mut step_tokens = 0;
             let mut aborted = false;
@@ -1278,11 +1312,17 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                         Ok(())
                     })?
                 } else { loaded.model.forward(&b.input, Some(&b.valid))? };
-                let (loss, mut objective, n) = response_loss(
+                let answer = state.resume_binding.as_ref().is_some_and(|b| b.family == checkpoint::ANSWER_MEAN_FAMILY);
+                let (loss, mut objective, n, denominator) = response_objective(
                     &logits,
                     &b,
                     config.first_target_weight,
+                    answer,
                 )?;
+                if fresh.is_some_and(|(p,_)|p.is_answer_mean_study()) {
+                    answer_ce_sum += f64::from(answer_mean_loss(&logits,&b)?.to_scalar::<f32>()?) * indices.len() as f64;
+                }
+                examples += indices.len();
                 if let Some((plan,_)) = fresh
                     && let Some((sidewise,pairs)) = plan.contrast_pairs(&indices)? {
                     objective = (objective + pair_contrast_loss(&logits,&train,&indices,&pairs,sidewise)?)?;
@@ -1320,13 +1360,14 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                 executed_padding_tokens += (b.input.elem_count()-b.tokens) as u64;
                 step_tokens += b.tokens;
                 loss_sum += value * n as f64;
-                objective_sum += objective_value * n as f64;
+                objective_sum += objective_value * denominator as f64;
+                objective_denominator += denominator;
                 targets += n;
                 for (name, var) in &loaded.model.vars {
                     let g = grads
                         .get(var)
                         .ok_or_else(|| Error::Model(format!("missing gradient {name}")))?;
-                    let weighted = (g * n as f64)?.detach();
+                    let weighted = (g * denominator as f64)?.detach();
                     let accumulated = match gradients.remove(name) {
                         Some(old) => (old + weighted)?,
                         None => weighted,
@@ -1341,7 +1382,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                 break;
             }
             for gradient in gradients.values_mut() {
-                *gradient = (&*gradient / targets as f64)?;
+                *gradient = (&*gradient / objective_denominator as f64)?;
             }
             control.check("before_training_optimizer")?;
             let actual_lr=fresh.map_or_else(||config.learning_rate(state.step+1),|(p,_)|p.learning_rate(state.step+1));
@@ -1357,7 +1398,16 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
             state.validation_loss = None;
             if let Some(trace)=&mut fresh_trace {
                 use std::io::Write;
-                replica_v3::binary::write_value_record(trace,&replica_v3::binary::record!({"step":state.step,"sampler":state.sampler_state,"epoch":fresh.map_or(state.step/1024,|(p,_)|p.epoch(state.step)),"paired_cursor":fresh.and_then(|(p,_)|p.pair_position(state.step-1)),"draw":fresh.map(|(p,_)|p.draw(state.step-1)),"sample_indices":balanced,"tasks":task_stats,"input":step_tokens,"target":targets,"ce":state.train_loss,"objective":objective_sum/targets as f64,"lr":actual_lr,"lr_bits":actual_lr.to_bits(),"grad_norm":grad_norm,"clip":(config.clip/(grad_norm+1e-12)).min(1.),"delta_norm":delta}))?;
+                let mut row=replica_v3::binary::record!({"step":state.step,"sampler":state.sampler_state,"epoch":fresh.map_or(state.step/1024,|(p,_)|p.epoch(state.step)),"paired_cursor":fresh.and_then(|(p,_)|p.pair_position(state.step-1)),"draw":fresh.map(|(p,_)|p.draw(state.step-1)),"sample_indices":balanced,"tasks":task_stats,"input":step_tokens,"target":targets,"ce":state.train_loss,"objective":objective_sum/objective_denominator as f64,"lr":actual_lr,"lr_bits":actual_lr.to_bits(),"grad_norm":grad_norm,"clip":(config.clip/(grad_norm+1e-12)).min(1.),"delta_norm":delta});
+                if fresh.is_some_and(|(p,_)|p.is_answer_mean_study()) {
+                    row["token_ce"]=replica_v3::binary::record!(loss_sum/targets as f64);
+                    row["answer_mean_ce"]=replica_v3::binary::record!(answer_ce_sum/examples as f64);
+                    row["effective_training_objective"]=replica_v3::binary::record!(objective_sum/objective_denominator as f64);
+                    row["objective_denominator"]=replica_v3::binary::record!(objective_denominator);
+                    row["target_tokens"]=replica_v3::binary::record!(targets);
+                    row["examples"]=replica_v3::binary::record!(examples);
+                }
+                replica_v3::binary::write_value_record(trace,&row)?;
                 trace.flush()?;
                 if state.step==config.budget_start_step+1||state.step.is_multiple_of(32){trace.sync_all()?;}
             }
@@ -1383,7 +1433,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                 "step={} loss={:.8} objective={:.8} first_target_weight={} grad_norm={grad_norm:.8} weight_delta_l2={delta:.8} lr={:.8} consumed_tokens={} target_tokens={} step_tokens={step_tokens} elapsed_s={:.3} rss_KiB={rss:?} peak_sampled_rss_KiB={peak:?}",
                 state.step,
                 state.train_loss.expect("observed"),
-                objective_sum / targets as f64,
+                objective_sum / objective_denominator as f64,
                 config.first_target_weight,
                 actual_lr,
                 state.consumed_tokens,
@@ -1544,6 +1594,128 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn answer_mean_scalar_mask_gradient_and_accumulation() -> Result<()> {
+        let device=Device::Cpu;
+        let make=|lengths:&[usize]| lengths.iter().enumerate().map(|(i,&n)| {
+            let mut tokens=vec![BOS,8+i as u32,20];
+            tokens.extend((0..n-1).map(|j|8+(j%12) as u32)); tokens.push(EOS);
+            Sample{tokens,response_start:3,curriculum:false}
+        }).collect::<Vec<_>>();
+        let mut fd=0;
+        for lengths in [vec![2,2,2,2,17,17,17,17],vec![1,3,5,7,2,4,6,8],vec![3;8]] {
+            let ss=make(&lengths);let b=batch(&ss,&(0..8).collect::<Vec<_>>(),&device)?;
+            let t=b.input.dim(1)?;let v=32;
+            let values=(0..8*t*v).map(|i|(i%29) as f32*0.07-1.).collect::<Vec<_>>();
+            let masks=b.mask.flatten_all()?.to_vec1::<f32>()?;
+            let targets=b.target.flatten_all()?.to_vec1::<u32>()?;
+            for answer in [false,true] {
+                let logits=Var::from_vec(values.clone(),(8,t,v),&device)?;
+                let (_,loss,n,den)=response_objective(&logits,&b,1.,answer)?;
+                assert_eq!(n,lengths.iter().sum::<usize>());assert_eq!(den,if answer {8}else{n});
+                let reference=|values:&[f32]| {
+                    let mut total=0.;
+                    for row in 0..8*t {
+                        let z=&values[row*v..(row+1)*v];let max=z.iter().copied().fold(f32::NEG_INFINITY,f32::max) as f64;
+                        let sum=z.iter().map(|x|(f64::from(*x)-max).exp()).sum::<f64>();
+                        let coefficient=f64::from(masks[row])/if answer {8.*lengths[row/t] as f64}else{n as f64};
+                        total+=(max+sum.ln()-f64::from(z[targets[row] as usize]))*coefficient;
+                    } total
+                };
+                assert!((f64::from(loss.to_scalar::<f32>()?)-reference(&values)).abs()<2e-6);
+                let grads=loss.backward()?;let actual=grads.get(&logits).unwrap().flatten_all()?.to_vec1::<f32>()?;
+                for row in 0..8*t {
+                    let z=&values[row*v..(row+1)*v];let max=z.iter().copied().fold(f32::NEG_INFINITY,f32::max) as f64;
+                    let sum=z.iter().map(|x|(f64::from(*x)-max).exp()).sum::<f64>();
+                    let coefficient=f64::from(masks[row])/if answer {8.*lengths[row/t] as f64}else{n as f64};
+                    for k in 0..v {
+                        let expected=(((f64::from(z[k])-max).exp()/sum)-f64::from(k==targets[row] as usize))*coefficient;
+                        assert!((f64::from(actual[row*v+k])-expected).abs()<2e-6);
+                        if masks[row]==0. {assert_eq!(actual[row*v+k],0.);}
+                    }
+                }
+                for row in 0..8 {let eos=row*t+ss[row].tokens.len()-2;assert_eq!(targets[eos],EOS);assert_eq!(masks[eos],1.);assert!(actual[eos*v+EOS as usize]<0.);}
+                // Eight central differences; the analytic gradient covers every layout/coordinate.
+                for i in [0,2*v+8,(t+2)*v+9,(8*t-1)*v+EOS as usize].into_iter().filter(|_|lengths[0]==2 && lengths[7]==17) {
+                    let mut lo=values.clone();let mut hi=values.clone();lo[i]-=0.001;hi[i]+=0.001;
+                    let expected=(reference(&hi)-reference(&lo))/f64::from(hi[i]-lo[i]);fd+=1;
+                    assert!((f64::from(actual[i])-expected).abs()<2e-6);
+                }
+                for sizes in [vec![8],vec![4,4],vec![3,5],vec![2,6]] {
+                    let mut start=0;let mut total=0.;let mut norm=0;
+                    for size in sizes {
+                        let ids=(start..start+size).collect::<Vec<_>>();let mb=batch(&ss,&ids,&device)?;
+                        let mt=mb.input.dim(1)?;
+                        let slice=logits.narrow(0,start,size)?.narrow(1,0,mt)?;
+                        let (_,l,_,d)=response_objective(&slice,&mb,1.,answer)?;
+                        total+=f64::from(l.to_scalar::<f32>()?)*d as f64;norm+=d;
+                        let mg=l.backward()?;let g=mg.get(&logits).unwrap().flatten_all()?.to_vec1::<f32>()?;
+                        for r in start..start+size {for k in 0..t*v {
+                            assert!((g[r*t*v+k]*d as f32/den as f32-actual[r*t*v+k]).abs()<2e-6);
+                        }} start+=size;
+                    }
+                    assert_eq!(norm,den);assert!((total/norm as f64-reference(&values)).abs()<2e-6);
+                }
+                let reversed=(0..8).rev().collect::<Vec<_>>();let rb=batch(&ss,&reversed,&device)?;
+                let rv=reversed.iter().flat_map(|&i|values[i*t*v..(i+1)*t*v].iter().copied()).collect::<Vec<_>>();
+                let (_,rl,_,_)=response_objective(&Tensor::from_vec(rv,(8,t,v),&device)?,&rb,1.,answer)?;
+                assert!((rl.to_scalar::<f32>()?-loss.to_scalar::<f32>()?).abs()<2e-6);
+                let mut invalid=batch(&ss,&[0],&device)?;
+                invalid.mask=Tensor::zeros(invalid.mask.shape(),DType::F32,&device)?;
+                assert!(response_objective(&logits.narrow(0,0,1)?.narrow(1,0,invalid.input.dim(1)?)?,&invalid,1.,answer).is_err());
+                let mut mixed=batch(&ss,&[0,1],&device)?;
+                let mut mm=mixed.mask.to_vec2::<f32>()?;mm[0].fill(0.);
+                mixed.mask=Tensor::from_vec(mm.concat(),mixed.mask.shape(),&device)?;
+                assert!(response_objective(&logits.narrow(0,0,2)?.narrow(1,0,mixed.input.dim(1)?)?,&mixed,1.,answer).is_err());
+                let nan=Tensor::full(f32::NAN,(8,t,v),&device)?;
+                assert!(response_objective(&nan,&b,1.,answer).is_err());
+            }
+            if lengths.iter().all(|n|*n==3) {
+                let logits=Tensor::from_vec(values,(8,t,v),&device)?;
+                let (ce,l,_,_)=response_objective(&logits,&b,1.,true)?;
+                assert!((ce.to_scalar::<f32>()?-l.to_scalar::<f32>()?).abs()<2e-6);
+            }
+        }
+        println!("ANSWER_SCALAR finite_difference_coordinates={fd} optimizer=0 generation=0 teacher=0 native_forward=0 tolerance=2e-6");
+        Ok(())
+    }
+    #[test]
+    fn answer_mean_random_native_gradient_microbatch() -> Result<()> {
+        let ss=(0..8).map(|i| {
+            let mut tokens=vec![BOS,8+i as u32,20];let n=if i<4 {2}else{17};
+            tokens.extend((0..n-1).map(|j|8+j as u32));tokens.push(EOS);
+            Sample{tokens,response_start:3,curriculum:false}
+        }).collect::<Vec<_>>();
+        let cfg=TrainConfig{warmup:0,clip:1.,..Default::default()};
+        let mut reference:Option<(BTreeMap<String,Vec<f32>>,BTreeMap<String,Vec<f32>>)>=None;
+        let mut forwards=0;
+        for sizes in [vec![8],vec![4,4],vec![3,5],vec![2,6]] {
+            let model=Transformer::init(neural::transformer::Config::tiny(264),93,Device::Cpu)?;
+            let mut gradients=BTreeMap::new();let mut count=0;
+            for size in sizes {
+                let ids=(count..count+size).collect::<Vec<_>>();let b=batch(&ss,&ids,&Device::Cpu)?;
+                let logits=model.forward(&b.input,Some(&b.valid))?;forwards+=1;
+                let (_,loss,_,den)=response_objective(&logits,&b,1.,true)?;
+                let gs=loss.backward()?;
+                for (name,var) in &model.vars {
+                    let g=(gs.get(var).unwrap()*den as f64)?.detach();
+                    let total=match gradients.remove(name) {Some(old)=>(old+g)?,None=>g};
+                    gradients.insert(name.clone(),total);
+                }count+=size;
+            }
+            for g in gradients.values_mut(){*g=(&*g/count as f64)?;}
+            let flat=gradients.iter().map(|(n,t)|Ok((n.clone(),t.flatten_all()?.to_vec1::<f32>()?))).collect::<Result<BTreeMap<_,_>>>()?;
+            let mut adam=Adam::new(&model.vars)?;
+            adam.step_constant(&model.vars,&gradients,&cfg,1,3e-4)?;
+            let weights=model.vars.iter().map(|(n,t)|Ok((n.clone(),t.flatten_all()?.to_vec1::<f32>()?))).collect::<Result<BTreeMap<_,_>>>()?;
+            if let Some((rg,rw))=&reference {
+                for (name,g) in &flat {for (x,y) in g.iter().zip(&rg[name]){assert!((x-y).abs()<2e-5,"gradient {name}");}}
+                for (name,w) in &weights {for (x,y) in w.iter().zip(&rw[name]){assert!((x-y).abs()<2e-5,"Adam {name}");}}
+            } else {reference=Some((flat,weights));}
+        }
+        println!("ANSWER_NATIVE random_TINY optimizer=4 native_forward={forwards} backward={forwards} generation=0 teacher=0 tolerance=2e-5");
+        Ok(())
+    }
     #[test]
     fn record_grounding_matches_scalar_gradient_and_mask_contract() -> Result<()> {
         let device=Device::Cpu;

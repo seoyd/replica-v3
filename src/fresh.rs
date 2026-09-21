@@ -19,6 +19,12 @@ const SYSTEM: &str = "제공된 기록과 질문만으로 답하세요. 요구�
 mod identifiable;
 #[derive(Subcommand)]
 pub enum Command {
+    /// Same sealed citation data/tape, TOKEN reference and answer-mean CE fork.
+    AnswerMeanPrepare { #[arg(long)] previous: PathBuf, #[arg(long)] output: PathBuf },
+    AnswerMeanParent { #[arg(long)] study: PathBuf },
+    AnswerMeanReport { #[arg(long)] study: PathBuf },
+    /// Explicit read-only reproduction of complete endpoints, including quality guard stops.
+    AnswerMeanReview { #[arg(long)] root: PathBuf, #[arg(long)] citation: bool },
     /// Prepare the single parent-bound value/citation continuation.
     CitationPrepare { #[arg(long)] parent: PathBuf, #[arg(long)] output: PathBuf, #[arg(long)] reservation: PathBuf, #[arg(long)] used_ids: PathBuf },
     CitationParent { #[arg(long)] study: PathBuf, #[arg(long)] citation: bool },
@@ -1245,6 +1251,9 @@ fn corpus(train: Vec<Episode>, dev: Vec<Episode>, seed: u64) -> Result<data::nat
     data::native::from_episodes(m, train, dev)
 }
 impl Plan {
+    pub(super) fn is_answer_mean_study(&self) -> bool {
+        identifiable::binding::citation::is_mean(self)
+    }
     pub(super) fn framing(&self) -> neural::Framing {
         self.framing.unwrap_or_default()
     }
@@ -1454,6 +1463,10 @@ impl Plan {
         b.policy = checkpoint::ResumeBinding::digest_bytes(&binary::to_vec(self)?);
         b.provenance = b.policy;
         b.train_order = checkpoint::ResumeBinding::digest_bytes(self.train_order.as_bytes());
+        if identifiable::binding::citation::answer_mean(self) {
+            b.family = checkpoint::ANSWER_MEAN_FAMILY;
+            b.normalizer = 2;
+        }
         if let Some(tape) = &self.paired && ["CONTRAST","SIDE","REPLAY","WIDE","FIT","VALUE","COVER","DIVERSE","COVER4","GROUND"].contains(&tape.mode.as_str()) {
             b.family = if tape.mode == "CONTRAST" {3}else if tape.mode=="GROUND" {5}else{4};
             b.normalizer = b.family;
@@ -1713,6 +1726,10 @@ fn source_digest() -> Result<String> {
 }
 pub fn execute(command: Command) -> Result<()> {
     match command {
+        Command::AnswerMeanPrepare { previous,output } => identifiable::binding::citation::mean_prepare(&previous,&output,false),
+        Command::AnswerMeanParent { study } => identifiable::binding::citation::mean_parent(&study),
+        Command::AnswerMeanReport { study } => identifiable::binding::citation::mean_report(&study),
+        Command::AnswerMeanReview { root,citation } => identifiable::binding::citation::mean_review(&root,citation),
         Command::CitationPrepare {parent,output,reservation,used_ids} => identifiable::binding::citation::prepare(&parent,&output,&reservation,&used_ids),
         Command::CitationParent {study,citation} => identifiable::binding::citation::parent_observe(&study,citation),
         Command::CitationReport {study} => identifiable::binding::citation::report(&study),

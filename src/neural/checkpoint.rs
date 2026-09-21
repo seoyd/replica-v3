@@ -147,6 +147,9 @@ pub struct TrainingState {
     pub validation_loss: Option<f64>,
 }
 
+/// Explicit per-answer CE meaning; no new tensor or descriptor layout.
+pub const ANSWER_MEAN_FAMILY: u8 = 6;
+pub const ANSWER_MEAN_OBJECTIVE: &str = "response_ce_answer_mean_v1";
 /// Execution identity, independent of tensor/model identity and filesystem location.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -156,6 +159,7 @@ pub struct ResumeBinding {
     /// 3: response CE + 0.1 * mean paired first-divergence softplus (margin1).
     /// 4: response CE + 0.1 * mean of per-side first-divergence softplus (margin1).
     /// 5: family4 + 0.1 * mean first-query last-layer selected-record attention NLL.
+    /// 6: response_ce_answer_mean_v1, per-answer token mean then example mean.
     pub family: u8,
     pub first_target_weight_bits: u64,
     /// Historical slot: span alpha for2, fixed auxiliary coefficient0.1 for3/4/5.
@@ -211,7 +215,7 @@ impl ResumeBinding {
     }
     pub fn validate(&self, state: &TrainingState, tok: &ByteBpe) -> Result<()> {
         if self.version != 1
-            || ![1, 2, 3, 4, 5].contains(&self.family)
+            || ![1, 2, 3, 4, 5, ANSWER_MEAN_FAMILY].contains(&self.family)
             || self.execution > 1
             || self.first_target_weight_bits != state.config.first_target_weight.to_bits()
             || self.tokenizer != Self::digest_bytes(tok.semantic_id().as_bytes())
@@ -227,6 +231,12 @@ impl ResumeBinding {
                 && (self.normalizer != 2
                     || self.span_alpha_bits != Some(1f64.to_bits())
                     || self.annotation.is_none()
+                    || self.execution != 1))
+            || (self.family == ANSWER_MEAN_FAMILY
+                && (self.normalizer != 2
+                    || self.first_target_weight_bits != 1f64.to_bits()
+                    || self.span_alpha_bits.is_some()
+                    || self.annotation.is_some()
                     || self.execution != 1))
             || ([3,4,5].contains(&self.family)
                 && (self.normalizer != self.family

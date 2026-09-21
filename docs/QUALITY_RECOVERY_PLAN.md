@@ -1,5 +1,82 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: answer-mean citation reduction from accepted4352
+
+R3-ANSWER-MEAN-CITATION-1.0 preserves the accepted scalar4352 and the complete
+VALUE-CITATION4384 negative endpoint. The latest independent review reproduced
+that endpoint's V16/VC16; the historical CLI refusal remains a separate fact.
+No previous failure, unused budget or acceptance record is reopened.
+
+The only intervention is CE reduction. TOKEN retains sum of response NLL divided
+by actual supervised token count. ANSWER uses the mean of each example's mean
+response NLL. Actual binary response masks determine lengths; prompt/padding
+are excluded and EOS included. Microbatch gradients are multiplied by their
+normalizer and divided by the sum of normalizers: tokens for TOKEN, examples
+for ANSWER. Logged token CE, answer CE, effective objective and normalizer are
+distinct from actual input/target/padding usage. Scalar V/VC contributions do
+not claim per-task gradient norms or Adam displacement.
+
+Native ResumeBinding family6 denotes `response_ce_answer_mean_v1`, normalizer2,
+first-target1, no span/annotation/auxiliary loss, execution1 and the exact
+policy/corpus/tape/tokenizer/framing/config digests. This extends an unused tag
+without changing tensor fields or descriptor widths. Existing readers reject
+unknown family6; new readers preserve existing family1 semantics. Inference
+can load the native model, while generic TOKEN resume rejects a moved ANSWER
+file before optimizer execution. The parent-to-ANSWER change is an explicit
+new objective fork retaining the parent Adam, not an implicit default resume.
+
+Both arms copy the same4352 native and unchanged train4608/development1536
+corpus, metadata, tokenizer and finite tape. TOKEN-CONTROL uses the first32
+rows; ANSWER-MEAN uses up to3072. Constant LR3e-4, batch8/accumulation1,
+V4/VC4, QE, LOCAL5/F32/Accelerate/thread1 and basic CE remain fixed.
+Every batch contains76 actual targets: V4*2 and VC4*17. Its scalar mode weights
+are2/19 and17/19 for TOKEN, one half each for ANSWER. General loss code never
+uses those task lengths as constants. Full planned costs are input3699968,
+target235904,padding99328 for3104 updates; all are recomputed from native data.
+
+Direct checks cover independent F64 loss/logit gradients, empty/nonfinite masks,
+EOS and padding, random TINY gradient/Adam under8/4+4/3+5/2+6 partitions,
+native moved-objective rejection and actual new-process2 versus1+1 plus
+last-step evaluation-only2+0. Random native continuation and the existing EOS
+tensor evaluation fixture are disclosed separately. Scalar tolerance2e-6 and
+native gradient/Adam tolerance2e-5 are fixed before execution; identical-path
+resume and TOKEN raw/tensor/Adam comparisons require exact equality.
+Use `replica-check quick --answer-mean` for only these boundaries.
+
+Independent A precedes SMALL. `fresh answer-mean-prepare --previous PATH --output PATH`
+binds the unchanged previous study and unused citation seal without creating
+new examples or a new seal. After A, `fresh answer-mean-parent --study PATH`
+checks the fixed parent16; `fresh run --root PATH/TOKEN-CONTROL` executes1 then31
+in separate processes. Only complete verified negative quality termination,
+matching original raw128 and tensor/Adam, permits ANSWER. Cancellation, storage,
+binding, UNKNOWN and incomplete peer state remain blocking.
+
+ANSWER similarly saves after1 and continues to32. Keep the original V64 guard:
+FULL loss>=16, ALL4 loss>=4 or scorer errors>=4 stops for QUALITY_REGRESSION.
+Early citation0/length alone does not stop. Subsequent evaluation is at
++128/384/768/1536/3072, with the previous panels and all unchanged joint gates;
+safe non-evaluation saves keep segments <=512 updates. Eligible1536 stops
+immediately; otherwise the registered maximum3072 is final. No new ratio,
+LR/seed/loss/core exploration or automatic extension follows a miss.
+
+Caps: new SMALL3104, input4000000,target260000, generation/teacher16384 each,
+diagnostic backward0, active10800s, segment900s plus cleanup120s, RSS16GiB.
+Direct plus independent TINY caps are96 updates,1024 generation/teacher each,
+finite-difference64 coordinates, including failed tests. Zero-test filters
+are not verification. Reports are pure readers and never synthesize evidence.
+
+Independent B recounts both actual endpoints and uses
+`fresh answer-mean-review --root ARM_PATH [--citation]` for V16/VC16 even on a
+complete QUALITY_REGRESSION. This is reproduction only; it grants neither
+resume nor candidate rights and leaves the old citation parity policy intact.
+Malformed citation prefixes are separated from parsed IDs outside supplied
+evidence. Only eligible ANSWER plus B may use the explicitly linked, previously
+unused citation V256/VC256 seal once through the existing confirmation path.
+Its immutable source bytes remain in the earlier study. The old scalar seal
+is never used to select this model. Any success covers only two current records,
+single-digit key/value and fixed eight-digit event citations; S4/S5/S6 and
+Goal1 remain separate and unaccepted.
+
 ## Closed at retention guard: value and selected-event citation from4352
 
 Actual execution on frozen source `04b5624f0855d9f1ff35c1a8a4a48df459ef3d8b`

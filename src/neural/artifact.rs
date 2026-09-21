@@ -1198,15 +1198,21 @@ mod tests {
         );
         // The fixed paired objective reuses the descriptor bytes, but can never
         // silently resume as default CE or lose its coefficient/annotation.
-        for family in [3,4,5] {
+        for family in [3,4,5,super::checkpoint::ANSWER_MEAN_FAMILY] {
         let mut contrast = full.manifest.clone();
         let state = contrast.training.as_mut().unwrap();
         let binding = state.resume_binding.as_mut().unwrap();
-        binding.family = family; binding.normalizer = family; binding.execution = 1;
-        binding.span_alpha_bits = Some(0.1f64.to_bits()); binding.annotation = Some([7;32]);
+        binding.family = family; binding.normalizer = if family==6 {2}else{family}; binding.execution = 1;
+        binding.span_alpha_bits = if family==6 {None}else{Some(0.1f64.to_bits())};
+        binding.annotation = if family==6 {None}else{Some([7;32])};
         let path = d.path().join(format!("paired-objective-{family}"));
         save(&path,&full.model,&full.tokenizer,contrast.clone(),&full.optimizer).unwrap();
         let restored = load(&path,Device::Cpu,true).unwrap();
+        if family==6 {
+            let view=load(&path,Device::Cpu,false).unwrap();
+            assert!(view.optimizer.is_empty());
+            assert_eq!(view.model.weights_content_id().unwrap(),restored.model.weights_content_id().unwrap());
+        }
         assert_eq!(restored.manifest.training,contrast.training);
         assert!(ResumeBinding::require_default(restored.manifest.training.as_ref().unwrap(),&restored.tokenizer).is_err());
         for change in 0..5 {
@@ -1214,7 +1220,7 @@ mod tests {
             let b = invalid.resume_binding.as_mut().unwrap();
             match change {
                 0 => b.span_alpha_bits = Some(0.2f64.to_bits()),
-                1 => b.annotation = None,
+                1 => b.annotation = if family==6 {Some([7;32])}else{None},
                 2 => b.normalizer = if family==3 {4}else{3},
                 3 => b.execution = 0,
                 4 => b.first_target_weight_bits = 4f64.to_bits(),
