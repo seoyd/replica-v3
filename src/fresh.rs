@@ -1727,7 +1727,7 @@ pub fn execute(command: Command) -> Result<()> {
         Command::OrbitPrepare { parent, output } => identifiable::binding::orbit_prepare(&parent, &output, false),
         Command::OrbitSeal { study } => identifiable::binding::orbit_seal(&study),
         Command::OrbitCompare { study } => identifiable::binding::orbit_compare(&study),
-        Command::OrbitReviewParity { root } => { let p=plan_read(&root)?; identifiable::binding::orbit_parity(&root,&p,true) },
+        Command::OrbitReviewParity { root } => { let p=identifiable::binding::historical_plan(&root)?; identifiable::binding::orbit_parity(&root,&p,true) },
         Command::OrbitConfirm { study } => identifiable::binding::orbit_confirm(&study),
         Command::IdentifiableAudit { roots, diagnostics, output } => identifiable::audit(&roots, &diagnostics, &output),
         Command::IdentifiablePrepare { parent, output } => identifiable::prepare(&parent, &output),

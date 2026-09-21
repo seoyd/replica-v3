@@ -1813,6 +1813,131 @@ fn verify_seal(study:&Path) -> Result<binary::Value> {
     }
     Ok(receipt)
 }
+// A projection of present evidence, never a replacement for the immutable
+// comparison that authorized opening the seal. This path performs no writes or
+// native calls, including when a publication or an observation is incomplete.
+fn confirmation_current(study: &Path, p: &Plan, end: &Segment, comparison: &binary::Value) -> binary::Value {
+    match confirmation_current_checked(study, p, end, comparison) {
+        Ok(value) => value,
+        Err(e) => {
+            let access = matches!(&e, replica_v3::Error::Io(io)
+                if !matches!(io.kind(), std::io::ErrorKind::InvalidData | std::io::ErrorKind::NotFound));
+            binary::record!({"status":if access {"NOT_VERIFIABLE"} else {"INTEGRITY_FAIL"},
+                "error":e.to_string(),"minimal_binding_baseline_verified":false,"goal1_ready":false})
+        }
+    }
+}
+fn confirmation_current_checked(study: &Path, p: &Plan, end: &Segment, comparison: &binary::Value) -> Result<binary::Value> {
+    // read_dir, rather than exists(), distinguishes inaccessible evidence from
+    // an observed empty namespace. Call journals also count as execution traces.
+    let mut names = BTreeSet::new();
+    for entry in std::fs::read_dir(study)? {
+        names.insert(entry?.file_name().to_string_lossy().into_owned());
+    }
+    let state = |status: &str| binary::record!({"status":status,"observed":!["NOT_OPENED","NOT_ELIGIBLE"].contains(&status),"checkpoint":end.checkpoint_hash,
+        "minimal_binding_baseline_verified":false,"goal1_ready":false});
+    let traces = names.iter().any(|n| n.starts_with("confirmation-") || n == "confirmation.r3rows");
+    if !traces {
+        return Ok(state(if comparison["selected"].is_null() {"NOT_ELIGIBLE"} else {"NOT_OPENED"}));
+    }
+    if !names.contains("confirmation-candidate.r3b") {
+        return Err(bad("confirmation execution without fixed candidate"));
+    }
+    let root = study.join(&own(p).arm);
+    let candidate: binary::Value = read(&study.join("confirmation-candidate.r3b"))?;
+    let selection: binary::Value = read(&study.join("selection.r3b"))?;
+    let seal_root = Path::new(selection["seal_root"].as_str().ok_or_else(||bad("confirmation seal root"))?);
+    let seal = verify_seal(seal_root)?;
+    let review: binary::Value = read_confirmed(&study.join("review-b.r3b"))?;
+    if comparison["selected"] != own(p).arm || candidate != binary::record!({"arm":own(p).arm,
+        "checkpoint":end.checkpoint_hash,"framing":p.framing(),"comparison":comparison,
+        "seal":file_hash(&seal_root.join("confirmation-seal.r3b"))?,"review":file_hash(&study.join("review-b.r3b"))?})
+        || review["verdict"] != "PASS" || review["endpoints"] != comparison["endpoints"]
+        || review["preparation"] != file_hash(&study.join("preparation.r3b"))?
+        || review["report_hash"] != file_hash(Path::new(review["report_path"].as_str().ok_or_else(||bad("review report path"))?))?
+        || file_hash(&root.join(&end.checkpoint))? != end.checkpoint_hash {
+        return Err(bad("confirmation candidate/model/review binding"));
+    }
+    let corpus = verified_corpus(&seal_root.join("sealed/confirmation.r3cor"), seal["corpus"].as_str().ok_or_else(||bad("seal corpus"))?)?;
+    let metadata: Vec<Meta> = read(&seal_root.join("sealed/metadata.r3b"))?;
+    let tok = ByteBpe::load(&root.join("tokenizer.r3b"))?;
+    if tok.id() != p.tokenizer {return Err(bad("confirmation tokenizer binding"));}
+    orbit_validate(&corpus.validation, &metadata, &tok, 256)?;
+    let identity = binary::record!({"policy":digest(p)?,"checkpoint":end.checkpoint_hash,
+        "candidate":file_hash(&study.join("confirmation-candidate.r3b"))?});
+    let binding = binary::record!({"identity":identity,"checkpoint":end.checkpoint_hash,
+        "cases":digest(&corpus.validation)?,"source":p.source,"binary":p.binary,"decoding":"normal-greedy-strict-utf8-eos"});
+    let start = names.contains("confirmation-started.r3b");
+    let raw = names.contains("confirmation.r3rows");
+    let finish = names.contains("confirmation-finished.r3b");
+    let result = names.contains("confirmation-result.r3b");
+    if !start {
+        if raw || finish || result || names.iter().any(|n|n.starts_with("confirmation-generation-")) {
+            return Err(bad("confirmation output without start"));
+        }
+        return Ok(state("PENDING/INCOMPLETE"));
+    }
+    if read::<binary::Value>(&study.join("confirmation-started.r3b"))? != binding {
+        return Err(bad("confirmation start identity"));
+    }
+    let rows = if raw {binary::read_value_records(&study.join("confirmation.r3rows"))?} else {vec![]};
+    if (!rows.is_empty() && rows.first() != Some(&binding)) || rows.len() > 257 {
+        return Err(bad("confirmation raw header/count"));
+    }
+    let actual = rows.get(1..).unwrap_or(&[]);
+    // Validate even a partial prefix against sealed gold, not self-reported
+    // expected answers. No missing row or call resolution is manufactured.
+    score(actual, &corpus.validation[..actual.len()], &metadata[..actual.len()])?;
+    for (i,(row,e)) in actual.iter().zip(&corpus.validation).enumerate() {
+        verify_generated(row,&tok)?;
+        let prompt=tok.prepare_with_framing(&e.request,p.framing(),p.architecture.context as u32,&p.architecture.id()?)?;
+        if row["native_prompt_digest"]!=prompt.token_digest || row["framing"]!=p.framing().id() {
+            return Err(bad("confirmation raw tokenizer/framing mismatch"));
+        }
+        if let Some(attempt) = row["attempt"].as_str() {
+            let resolved = attempt.replace("-prepared", "-resolved");
+            if names.contains(attempt) && (!names.contains(&resolved)
+                || names.contains(&resolved.replace(".r3b", ".pending.r3b"))) {
+                return Ok(state("UNKNOWN/FAILED_EXECUTION"));
+            }
+        }
+        call_attempt(study,"confirmation","generation",&binding,e,i,Some(row))?;
+    }
+    let uncertain = names.iter().any(|n|n.starts_with("confirmation-") && n.ends_with("pending.r3b"));
+    if uncertain {return Ok(state("UNKNOWN/FAILED_EXECUTION"));}
+    if !finish {
+        if result {return Err(bad("confirmation result without terminal"));}
+        return Ok(state(if names.iter().any(|n|n.starts_with("confirmation-generation-") && n.ends_with("prepared.r3b")
+            && !names.contains(&n.replace("-prepared", "-resolved"))) {"UNKNOWN/FAILED_EXECUTION"} else {"PENDING/INCOMPLETE"}));
+    }
+    let finished: binary::Value = read_confirmed(&study.join("confirmation-finished.r3b"))?;
+    if finished["binding"] != binding || finished["policy"] != digest(p)? || finished["checkpoint"] != end.checkpoint_hash
+        || finished["completed"] != actual.len() || finished["raw"] != if raw {binary::record!(file_hash(&study.join("confirmation.r3rows"))?)} else {binary::Value::Null}
+        || finished["matched"] != 0 || finished["control"]["generation_calls"] != actual.len()
+        || finished["control"]["teacher_calls"] != 0
+        || finished["control"]["elapsed_seconds"].as_f64().is_none_or(|v|!v.is_finite() || v<0.) {
+        return Err(bad("confirmation terminal/raw usage binding"));
+    }
+    if !finished["error"].is_null() || finished["control"]["terminal_reason"] != "COMPLETED"
+        || finished["control"]["observed_conditions"] != binary::record!([]) {
+        if result {return Err(bad("confirmation result after failed execution"));}
+        return Ok(state("UNKNOWN/FAILED_EXECUTION"));
+    }
+    if actual.len() != 256 {return Err(bad("completed confirmation has missing rows"));}
+    if !result {return Ok(state("PENDING/INCOMPLETE"));}
+    let score = orbit_score(&corpus.validation,&metadata,actual,&tok)?;
+    let pass = score.full>=244 && score.query_both>=116 && score.all4>=58 && score.errors==0 && score.eos==256;
+    let saved: binary::Value = read_confirmed(&study.join("confirmation-result.r3b"))?;
+    let scope = "K1-V finite digits; two records; new key/value sets";
+    if saved != binary::record!({"arm":own(p).arm,"checkpoint":end.checkpoint_hash,"score":score,
+        "minimal_binding_baseline_verified":pass,"scope":scope,"goal1_ready":false,"s4":false,"s5":false,"s6":false}) {
+        return Err(bad("confirmation stored result differs from strict sealed raw recount"));
+    }
+    Ok(binary::record!({"status":if pass {"COMPLETED_PASS"} else {"COMPLETED_QUALITY_FAIL"},
+        "observed":true,"checkpoint":end.checkpoint_hash,"score":score,"scope":scope,"minimal_binding_baseline_verified":pass,
+        "historical_comparison":digest(comparison)?,"confirmation_result":file_hash(&study.join("confirmation-result.r3b"))?,
+        "goal1_ready":false,"s4":false,"s5":false,"s6":false}))
+}
 pub(in super::super) fn orbit_seal(study:&Path) -> Result<()> {
     let p=plan_read(&study.join("FIXED"))?;
     if !is_orbit(&p) {return Err(bad("orbit seal scope"));}
@@ -1869,18 +1994,15 @@ fn orbit_peer_can_proceed(s: &Segment) -> bool {
         && (s.phase.as_deref() != Some("Finished") || s.stop == "BUDGET_REACHED")
 }
 pub(in super::super) fn orbit_parity(root: &Path, p: &Plan, reviewer: bool) -> Result<()> {
-    if !is_orbit(p) || p.tiny {
+    if !is_orbit(p) || (p.tiny && !(is_consolidation(p) && cfg!(feature="test-support"))) {
         return Err(bad("SMALL orbit parity scope"));
     }
     authorize(root, p)?;
     let h = history(root, p)?;
     let end = h.last().ok_or_else(|| bad("orbit endpoint missing"))?;
     if is_consolidation(p) {
-        if ![4352,5120].contains(&end.step) || end.resume || end.phase.as_deref()!=Some("Finished")
-            || end.stop != format!("CANDIDATE_FIXED_AT_{}", end.step) {
-            return Err(bad("consolidation fixed candidate required"));
-        }
-        consolidation_close(root)?;
+        let (_, _, decision) = consolidation_close_bound(root, p.clone())?;
+        consolidation_reproduction_endpoint(end, &decision, reviewer, p.tiny)?;
     } else if is_expansion(p) {
         if end.step!=3584 || end.resume || end.phase.as_deref()!=Some("Finished")
             || !["CANDIDATE_FIXED","FINAL_QUALITY_FAIL"].contains(&end.stop.as_str()) {
@@ -1899,9 +2021,14 @@ pub(in super::super) fn orbit_parity(root: &Path, p: &Plan, reviewer: bool) -> R
     let c = verified_corpus(&root.join("corpus.r3cor"), &p.corpus)?;
     let (_, dm, _) = verified_metadata(root, p)?;
     let tok = ByteBpe::load(&root.join("tokenizer.r3b"))?;
-    audit_panel(root, p, end.step, "dev512", &c.validation, &dm, &tok)?;
+    let (panel, cases, metadata) = if p.tiny {
+        panel_cases(root,p,end.step)?.into_iter().find(|(n,_,_)|n.starts_with("dev"))
+            .ok_or_else(||bad("explicit TINY development panel absent"))?
+    } else {("dev512".into(),c.validation,dm)};
+    audit_panel(root, p, end.step, &panel, &cases, &metadata, &tok)?;
     let raw =
-        binary::read_value_records(&root.join(format!("eval-{:04}-dev512.r3rows", end.step)))?;
+        binary::read_value_records(&root.join(format!("eval-{:04}-{panel}.r3rows", end.step)))?;
+    let count=cases.len().min(16);
     let destination = if reviewer {
         own(p).study.clone()
     } else {
@@ -1913,9 +2040,9 @@ pub(in super::super) fn orbit_parity(root: &Path, p: &Plan, reviewer: bool) -> R
         "parity".into()
     };
     let identity = binary::record!({"policy":digest(p)?,"checkpoint":end.checkpoint_hash,"selection":"first16 frozen dev rows",
-        "reviewer":reviewer,"cases":digest(&&c.validation[..16])?});
-    orbit_observe(&destination,&name,&root.join(&end.checkpoint),&c.validation[..16],&identity,Some(&raw[1..17]),observation_control(p,16,0)?)?;
-    println!("ORBIT_PARITY arm={} reviewer={reviewer} matched16/16 optimizer0 teacher0",own(p).arm);Ok(())
+        "reviewer":reviewer,"cases":digest(&&cases[..count])?});
+    orbit_observe(&destination,&name,&root.join(&end.checkpoint),&cases[..count],&identity,Some(&raw[1..count+1]),observation_control(p,count,0)?)?;
+    println!("ORBIT_PARITY arm={} reviewer={reviewer} matched{count}/{count} optimizer0 teacher0",own(p).arm);Ok(())
 }
 fn orbit_comparison(study:&Path) -> Result<binary::Value> {
     let mut scores=vec![];let mut endpoints=BTreeMap::new();let mut candidates=vec![];
@@ -3808,6 +3935,28 @@ fn consolidation_decision(root: &Path, p: &Plan, step: usize) -> Result<Option<S
 }
 fn consolidation_close(root: &Path) -> Result<(Plan, Segment, binary::Value)> {
     let p = plan_read(root)?;
+    consolidation_close_bound(root, p)
+}
+// Historical readers retain the recorded source/binary identity. Training and
+// candidate publication still enter through plan_read's current-build binding.
+pub(in super::super) fn historical_plan(root: &Path) -> Result<Plan> {
+    let root = root.canonicalize()?;
+    let p: Plan = read(&root.join("plan.r3b"))?;
+    plan_read_bound(&root, &p.source, &p.binary)
+}
+fn consolidation_reproduction_endpoint(end: &Segment, d: &binary::Value, reviewer: bool, tiny: bool) -> Result<()> {
+    let candidate = !tiny && [4352, 5120].contains(&end.step)
+        && end.stop == format!("CANDIDATE_FIXED_AT_{}", end.step) && d["eligible"] == true;
+    let quality_failure = reviewer && end.step == (if tiny {4} else {5120})
+        && end.stop == (if tiny {"FINAL_QUALITY_FAIL"} else {"FINAL_QUALITY_FAIL_AT_5120"}) && d["eligible"] == false;
+    if end.resume || end.phase.as_deref() != Some("Finished") || !(candidate || quality_failure)
+        || d["step"] != end.step || d["stop"] != end.stop || d["action"] != end.stop
+        || d["extend"] != false || d["regression"] != false {
+        return Err(bad("normal complete consolidation endpoint required; reproduction grants no candidate/resume permission"));
+    }
+    Ok(())
+}
+fn consolidation_close_bound(root: &Path, p: Plan) -> Result<(Plan, Segment, binary::Value)> {
     if !is_consolidation(&p) {
         return Err(bad("consolidation close scope"));
     }
@@ -3833,6 +3982,10 @@ fn consolidation_close(root: &Path) -> Result<(Plan, Segment, binary::Value)> {
 fn consolidation_comparison(study: &Path) -> Result<binary::Value> {
     let root = study.join(CONTINUE_ARM);
     let (p, end, d) = consolidation_close(&root)?;
+    consolidation_comparison_bound(study, &p, &end, &d)
+}
+fn consolidation_comparison_bound(study: &Path, p: &Plan, end: &Segment, d: &binary::Value) -> Result<binary::Value> {
+    let root = study.join(CONTINUE_ARM);
     let parity = if d["eligible"] == true {
         parity_verified(&root, &p)?
     } else {
@@ -3849,7 +4002,7 @@ fn consolidation_comparison(study: &Path) -> Result<binary::Value> {
 }
 pub(in super::super) fn consolidation_report(study: &Path) -> Result<()> {
     let root = study.join(CONTINUE_ARM);
-    let p = plan_read(&root)?;
+    let p = historical_plan(&root)?;
     let h = history(&root, &p)?;
     let Some(end) = h.last() else {
         println!("CONSOLIDATION NOT_RUN");
@@ -3877,10 +4030,10 @@ pub(in super::super) fn consolidation_report(study: &Path) -> Result<()> {
         work(&p)?
     );
     if !end.resume && end.phase.as_deref() == Some("Finished") {
-        println!(
-            "CONSOLIDATION_COMPARISON {}",
-            consolidation_comparison(study)?
-        );
+        let (_, checked_end, decision) = consolidation_close_bound(&root, p.clone())?;
+        let comparison = consolidation_comparison_bound(study, &p, &checked_end, &decision)?;
+        println!("CONSOLIDATION_HISTORICAL_COMPARISON {comparison}");
+        println!("CONSOLIDATION_CONFIRMATION_CURRENT {}", confirmation_current(study, &p, &checked_end, &comparison));
     }
     Ok(())
 }
@@ -4436,6 +4589,165 @@ fn verify_framing_comparison(result:&binary::Value)->Result<()> {
 
 #[cfg(test)]
 mod tests {
+    // Synthetic gold rows exercise the reader, not model quality. The separate
+    // child invocations below use untouched random TINY weights and real greedy.
+    #[test]
+    fn value_citation_v1_confirmation_and_reviewer_process() -> Result<()> {
+        const CHILD: &str = "R3_VALUE_CITATION_V1_CHILD";
+        if let Ok(dir) = std::env::var(CHILD) {
+            let dir = Path::new(&dir);
+            let (p,end,comparison): (Plan,Segment,binary::Value) = read(&dir.join("reader-input.r3b"))?;
+            let result = confirmation_current(dir,&p,&end,&comparison);
+            assert_eq!(result["status"], "COMPLETED_PASS");
+            consolidation_reproduction_endpoint(&end,&binary::record!({"step":5120,"eligible":false,
+                "action":"FINAL_QUALITY_FAIL_AT_5120","stop":"FINAL_QUALITY_FAIL_AT_5120","extend":false,"regression":false}),true,false)?;
+            let c: Vec<Episode> = read(&dir.join("native-cases.r3b"))?;
+            let previous = binary::read_value_records(&dir.join("native-parent.r3rows"))?;
+            let control = recovery::RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),std::time::Duration::from_secs(60),16*1024*1024)?;
+            let observed=orbit_observe(dir,"native-review",&dir.join(own(&p).arm.as_str()).join(&end.checkpoint),&c,
+                &binary::record!({"policy":digest(&p)?}),Some(&previous[1..]),control);
+            let parent:binary::Value=read_confirmed(&dir.join("native-parent-finished.r3b"))?;
+            let current:binary::Value=read_confirmed(&dir.join("native-review-finished.r3b"))?;
+            assert_eq!(parent["error"],current["error"]);
+            assert_eq!(current["matched"],1);
+            assert_eq!(current["control"]["generation_calls"],1);
+            println!("V1_CHILD random_TINY generation1 teacher0 optimizer0 result={observed:?}");
+            return Ok(());
+        }
+        let temp = if let Ok(path)=std::env::var("R3_VALUE_CITATION_V1_EVIDENCE") {
+            tempfile::tempdir_in(path)?
+        } else {tempfile::tempdir()?};
+        let fixture_root=temp.path().to_path_buf();
+        let original = orbit_fixture(&fixture_root)?;
+        let mut p = plan_read(&original.join("BOTH"))?;
+        let dir = temp.path().join("projection");std::fs::create_dir(&dir)?;
+        p.identifiable.as_mut().unwrap().study = dir.clone();
+        let root = dir.join("BOTH");std::fs::create_dir(&root)?;
+        std::fs::copy(original.join("BOTH/tokenizer.r3b"),root.join("tokenizer.r3b"))?;
+        let loaded = checkpoint::load(&original.join("BOTH/initial.r3m"),Device::Cpu,false)?;
+        let model = replica_v3::neural::transformer::Transformer::init(p.architecture.clone(),71,Device::Cpu)?;
+        neural::artifact::save(&root.join("random.r3m"),&model,&loaded.tokenizer,loaded.manifest.clone(),&loaded.optimizer)?;
+        let mut end = Segment {schema:None,start_hash:None,control_hash:None,phase:Some("Finished".into()),
+            policy:digest(&p)?,checkpoint:"random.r3m".into(),checkpoint_hash:file_hash(&root.join("random.r3m"))?,
+            step:5120,input:0,target:0,elapsed:0.,generations:0,teachers:0,resume:false,stop:"FINAL_QUALITY_FAIL_AT_5120".into()};
+        let fail = binary::record!({"step":5120,"eligible":false,"action":end.stop,"stop":end.stop,"extend":false,"regression":false});
+        consolidation_reproduction_endpoint(&end,&fail,true,false)?;
+        assert!(consolidation_reproduction_endpoint(&end,&fail,false,false).is_err());
+        for reason in ["CANCELLED","UNKNOWN","QUALITY_REGRESSION","IO_ERROR"] {
+            let mut stopped=end.clone();stopped.stop=reason.into();
+            assert!(consolidation_reproduction_endpoint(&stopped,&fail,true,false).is_err());
+        }
+        for phase in ["EvaluationPending","Failed"] {
+            let mut stopped=end.clone();stopped.phase=Some(phase.into());
+            assert!(consolidation_reproduction_endpoint(&stopped,&fail,true,false).is_err());
+        }
+        end.step=4352;end.stop="CANDIDATE_FIXED_AT_4352".into();
+        let good=binary::record!({"step":4352,"eligible":true,"action":end.stop,"stop":end.stop,"extend":false,"regression":false});
+        consolidation_reproduction_endpoint(&end,&good,false,false)?;
+        let mut mismatch=good.clone();mismatch["step"]=binary::record!(5120);
+        assert!(consolidation_reproduction_endpoint(&end,&mismatch,true,false).is_err());
+        end.step=5120;end.stop="FINAL_QUALITY_FAIL_AT_5120".into();
+        let comparison=binary::record!({"selected":"BOTH","endpoints":{"fixture":"explicit synthetic reader spec; no candidate authority"}});
+        assert_eq!(confirmation_current(&dir,&p,&end,&comparison)["status"],"NOT_OPENED");
+        assert_eq!(confirmation_current(&dir,&p,&end,&binary::record!({"selected":null}))["status"],"NOT_ELIGIBLE");
+        write(&dir.join("selection.r3b"),&binary::record!({"seal_root":original}))?;
+        write(&dir.join("preparation.r3b"),&binary::record!({"fixture":true}))?;
+        let report=dir.join("fixture-review.txt");std::fs::write(&report,b"synthetic reader fixture, not acceptance")?;
+        write(&dir.join("review-b.r3b"),&binary::record!({"verdict":"PASS","preparation":file_hash(&dir.join("preparation.r3b"))?,
+            "endpoints":comparison["endpoints"],"report_path":report,"report_hash":file_hash(&report)?}))?;
+        let candidate=binary::record!({"arm":"BOTH","checkpoint":end.checkpoint_hash,"framing":p.framing(),"comparison":comparison,
+            "seal":file_hash(&original.join("confirmation-seal.r3b"))?,"review":file_hash(&dir.join("review-b.r3b"))?});
+        write(&dir.join("confirmation-candidate.r3b"),&candidate)?;
+        assert_eq!(confirmation_current(&dir,&p,&end,&comparison)["status"],"PENDING/INCOMPLETE");
+        let seal=verify_seal(&original)?;
+        let corpus=verified_corpus(&original.join("sealed/confirmation.r3cor"),seal["corpus"].as_str().unwrap())?;
+        let ms:Vec<Meta>=read(&original.join("sealed/metadata.r3b"))?;
+        let tok=&loaded.tokenizer;
+        let identity=binary::record!({"policy":digest(&p)?,"checkpoint":end.checkpoint_hash,"candidate":file_hash(&dir.join("confirmation-candidate.r3b"))?});
+        let binding=binary::record!({"identity":identity,"checkpoint":end.checkpoint_hash,"cases":digest(&corpus.validation)?,
+            "source":p.source,"binary":p.binary,"decoding":"normal-greedy-strict-utf8-eos"});
+        write(&dir.join("confirmation-started.r3b"),&binding)?;
+        assert_eq!(confirmation_current(&dir,&p,&end,&comparison)["status"],"PENDING/INCOMPLETE");
+        let mut raw=vec![binding.clone()];
+        for (i,e) in corpus.validation.iter().enumerate() {
+            let tokens=tok.encode(e.answer.as_bytes())?;let mut ids=tokens.clone();ids.push(EOS);
+            let prepared=prepare_call(&dir,"confirmation","generation",&binding,e,i)?;
+            let row=binary::record!({"row_version":2,"id":e.id,"question":e.request.input,"generated_evidence":e.request.evidence,
+                "expected":e.answer,"actual":e.answer,"raw_tokens":ids,"finish_reason":"stop","generation_completed":true,
+                "generation":{"tokens":tokens,"generated":ids.len(),"finish":"stop"},"error":null,"exact_match":true,
+                "native_prompt_digest":tok.prepare_with_framing(&e.request,p.framing(),p.architecture.context as u32,&p.architecture.id()?)?.token_digest,
+                "framing":p.framing().id(),
+                "attempt":prepared.file_name().unwrap().to_string_lossy()});
+            write(&prepared.with_file_name(prepared.file_name().unwrap().to_string_lossy().replace("-prepared","-resolved")),
+                &binary::record!({"prepared":file_hash(&prepared)?,"state":"RETURNED","row":digest(&row)?,"fixture":"synthetic strict-gold oracle; no model call"}))?;
+            raw.push(row);
+        }
+        let raw_path=dir.join("confirmation.r3rows");
+        let save_raw=|rows:&[binary::Value]|->Result<()> {let mut f=std::fs::File::create(&raw_path)?;for row in rows {append_row(&mut f,row)?;}Ok(())};
+        save_raw(&raw)?;
+        let finished=binary::record!({"binding":binding,"policy":digest(&p)?,"checkpoint":end.checkpoint_hash,"completed":256,"matched":0,
+            "raw":file_hash(&raw_path)?,"error":null,"control":{"generation_calls":256,"teacher_calls":0,"elapsed_seconds":0.,"terminal_reason":"COMPLETED","observed_conditions":[]}});
+        write(&dir.join("confirmation-finished.r3b"),&finished)?;
+        let s=orbit_score(&corpus.validation,&ms,&raw[1..],tok)?;
+        let result=binary::record!({"arm":"BOTH","checkpoint":end.checkpoint_hash,"score":s,"minimal_binding_baseline_verified":true,
+            "scope":"K1-V finite digits; two records; new key/value sets","goal1_ready":false,"s4":false,"s5":false,"s6":false});
+        write(&dir.join("confirmation-result.r3b"),&result)?;
+        let snapshot=||inventory(&dir);
+        let before=snapshot()?;
+        assert_eq!(confirmation_current(&dir,&p,&end,&comparison)["status"],"COMPLETED_PASS");
+        assert_eq!(before,snapshot()?);
+        let mut failed_raw=raw.clone();
+        let mut preserved_resolutions=vec![];
+        for row in &mut failed_raw[1..17] {
+            let text=if row["actual"]=="0" {"1"} else {"0"};
+            let tokens=tok.encode(text.as_bytes())?;let mut ids=tokens.clone();ids.push(EOS);
+            row["actual"]=binary::record!(text);row["raw_tokens"]=binary::record!(ids);
+            row["generation"]=binary::record!({"tokens":tokens,"generated":ids.len(),"finish":"stop"});row["exact_match"]=binary::record!(false);
+            let path=dir.join(row["attempt"].as_str().unwrap().replace("-prepared","-resolved"));
+            preserved_resolutions.push((path.clone(),std::fs::read(&path)?));
+            let mut r:binary::Value=read(&path)?;r["row"]=binary::record!(digest(row)?);
+            std::fs::remove_file(&path)?;write(&path,&r)?;
+        }
+        save_raw(&failed_raw)?;
+        let mut terminal=finished.clone();terminal["raw"]=binary::record!(file_hash(&raw_path)?);
+        std::fs::remove_file(dir.join("confirmation-finished.r3b"))?;write(&dir.join("confirmation-finished.r3b"),&terminal)?;
+        let mut failed_result=result.clone();failed_result["score"]=binary::record!(orbit_score(&corpus.validation,&ms,&failed_raw[1..],tok)?);
+        failed_result["minimal_binding_baseline_verified"]=binary::record!(false);
+        std::fs::remove_file(dir.join("confirmation-result.r3b"))?;write(&dir.join("confirmation-result.r3b"),&failed_result)?;
+        assert_eq!(confirmation_current(&dir,&p,&end,&comparison)["status"],"COMPLETED_QUALITY_FAIL");
+        for (path,bytes) in preserved_resolutions {std::fs::write(path,bytes)?;}
+        save_raw(&raw)?;
+        for (name,value) in [("confirmation-finished.r3b",&finished),("confirmation-result.r3b",&result)] {
+            std::fs::remove_file(dir.join(name))?;write(&dir.join(name),value)?;
+        }
+        for (file,original_value,key,value) in [
+            ("confirmation-result.r3b",result.clone(),"minimal_binding_baseline_verified",binary::record!(false)),
+            ("confirmation-candidate.r3b",candidate.clone(),"checkpoint",binary::record!("wrong-model")),
+            ("confirmation-candidate.r3b",candidate.clone(),"seal",binary::record!("wrong-seal")),
+        ] {
+            let path=dir.join(file);let bytes=std::fs::read(&path)?;let mut changed=original_value;changed[key]=value;
+            std::fs::remove_file(&path)?;write(&path,&changed)?;
+            assert_eq!(confirmation_current(&dir,&p,&end,&comparison)["status"],"INTEGRITY_FAIL");
+            std::fs::write(path,bytes)?;
+        }
+        let mut duplicate=raw.clone();duplicate[2]=duplicate[1].clone();save_raw(&duplicate)?;
+        assert_eq!(confirmation_current(&dir,&p,&end,&comparison)["status"],"INTEGRITY_FAIL");
+        save_raw(&raw[..256])?;assert_eq!(confirmation_current(&dir,&p,&end,&comparison)["status"],"INTEGRITY_FAIL");save_raw(&raw)?;
+        write(&pending_path(&dir.join("confirmation-result.r3b")),&result)?;
+        assert_eq!(confirmation_current(&dir,&p,&end,&comparison)["status"],"UNKNOWN/FAILED_EXECUTION");
+        std::fs::remove_file(pending_path(&dir.join("confirmation-result.r3b")))?;
+        let cases=corpus.validation[..1].to_vec();write(&dir.join("native-cases.r3b"),&cases)?;
+        let ctl=recovery::RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),std::time::Duration::from_secs(60),16*1024*1024)?;
+        let observed=orbit_observe(&dir,"native-parent",&root.join(&end.checkpoint),&cases,&binary::record!({"policy":digest(&p)?}),None,ctl);
+        println!("V1_PARENT random_TINY generation1 result={observed:?}");
+        write(&dir.join("reader-input.r3b"),&(p,end,comparison))?;
+        let status=std::process::Command::new(std::env::current_exe()?).arg("value_citation_v1_confirmation_and_reviewer_process")
+            .arg("--nocapture").env(CHILD,&dir).env("VECLIB_MAXIMUM_THREADS","1").env("OMP_NUM_THREADS","1").status()?;
+        assert!(status.success());
+        println!("V1 actual random TINY parent1+fresh_process1 generation2 teacher0 optimizer0; generated errors retained; synthetic5120 metadata is not training; strict-reader fault cases PASS");
+        if std::env::var_os("R3_VALUE_CITATION_V1_EVIDENCE").is_some() {println!("V1_EVIDENCE {}",temp.keep().display());}
+        Ok(())
+    }
     #[test]
     fn consolidation_t1_actual_suffix_and_native_plan() -> Result<()> {
         let tmp = tempfile::tempdir()?;
@@ -4599,6 +4911,17 @@ mod tests {
     fn consolidation_t2_native_process_resume() -> Result<()> {
         const CHILD: &str = "R3_CONSOLIDATION_CHILD";
         if let Ok(root) = std::env::var(CHILD) {
+            if std::env::var("R3_CONSOLIDATION_REVIEW").as_deref() == Ok("1") {
+                let root=Path::new(&root);let p=plan_read(root)?;
+                assert!(!gate(root,&p)?);
+                assert!(orbit_parity(root,&p,false).is_err());
+                orbit_parity(root,&p,true)?;
+                let comparison=consolidation_comparison(&own(&p).study)?;
+                assert!(comparison["selected"].is_null());
+                assert!(orbit_confirm(&own(&p).study).is_err());
+                assert!(run(root,false).is_err());
+                return Ok(());
+            }
             if std::env::var("R3_CONSOLIDATION_PARITY").as_deref() == Ok("1") {
                 return consolidation_parent_parity(Path::new(&root));
             }
@@ -4621,6 +4944,7 @@ mod tests {
             if label.ends_with("parity") {
                 c.env("R3_CONSOLIDATION_PARITY", "1");
             }
+            if label.ends_with("review") {c.env("R3_CONSOLIDATION_REVIEW","1");}
             if fault {
                 c.env(
                     "R3_FRESH_CALL_STOP",
@@ -4733,6 +5057,8 @@ mod tests {
             raws.push(output);
             consolidation_close(&root)?;
             if name == "continuous" {
+                child(&root,false,false,"normal-quality-failure-review")?;
+                usage[1]+=4;
                 let same = root.join("same-content-distinct-file.r3m");
                 let mut manifest = loaded.manifest.clone();
                 manifest.source_id = neural::hash(b"TINY physical copy provenance");
@@ -4794,9 +5120,9 @@ mod tests {
         assert_eq!(
             usage,
             if retained_parent.is_some() {
-                [6, 48, 36]
+                [6, 52, 36]
             } else {
-                [10, 80, 68]
+                [10, 84, 68]
             }
         );
         println!(

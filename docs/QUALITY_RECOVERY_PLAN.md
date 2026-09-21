@@ -1,5 +1,70 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: value and selected-event citation from the accepted4352 baseline
+
+R3-VALUE-CITATION-BRIDGE-1.0 preserves the accepted REBIND4352 native,
+Adam136, tokenizer562, QE, LOCAL5/F32/Accelerate/thread1 and every previous
+failure/receipt. Its two repairs separate normal quality-failure reviewer
+reproduction from candidate/resume authority, and show confirmation's current
+verified state separately from its immutable historical comparison. Historical
+readers retain the recorded source/binary binding. Missing/pending/corrupt
+evidence never triggers generation or replacement records.
+
+After direct regressions and independent A, the single VALUE-CITATION fork uses
+the same4352 weights/Adam, CE first-target1, constant LR3e-4, batch8/accumulation1.
+The native train pool retains1536 value-only rows exactly, adds1536 citation rows
+with original event IDs, and1536 citation rows differing only in two newly
+assigned eight-digit IDs and their gold citation. The existing request grammar
+and full answer `{value}입니다. [event:{id}]` are retained. No product resolver,
+answer repair, vocabulary, core, auxiliary loss or storage change is permitted.
+
+Each batch has four distinct bases and both queries: two V bases and two VC
+bases. At3072 updates V rows receive8 exposures each and VC rows4 each, totaling
+24576 samples. VC0/VC1 exposures are equal. Actual target/input/padding costs and
+per-row exposures are prepared and bound; token weighting is not asserted to be
+50:50 merely because sample counts are. Native parent_entry binds the new
+corpus/tape and budget without resetting the parent Adam clock.
+
+Vdev512 remains byte-identical. VCdev512 changes only the output request/gold;
+VC-ID512 renames event IDs only. Their128 skeletons are shared, not1536 independent
+scenes. New confirmation is independently reserved before learning:64 skeletons
+excluded from train384, dev128 and previously used confirmation64, with new IDs
+excluded from all train/dev IDs. V256 and VC256 use those same new64 skeletons.
+The old confirmation is read only for preservation/report integrity.
+
+First save is4353, followed by chunks of at most512 updates. Screen at+32/+128
+uses V64/VC64; +384/+768 adds VC-ID64. At+1536/+3072 use all three dev512 panels
+and fixed VCtrain128. A joint dev pass triggers Vtrain1536 and VCtrain3072 at
+that same checkpoint before eligibility. A first train miss preserves the result
+and may continue only to the registered maximum7424. Evaluation-only time resume
+adds no optimizer step and never retries a returned failure row.
+
+Required FULL/QB/ALL4 minima: V old512 508/252/124, V new1024 1016/504/248,
+Vdev512 488/232/116; VCtrain3072 3048/1512/744 and each variant1536
+1524/756/372. Each citation dev512 independently requires488/232/116 plus
+value508 and selected-event support508, no outside ID, no generation error and
+all512 EOS. Report SB and ID_BOTH separately. Strict full strings, raw token
+decode, normal greedy/EOS and sealed expected answers determine correctness.
+Other provided-event citations remain support errors.
+
+From+32, V64 FULL loss>=16, ALL4 loss>=4 or errors>=4 versus the fixed parent
+sample stops for retention. Early low citation scores/length endings alone do
+not stop learning; numeric, storage, binding, cancellation and UNKNOWN failures
+remain sticky. Caps: new SMALL3072, input6300000, targets800000, generation16384,
+teacher samples16384, diagnostic backward0, active10800s, segment900s plus120s
+cleanup, RSS16GiB. Direct and independent TINY caps are optimizer96 and
+generation/teacher1024 each, including failed tests. No automatic extension,
+seed/LR search, new data or reinitialization is authorized.
+
+Independent B recounts raw/native/trace and reproduces V16/VC16 even for a
+normal final quality failure; this grants no confirmation or training authority.
+An eligible5888 or7424 candidate can use the new V256/VC256 confirmation once,
+after B. Both require FULL244/QB116/ALL4 58 and errors0; VC also requires value254,
+support254 and outside-ID0. Only the value+eight-digit citation scope can then
+be registered. The protected scalar4352 remains separately accepted. S4/S5/S6
+and Goal1 are not granted by this study. A possible subsequent name/evidence
+length study is planning only, with no learning under this budget.
+
 ## Closed: REBIND4352 minimal binding baseline accepted
 
 Execution source `c52f7fbd1a60464cc55961b48d9b73952ee625b6` and its frozen

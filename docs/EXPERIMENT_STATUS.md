@@ -1,5 +1,76 @@
 # 진단 및 구현 상태
 
+## 2026-09-21 값·선택사건 인용 — V0/V1 독립 검증 완료
+
+R3-VALUE-CITATION-BRIDGE-1.0은 수용된 REBIND4352에서 시작하는 별도
+단일 연구다. 시작 HEAD는 `8ccd30c278e3b978a7da12e25bd2a695b902c3ad`,
+기준 source는 `c52f7fbd1a60464cc55961b48d9b73952ee625b6`이다.
+Rust/Cargo1.98.1, 기존 lock/offline/Accelerate/thread1을 사용한다.
+기존 모델·Adam·확인자료·실패와 미추적 `.DS_Store`는 보존한다.
+
+독립 V0 reader가 native4352 physical `d5d1b61e4df7cc7bfa911a03766006d71f7e883b870e55283ef85e4b4ebe62da`,
+tensor `18c1ff90dd9be84ede87f05698a4d06b8436c7b2badd4b53176312197b44dd4a`,
+Adam136 `ddc38f4983d003c08f4d8db847875d844541161ae943e9e055a11708e0437f72`,
+clock4352/input5048320/target69632를 실제 검증했다. 기존 confirmation도
+sealed expected와 raw에서 FULL254/QB126/SB126/ALL4 62/errors0/EOS256을
+재채점하고 candidate/B/start/finished/result/seal 연결을 확인했다.
+이 과정의 신규 optimizer/generation/teacher는0이다. 기존71개 보존 목록을
+직접 관련128개로 확장했다. 독립 보고와 manifest는 로컬
+`artifacts/value-citation-20260921-review/`에 있다.
+
+유한 공간1260에서 train384/dev128/기존 confirmation64를 제외한684개를
+검산했고, 독립 담당자가 새로운64개와 event ID128개를 예약했다. 공개
+예약에는 count/digest/제외할 ID만 있으며 구현자는 확인 정답으로 자료를
+조정하지 않는다. 이 시점에는 새 확인 corpus/학습은 아직 실행하지 않았다.
+
+V1 source는 `src/binding.rs`, 직접 caller는 `src/fresh.rs`다. 정상5120
+품질실패의 reviewer 재현을 후보/학습 재개/confirmation 권한과 분리한다.
+실제 close/history/trace/raw 검증을 통과해야 하며, cancellation/UNKNOWN/
+미완료/모델 불일치는 허용하지 않는다. 과거 comparison의 canonical 필드는
+그대로 두고, 순수 confirmation reader가 sealed gold·strict raw·EOS·모델·
+tokenizer/framing·B·종료를 검산한 현재 상태를 별도로 보고한다.
+
+직접 `value_citation_v1_confirmation_and_reviewer_process`는 synthetic gold
+reader fixture의 pass/quality-fail/미개봉/부분/불확정/모델·seal·중복·누락·
+점수 손상과 쓰기 없는 읽기를 확인한다. 합성 score는 모델 품질이 아니다.
+별도 실제 무작위 TINY는 control token을 생성해 INTEGRITY_FAIL이었으며,
+새 process에서도 동일 실패1행이 재현됐다. 각 process의 호출1, 정상 완료0을
+보존했고, 이를 정상 품질실패 또는 모델 성공으로 바꾸지 않았다. 최초 시험은
+이 오류 반환을 성공으로 기대해 실패했고 후속 회귀에서 기대를 바로잡았다.
+
+추가로 기존 `consolidation_t2_native_process_resume`의 명시적 EOS tensor
+fixture를 사용한 실제2 대1+1 및2+0 재개 검증에, 같은 production
+`orbit_parity → close/history/trace/panel` 경로의 새 process 재현을 연결했다.
+정상 종료된 TINY 품질실패의4/4 출력이 같아도 candidate=null이고
+confirmation/학습 재개는 거부된다. 이 회귀는 PASS, 실제 optimizer10/
+generation84/teacher68이며 SMALL5120 학습이 아니다.
+실행 로그·native fixture는 `artifacts/value-citation-20260921-evidence/`에
+보존한다. 전체 과거 안정화 테스트나 기존 SMALL 학습은 반복하지 않았다.
+
+새 release 실행물의 실제 `fresh consolidation-report --study` 읽기에서
+`CONSOLIDATION_CONFIRMATION_CURRENT`는 COMPLETED_PASS/observed=true,
+FULL254/QB126/SB126/ALL4 62, minimal_binding_baseline_verified=true,
+Goal1=false로 검증됐다. candidate 안의 과거 comparison과 exact equality를
+유지한다. 디버그 읽기는 모델 호출0 상태에서 장시간 소요되어 중단했고,
+첫 release의 상대 경로는 등록 absolute-root 비교에 걸려 exit1이었다.
+historical reader에서 실제 canonical root를 검증하도록 정규화했으며,
+절대 경로 release 읽기는 exit0이다. 기존 종료나 원자료는 수정하지 않았다.
+
+최종 독립 F02는 동일 release 실행물로 상대 경로 명령1회 exit0을 확인했다.
+실행 binary SHA256은 `ea54d2263e9c6688d9ac92a44e3db91dda1dd5f381c0f9d52c530efc99f3f0f0`이다.
+전후 9640개 경로(파일9636, 디렉터리4), 1499909877bytes의 내용·경로·크기가
+동일하며, 별도128개 보존 목록과 과거 canonical comparison도 불변이다.
+F01 실제 전체 경로 및 F02 순수 보고는 각각 독립 PASS이며 최종 자료검토 A와는
+구별한다. 독립 보고 `F02_V1_FINALREVIEW.md`의 SHA256은
+`ebba77fbe26c40beb905ee178a476f548e542537b5c507a0db621658b543b5f0`이다.
+회귀02/03/04의 확인된 TINY generation은6회이며 T2의84회를 더해90회다.
+최초 실패 회귀의 정확한 사용량은 UNKNOWN(소스상 최대4회)으로 남긴다.
+확인된 optimizer10/teacher68이며 독립 보고 실행의 추가 모델 호출은0이다.
+
+V2 준비, 최종 독립 A, 새 SMALL 학습·값 보존·인용 dev·새 confirmation은
+아직 NOT_RUN이다. 기존 최소 scalar 기준선의 수용은 유지하며,
+S4/S5/S6와 GOAL1_READY/ACCEPTED는 여전히 false다.
+
 ## 2026-09-21 REBIND consolidation — 4352 최소 binding 기준선 독립 수용
 
 실행 source는 `c52f7fbd1a60464cc55961b48d9b73952ee625b6`이다. 해당 source를
