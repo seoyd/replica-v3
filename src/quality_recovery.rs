@@ -90,12 +90,17 @@ impl RunControl {
         self.teacher_limit = teacher;
     }
     pub(super) fn begin_teacher(&mut self) -> Result<()> {
+        self.begin_teacher_rows(1)
+    }
+    // Batched diagnostics reserve their actual sample-forward rows atomically.
+    // Backend microbatch invocations are recorded separately by the observer.
+    pub(super) fn begin_teacher_rows(&mut self, rows: usize) -> Result<()> {
         self.check("before_teacher_budget")?;
-        if self.teacher_calls >= self.teacher_limit {
+        if rows == 0 || self.teacher_calls.checked_add(rows).is_none_or(|n|n>self.teacher_limit) {
             self.observe(StopReason::TokenBudget);
             return self.stop_result();
         }
-        self.teacher_calls += 1;
+        self.teacher_calls += rows;
         Ok(())
     }
     pub(super) fn new(

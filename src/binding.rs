@@ -10,6 +10,8 @@ const ORBIT_ARMS: [&str; 2] = ["FIXED", "BOTH"];
 const FRAME_DATA: &str = "causal-framing-v1";
 const FRAME_CONTRACT: &str = "R3-CAUSAL-FRAMING-BASELINE-1.0";
 const FRAME_ARMS: [&str; 2] = ["QE", "EQ"];
+const SIGNAL_DATA: &str = "query-signal-convergence-v1";
+const SIGNAL_CONTRACT: &str = "R3-QUERY-SIGNAL-CONVERGENCE-1.0";
 const SHORT_SYSTEM: &str = "근거에 따라 답하라.";
 const VALUE_QUERY: &str = "현재 값의 숫자 하나만 답하라.";
 const CITATION_QUERY: &str = "현재 값을 인용과 함께 써라.";
@@ -18,7 +20,10 @@ type Skeleton = [u8; 4];
 pub(in super::super) fn is(p: &Plan) -> bool {
     p.identifiable
         .as_ref()
-        .is_some_and(|x| [DATA, ORBIT_DATA, FRAME_DATA].contains(&x.dataset.as_str()))
+        .is_some_and(|x| [DATA, ORBIT_DATA, FRAME_DATA, SIGNAL_DATA].contains(&x.dataset.as_str()))
+}
+pub(in super::super) fn is_signal(p: &Plan) -> bool {
+    p.identifiable.as_ref().is_some_and(|x| x.dataset == SIGNAL_DATA)
 }
 pub(in super::super) fn is_framing(p: &Plan) -> bool {
     p.identifiable
@@ -26,13 +31,15 @@ pub(in super::super) fn is_framing(p: &Plan) -> bool {
         .is_some_and(|x| x.dataset == FRAME_DATA)
 }
 fn is_orbit(p: &Plan) -> bool {
-    is_framing(p)
+    is_signal(p) || is_framing(p)
         || p.identifiable
             .as_ref()
             .is_some_and(|x| x.dataset == ORBIT_DATA)
 }
 fn arms(p: &Plan) -> &'static [&'static str] {
-    if is_framing(p) {
+    if is_signal(p) {
+        &["QE"]
+    } else if is_framing(p) {
         &FRAME_ARMS
     } else if is_orbit(p) {
         &ORBIT_ARMS
@@ -42,6 +49,14 @@ fn arms(p: &Plan) -> &'static [&'static str] {
 }
 pub(in super::super) fn evaluation_for(p: &Plan) -> EvaluationPolicy {
     let mut e = evaluation(p.tiny);
+    if is_signal(p) {
+        e.screen_steps.clear();
+        e.train_steps = if p.tiny {vec![4]} else {vec![768,1024,1536,2048]};
+        e.generation_limit = 2816;
+        e.teacher_limit = 3072;
+        e.active_seconds = 7200;
+        return e;
+    }
     if is_orbit(p) {
         e.teacher_limit = 3072;
         e.primary_min = 488;
@@ -563,6 +578,7 @@ pub(in super::super) fn prepare(parent: &Path, output: &Path, tiny: bool) -> Res
     Ok(())
 }
 pub(in super::super) fn verify_plan(root: &Path, p: &Plan) -> Result<()> {
+    if is_signal(p) { return signal_verify_plan(root, p); }
     if is_framing(p) {
         return framing_verify_plan(root, p);
     }
@@ -626,7 +642,7 @@ fn panel_cases(
     let nt = if is_orbit(p) {
         if p.tiny {
             4
-        } else if step >= 512 {
+        } else if step >= 512 && (!is_signal(p) || [1024,2048].contains(&step)) {
             512
         } else {
             64
@@ -641,7 +657,7 @@ fn panel_cases(
     let nd = if is_orbit(p) {
         if p.tiny {
             4
-        } else if step >= 512 {
+        } else if step >= 512 && (!is_signal(p) || [1024,2048].contains(&step)) {
             512
         } else {
             64
@@ -676,6 +692,7 @@ pub(in super::super) fn evaluate(
     for (name, es, ms) in panel_cases(root, p, step)? {
         evaluate_panel(p, root, path, step, &name, &es, &ms, control)?;
     }
+    if is_signal(p) { return signal_evaluation_decision(root, p, step); }
     Ok(None)
 }
 pub(in super::super) fn audit(
@@ -702,6 +719,10 @@ pub(in super::super) fn audit(
     Ok((count, out))
 }
 fn gate(root: &Path, p: &Plan) -> Result<bool> {
+    if is_signal(p) {
+        let h = history(root,p)?;
+        return Ok(h.last().is_some_and(|s| s.stop == "CANDIDATE_FIXED" && !s.resume));
+    }
     if is_framing(p) {
         let h = history(root, p)?;
         let Some(s) = h.last() else { return Ok(false) };
@@ -755,6 +776,7 @@ pub(in super::super) fn authorize(root: &Path, p: &Plan) -> Result<()> {
     {
         return Err(bad("independent binding review required"));
     }
+    if is_signal(p) { return signal_authorize(root,p); }
     for &arm in arms(p) {
         let r = study.join(arm);
         let plan = plan_read(&r)?;
@@ -853,7 +875,9 @@ pub(in super::super) fn usage(p: &Plan) -> Result<(f64, usize, usize)> {
 }
 pub(in super::super) fn remaining(p: &Plan, target: bool) -> Result<u64> {
     let w = work(p)?;
-    let (cap, n) = if is_framing(p) {
+    let (cap, n) = if is_signal(p) {
+        if target {(30_000u64,w.4)} else {(2_100_000u64,w.3)}
+    } else if is_framing(p) {
         if target {
             (40_000u64, w.4)
         } else {
@@ -1767,7 +1791,12 @@ pub(in super::super) fn orbit_parity(root: &Path, p: &Plan, reviewer: bool) -> R
     authorize(root, p)?;
     let h = history(root, p)?;
     let end = h.last().ok_or_else(|| bad("orbit endpoint missing"))?;
-    if is_framing(p) {
+    if is_signal(p) {
+        if ![1024,2048].contains(&end.step) || end.resume || end.phase.as_deref()!=Some("Finished")
+            || !["CANDIDATE_FIXED","FINAL_QUALITY_FAIL"].contains(&end.stop.as_str()) {
+            return Err(bad("signal final endpoint required"));
+        }
+    } else if is_framing(p) {
         framing_final_step(&own(p).study)?;
     } else if end.step != 512 || end.resume || end.phase.as_deref() != Some("Finished") {
         return Err(bad("orbit final endpoint"));
@@ -1829,7 +1858,10 @@ pub(in super::super) fn orbit_compare(study:&Path) -> Result<()> {
 }
 pub(in super::super) fn orbit_confirm(study: &Path) -> Result<()> {
     let framing = study.join("QE/plan.r3b").exists();
-    let comparison = if framing {
+    let signal = framing && is_signal(&plan_read(&study.join("QE"))?);
+    let comparison = if signal {
+        signal_comparison(study)?
+    } else if framing {
         framing_comparison(study)?
     } else {
         orbit_comparison(study)?
@@ -2175,7 +2207,323 @@ fn framing_authorize(_root: &Path, p: &Plan) -> Result<()> {
     }
     Ok(())
 }
+fn framing_action(step: usize, full: bool, signal: bool) -> Result<(&'static str, bool)> {
+    match (step, full, signal) {
+        (512, true, _) => Ok(("CANDIDATE_AT_512", false)),
+        (512, false, true) => Ok(("EXTEND_BOTH_TO_1024", true)),
+        (512, false, false) => Ok(("CLOSE_NO_JOINT_SIGNAL", false)),
+        (1024, true, _) => Ok(("CANDIDATE_AT_1024", false)),
+        (1024, false, _) => Ok(("FINAL_QUALITY_FAIL_AT_1024", false)),
+        _ => Err(bad("unsupported framing decision endpoint")),
+    }
+}
+fn framing_endpoint_score(requested:usize,actual:usize,pending:bool,normal:bool,
+    tr:&OrbitScore,dv:&OrbitScore)->Result<(bool,bool)> {
+    if requested!=actual || pending || !normal || tr.total!=512 || dv.total!=512
+        || tr.errors!=0 || dv.errors!=0 || tr.eos!=512 || dv.eos!=512 {
+        return Err(bad("matched framing endpoint incomplete"));
+    }
+    Ok((orbit_candidate_scores(tr,dv),(tr.query_both>=64&&tr.all4>=16)||(dv.query_both>=32&&dv.all4>=8)))
+}
+
+// A new, explicitly parent-bound study. Historical plans are read with their
+// retained identities only here; they never authorize execution by this binary.
+fn signal_parent(root: &Path) -> Result<(Plan, Segment)> {
+    let raw: Plan = read(&root.join("plan.r3b"))?;
+    let p = plan_read_bound(root, &raw.source, &raw.binary)?;
+    if !is_framing(&p) || own(&p).arm != "QE" || p.framing() != neural::Framing::QuestionEvidence {
+        return Err(bad("preserved QE parent required"));
+    }
+    let h = history(root,&p)?;
+    let end = h.last().ok_or_else(||bad("QE parent endpoint missing"))?.clone();
+    if end.step != if p.tiny {2} else {512} || end.phase.as_deref()!=Some("TrainingPending")
+        || end.stop!="TRAINING" || !end.resume {
+        return Err(bad("QE staged parent identity"));
+    }
+    if !p.tiny {
+        let d: binary::Value = read_confirmed(&own(&p).study.join("framing-decision.r3b"))?;
+        if d["decision"]!="CLOSE_NO_JOINT_SIGNAL" || d["extend"]!=false || d["source"]!=p.source
+            || d["endpoints"]["QE"]["checkpoint"]!=end.checkpoint_hash
+            || d["endpoints"]["QE"]["step"]!=512 {
+            return Err(bad("closed historical decision binding"));
+        }
+    }
+    Ok((p,end))
+}
+fn signal_config(old:&Plan,state:&TrainingState) -> TrainConfig {
+    let mut c=old.config.clone();
+    c.budget_start_step=state.step;c.budget_start_tokens=state.consumed_tokens;
+    c.max_steps=if old.tiny {4}else{2048};
+    c.max_tokens=state.consumed_tokens+2_100_000;
+    c.warmup=0;c.lr=3e-4;
+    c
+}
+pub(in super::super) fn signal_prepare(parent:&Path,output:&Path,tiny:bool)->Result<()> {
+    if cfg!(feature="test-support") && !tiny {return Err(bad("production signal binary required"));}
+    let (old,end)=signal_parent(parent)?;
+    if old.tiny!=tiny {return Err(bad("signal parent profile"));}
+    let cp=parent.join(&end.checkpoint);
+    let l=checkpoint::load(&cp,Device::Cpu,true)?;
+    let state=l.manifest.training.as_ref().ok_or_else(||bad("parent Adam required"))?;
+    let previous:binary::Value=read(&own(&old).study.join("selection.r3b"))?;
+    let mut p=old.clone();
+    p.source=source_digest()?;p.binary=file_hash(&std::env::current_exe()?)?;
+    p.initial=end.checkpoint_hash.clone();p.initial_weights=l.model.weight_hash()?;
+    p.config=signal_config(&old,state);
+    let rows=(0..p.config.max_steps).map(|i|own(&old).rows[i%end.step]).collect::<Vec<_>>();
+    p.identifiable=Some(Policy{study:output.into(),arm:"QE".into(),dataset:SIGNAL_DATA.into(),rows:rows.clone()});
+    p.train_order=digest(&rows)?;p.evaluation=evaluation_for(&p);
+    std::fs::create_dir(output)?;
+    let selection=binary::record!({"contract":SIGNAL_CONTRACT,"source":p.source,"binary":p.binary,
+        "historical_mode":"READ_ONLY_PARENT","parent":parent,"parent_policy":file_hash(&parent.join("plan.r3b"))?,
+        "parent_source":old.source,"parent_binary":old.binary,"parent_endpoint":end,
+        "parent_content":l.model.weights_content_id()?,"parent_adam":optimizer_hash(&l.optimizer)?,"parent_state":digest(state)?,
+        "old_decision":if tiny {None}else{Some(file_hash(&own(&old).study.join("framing-decision.r3b"))?)},
+        "seal_root":previous["seal_root"],"seal":previous["seal"],"sealed_corpus":previous["sealed_corpus"],
+        "new_updates":p.config.max_steps-end.step,"first_new_tape_index":0,"max_input":2_100_000,"max_target":30_000,
+        "observation":"fixed first4 train skeletons, local1/8/32/128; separate graphs; no CE change",
+        "stop":"1024 full gate fixes candidate; otherwise registered2048 unless safety/divergence/budget"});
+    write(&output.join("selection.r3b"),&selection)?;
+    p.fork=Some(Fork{study:output.into(),study_hash:file_hash(&output.join("selection.r3b"))?,arm:"QE".into(),
+        parent_policy:digest(&old)?,parent_state:digest(state)?,parent_adam:optimizer_hash(&l.optimizer)?,
+        origin_step:state.step,origin_input:state.consumed_tokens,origin_target:state.target_tokens,
+        original_corpus:old.corpus.clone(),tokenizer_training_hash:l.tokenizer.train_hash.clone(),
+        variants:None,variant_metadata:None,alternate_first:vec![],selector:None,selector_metadata:None,flip_first:vec![],
+        constant_lr:3e-4,target_limit:30_000});
+    let root=output.join("QE");std::fs::create_dir(&root)?;
+    for name in ["corpus.r3cor","transfer.r3cor","metadata.r3b","tokenizer.r3b"] {
+        copy_native(&parent.join(name),&root.join(name))?;
+    }
+    copy_native(&cp,&root.join("initial.r3m"))?;
+    write(&root.join("plan.r3b"),&p)?;
+    signal_verify_plan(&root,&p)?;
+    if !p.parent_entry(&root.join("initial.r3m"),&l)? {return Err(bad("signal parent readback"));}
+    let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;
+    let ss=samples_with_framing(&c.train,&l.tokenizer,p.config.seq_len,p.framing())?;
+    let input=rows[end.step..].iter().flatten().map(|&i|ss[i].tokens.len()-1).sum::<usize>();
+    let target=rows[end.step..].len()*16;
+    if !tiny && (input!=1_781_760 || target!=24_576) {return Err(bad("signal actual planned token budget"));}
+    publish_confirmed(&output.join("preparation.r3b"),&binary::record!({"contract":SIGNAL_CONTRACT,
+        "source":p.source,"binary":p.binary,"selection":p.fork.as_ref().unwrap().study_hash,
+        "arms":{"QE":{"policy":file_hash(&root.join("plan.r3b"))?,"tape":p.train_order,"corpus":p.corpus,
+        "metadata":p.metadata,"tokenizer":p.tokenizer,"initial":p.initial,"content":selection["parent_content"],
+        "new_input":input,"new_target":target,"new_updates":rows.len()-end.step}},"optimizer":0,"generation":0,"teacher":0}))?;
+    println!("SIGNAL_PREPARED parent={} new_updates={} input={input} target={target} REVIEW_PENDING",end.step,rows.len()-end.step);
+    Ok(())
+}
+fn signal_verify_plan(root:&Path,p:&Plan)->Result<()> {
+    let o=own(p);let f=p.fork.as_ref().ok_or_else(||bad("signal explicit fork required"))?;
+    let s:binary::Value=read(&o.study.join("selection.r3b"))?;
+    let parent=Path::new(s["parent"].as_str().ok_or_else(||bad("signal parent path"))?);
+    let (old,end)=signal_parent(parent)?;
+    let (m,_)=checkpoint::metadata(&parent.join(&end.checkpoint))?;
+    let state=m.training.as_ref().ok_or_else(||bad("signal parent state"))?;
+    let expected_rows=(0..p.config.max_steps).map(|i|own(&old).rows[i%end.step]).collect::<Vec<_>>();
+    let mut expected=old.clone();
+    expected.source=p.source.clone();expected.binary=p.binary.clone();expected.initial=end.checkpoint_hash.clone();
+    expected.initial_weights=p.initial_weights.clone();expected.config=signal_config(&old,state);
+    expected.identifiable=Some(Policy{study:o.study.clone(),arm:"QE".into(),dataset:SIGNAL_DATA.into(),rows:expected_rows.clone()});
+    expected.train_order=digest(&expected_rows)?;expected.fork=Some(Fork{study:o.study.clone(),study_hash:file_hash(&o.study.join("selection.r3b"))?,arm:"QE".into(),
+        parent_policy:digest(&old)?,parent_state:digest(state)?,parent_adam:s["parent_adam"].as_str().ok_or_else(||bad("parent Adam digest"))?.into(),
+        origin_step:state.step,origin_input:state.consumed_tokens,origin_target:state.target_tokens,original_corpus:old.corpus.clone(),
+        tokenizer_training_hash:ByteBpe::load(&parent.join("tokenizer.r3b"))?.train_hash,
+        variants:None,variant_metadata:None,alternate_first:vec![],selector:None,selector_metadata:None,flip_first:vec![],constant_lr:3e-4,target_limit:30_000});
+    expected.evaluation=evaluation_for(&expected);
+    if *p!=expected || root!=o.study.join("QE") || s["contract"]!=SIGNAL_CONTRACT || s["source"]!=p.source
+        || s["binary"]!=p.binary || s["parent_policy"]!=file_hash(&parent.join("plan.r3b"))?
+        || s["parent_source"]!=old.source || s["parent_binary"]!=old.binary || s["parent_endpoint"]!=binary::record!(end)
+        || s["parent_state"]!=f.parent_state || f.study_hash!=file_hash(&o.study.join("selection.r3b"))? {
+        return Err(bad("signal frozen parent/policy/tape mismatch"));
+    }
+    if !p.tiny && s["old_decision"]!=file_hash(&own(&old).study.join("framing-decision.r3b"))? {return Err(bad("historical decision changed"));}
+    for (name,h) in [("corpus.r3cor",&p.corpus),("transfer.r3cor",&p.transfer),("metadata.r3b",&p.metadata),("initial.r3m",&p.initial)] {
+        if file_hash(&root.join(name))?!=*h {return Err(bad("signal owned bytes mismatch"));}
+    }
+    if file_hash(&root.join("tokenizer.r3b"))?!=file_hash(&parent.join("tokenizer.r3b"))? {return Err(bad("signal tokenizer bytes changed"));}
+    Ok(())
+}
+fn signal_authorize(root:&Path,p:&Plan)->Result<()> {
+    let study=&own(p).study;
+    let prep:binary::Value=read_confirmed(&study.join("preparation.r3b"))?;
+    if prep["selection"]!=file_hash(&study.join("selection.r3b"))? {return Err(bad("reviewed signal selection changed"));}
+    let h=history(root,p)?;
+    for local in if p.tiny {vec![1]}else{vec![1,8,32,128]} {
+        let step=p.origin_step()+local;
+        if root.join(format!("signal-probe-{step:04}-started.r3b")).exists() {
+            let r:binary::Value=read_confirmed(&root.join(format!("signal-probe-{step:04}-finished.r3b")))
+                .map_err(|_|bad("signal observation unfinished/UNKNOWN"))?;
+            if !r["error"].is_null() {return Err(bad("signal observation failed"));}
+        }
+    }
+    if h.last().is_some_and(|s|s.phase.as_deref()==Some("Failed") || !["TRAINING","TIME_BUDGET","CANDIDATE_FIXED","BUDGET_REACHED","FINAL_QUALITY_FAIL"].contains(&s.stop.as_str())) {
+        return Err(bad("signal failed endpoint remains closed"));
+    }
+    if !p.tiny {
+        let r:binary::Value=read_confirmed(&study.join("legacy-finished.r3b"))?;
+        if r["checkpoint"]!=p.initial || r["binding"]["source"]!=p.source || r["binding"]["binary"]!=p.binary
+            || r["matched"]!=16 || r["completed"]!=16 || !r["error"].is_null()
+            || r["control"]["generation_calls"]!=16 || r["control"]["teacher_calls"]!=0
+            || r["control"]["terminal_reason"]!="COMPLETED" || r["raw"]!=file_hash(&study.join("legacy.r3rows"))? {
+            return Err(bad("signal parent parity required"));
+        }
+    }
+    Ok(())
+}
+pub(in super::super) fn signal_parent_parity(study:&Path)->Result<()> {
+    let root=study.join("QE");let p=plan_read(&root)?;
+    let review:binary::Value=read_confirmed(&study.join("review-a.r3b"))?;
+    if !is_signal(&p) || p.tiny || review["verdict"]!="PASS" || review["source"]!=p.source
+        || review["preparation"]!=file_hash(&study.join("preparation.r3b"))?
+        || review["report_hash"]!=file_hash(Path::new(review["report_path"].as_str().ok_or_else(||bad("review path"))?))? {
+        return Err(bad("signal independent A required"));
+    }
+    let selection:binary::Value=read(&study.join("selection.r3b"))?;
+    let parent=Path::new(selection["parent"].as_str().ok_or_else(||bad("parent path"))?);
+    let (old,end)=signal_parent(parent)?;
+    let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;
+    let (_,dm,_)=verified_metadata(parent,&old)?;
+    let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
+    audit_panel(parent,&old,end.step,"dev512",&c.validation,&dm,&tok)?;
+    let raw=binary::read_value_records(&parent.join("eval-0512-dev512.r3rows"))?;
+    orbit_observe(study,"legacy",&root.join("initial.r3m"),&c.validation[..16],
+        &binary::record!({"policy":digest(&p)?,"parent":parent,"checkpoint":p.initial}),Some(&raw[1..17]),observation_control(&p,16,0)?)?;
+    println!("SIGNAL_PARENT_PARITY matched16/16 optimizer0 teacher0");Ok(())
+}
+pub(in super::super) fn signal_endpoint(p:&Plan,step:usize,pending:bool)->Result<usize> {
+    let origin=p.origin_step();
+    if step<origin || step>p.config.max_steps {return Err(bad("signal cursor out of range"));}
+    if pending && p.evaluation_due(step) {return Ok(step);}
+    if p.tiny {return Ok(p.config.max_steps);}
+    [1024,1536,2048].into_iter().find(|&s|s>step).ok_or_else(||bad("signal budget closed"))
+}
+fn signal_margins(m0:f64,m1:f64)->Result<[f64;4]> {
+    if !m0.is_finite() || !m1.is_finite() {return Err(bad("nonfinite discrimination logits"));}
+    Ok([(m0-m1)/2.,(m0+m1)/2.,m0,m1])
+}
+fn signal_stats(root:&Path,p:&Plan,step:usize,name:&str,count:usize)->Result<binary::Value> {
+    let (_,es,ms)=panel_cases(root,p,step)?.into_iter().find(|(n,_,_)|n==name).ok_or_else(||bad("signal panel"))?;
+    if count>es.len() || count==0 || count%4!=0 {return Err(bad("signal panel denominator"));}
+    let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
+    audit_panel(root,p,step,name,&es,&ms,&tok)?;
+    let teachers=binary::read_value_records(&root.join(format!("eval-{step:04}-{name}-teachers.r3rows")))?;
+    let raw=binary::read_value_records(&root.join(format!("eval-{step:04}-{name}.r3rows")))?;
+    let score=orbit_score(&es[..count],&ms[..count],&raw[1..count+1],&tok)?;
+    let mut margins=vec![];let mut nll=[0.;3];
+    for (i,e) in es[..count].iter().enumerate() {
+        if resolve_request(&e.request)?!=e.answer || teachers[i+1]["id"]!=e.id {return Err(bad("signal orientation label"));}
+        let t=&teachers[i+1]["teacher"];let cf=&t["conditional_foil"];
+        let gold=tok.encode(e.answer.as_bytes())?[0];let foil=tok.encode(orbit_foil(e)?.as_bytes())?[0];
+        let g=cf["gold_logit"].as_f64().ok_or_else(||bad("gold logit missing"))?;
+        let f=cf["foil_logit"].as_f64().ok_or_else(||bad("foil logit missing"))?;
+        let n:Vec<f64>=binary::from_value(t["target_token_observation"]["nll"].clone())?;
+        let margin=g-f;let bn=(-margin).max(0.)+(-margin.abs()).exp().ln_1p();
+        if n.len()!=2 || n.iter().any(|v|!v.is_finite()) || !margin.is_finite()
+            || cf["gold"]!=gold || cf["foil"]!=foil || cf["margin"]!=binary::record!(margin)
+            || cf["binary_nll"]!=binary::record!(bn) || t["target_token_observation"]["gold"]!=binary::record!([gold,EOS]) {
+            return Err(bad("signal teacher binding/NLL"));
+        }
+        margins.push(margin);nll[0]+=n[0];nll[1]+=n[1];nll[2]+=bn;
+    }
+    let mut cs=vec![];let mut ds=vec![];let mut mins=vec![];let mut positive=0;
+    for i in (0..count).step_by(2) {
+        if ms[i].base!=ms[i+1].base || es[i].request.evidence!=es[i+1].request.evidence
+            || es[i].answer!=orbit_foil(&es[i+1])? || es[i].request.input==es[i+1].request.input {
+            return Err(bad("signal query/evidence orientation mismatch"));
+        }
+        let [c,d,m0,m1]=signal_margins(margins[i],margins[i+1])?;
+        cs.push(c);ds.push(d);mins.push(m0.min(m1));positive+=usize::from(m0>0.&&m1>0.);
+    }
+    let dist=|v:&[f64]| {let mut s=v.to_vec();s.sort_by(f64::total_cmp);binary::record!({"min":s[0],"q25":s[(s.len()-1)/4],"median":s[(s.len()-1)/2],"q75":s[(s.len()-1)*3/4],"max":s[s.len()-1],"mean":s.iter().sum::<f64>()/s.len() as f64,"mean_abs":s.iter().map(|x|x.abs()).sum::<f64>()/s.len() as f64})};
+    Ok(binary::record!({"step":step,"panel":name,"count":count,"cases":digest(&&es[..count])?,"score":score,
+        "c":dist(&cs),"d":dist(&ds),"min_margin":dist(&mins),"positive_pairs":positive,
+        "all4_positive":margins.chunks_exact(4).filter(|v|v.iter().all(|&m|m>0.)).count(),
+        "value_nll":nll[0]/count as f64,"eos_nll":nll[1]/count as f64,"binary_nll":nll[2]/count as f64,
+        "raw":file_hash(&root.join(format!("eval-{step:04}-{name}.r3rows")))?,
+        "teacher":file_hash(&root.join(format!("eval-{step:04}-{name}-teachers.r3rows")))?}))
+}
+fn signal_evaluation_result(root:&Path,p:&Plan,step:usize)->Result<binary::Value> {
+    let mut panels=BTreeMap::new();
+    for (name,es,_) in panel_cases(root,p,step)? {
+        panels.insert(name.clone(),signal_stats(root,p,step,&name,es.len())?);
+    }
+    let nt=if [1024,2048].contains(&step){512}else{64};
+    let tr=signal_stats(root,p,step,&format!("train{nt}"),64)?;
+    let dv=signal_stats(root,p,step,&format!("dev{nt}"),64)?;
+    let selection:binary::Value=read(&own(p).study.join("selection.r3b"))?;
+    let parent=Path::new(selection["parent"].as_str().ok_or_else(||bad("signal parent"))?);
+    let (old,_)=signal_parent(parent)?;
+    let baseline=signal_stats(parent,&old,512,"train512",64)?;
+    let preceding=p.evaluation.train_steps.iter().copied().take_while(|&s|s<step).collect::<Vec<_>>();
+    let mut prior=baseline.clone();let mut streak=0usize;
+    for s in preceding.iter().copied().chain(std::iter::once(step)) {
+        let n=if [1024,2048].contains(&s){512}else{64};
+        let current=if s==step {tr.clone()}else{signal_stats(root,p,s,&format!("train{n}"),64)?};
+        let no_gain=current["score"]["query_both"].as_u64()<=prior["score"]["query_both"].as_u64()
+            && current["score"]["all4"].as_u64()<=prior["score"]["all4"].as_u64();
+        let bad_nll=current["value_nll"].as_f64().unwrap()>=1.5*baseline["value_nll"].as_f64().unwrap();
+        streak=if no_gain&&bad_nll {streak+1}else{0};prior=current;
+    }
+    let full=nt==512&&orbit_candidate_scores(&orbit_panel(root,p,step,"train512")?,&orbit_panel(root,p,step,"dev512")?);
+    let stop=if full {Some("CANDIDATE_FIXED")}else if streak>=2 {Some("QUALITY_DIVERGENCE")}
+        else if step==p.config.max_steps {Some("FINAL_QUALITY_FAIL")}else{None};
+    Ok(binary::record!({"policy":digest(p)?,"step":step,"panels":panels,"fixed_train64":tr,"fixed_dev64":dv,
+        "parent_fixed_train64":baseline,"divergence_streak":streak,"full_gate":full,"stop":stop}))
+}
+fn signal_evaluation_decision(root:&Path,p:&Plan,step:usize)->Result<Option<String>> {
+    if p.tiny {return Ok(None);}
+    let decision=signal_evaluation_result(root,p,step)?;
+    let path=root.join(format!("signal-decision-{step:04}.r3b"));
+    if path.exists() {let old:binary::Value=read_confirmed(&path)?;if old!=decision {return Err(bad("signal decision/raw mismatch"));}}
+    else {publish_confirmed(&path,&decision)?;}
+    println!("SIGNAL_DECISION {decision}");
+    Ok(decision["stop"].as_str().map(str::to_owned))
+}
+pub(in super::super) fn signal_report(study:&Path)->Result<()> {
+    let p=plan_read(&study.join("QE"))?;
+    if !is_signal(&p) {return Err(bad("signal report scope"));}
+    let h=history(&study.join("QE"),&p)?;
+    let end=h.last().ok_or_else(||bad("signal endpoint missing"))?;
+    audit(&study.join("QE"),&p,p.origin_step()+1,end.step)?;
+    orbit_report_panels(&study.join("QE"),&p,end.step)?;
+    if !p.tiny {
+        for &step in p.evaluation.train_steps.iter().filter(|&&s|s<=end.step) {
+            let actual=signal_evaluation_result(&study.join("QE"),&p,step)?;
+            let recorded:binary::Value=read_confirmed(&study.join(format!("QE/signal-decision-{step:04}.r3b")))?;
+            if actual!=recorded {return Err(bad("signal report decision/raw mismatch"));}
+            println!("SIGNAL_DIAGNOSTIC {actual}");
+        }
+    }
+    println!("SIGNAL_RESULT step={} new_updates={} durable={} stop={} resume={} usage={:?} Goal1=false",end.step,end.step-p.origin_step(),end.checkpoint_hash,end.stop,end.resume,usage(&p)?);
+    Ok(())
+}
+fn signal_comparison(study:&Path)->Result<binary::Value> {
+    let root=study.join("QE");let p=plan_read(&root)?;authorize(&root,&p)?;
+    let h=history(&root,&p)?;let end=h.last().ok_or_else(||bad("signal final missing"))?;
+    if p.tiny || end.resume || end.phase.as_deref()!=Some("Finished") || ![1024,2048].contains(&end.step)
+        || !["CANDIDATE_FIXED","FINAL_QUALITY_FAIL"].contains(&end.stop.as_str()) {return Err(bad("signal final incomplete"));}
+    let tr=orbit_panel(&root,&p,end.step,"train512")?;let dv=orbit_panel(&root,&p,end.step,"dev512")?;
+    let eligible=end.stop=="CANDIDATE_FIXED"&&orbit_candidate_scores(&tr,&dv)&&parity_verified(&root,&p)?;
+    Ok(binary::record!({"contract":SIGNAL_CONTRACT,"source":p.source,"preparation":file_hash(&study.join("preparation.r3b"))?,
+        "endpoints":{"QE":{"policy":digest(&p)?,"checkpoint":end.checkpoint_hash,"step":end.step,"train":tr,"dev":dv}},
+        "selected":if eligible {Some("QE")}else{None},"minimal_baseline_verified":false,"goal1_ready":false}))
+}
+pub(in super::super) fn signal_probe_cases(p:&Plan,root:&Path,step:usize,tok:&ByteBpe)->Result<Option<(Vec<Sample>,Vec<u32>,bool)>> {
+    if !is_signal(p) {return Ok(None);}
+    let local=step.checked_sub(p.origin_step()).ok_or_else(||bad("signal probe cursor"))?;
+    if !(if p.tiny {vec![1]}else{vec![1,8,32,128]}).contains(&local) {return Ok(None);}
+    #[cfg(feature="test-support")]
+    if p.tiny && std::env::var("R3_SIGNAL_OBSERVER_OFF").as_deref()==Ok("1") {return Ok(None);}
+    let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;
+    let (ms,_,_)=verified_metadata(root,p)?;
+    for (i,e) in c.train[..16].iter().enumerate() {
+        if resolve_request(&e.request)?!=e.answer || ms[i].base!=ms[i/4*4].base {return Err(bad("signal probe fixed skeleton/label"));}
+    }
+    let samples=samples_with_framing(&c.train[..16],tok,p.config.seq_len,p.framing())?;
+    let foils=c.train[..16].iter().map(|e|Ok(tok.encode(orbit_foil(e)?.as_bytes())?[0])).collect::<Result<Vec<_>>>()?;
+    Ok(Some((samples,foils,local!=128)))
+}
 fn framing_stage(study: &Path, step: usize, latest: bool) -> Result<binary::Value> {
+    framing_action(step, false, false)?;
     let mut endpoints = BTreeMap::new();
     let mut full = false;
     let mut signal = false;
@@ -2192,25 +2540,15 @@ fn framing_stage(study: &Path, step: usize, latest: bool) -> Result<binary::Valu
                 .find(|s| s.step == step && s.phase.as_deref() != Some("EvaluationPending"))
         }
         .ok_or_else(|| bad("matched framing endpoint missing"))?;
-        if s.step != step
-            || s.phase.as_deref() == Some("EvaluationPending")
-            || !orbit_peer_can_proceed(s)
-        {
-            return Err(bad("matched framing endpoint incomplete"));
-        }
         let tr = orbit_panel(&root, &p, step, "train512")?;
         let dv = orbit_panel(&root, &p, step, "dev512")?;
-        if tr.errors > 0 || dv.errors > 0 || tr.eos != 512 || dv.eos != 512 {
-            return Err(bad("framing endpoint error"));
-        }
-        full |= orbit_candidate_scores(&tr, &dv);
-        signal |= (tr.query_both >= 64 && tr.all4 >= 16) || (dv.query_both >= 32 && dv.all4 >= 8);
+        let (f,j)=framing_endpoint_score(step,s.step,s.phase.as_deref()==Some("EvaluationPending"),orbit_peer_can_proceed(s),&tr,&dv)?;
+        full|=f;signal|=j;
         endpoints.insert(arm,binary::record!({"checkpoint":s.checkpoint_hash,"step":step,"policy":digest(&p)?,"framing":p.framing(),"train":tr,"dev":dv}));
     }
-    Ok(
-        binary::record!({"endpoints":endpoints,"full_gate":full,"joint_signal":signal,"extend":!full&&signal,
-        "decision":if full{"CANDIDATE_AT_512"}else if signal{"EXTEND_BOTH_TO_1024"}else{"CLOSE_NO_JOINT_SIGNAL"},"source":source_digest()?}),
-    )
+    let (decision, extend) = framing_action(step, full, signal)?;
+    Ok(binary::record!({"endpoints":endpoints,"full_gate":full,"joint_signal":signal,
+        "extend":extend,"decision":decision,"source":source_digest()?}))
 }
 pub(in super::super) fn framing_decide(study: &Path) -> Result<()> {
     framing_legacy_reproduction(study)?;
@@ -2433,11 +2771,188 @@ fn framing_comparison(study: &Path) -> Result<binary::Value> {
     });
     result["minimal_baseline_verified"] = binary::record!(false);
     result["goal1_ready"] = binary::record!(false);
+    verify_framing_comparison(&result)?;
     Ok(result)
+}
+fn verify_framing_comparison(result:&binary::Value)->Result<()> {
+    let step=result["step"].as_u64().ok_or_else(||bad("comparison step missing"))? as usize;
+    let mut full=false;let mut signal=false;let mut candidates=vec![];
+    for arm in FRAME_ARMS {
+        let e=&result["endpoints"][arm];
+        let actual=e["step"].as_u64().ok_or_else(||bad("comparison endpoint missing"))? as usize;
+        let tr:OrbitScore=binary::from_value(e["train"].clone())?;
+        let dv:OrbitScore=binary::from_value(e["dev"].clone())?;
+        let (f,s)=framing_endpoint_score(step,actual,false,true,&tr,&dv)?;
+        full|=f;signal|=s;
+        if f {candidates.push((arm,dv.all4,dv.query_both,dv.full));}
+    }
+    candidates.sort_by(|a,b|b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(b.3.cmp(&a.3)).then((a.0!="QE").cmp(&(b.0!="QE"))));
+    let (decision,extend)=framing_action(step,full,signal)?;
+    if result["full_gate"]!=full || result["joint_signal"]!=signal || result["decision"]!=decision
+        || result["extend"]!=extend || result["selected"]!=binary::record!(candidates.first().map(|x|x.0)) {
+        return Err(bad("comparison action/candidate endpoint mismatch"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    fn endpoint_fixture(full:usize,qb:usize,all4:usize)->OrbitScore {
+        OrbitScore{total:512,full,query_both:qb,swap_both:0,all4,eos:512,errors:0,
+            gold_foil_other_malformed:[full,512-full,0,0],same_across_queries:0,same_across_assignments:0,exact:vec![false;512]}
+    }
+    #[test]
+    fn query_signal_comparison_and_scalar_boundaries()->Result<()> {
+        let tr=endpoint_fixture(508,252,124);let dv=endpoint_fixture(488,232,116);
+        for requested in [512,1024] {
+            let encoded=binary::to_vec(&(requested,&tr,&dv))?;
+            let (actual,t,d):(usize,OrbitScore,OrbitScore)=binary::from_slice(&encoded)?;
+            let (full,joint)=framing_endpoint_score(requested,actual,false,true,&t,&d)?;
+            assert!(full&&joint);assert_eq!(framing_action(requested,full,joint)?.1,false);
+            assert!(framing_endpoint_score(requested,actual,true,true,&t,&d).is_err());
+            assert!(framing_endpoint_score(requested,actual,false,false,&t,&d).is_err());
+            assert!(framing_endpoint_score(requested,1536-actual,false,true,&t,&d).is_err());
+            let mut missing=endpoint_fixture(508,252,124);missing.total=511;
+            assert!(framing_endpoint_score(requested,actual,false,true,&missing,&d).is_err());
+        }
+        for (index,threshold) in [(0,508),(1,252),(2,124),(3,488),(4,232),(5,116)] {
+            for delta in [-1i32,0,1] {
+                let mut values=[508,252,124,488,232,116];values[index]=(threshold as i32+delta) as usize;
+                let t=endpoint_fixture(values[0],values[1],values[2]);let d=endpoint_fixture(values[3],values[4],values[5]);
+                assert_eq!(orbit_candidate_scores(&t,&d),delta>=0);
+            }
+        }
+        for delta in [-1i32,0,1] {
+            let t=endpoint_fixture(256,(64+delta) as usize,16);let d=endpoint_fixture(256,0,0);
+            assert_eq!(framing_endpoint_score(512,512,false,true,&t,&d)?.1,delta>=0);
+            assert_eq!(framing_action(1024,false,delta>=0)?,("FINAL_QUALITY_FAIL_AT_1024",false));
+        }
+        let sp=|v:f64|v.max(0.)+(-v.abs()).exp().ln_1p();
+        let loss=|c:f64,d:f64|(sp(-c-d)+sp(c-d))/2.;
+        let h=1e-5;let mut calculations=0;
+        for c in [-4.,-1.,0.,3.] {
+            let derivative=(loss(c,h)-loss(c,-h))/(2.*h);calculations+=2;
+            assert!((derivative+0.5).abs()<1e-9);
+        }
+        let a=signal_margins(2.,-1.)?;assert_eq!(a,[1.5,0.5,2.,-1.]);
+        assert_eq!(signal_margins(-2.,1.)?,a.map(|v|-v));
+        let z=[3.,1.,2.,4.];let shifted=z.map(|v|v+17.);
+        assert_eq!(signal_margins(z[0]-z[1],z[3]-z[2])?,signal_margins(shifted[0]-shifted[1],shifted[3]-shifted[2])?);
+        let ms=(0..16).map(|i|i as f64-5.).collect::<Vec<_>>();
+        let global=ms.iter().sum::<f64>()/16.;
+        assert_eq!(global,ms.chunks_exact(8).map(|v|v.iter().sum::<f64>()/16.).sum::<f64>());
+        assert_eq!(global,ms.chunks_exact(2).map(|m|signal_margins(m[0],m[1]).unwrap()[1]).sum::<f64>()/8.);
+        assert!(signal_margins(f64::NAN,0.).is_err());
+        println!("QUERY_SIGNAL_SCALAR finite_difference_evaluations={calculations} model_calls=0 synthetic_endpoint_steps=512,1024 optimizer=0");
+        Ok(())
+    }
+    #[test]
+    fn query_signal_comparison_published_endpoint_and_row_budget()->Result<()> {
+        let temp=tempfile::tempdir()?;
+        let tr=endpoint_fixture(508,252,124);let dv=endpoint_fixture(488,232,116);
+        let endpoint=binary::record!({"step":1024,"train":tr,"dev":dv});
+        let result=binary::record!({"step":1024,"endpoints":{"QE":endpoint,"EQ":endpoint},
+            "full_gate":true,"joint_signal":true,"decision":"CANDIDATE_AT_1024","extend":false,"selected":"QE"});
+        let path=temp.path().join("comparison.r3b");publish_confirmed(&path,&result)?;
+        let readback:binary::Value=read_confirmed(&path)?;verify_framing_comparison(&readback)?;
+        let before=file_hash(&path)?;
+        for (field,value) in [("step",binary::record!(512)),("extend",binary::record!(true)),
+            ("decision",binary::record!("CANDIDATE_AT_512")),("selected",binary::record!("EQ"))] {
+            let mut invalid=readback.clone();invalid[field]=value;assert!(verify_framing_comparison(&invalid).is_err());
+        }
+        for value in [binary::Value::Null,binary::record!({"step":512,"train":tr,"dev":dv})] {
+            let mut invalid=readback.clone();invalid["endpoints"]["EQ"]=value;assert!(verify_framing_comparison(&invalid).is_err());
+        }
+        assert_eq!(before,file_hash(&path)?);
+        let mut control=recovery::RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),std::time::Duration::from_secs(30),16*1024*1024)?;
+        control.set_call_limits(0,16);control.begin_teacher_rows(8)?;control.begin_teacher_rows(8)?;
+        assert_eq!(control.teacher_calls,16);assert!(control.begin_teacher_rows(1).is_err());assert_eq!(control.teacher_calls,16);
+        println!("QUERY_SIGNAL_COMPARISON writer/publisher/reader1024 endpoint/candidate/missing/mixed rejection; reserved_teacher_rows16 simulated_model_calls0");
+        Ok(())
+    }
+    #[test]
+    fn query_signal_tiny_observer_and_process_resume()->Result<()> {
+        const CHILD:&str="R3_SIGNAL_TEST_CHILD";
+        if let Ok(root)=std::env::var(CHILD) {
+            return run(Path::new(&root),std::env::var("R3_SIGNAL_CONTINUOUS").as_deref()==Ok("1"));
+        }
+        let temp=tempfile::tempdir()?;
+        let base=std::env::var_os("R3_SIGNAL_TEST_ROOT").map(PathBuf::from).unwrap_or_else(||temp.path().join("evidence"));
+        std::fs::create_dir(&base)?;
+        let retained_parent=std::env::var_os("R3_SIGNAL_TEST_PARENT").map(PathBuf::from);
+        let parent_root=if let Some(parent)=&retained_parent {parent.clone()}else{
+            let old=orbit_fixture(&base)?;let frames=base.join("frames");
+            framing_prepare(&old.join("BOTH"),&frames,true)?;fixture_review(&frames)?;frames.join("QE")
+        };
+        let child=|root:&Path,continuous:bool,off:bool,stop:bool,label:&str|->Result<()> {
+            let mut cmd=std::process::Command::new(std::env::current_exe()?);
+            cmd.args(["--exact","training::fresh::identifiable::binding::tests::query_signal_tiny_observer_and_process_resume","--nocapture"])
+                .env(CHILD,root).env("R3_SIGNAL_CONTINUOUS",if continuous{"1"}else{"0"})
+                .env("R3_SIGNAL_OBSERVER_OFF",if off{"1"}else{"0"}).env("VECLIB_MAXIMUM_THREADS","1").env("OMP_NUM_THREADS","1");
+            if stop {cmd.env("R3_FRESH_TRAIN_STOP","training_checkpoint_saved");}
+            let out=cmd.output()?;
+            std::fs::write(base.join(format!("{label}.stdout")),&out.stdout)?;
+            std::fs::write(base.join(format!("{label}.stderr")),&out.stderr)?;
+            assert!(out.status.success(),"{label}: {} {}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));
+            assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
+            Ok(())
+        };
+        if retained_parent.is_none() {child(&parent_root,true,true,false,"parent2")?;}
+        let (oldp,_)=signal_parent(&parent_root)?;
+        let oldh=history(&parent_root,&oldp)?;
+        let mut generations=if retained_parent.is_none(){oldh.iter().map(|s|s.generations).sum::<usize>()}else{0};
+        let mut teacher_rows=if retained_parent.is_none(){oldh.iter().map(|s|s.teachers).sum::<usize>()}else{0};
+        let mut updates=if retained_parent.is_none(){2}else{0};let mut endpoints=vec![];let mut raws=vec![];
+        // A retained test parent avoids repeating already-counted fixture work.
+        for name in ["off","segmented","evaluation-only"] {
+            let study=base.join(name);signal_prepare(&parent_root,&study,true)?;fixture_review(&study)?;
+            let root=study.join("QE");let p=plan_read(&root)?;
+            assert_eq!(own(&p).rows[..2],own(&p).rows[2..4]);assert_eq!(p.learning_rate(3),3e-4);
+            let mut wrong=p.clone();wrong.fork.as_mut().unwrap().origin_step+=1;assert!(signal_verify_plan(&root,&wrong).is_err());
+            wrong=p.clone();wrong.framing=Some(neural::Framing::EvidenceQuestion);assert!(signal_verify_plan(&root,&wrong).is_err());
+            let continuous=name!="segmented";let off=name!="segmented";
+            child(&root,continuous,off,name=="evaluation-only",&format!("{name}-0"))?;
+            if name=="segmented"||name=="evaluation-only" {
+                let h=history(&root,&p)?;
+                if name=="evaluation-only" {assert_eq!(h.last().unwrap().phase.as_deref(),Some("EvaluationPending"));}
+                child(&root,continuous,off,false,&format!("{name}-1"))?;
+            }
+            let h=history(&root,&p)?;let end=h.last().unwrap();assert_eq!(end.step,4);assert!(!end.resume);
+            let l=checkpoint::load(&root.join(&end.checkpoint),Device::Cpu,true)?;
+            let s=l.manifest.training.as_ref().unwrap();
+            endpoints.push((l.model.weights_content_id()?,optimizer_hash(&l.optimizer)?,s.step,s.sampler_state,s.consumed_tokens,s.target_tokens));
+            let raw=binary::read_value_records(&root.join("eval-0004-dev4.r3rows"))?;
+            raws.push(raw[1..].iter().map(|r|r["raw_tokens"].clone()).collect::<Vec<_>>());
+            for (i,seg) in h.iter().enumerate() {
+                let control:binary::Value=read(&root.join(format!("segment-{i:04}/train-control.r3b")))?;
+                updates+=control["optimizer_calls"].as_u64().unwrap() as usize;
+                teacher_rows+=seg.teachers;generations+=seg.generations;
+                if name=="evaluation-only"&&i==1 {assert_eq!(control["optimizer_calls"],0);}
+            }
+            if !off {
+                for step in [3] {
+                    let r:binary::Value=read_confirmed(&root.join(format!("signal-probe-{step:04}-finished.r3b")))?;
+                    assert_eq!(r["diagnostic_backwards"],2);assert_eq!(r["sample_forwards"],32);assert!(r["error"].is_null());
+                }
+            }
+        }
+        assert!(endpoints.windows(2).all(|v|v[0]==v[1]));assert!(raws.windows(2).all(|v|v[0]==v[1]));
+        assert!(updates<=64&&generations<=256&&teacher_rows<=256);
+        println!("QUERY_SIGNAL_TINY actual observeroff2/observed_newprocess1+1/evalonly2+0 BITWISE_WEIGHTS_ADAM_CLOCK_TOKENS_RAW_EQUAL optimizer={updates} generation={generations} teacher_sample_rows={teacher_rows} retained_parent={} evidence={}",retained_parent.is_some(),base.display());
+        Ok(())
+    }
+    #[test]
+    fn framing_final_action_is_endpoint_bound() -> Result<()> {
+        for signal in [false, true] {
+            assert_eq!(framing_action(512, true, signal)?, ("CANDIDATE_AT_512", false));
+            assert_eq!(framing_action(1024, true, signal)?, ("CANDIDATE_AT_1024", false));
+            assert_eq!(framing_action(1024, false, signal)?, ("FINAL_QUALITY_FAIL_AT_1024", false));
+        }
+        assert_eq!(framing_action(512, false, false)?, ("CLOSE_NO_JOINT_SIGNAL", false));
+        assert_eq!(framing_action(512, false, true)?, ("EXTEND_BOTH_TO_1024", true));
+        for step in [0, 511, 513, 1023, 1025] { assert!(framing_action(step, true, true).is_err()); }
+        Ok(())
+    }
     use super::*;
     #[test]
     fn framing_t1_t2_t3_exact_blocks_and_policy() -> Result<()> {

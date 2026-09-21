@@ -1,5 +1,68 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: query signal convergence — explicit QE512 continuation
+
+R3-QUERY-SIGNAL-CONVERGENCE-1.0 preserves source32df6dcb1c86020b9fc5402ff3b8bc32f3180f0e
+and the closed QE/EQ comparison. Its old decision and all endpoint receipts are
+immutable. This is a separate parent-bound study from the actual QE512 native
+weights/Adam, not permission to resume the old framing experiment. Product QE,
+tokenizer562, LOCAL5, F32/Accelerate/thread1, BOTH512 corpus and basic response CE
+remain unchanged. The only new training intervention is additional fixed exposure.
+
+Q0 verifies physical/content/state/Adam hashes and original preservation. Q1 fixes
+the final1024 action: extend is always false, with CANDIDATE_AT_1024 or
+FINAL_QUALITY_FAIL_AT_1024. The512 action/gates/selection order remain unchanged.
+Q2 independently recounts existing first16 skeletons at0/128/256/512 and the full
+512 endpoints separately. For the same assignment's two queries, u0=za(q0)-zb(q0),
+u1=za(q1)-zb(q1), c=(u0+u1)/2, d=(u0-u1)/2. Report both margins, positive pairs,
+four-positive skeletons, strict generation scores, first-digit/EOS NLL and binary
+NLL. Labels/evidence establish orientation; first-token and EOS losses are separate.
+
+The fixed first4 training skeletons (16 rows) measure S=mean(d), equivalent to
+mean oriented gold-minus-foil margin over16 rows. At local1/8/32, a separate
+autograd graph computes gS using two batches of8 and denominator16. The existing
+Adam callback only reads the actual post-clip/moment/decay delta. gS never enters
+CE, moments, RNG or sampling. Read S and first-digit/EOS NLL before/after; local128
+uses the same observation without backward. Record first-order residual rather
+than calling the dot product causal proof. TINY observer-off/on and fresh-process
+resume must preserve weights/Adam/clock/tokens/raw bitwise. Interrupted observation
+is retained and blocks retry; unknown work is not zero.
+
+Independent A must approve the actual source, directly affected checks, parent,
+corpus/tape and immutable preparation before SMALL work. First additional update
+is saved, then a fresh process continues. Register absolute512→2048 with no reset
+or warmup, constantLR3e-4, original beta.9/.999/epsilon1e-8/decay.01/clip1,
+batch8/accumulation1/seq256. Repeat the original512 tape three times: expected
+new input1,781,760, targets24,576 and24 exposures per training row. Adam and sampler
+clocks remain absolute. Each segment has at most512 updates; evaluation-only
+continuation adds zero optimizer calls and reuses durable returned rows.
+
+At768/1536 evaluate the same train64/dev64; at1024/2048 evaluate train512/dev512.
+Both full panels must pass at the same checkpoint: train FULL>=508, QUERY_BOTH>=252,
+ALL4>=124; dev FULL>=488, QUERY_BOTH>=232, ALL4>=116; errors0 and normal EOS.
+At1024 success fixes the candidate early; otherwise continue to the registered2048
+unless safety/budget stops. Two consecutive scheduled checks with no QB/ALL4 gain
+and fixed-train64 first-digit NLL>=1.5 times the parent stop QUALITY_DIVERGENCE.
+Current and parent fixed subsets are identical even when the full512 is evaluated.
+Final failure is FINAL_QUALITY_FAIL. No EQ, seed/LR/loss/core search or extension.
+
+Caps: new SMALL1536, executed input2,100,000/target30,000 including discarded work,
+generation2816, teacher/sample-forward rows3072. Diagnostic microbatch forwards16,
+backwards16 maximum, scalar finite-difference evaluations16; TINY optimizer64,
+generation256/teacher256, including failed tests. One heavy process; active7200s,
+segment900s plus cleanup120s; training16GiB, inference12GiB. Model calls, sample
+rows and additional diagnostic backwards are separately counted. Compile time is
+not inference performance. Cancellation, nonfinite/disconnected gradients, storage,
+policy/data/source errors and UNKNOWN remain sticky.
+
+Parent16 parity, final implementer16 and independent16 have separate receipts.
+Independent B recounts native state, tape, raw/teacher and final parity. Only an
+eligible fixed candidate may open the old sealed256 once: FULL>=244,
+QUERY_BOTH>=116, ALL4>=58, errors0. Otherwise it remains NOT_RUN_PREREQUISITE.
+Narrow selection acceptance, S4/S5/S6 and Goal1 are separate; product default and
+GOAL1_ACCEPTED are never changed by this study. Commit/push named related source,
+tests and minimal status only; freeze source/binary before learning.
+
 ## Closed: causal framing baseline — no joint signal at512
 
 Frozen source32df6dcb1c86020b9fc5402ff3b8bc32f3180f0e was independently approved,

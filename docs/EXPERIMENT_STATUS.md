@@ -1,5 +1,60 @@
 # 진단 및 구현 상태
 
+## 2026-09-21 Query signal — QE512 보존 확인 및 제한 continuation 준비
+
+R3-QUERY-SIGNAL-CONVERGENCE-1.0은 기존 framing512 종료를 고치지 않는 별도
+연구다. 기준 source32df6dcb1c86020b9fc5402ff3b8bc32f3180f0e 이후 시작 HEAD는
+a9c652e2eccbd0067d17d33ea4c3e1f7fd9d673a이며 기존 변경은 상태/계획 문서2개뿐이다.
+사용자의 미추적 `.DS_Store`와 모든 원본을 보존했다. 설치된 Rust/Cargo1.98.1,
+locked/offline/Accelerate를 사용하고 모델·의존성을 내려받지 않았다.
+
+Q0 독립 확인은 실제 QE512 physical
+e6895cbe02ab5ecdef0f300d953b60749358e0d6f8ba2d4d31344eece8f15fbb,
+tensor content7d5dce3d545f7fc860de99113e7a74760b450e91f4de60d20cfff8fa60895e6e,
+Adam eb258addfd2e5841b0ce946e232cc70cdde1a7f0cc8e324cc9f84bcdbd3eb64e,
+step/cursor512·QE·tokenizer562·기존 corpus/tape를 검산했다. 직접 관련50파일의
+보존 manifest를 남겼다. 이전 CLOSE_NO_JOINT_SIGNAL과 segment 종료는 불변이다.
+
+Q1은 실제 endpoint를 받는 순수 판정으로1024의 extend=false와 최종 문자열을
+연결했다.512의 기존 truth table·품질 gate·candidate 순서는 유지한다.
+작은1024 endpoint fixture는 실제 publisher/reader/comparison 검증을 통과하며
+누락·mixed step·잘못된 candidate/action을 거부한다. 이 fixture는1024 학습이 아니다.
+
+Q2 기존 raw 독립 재집계는 추가 모델 호출0이다. 각 고정64와512 전수를 나눴다.
+QE train512는 mean|c|0.969794, mean|d|0.014082, 양 margin 양수0/256이다.
+EOS/후보 밖 확률의 감소와 두 질문 공동 정답의 부재를 구분한다. 이를 단일 원인이나
+구조적 불가능의 증명으로 쓰지 않는다. Scalar finite-difference는 총16계산,
+모델 호출0이며 d=0 미분−0.5·orientation·상수 이동·분모를 확인했다.
+
+첫 실제 TINY process 시험은 관측이 stop_after보다 먼저 시작되어 미실행 다음
+step의 probe를 남기는 오류를 재현했다. 실패와 원본을 보존하고 관측 시작을
+중단 검사 뒤로 이동했다.8행 관측의 budget 예약도 backend1회와 혼동하지 않도록
+원자적8행 예약으로 수정했다. 독립 source 검토의 두 finding을 함께 보존했다.
+수정 후 observer-off2/observed1+1/평가-only2+0의 weights·Adam·clock·token·raw가
+bitwise 일치했다. 기존 EOS 중심 numeric fixture의 S/gS=0은 품질 증거가 아니다.
+TINY 누적 실제 optimizer13/generation56/teacher sample-forward200, 관측
+microbatch18·추가 backward10이다. 이 값은 실패 시험을 포함하며 SMALL과 별도다.
+
+직접 실행: endpoint truth table, scalar/경계 fixture, 실제 published comparison,
+TINY process 재개, 기존 record capacity writer→publisher→reader(0..512 명시
+개수)만 실행했다. 처음 미완성 소스 compile과 TINY 실패를 PASS에 합산하지 않았다.
+새 source/준비물 독립 A는 실제 native payload(Adam 포함)·tape·counts와 순수
+회귀3개를 별도로 확인해 PASS했다. 보고서 ACTUAL_PREREVIEW.md SHA256은
+b65acead143def18385805723a6c9e5d75b77937bf90b0330e34d35195bf1cd4다.
+Compiled source digest1892e1c5575658e41c6318b32018e1a8f3d052e325931b778da999c57fae2f7e,
+production executable c037ec25664e4a2945628bff0724a2ddf96a4da7e5a1a2f648a327857305d49f,
+preparation a5e49a4bd49ecc3e2abfcf8b237047f108bd1286336831866f7e64ab0bf4c2b0,
+QE policy c7a6d0605e31e7714b15f3391250636dc7f6ed52934bdc0d3a1db74d62d0ab7c에 묶였다.
+실제 SMALL 실행은 아직 NOT_RUN이다. Confirmation은 미개봉이며 S4/S5/S6 및
+GOAL1_READY/GOAL1_ACCEPTED=false를 유지한다. 이 상태 commit 이후 source를 동결한다.
+
+로컬 인가 증거: `artifacts/query-signal-20260921-evidence/`,
+`artifacts/query-signal-20260921-review/`,
+`artifacts/query-signal-20260921-math-review/`,
+`artifacts/query-signal-20260921-tiny-01/`(실패 포함),
+`artifacts/query-signal-20260921-tiny-02/`(수정 후 통과).
+원본 checkpoint/corpus/raw/실행 바이너리는 게시하지 않는다.
+
 ## 2026-09-21 Causal framing512 — 제한 학습 종료, 공동 선택 품질 미달
 
 R3-CAUSAL-FRAMING-BASELINE-1.0의 독립 준비 A 후 QE/EQ를 각각 실제512회

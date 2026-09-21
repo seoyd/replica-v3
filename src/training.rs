@@ -1181,10 +1181,12 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
     let input_allowance=match fresh {Some((p,_))=>p.remaining_input()?,None=>None};
     let mut token_budget_reached = false;
     let mut fresh_stop = None;
+    let mut signal_observation: Option<fresh::SignalObservation> = None;
+    let mut diagnostic_counts = (0usize,0usize);
     let mut fresh_trace = if fresh.is_some() {
         Some(std::fs::OpenOptions::new().write(true).create_new(true).open(run.output.join("updates.r3rows"))?)
     } else {None};
-    let outcome = (|| -> Result<()> {
+    let mut outcome = (|| -> Result<()> {
         let initial_loss = if fresh.is_some() { state.validation_loss.unwrap_or(0.) } else { validation_loss(&loaded.model, &validation, control)? };
         last_validated = if fresh.is_some() {None} else {Some(state.step)};
         println!(
@@ -1225,6 +1227,10 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
             if run.stop_after.is_some_and(|n| state.step >= n) {
                 reason = "TRAINING";
                 break;
+            }
+            if let Some((p,root))=fresh {
+                signal_observation=fresh::SignalObservation::start(p,root,state.step+1,&loaded.tokenizer)?;
+                if let Some(obs)=&mut signal_observation {obs.before(&loaded.model,control)?;}
             }
             let sampler_before = rng.state;
             let mut gradients: BTreeMap<String, Tensor> = BTreeMap::new();
@@ -1336,8 +1342,10 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
             control.check("before_training_optimizer")?;
             let actual_lr=fresh.map_or_else(||config.learning_rate(state.step+1),|(p,_)|p.learning_rate(state.step+1));
             executed_optimizer_calls += 1;
-            let (grad_norm, delta) =
-                adam.step_constant(&loaded.model.vars, &gradients, &config, state.step + 1,actual_lr)?;
+            let (grad_norm, delta) = if let Some(obs)=&mut signal_observation {
+                adam.step_constant_observed(&loaded.model.vars,&gradients,&config,state.step+1,actual_lr,
+                    |name,_,old,next|obs.delta(name,old,next))?
+            } else {adam.step_constant(&loaded.model.vars, &gradients, &config, state.step + 1,actual_lr)?};
             state.step += 1;
             state.target_tokens += targets as u64;
             state.sampler_state = if fresh.is_some() {state.step as u64} else {rng.state};
@@ -1348,6 +1356,12 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                 replica_v3::binary::write_value_record(trace,&replica_v3::binary::record!({"step":state.step,"sampler":state.sampler_state,"epoch":fresh.map_or(state.step/1024,|(p,_)|p.epoch(state.step)),"paired_cursor":fresh.and_then(|(p,_)|p.pair_position(state.step-1)),"draw":fresh.map(|(p,_)|p.draw(state.step-1)),"sample_indices":balanced,"tasks":task_stats,"input":step_tokens,"target":targets,"ce":state.train_loss,"objective":objective_sum/targets as f64,"lr":actual_lr,"lr_bits":actual_lr.to_bits(),"grad_norm":grad_norm,"clip":(config.clip/(grad_norm+1e-12)).min(1.),"delta_norm":delta}))?;
                 trace.flush()?;
                 if state.step==config.budget_start_step+1||state.step.is_multiple_of(32){trace.sync_all()?;}
+            }
+            if let Some(obs)=&mut signal_observation {
+                obs.after(&loaded.model,control)?;
+                obs.finish(None)?;
+                let (f,b)=obs.counts();diagnostic_counts.0+=f;diagnostic_counts.1+=b;
+                signal_observation=None;
             }
             #[cfg(feature = "test-support")]
             if fresh.is_some_and(|(p, _)| p.is_tiny())
@@ -1430,6 +1444,11 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
         }
         Ok(())
     })();
+    if let Some(obs)=signal_observation.take() {
+        let (f,b)=obs.counts();diagnostic_counts.0+=f;diagnostic_counts.1+=b;
+        let error=outcome.as_ref().err().map(ToString::to_string).or_else(||Some("incomplete observation".into()));
+        if let Err(e)=obs.finish(error) {outcome=Err(e);}
+    }
     if let Err(error) = &outcome {
         control.classify_error(error);
     }
@@ -1481,6 +1500,9 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
     receipt["executed_input_tokens_including_uncommitted"] =
         replica_v3::binary::record!(executed_input_tokens);
     receipt["optimizer_calls"] = replica_v3::binary::record!(executed_optimizer_calls);
+    receipt["diagnostic_microbatch_forwards"]=replica_v3::binary::record!(diagnostic_counts.0);
+    receipt["diagnostic_sample_forwards"]=replica_v3::binary::record!(diagnostic_counts.0*8);
+    receipt["diagnostic_backwards"]=replica_v3::binary::record!(diagnostic_counts.1);
     receipt["executed_target_tokens_including_uncommitted"]=replica_v3::binary::record!(executed_target_tokens);
     receipt["executed_padding_tokens"]=replica_v3::binary::record!(executed_padding_tokens);
     receipt["token_budget_reached"]=replica_v3::binary::record!(token_budget_reached);
