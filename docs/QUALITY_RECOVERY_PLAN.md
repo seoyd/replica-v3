@@ -1,6 +1,17 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: value and selected-event citation from the accepted4352 baseline
+## Closed at retention guard: value and selected-event citation from4352
+
+Actual execution on frozen source `04b5624f0855d9f1ff35c1a8a4a48df459ef3d8b`
+stopped at4384 after32 new updates. Same-model V64 fell from FULL64/ALL4 16
+to FULL41/ALL4 5 with15 generation errors; all three registered retention
+conditions fired. The endpoint is durable, QUALITY_REGRESSION/resume=false,
+candidate=null. Citation64 FULL0/value47/support0 is not acceptance.
+There is no authorization to spend the remaining3040 updates, repeat the run,
+change LR/seed/loss, or open confirmation. The budget, gates and conditional
+later stages below describe the registered plan; they were not all executed.
+Read-only independent outcome review remains separate from quality acceptance.
+The original scalar4352 and its accepted confirmation are preserved.
 
 R3-VALUE-CITATION-BRIDGE-1.0 preserves the accepted REBIND4352 native,
 Adam136, tokenizer562, QE, LOCAL5/F32/Accelerate/thread1 and every previous

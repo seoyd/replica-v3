@@ -1,6 +1,94 @@
 # 진단 및 구현 상태
 
-## 2026-09-21 값·선택사건 인용 — 독립 A 통과, 부모 관측 완료
+## 2026-09-21 값·선택사건 인용 — 32회 실제 학습 후 보존 guard 중단
+
+**코드·자료 독립 A PASS / 실제 학습32회 / 값 보존 FAIL / 인용 수용 FAIL.**
+후보는 없고 새 confirmation은 NOT_ELIGIBLE이며 모델 호출0이다.
+최종 저장은4352 부모에서32회 추가한4384다. 실행은 두 새 process 각각
+exit0으로 마쳤지만 모델 품질은 `QUALITY_REGRESSION / resume=false`다.
+전체3072회 예산을 다 사용한 결과나 FINAL_QUALITY_FAIL_AT_7424가 아니다.
+남은3040회는 이 종료된 연구에서 재사용하지 않는다. 기존 수용된4352와
+독립 confirmation254/256·ALL4 62/64는 변경하지 않았다.
+
+|동일 고정64 개발 표본|FULL|QUERY_BOTH|SWAP_BOTH|ALL4|EOS / 오류|
+|---|---:|---:|---:|---:|---|
+|부모4352 V, 기존 raw|64/64|32/32|32/32|16/16|64 / 0|
+|새4384 V|41/64|14/32|14/32|5/16|49 / 15|
+|부모4352 VC, 새 관측|0/64|0/32|0/32|0/16|64 / 0|
+|새4384 VC|0/64|0/32|0/32|0/16|55 / 9|
+
+V의 FULL23개·ALL4 11개 하락과 오류15개는 각각 등록한16/4/4 중단조건을
+넘었다. VC 첫 값 정답은34→47/64로 늘었지만 정확한 인용 문법·제공된 사건의
+인용·선택 근거 인용은 모두0/64다. 따라서 일부 값 개선을 전체 답변 성공으로
+바꾸지 않는다. 원 출력의 외부 ID 검출은10개, 첫 불일치는 값15/형식40/EOS9다.
+전체 필드 오류는 값17/형식64/인용 숫자64/EOS9로 중복 집계되며 첫 오류 분포와
+다르다. ID재명명64/전수dev/학습전수는 선행 guard 실패로 NOT_RUN이다.
+
+|실제 process|신규 updates|입력 / 정답 tokens|generation / teacher|마지막 durable / 종료|
+|---|---:|---|---|---|
+|segment-0000|1|1192 / 76|0 / 0|4353 / TRAINING, resume=true|
+|segment-0001|31|36952 / 2356|128 / 128|4384 / QUALITY_REGRESSION, resume=false|
+
+실제 전체256 samples는 V128/VC064/VC164이며 각각 고유128/64/64행을
+한 번씩 소비했다. V input18560/target256, VC0 및 VC1 각각9792/1088;
+총 input38144/target2432/padding1024다. 이는3072회 전수 tape의 균등 노출을
+완료했다는 뜻이 아니다. 누적 native clock/sampler4384, input5086464,
+target72064다. 첫4353 CE12.17605019/grad15.82748497/delta L2 0.41892746,
+4384 CE1.65705848/grad2.72682242/delta0.45534522, 모든 실제 LR3e-4였다.
+loss 감소와 생성 품질 하락을 함께 보고한다. 과제별 gradient는 측정하지 않았고
+이 gradient/delta는 배치 전체다. 관측 backward는0이다.
+
+동일4384 teacher 관측의 V first-value NLL0.303328562/EOS NLL1.622083065,
+VC first-value0.715728343/인용 suffix1.792762923/ID token2.541199366/
+EOS0.403955643이다. suffix는 첫 값 이후 EOS 전 전체 정답 부분이며,
+ID는 실제8자리 구간512 tokens다. 이는 정답을 입력한 자체 모델의 읽기 전용
+진단으로, 정상 greedy 점수를 대체하거나 optimizer에 gradient를 더하지 않았다.
+
+SMALL 총32 optimizer/208 generation/128 teacher이며 parent80 generation을
+포함한다. generation은 실패 반환도128 평가 분모에 그대로 포함한다.
+계상 active39.200256918초, 두 segment elapsed 합34.509665417초,
+최대 관측 training RSS1123424KiB다. active는 부모 관측을 포함하며 컴파일·
+독립검토 wall과 다르다. 저장 오류·미반환 UNKNOWN·discarded tokens는0이다.
+최종 physical native는
+`2e620f3c2b958cca0e6b72ded677a1c8db0e330bcc38779939a8b55e034cfd13`,
+evaluation weights는 `312602c0ad6b318818c1ed70047975f2795630e35890c5d15529ea55315e882e`다.
+4353 physical은 `33298e0b0e9dc8bc5546a258cc21d860cda8f4b6afd17bb5dfd1dcbae1757c8e`다.
+각 TRAIN_END에 먼저 찍힌 hash는 resume binding 전 trainer 파일 identity이며
+최종 저장물의 physical hash로 혼동하지 않는다.
+
+### Candidate·준비자료·실행 근거
+
+기준 source `c52f7fbd1a60464cc55961b48d9b73952ee625b6`, 작업 시작/report
+`8ccd30c278e3b978a7da12e25bd2a695b902c3ad`, 실행 candidate
+`04b5624f0855d9f1ff35c1a8a4a48df459ef3d8b`를 구분한다. 준비 독립 A와 부모
+관측 문서 commit은 `08f1c0fc79c0ae7a255268445dd44acd89dea482`이며 정상 push
+후 실제 remote 전체 SHA 일치를 확인했다. 아래 artifact는 인가된 로컬 검토
+경로이며 Git에 올리지 않는다. 봉인 정답은 독립 담당자 전용으로 유지한다.
+
+|용도|저장 경로|
+|---|---|
+|실제 source diff|`artifacts/value-citation-20260921-evidence/candidate-04b5624.patch`|
+|동결 실행물|`artifacts/value-citation-20260921-executable`|
+|준비·선택·A receipt|`artifacts/value-citation-20260921-study/{preparation,selection,review-a}.r3b`|
+|학습 corpus / metadata / policy|`artifacts/value-citation-20260921-study/VALUE-CITATION/{corpus.r3cor,metadata.r3b,plan.r3b}`|
+|마지막 weights·Adam|`artifacts/value-citation-20260921-study/VALUE-CITATION/segment-0001/final`|
+|실제 update trace / control|같은 arm의 `segment-000{0,1}/{updates.r3rows,train-control.r3b}`|
+|4384 V/VC raw·teacher·receipt|같은 arm의 `eval-4384-{value64,citation64}*`|
+|종료 판정|같은 arm의 `citation-decision-4384.r3b` 및 `segment-0001-finished.r3b`|
+|부모·두 학습 명령 로그|`artifacts/value-citation-20260921-evidence/v3-*.log`|
+|순수 report exit0|`artifacts/value-citation-20260921-evidence/v4-report.log`|
+|직접 회귀·독립 검토|`artifacts/value-citation-20260921-evidence/`, `artifacts/value-citation-20260921-review/`|
+
+실제 명령은 동결 실행물의 `fresh citation-parent --study ABS_STUDY`와
+동일 명령 `--citation`을 각각1회, `fresh run --root ABS_STUDY/VALUE-CITATION`을
+새 process에서2회, `fresh citation-report --study ABS_STUDY`를1회 실행했다.
+모두 exit0, one heavy process, Accelerate/F32/thread1이었다. 순수 report hash는
+`3619447605af8b6329e600801336fc35c1c74c70440132620d13284a9cc5e68f`다.
+이 학습 결과의 독립 B 감사는 진행 중이다. QUALITY_REGRESSION은 정상 최종
+품질실패 재현 허가에 포함하지 않으며 권한 확대를 위해 종료를 바꾸지 않는다.
+S4/S5/S6, VALUE_CITATION_BASELINE_VERIFIED, GOAL1_READY/ACCEPTED는 false다.
+
+### 완료된 V0/V1/V2 및 독립 A의 근거
 
 R3-VALUE-CITATION-BRIDGE-1.0은 수용된 REBIND4352에서 시작하는 별도
 단일 연구다. 시작 HEAD는 `8ccd30c278e3b978a7da12e25bd2a695b902c3ad`,
