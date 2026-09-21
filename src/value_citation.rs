@@ -11,14 +11,18 @@ const POOL: usize = 1536;
 const MEAN_DATA: &str = "answer-mean-citation-v1";
 const MEAN_CONTRACT: &str = "R3-ANSWER-MEAN-CITATION-1.0";
 const MEAN_ARMS: [&str;2] = ["TOKEN-CONTROL", "ANSWER-MEAN"];
+const CONT_DATA: &str = "citation-continuation-v1";
+const CONT_CONTRACT: &str = "R3-CITATION-CONTINUATION-1.0";
+fn continuation(p:&Plan)->bool {p.identifiable.as_ref().is_some_and(|o|o.dataset==CONT_DATA)}
+fn citation_offset(p:&Plan,step:usize)->usize {step-p.origin_step()+if continuation(p)&&!p.tiny {32}else{0}}
 pub(in super::super::super) fn is_mean(p: &Plan) -> bool {
-    p.identifiable.as_ref().is_some_and(|o|o.dataset == MEAN_DATA)
+    continuation(p) || p.identifiable.as_ref().is_some_and(|o|o.dataset == MEAN_DATA)
 }
 pub(in super::super::super) fn answer_mean(p: &Plan) -> bool {
     is_mean(p) && own(p).arm == MEAN_ARMS[1]
 }
 pub(super) fn arms(p: &Plan) -> &'static [&'static str] {
-    if is_mean(p) { &MEAN_ARMS } else { &[ARM] }
+    if continuation(p) { &[MEAN_ARMS[1]] } else if is_mean(p) { &MEAN_ARMS } else { &[ARM] }
 }
 fn selected_root(study: &Path) -> PathBuf {
     study.join(if study.join(MEAN_ARMS[1]).is_dir() { MEAN_ARMS[1] } else { ARM })
@@ -46,6 +50,8 @@ pub(super) fn evaluation(p: &Plan) -> EvaluationPolicy {
     e.screen_steps.clear();
     e.train_steps = if p.tiny {
         vec![p.origin_step() + 2]
+    } else if continuation(p) {
+        [64,128,256,384,768,1536,3072].map(|n|ORIGIN+n).to_vec()
     } else {
         [32, 128, 384, 768, 1536, 3072].map(|n| ORIGIN + n).to_vec()
     };
@@ -67,8 +73,9 @@ pub(in super::super::super) fn endpoint(p: &Plan, step: usize, pending: bool) ->
             .then_some(p.config.max_steps)
             .ok_or_else(|| bad("citation fixture closed"));
     }
-    [4384, 4480, 4736, 5120, 5632, 5888, 6400, 6912, 7424]
-        .into_iter()
+    let points:&[usize]=if continuation(p) {&[4416,4480,4608,4736,5120,5632,5888,6400,6912,7424]}
+        else{&[4384,4480,4736,5120,5632,5888,6400,6912,7424]};
+    points.iter().copied()
         .find(|&n| n > step)
         .ok_or_else(|| bad("citation budget closed"))
 }
@@ -588,6 +595,7 @@ fn prepare_inner(
     Ok(())
 }
 pub(super) fn verify_plan(root: &Path, p: &Plan) -> Result<()> {
+    if continuation(p) {return verify_continuation(root,p);}
     if is_mean(p) { return verify_mean_plan(root,p); }
     let o = own(p);
     let s: binary::Value = read(&o.study.join("selection.r3b"))?;
@@ -862,7 +870,7 @@ fn base_panels(root: &Path, p: &Plan, step: usize) -> Result<Vec<Panel>> {
     {
         return Err(bad("citation frozen full panel pool"));
     }
-    let offset = step - p.origin_step();
+    let offset = citation_offset(p,step);
     let full = !p.tiny && [1536, 3072].contains(&offset);
     let n = if p.tiny {
         4
@@ -959,6 +967,8 @@ fn read_score(root: &Path, p: &Plan, step: usize, panel: &Panel) -> Result<binar
     let mut citation_tokens = 0;
     let mut id_nll = 0.;
     let mut id_tokens = 0;
+    let mut id_positions=[0.;8];let mut id_position_counts=[0usize;8];
+    let mut grammar_nll=0.;let mut grammar_tokens=0;let mut after_value_margin=0.;
     for (r, e) in teachers[1..].iter().zip(es) {
         let t = &r["teacher"]["target_token_observation"];
         let n: Vec<f64> = binary::from_value(t["nll"].clone())?;
@@ -975,6 +985,9 @@ fn read_score(root: &Path, p: &Plan, step: usize, panel: &Panel) -> Result<binar
         eos_nll += n[n.len() - 1];
         cite_nll += n[1..n.len() - 1].iter().sum::<f64>();
         citation_tokens += n.len() - 2;
+        if continuation(p) {
+            after_value_margin+=r["teacher"]["after_value"]["eos_minus_citation_logit"].as_f64().filter(|n|n.is_finite()).ok_or_else(||bad("continuation after-value teacher signal missing"))?;
+        }
         if let Some(start) = e.answer.find("[event:").map(|p| p + 7) {
             let end = e.answer.len() - 1;
             let mut offset = 0;
@@ -983,7 +996,9 @@ fn read_score(root: &Path, p: &Plan, step: usize, panel: &Panel) -> Result<binar
                 if offset < end && offset + size > start {
                     id_nll += loss;
                     id_tokens += 1;
+                    for position in 0..8 {if offset<=start+position && offset+size>start+position {id_positions[position]+=loss;id_position_counts[position]+=1;}}
                 }
+                if offset>0 && offset+size<=start {grammar_nll+=loss;grammar_tokens+=1;}
                 offset += size;
             }
             if offset != e.answer.len() {
@@ -1002,6 +1017,13 @@ fn read_score(root: &Path, p: &Plan, step: usize, panel: &Panel) -> Result<binar
         binary::record!(cite_nll / citation_tokens as f64)
     };
     out["citation_target_tokens"] = binary::record!(citation_tokens);
+    if continuation(p) {
+        out["after_value_eos_minus_citation_logit"]=binary::record!(after_value_margin/es.len() as f64);
+        out["grammar_prefix_nll"]=binary::record!((grammar_tokens>0).then(||grammar_nll/grammar_tokens as f64));
+        out["grammar_prefix_tokens"]=binary::record!(grammar_tokens);
+        out["id_position_token_nll"]=binary::record!(id_positions.iter().zip(id_position_counts).map(|(&n,c)|(c>0).then(||n/c as f64)).collect::<Vec<_>>());
+        out["id_position_counts"]=binary::record!(id_position_counts);
+    }
     out["citation_target_scope"] =
         binary::record!("all answer suffix tokens after first value, before EOS");
     out["citation_id_nll"] = if id_tokens == 0 {
@@ -1030,7 +1052,7 @@ fn dev_pass(scores: &BTreeMap<String, binary::Value>) -> Result<bool> {
 }
 pub(super) fn panels(root: &Path, p: &Plan, step: usize) -> Result<Vec<Panel>> {
     let mut out = base_panels(root, p, step)?;
-    if !p.tiny && [1536, 3072].contains(&(step - p.origin_step())) {
+    if !p.tiny && [1536, 3072].contains(&citation_offset(p,step)) {
         let present = out[..3]
             .iter()
             .all(|(name, _, _)| root.join(format!("eval-{step:04}-{name}.r3b")).exists());
@@ -1080,10 +1102,11 @@ fn evaluation_result(root: &Path, p: &Plan, step: usize) -> Result<binary::Value
     if baseline.total != n {
         return Err(bad("citation retention denominator"));
     }
-    let regression = baseline.full.saturating_sub(screen.full) >= 16
+    let guard = if continuation(p) {Some(continuation_guard(root,p,step,&screen,file_hash(&root.join(format!("eval-{step:04}-{}.r3rows",value_panel.0)))?)?)}else{None};
+    let regression = if let Some(g)=&guard {g["stop"].is_string()}else{baseline.full.saturating_sub(screen.full) >= 16
         || baseline.all4.saturating_sub(screen.all4) >= 4
-        || screen.errors >= 4;
-    let full = !p.tiny && [1536, 3072].contains(&(step - p.origin_step()));
+        || screen.errors >= 4};
+    let full = !p.tiny && [1536, 3072].contains(&citation_offset(p,step));
     let development = full && dev_pass(&scores)?;
     let joint = |key: &str| -> Result<OrbitScore> {
         binary::from_value(
@@ -1101,7 +1124,7 @@ fn evaluation_result(root: &Path, p: &Plan, step: usize) -> Result<binary::Value
     };
     let eligible = development && fits && !regression;
     let action = if regression {
-        "QUALITY_REGRESSION".to_string()
+        guard.as_ref().and_then(|g|g["stop"].as_str()).unwrap_or("QUALITY_REGRESSION").to_string()
     } else if eligible {
         format!("CANDIDATE_FIXED_AT_{step}")
     } else if step == p.config.max_steps {
@@ -1130,11 +1153,40 @@ fn evaluation_result(root: &Path, p: &Plan, step: usize) -> Result<binary::Value
     } else {
         binary::Value::Null
     };
-    Ok(
-        binary::record!({"policy":digest(p)?,"step":step,"model":models.into_iter().next(),"panels":scores,
+    let mut result = binary::record!({"policy":digest(p)?,"step":step,"model":models.into_iter().next(),"panels":scores,
         "V64":screen,"parent_V64":baseline,"ID_pairs":id_pairs,"development":development,"fit":fits,"eligible":eligible,
-        "regression":regression,"action":action,"extend":extend,"stop":(!extend).then_some(action)}),
-    )
+        "regression":regression,"action":action,"extend":extend,"stop":(!extend).then_some(action)});
+    if let Some(g)=guard {result["guard"]=g;}
+    Ok(result)
+}
+fn retention_decision(full:usize,all4:usize,errors:usize,before:usize)->(usize,Option<&'static str>) {
+    let streak=if full<60 || all4<12 {before+1}else{0};
+    let stop=if full<=48 || errors>=4 {Some("SEVERE_RETENTION_REGRESSION")}
+        else if streak>=2 {Some("PERSISTENT_RETENTION_REGRESSION")}else{None};
+    (streak,stop)
+}
+fn continuation_guard(root:&Path,p:&Plan,step:usize,s:&OrbitScore,raw:String)->Result<binary::Value> {
+    let mut before=0;let mut previous=None;
+    for &prior in p.evaluation.train_steps.iter().filter(|&&n|n<step) {
+        let path=root.join(format!("citation-decision-{prior:04}.r3b"));
+        let d:binary::Value=read_confirmed(&path)?;
+        let panel=base_panels(root,p,prior)?.remove(0);
+        if d["policy"]!=digest(p)? || d["step"]!=prior || d["guard"]["before"]!=before
+            || d["guard"]["raw"]!=file_hash(&root.join(format!("eval-{prior:04}-{}.r3rows",panel.0)))?
+            || d["guard"]["previous"]!=binary::record!(previous) || !d["guard"]["stop"].is_null() {
+            return Err(bad("continuation guard chain ambiguous or already stopped"));
+        }
+        let score:OrbitScore=binary::from_value(d["V64"].clone())?;
+        let rows=binary::read_value_records(&root.join(format!("eval-{prior:04}-{}.r3rows",panel.0)))?;
+        let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;let n=if p.tiny {4}else{64};
+        if rows.len()<n+1 || score!=orbit_score(&panel.1[..n],&panel.2[..n],&rows[1..n+1],&tok)? {return Err(bad("continuation prior raw/guard score disagreement"));}
+        let (after,stop)=retention_decision(score.full,score.all4,score.errors,before);
+        if d["guard"]["after"]!=after || d["guard"]["stop"]!=binary::record!(stop) {return Err(bad("continuation guard decision mismatch"));}
+        before=after;previous=Some(file_hash(&path)?);
+    }
+    let (after,stop)=if p.tiny {(0,None)}else{retention_decision(s.full,s.all4,s.errors,before)};
+    Ok(binary::record!({"policy":digest(p)?,"step":step,"raw":raw,"previous":previous,"before":before,"after":after,"stop":stop,
+        "origin_counts_as_warning":false,"application":"immutable evaluation/decision receipt; prior distinct scheduled evaluations only"}))
 }
 pub(super) fn evaluate(
     p: &Plan,
@@ -1262,6 +1314,15 @@ fn trace(root: &Path, p: &Plan, end: &Segment) -> Result<binary::Value> {
 }
 fn seal_receipt(study: &Path) -> Result<binary::Value> {
     let selection:binary::Value=read(&study.join("selection.r3b"))?;
+    if selection["contract"]==CONT_CONTRACT {
+        let previous=Path::new(selection["previous_study"].as_str().ok_or_else(||bad("continuation seal source"))?);
+        let link:binary::Value=read_confirmed(&study.join("confirmation-link.r3b"))?;
+        if link["preparation"]!=file_hash(&study.join("preparation.r3b"))? || link["source_study"]!=binary::record!(previous)
+            || link["source_seal"]!=file_hash(&seal_owner(previous)?.join("confirmation-seal.r3b"))? || link["status"]!="VERIFIED_UNUSED" {
+            return Err(bad("continuation seal lineage"));
+        }
+        return seal_receipt(previous);
+    }
     if selection["contract"]==MEAN_CONTRACT {
         let link:binary::Value=read_confirmed(&study.join("confirmation-link.r3b"))?;
         let previous=Path::new(selection["previous_study"].as_str().ok_or_else(||bad("mean seal source"))?);
@@ -1270,7 +1331,7 @@ fn seal_receipt(study: &Path) -> Result<binary::Value> {
             || link["source_seal"]!=selection["source_seal"]
             || link["source_seal"]!=file_hash(&previous.join("confirmation-seal.r3b"))?
             || link["status"]!="VERIFIED_UNUSED" {return Err(bad("mean inherited seal binding"));}
-        return unused_seal(previous);
+        return seal_receipt(previous);
     }
     let s: binary::Value = read_confirmed(&study.join("confirmation-seal.r3b"))?;
     if s["preparation"] != file_hash(&study.join("preparation.r3b"))?
@@ -1321,6 +1382,7 @@ fn observed(
     Ok(rows[1..].to_vec())
 }
 pub(super) fn authorize(root: &Path, p: &Plan) -> Result<()> {
+    if continuation(p) {return continuation_authorize(root,p);}
     if is_mean(p) { return mean_authorize(root,p); }
     let study = &own(p).study;
     if root.canonicalize()? != study.join(ARM).canonicalize()? {
@@ -1609,16 +1671,18 @@ pub(in super::super::super) fn seal(study: &Path, private: &Path) -> Result<()> 
 fn comparison(study: &Path, p: &Plan, end: &Segment, d: &binary::Value) -> Result<binary::Value> {
     let endpoint = binary::record!({"policy":digest(p)?,"checkpoint":end.checkpoint_hash,"step":end.step,"decision":d});
     Ok(
-        binary::record!({"contract":if is_mean(p){MEAN_CONTRACT}else{CONTRACT},"source":p.source,"preparation":file_hash(&study.join("preparation.r3b"))?,
+        binary::record!({"contract":if continuation(p){CONT_CONTRACT}else if is_mean(p){MEAN_CONTRACT}else{CONTRACT},"source":p.source,"preparation":file_hash(&study.join("preparation.r3b"))?,
         "endpoints":BTreeMap::from([(own(p).arm.as_str(),endpoint)]),"selected":if d["eligible"]==true {Some(own(p).arm.as_str())}else{None},"goal1_ready":false}),
     )
 }
 pub(in super::super::super) fn confirm(study: &Path) -> Result<()> {
     let study = study.canonicalize()?;
+    let lock = std::fs::File::open(&study)?;
+    lock.try_lock().map_err(|_|bad("confirmation study already in use"))?;
     let root = selected_root(&study);
     let p = plan_read(&root)?;
     let (end, d) = close(&root, &p)?;
-    if d["eligible"] != true || p.tiny {
+    if !confirmation_admitted(&study,&p,&end,&d)? {
         return Err(bad("NOT_RUN_PREREQUISITE: no value/citation candidate"));
     }
     let comparison = comparison(&study, &p, &end, &d)?;
@@ -1636,48 +1700,81 @@ pub(in super::super::super) fn confirm(study: &Path) -> Result<()> {
         return Err(bad("independent citation B required"));
     }
     let c = verified_corpus(&root.join("corpus.r3cor"), &p.corpus)?;
+    let n=if p.tiny {4}else{16};
     for (name, es) in [
-        (if is_mean(&p){"mean-review-ANSWER-MEAN-value"}else{"citation-review-value"}, &c.validation[..16]),
-        (if is_mean(&p){"mean-review-ANSWER-MEAN-citation"}else{"citation-review-citation"}, &c.validation[512..528]),
+        (if is_mean(&p){"mean-review-ANSWER-MEAN-value"}else{"citation-review-value"}, &c.validation[..n]),
+        (if is_mean(&p){"mean-review-ANSWER-MEAN-citation"}else{"citation-review-citation"}, &c.validation[512..512+n]),
     ] {
         observed(&study, name, &p, &end.checkpoint_hash, es, true)?;
     }
     let seal = seal_receipt(&study)?;
-    write(
-        &study.join("confirmation-candidate.r3b"),
-        &binary::record!({"checkpoint":end.checkpoint_hash,"comparison":comparison,
-        "seal":file_hash(&seal_owner(&study)?.join("confirmation-seal.r3b"))?,"review":file_hash(&study.join("review-b.r3b"))?,"framing":p.framing()}),
-    )?;
+    let candidate = confirmation_candidate(&study,&p,&end,&comparison,&seal)?;
+    let candidate_path=study.join("confirmation-candidate.r3b");
+    let owner=seal_owner(&study)?;
+    let owner_lock=if owner!=study {Some(std::fs::File::open(&owner)?)}else{None};
+    if let Some(lock)=&owner_lock {lock.try_lock().map_err(|_|bad("confirmation seal in use"))?;}
+    let claim_path=owner.join("confirmation-claim.r3b");
+    if !claim_path.exists() {
+        let mut prior=study.clone();
+        loop {
+            if prior!=study {unused_seal(&prior)?;}
+            else if !candidate_path.exists() {unused_seal(&prior)?;}
+            if prior==owner {break;}
+            let s:binary::Value=read(&prior.join("selection.r3b"))?;
+            prior=PathBuf::from(s["previous_study"].as_str().ok_or_else(||bad("confirmation ancestor chain"))?);
+        }
+    }
+    if candidate_path.exists() {
+        if read_confirmed::<binary::Value>(&candidate_path)?!=candidate {return Err(bad("confirmation candidate mismatch"));}
+    } else { publish_confirmed(&candidate_path,&candidate)?; }
+    // A claim in the actual seal owner prevents a different study from opening
+    // the same heldout body. Directory locks do not change original artifacts.
+    let claim=binary::record!({"root":study,"candidate":file_hash(&candidate_path)?,"seal":candidate["seal"]});
+    if claim_path.exists() {
+        if read_confirmed::<binary::Value>(&claim_path)?!=claim {return Err(bad("confirmation seal already claimed"));}
+    } else { publish_confirmed(&claim_path,&claim)?; }
     let c = verified_corpus(
         &seal_owner(&study)?.join("sealed/confirmation.r3cor"),
         seal["corpus"]
             .as_str()
             .ok_or_else(|| bad("citation seal corpus"))?,
     )?;
-    let ms: Vec<Meta> = read(&seal_owner(&study)?.join("sealed/metadata.r3b"))?;
-    let es = c.validation;
+    let mut ms: Vec<Meta> = read(&seal_owner(&study)?.join("sealed/metadata.r3b"))?;
+    let mut es = c.validation;
     if es.len() != 512 || ms.len() != 512 {
         return Err(bad("complete V256/VC256 confirmation required"));
     }
     let tok = ByteBpe::load(&root.join("tokenizer.r3b"))?;
     orbit_validate(&es[..256], &ms[..256], &tok, 256)?;
     check_variant(&es[..256], &es[256..], &ms[256..], &tok, true)?;
-    let rows = orbit_observe(
+    if p.tiny { es=[es[..4].to_vec(),es[256..260].to_vec()].concat();ms=[ms[..4].to_vec(),ms[256..260].to_vec()].concat(); }
+    let n=es.len()/2;
+    if study.join("confirmation-result.r3b").exists() {
+        println!("CITATION_CONFIRMATION {}",verified_confirmation(&study,&p,&end,&d)?);
+        return Ok(());
+    }
+    let returned=if study.join("confirmation.r3rows").exists() {
+        binary::read_value_records(&study.join("confirmation.r3rows"))?.len().checked_sub(1).ok_or_else(||bad("confirmation missing header"))?
+    }else{0};
+    let remaining=es.len().checked_sub(returned).ok_or_else(||bad("confirmation extra rows"))?;
+    let mut control=observation_control(&p,remaining,0)?;
+    #[cfg(feature="test-support")]
+    if p.tiny && std::env::var("R3_CONFIRM_STOP").as_deref()==Ok("candidate") {control.fixture_boundary=Some("confirmation_next_generation".into());}
+    let rows = confirmation_collect(
         &study,
-        "confirmation",
         &root.join(&end.checkpoint),
         &es,
+        &tok,
         &binary::record!({"policy":digest(&p)?,"checkpoint":end.checkpoint_hash,"candidate":file_hash(&study.join("confirmation-candidate.r3b"))?}),
-        None,
-        observation_control(&p, 512, 0)?,
+        control,
     )?;
-    let v = orbit_score(&es[..256], &ms[..256], &rows[..256], &tok)?;
-    let vc = score_citation(&es[256..], &ms[256..], &rows[256..], &tok)?;
+    let v = orbit_score(&es[..n], &ms[..n], &rows[..n], &tok)?;
+    let vc = score_citation(&es[n..], &ms[n..], &rows[n..], &tok)?;
     let passed = pass(&v, 256, 244, 116, 58)
         && pass(&vc.joint, 256, 244, 116, 58)
         && vc.value_correct >= 254
         && vc.citation_support_correct >= 254
-        && if is_mean(&p) {valid_outside_ids(&es[256..],&rows[256..])==0}else{vc.outside_id == 0};
+        && if is_mean(&p) {valid_outside_ids(&es[n..],&rows[n..])==0}else{vc.outside_id == 0};
     publish_confirmed(
         &study.join("confirmation-result.r3b"),
         &binary::record!({"checkpoint":end.checkpoint_hash,"V":v,"VC":vc,
@@ -1689,6 +1786,25 @@ pub(in super::super::super) fn confirm(study: &Path) -> Result<()> {
         v.full, vc.joint.full, vc.citation_support_correct
     );
     Ok(())
+}
+fn confirmation_admitted(study:&Path,p:&Plan,end:&Segment,d:&binary::Value)->Result<bool> {
+    #[cfg(all(test,feature="test-support"))]
+    if p.tiny {
+        let expected=binary::record!({"scope":"TINY confirmation protocol only; no quality acceptance","policy":digest(p)?,"checkpoint":end.checkpoint_hash,"count":8});
+        return Ok(read_confirmed::<binary::Value>(&study.join("fixture-confirmation-admission.r3b"))?==expected);
+    }
+    let _=(study,end);
+    Ok(!p.tiny && d["eligible"]==true)
+}
+fn confirmation_candidate(study:&Path,p:&Plan,end:&Segment,comparison:&binary::Value,seal:&binary::Value)->Result<binary::Value> {
+    Ok(binary::record!({"protocol":1,"root":study,"checkpoint":end.checkpoint_hash,"step":end.step,"comparison":comparison,
+        "model":comparison["endpoints"][own(p).arm.as_str()]["decision"]["model"],
+        "seal":file_hash(&seal_owner(study)?.join("confirmation-seal.r3b"))?,"seal_owner":seal_owner(study)?,
+        "corpus":seal["corpus"],"metadata":seal["metadata"],"count":seal["count"],
+        "row_order_binding":"exact ordered typed metadata bytes authenticated by metadata digest",
+        "review":file_hash(&study.join("review-b.r3b"))?,"framing":p.framing(),"tokenizer":p.tokenizer,
+        "source":p.source,"binary":p.binary,"policy":digest(p)?,"evaluation":p.evaluation,"evaluated_count":if p.tiny {8}else{512},
+        "decoding":"normal-greedy-strict-utf8-eos","max_new_tokens":32,"architecture":p.architecture,"dtype":"F32","backend":"CPU/Accelerate/thread1"}))
 }
 // Same existing citation harness with a separately bound reduction comparison.
 // Historical files remain inputs; no collector or missing receipt is synthesized.
@@ -1721,7 +1837,7 @@ fn unused_seal(study:&Path)->Result<binary::Value> {
         if name.starts_with("confirmation-candidate") || name.starts_with("confirmation-started")
             || name.starts_with("confirmation-finished") || name.starts_with("confirmation-result")
             || name.starts_with("confirmation-generation") || name.starts_with("confirmation.r3rows")
-            || name=="confirmation" || name.starts_with("confirmation-call") {
+            || name=="confirmation" || name.starts_with("confirmation-call") || name.starts_with("confirmation-claim") {
             return Err(bad("citation confirmation already attempted or ambiguous"));
         }
     }
@@ -1729,9 +1845,125 @@ fn unused_seal(study:&Path)->Result<binary::Value> {
 }
 fn seal_owner(study:&Path)->Result<PathBuf> {
     let s:binary::Value=read(&study.join("selection.r3b"))?;
+    if s["contract"]==CONT_CONTRACT {return seal_owner(Path::new(s["previous_study"].as_str().ok_or_else(||bad("continuation seal owner"))?));}
     if s["contract"]==MEAN_CONTRACT {
         Ok(PathBuf::from(s["previous_study"].as_str().ok_or_else(||bad("mean seal owner"))?))
     }else{Ok(study.into())}
+}
+fn continuation_plan(old:&Plan,study:&Path,s:&binary::Value)->Result<Plan> {
+    let mut p=old.clone();
+    let end:Segment=binary::from_value(s["parent_endpoint"].clone())?;
+    let state:TrainingState=binary::from_value(s["parent_training_state"].clone())?;
+    p.source=s["source"].as_str().ok_or_else(||bad("continuation source"))?.into();
+    p.binary=s["binary"].as_str().ok_or_else(||bad("continuation binary"))?.into();
+    p.initial=end.checkpoint_hash;
+    p.initial_weights=s["parent_weights"].as_str().ok_or_else(||bad("continuation weights"))?.into();
+    p.config.budget_start_step=state.step;p.config.budget_start_tokens=state.consumed_tokens;
+    p.config.max_steps=state.step+if p.tiny {2}else{3040};p.config.max_tokens=state.consumed_tokens+4_000_000;
+    let o=p.identifiable.as_mut().unwrap();o.study=study.into();o.dataset=CONT_DATA.into();
+    if p.tiny {o.rows.extend(suffix().into_iter().take(2));}
+    p.train_order=digest(&o.rows)?;
+    let f=p.fork.as_mut().unwrap();f.study=study.into();f.study_hash=file_hash(&study.join("selection.r3b"))?;
+    f.parent_policy=digest(old)?;f.parent_state=digest(&state)?;
+    f.parent_adam=s["parent_adam"].as_str().ok_or_else(||bad("continuation Adam"))?.into();
+    f.origin_step=state.step;f.origin_input=state.consumed_tokens;f.origin_target=state.target_tokens;
+    f.target_limit=260_000;p.evaluation=evaluation(&p);
+    Ok(p)
+}
+pub(in super::super::super) fn continuation_prepare(previous:&Path,output:&Path,tiny:bool)->Result<()> {
+    if tiny!=cfg!(all(test,feature="test-support")) {return Err(bad("continuation production/TINY profile"));}
+    let previous=previous.canonicalize()?;let output=std::path::absolute(output)?;
+    let oldroot=previous.join(MEAN_ARMS[1]);let old=historical_plan(&oldroot)?;
+    if own(&old).dataset!=MEAN_DATA || old.tiny!=tiny {return Err(bad("specific ANSWER parent required"));}
+    let (end,d)=close(&oldroot,&old)?;
+    if end.resume || end.step!=old.origin_step()+if tiny {2}else{32}
+        || (!tiny && (end.step!=4384 || end.stop!="QUALITY_REGRESSION")) {return Err(bad("continuation complete ANSWER32 parent"));}
+    let l=checkpoint::load(&oldroot.join(&end.checkpoint),Device::Cpu,true)?;
+    let state=l.manifest.training.as_ref().ok_or_else(||bad("continuation parent Adam absent"))?;
+    if state.step!=end.step || state.sampler_state!=end.step as u64 || state.resume_binding.as_ref()!=Some(&old.binding(state,&l.tokenizer)?)
+        || state.resume_binding.as_ref().is_none_or(|b|b.family!=checkpoint::ANSWER_MEAN_FAMILY || b.normalizer!=2)
+        || old.config.lr!=3e-4 || old.config.first_target_weight!=1. || old.config.microbatch!=8 || old.config.accumulation!=1
+        || old.framing()!=neural::Framing::QuestionEvidence {return Err(bad("continuation parent native/objective/clock"));}
+    unused_seal(&previous)?;unused_seal(&seal_owner(&previous)?)?;
+    let c=verified_corpus(&oldroot.join("corpus.r3cor"),&old.corpus)?;
+    let costs=tape_cost(&suffix()[32..],&c.train,&l.tokenizer)?;
+    if !tiny && (own(&old).rows[ORIGIN..]!=suffix() || costs["input"]!=3623680 || costs["target"]!=231040) {return Err(bad("continuation original suffix"));}
+    let evaluation_generations=3*128+2*192+2*1664+2*4608;
+    let generations=evaluation_generations+32+32+512+640;
+    if generations>16384 || evaluation_generations>16384 {return Err(bad("continuation evaluation cap"));}
+    let mut s=binary::record!({"objective":checkpoint::ANSWER_MEAN_OBJECTIVE,"input_limit":4000000,"target_limit":260000});
+    s["contract"]=binary::record!(CONT_CONTRACT);s["source"]=binary::record!(source_digest()?);
+    s["binary"]=binary::record!(file_hash(&std::env::current_exe()?)?);
+    s["previous_study"]=binary::record!(previous);s["previous_preparation"]=binary::record!(file_hash(&previous.join("preparation.r3b"))?);
+    s["parent"]=binary::record!(oldroot);s["parent_endpoint"]=binary::record!(end);
+    s["parent_policy"]=binary::record!(file_hash(&oldroot.join("plan.r3b"))?);
+    s["parent_terminal"]=binary::record!(file_hash(&terminal_path(&oldroot,&end)?)?);
+    s["parent_decision"]=binary::record!(file_hash(&oldroot.join(format!("citation-decision-{:04}.r3b",end.step)))?);
+    s["parent_training_state"]=binary::record!(state);s["parent_adam"]=binary::record!(optimizer_hash(&l.optimizer)?);
+    s["parent_weights"]=binary::record!(l.model.weight_hash()?);s["parent_content"]=binary::record!(l.model.weights_content_id()?);
+    s["parent_baseline"]=binary::record!({"dev":{"screen":d["V64"]},"scope":"same complete ANSWER parent V64 raw; no inherited scalar4352 score"});
+    s["parent_quality"]=binary::record!(end.stop);s["historical_resume"]=binary::record!(false);
+    s["new_authorization"]=binary::record!(CONT_CONTRACT);s["costs_remaining"]=costs;
+    s["planned_generation_upper"]=binary::record!(generations);s["planned_teacher_upper"]=binary::record!(evaluation_generations);
+    s["new_updates"]=binary::record!(if tiny {2}else{3040});
+    std::fs::create_dir(&output)?;let root=output.join(MEAN_ARMS[1]);std::fs::create_dir(&root)?;
+    write(&output.join("selection.r3b"),&s)?;
+    for name in ["corpus.r3cor","transfer.r3cor","metadata.r3b","tokenizer.r3b"] {copy_native(&oldroot.join(name),&root.join(name))?;}
+    copy_native(&oldroot.join(&end.checkpoint),&root.join("initial.r3m"))?;
+    let p=continuation_plan(&old,&output,&s)?;write(&root.join("plan.r3b"),&p)?;
+    verify_continuation(&root,&p)?;
+    if !p.parent_entry(&root.join("initial.r3m"),&l)? {return Err(bad("continuation parent entry"));}
+    publish_confirmed(&output.join("preparation.r3b"),&binary::record!({"contract":CONT_CONTRACT,"source":p.source,"binary":p.binary,
+        "selection":file_hash(&output.join("selection.r3b"))?,"arms":{(MEAN_ARMS[1]):{"policy":file_hash(&root.join("plan.r3b"))?,"initial":p.initial,"corpus":p.corpus,"tape":p.train_order}},
+        "optimizer":0,"generation":0,"teacher":0}))?;
+    publish_confirmed(&output.join("confirmation-link.r3b"),&binary::record!({"preparation":file_hash(&output.join("preparation.r3b"))?,
+        "source_study":previous,"source_seal":file_hash(&seal_owner(&previous)?.join("confirmation-seal.r3b"))?,"status":"VERIFIED_UNUSED"}))?;
+    println!("CITATION_CONTINUATION_PREPARED origin={} maximum={} new_updates0 input={} target={} padding={} generations_upper={generations}",p.origin_step(),p.config.max_steps,s["costs_remaining"]["input"],s["costs_remaining"]["target"],s["costs_remaining"]["padding"]);Ok(())
+}
+fn verify_continuation(root:&Path,p:&Plan)->Result<()> {
+    let study=&own(p).study;let s:binary::Value=read(&study.join("selection.r3b"))?;
+    let prior=Path::new(s["parent"].as_str().ok_or_else(||bad("continuation parent path"))?);
+    let old=historical_plan(prior)?;let end:Segment=binary::from_value(s["parent_endpoint"].clone())?;
+    if own(&old).dataset!=MEAN_DATA || own(&old).arm!=MEAN_ARMS[1] || root!=study.join(MEAN_ARMS[1])
+        || s["contract"]!=CONT_CONTRACT || s["new_authorization"]!=CONT_CONTRACT || s["historical_resume"]!=false
+        || s["parent_quality"]!=end.stop || s["previous_study"]!=binary::record!(own(&old).study)
+        || s["previous_preparation"]!=file_hash(&own(&old).study.join("preparation.r3b"))?
+        || digest(&read_confirmed::<Segment>(&terminal_path(prior,&end)?)?)?!=digest(&end)?
+        || s["parent_policy"]!=file_hash(&prior.join("plan.r3b"))? || s["parent_terminal"]!=file_hash(&terminal_path(prior,&end)?)?
+        || s["parent_decision"]!=file_hash(&prior.join(format!("citation-decision-{:04}.r3b",end.step)))?
+        || end.resume || (!p.tiny && (end.step!=4384 || end.stop!="QUALITY_REGRESSION"))
+        || *p!=continuation_plan(&old,study,&s)? || p.initial!=file_hash(&prior.join(&end.checkpoint))?
+        || p.initial!=file_hash(&root.join("initial.r3m"))? {return Err(bad("continuation immutable parent/policy"));}
+    for name in ["corpus.r3cor","transfer.r3cor","metadata.r3b","tokenizer.r3b"] {
+        if file_hash(&root.join(name))?!=file_hash(&prior.join(name))? {return Err(bad("continuation owned input"));}
+    }
+    let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
+    if s["costs_remaining"]!=tape_cost(&suffix()[32..],&c.train,&tok)? {return Err(bad("continuation costs changed"));}
+    Ok(())
+}
+fn continuation_authorize(root:&Path,p:&Plan)->Result<()> {
+    verify_continuation(root,p)?;let study=&own(p).study;
+    let prep:binary::Value=read_confirmed(&study.join("preparation.r3b"))?;
+    if prep["selection"]!=file_hash(&study.join("selection.r3b"))? {return Err(bad("continuation reviewed preparation"));}
+    seal_receipt(study)?;
+    let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;let n=if p.tiny {4}else{16};
+    for (name,start) in [("continuation-parent-value",0),("continuation-parent-citation",512)] {
+        observed(study,name,p,&p.initial,&c.validation[start..start+n],true)?;
+    }
+    Ok(())
+}
+pub(in super::super::super) fn continuation_parent(study:&Path,citation:bool)->Result<()> {
+    let study=study.canonicalize()?;let root=selected_root(&study);let p=plan_read(&root)?;
+    if !continuation(&p) || !history(&root,&p)?.is_empty() {return Err(bad("continuation parent observation before learning"));}
+    expansion_review(&p)?;
+    let s:binary::Value=read(&study.join("selection.r3b"))?;let prior=Path::new(s["parent"].as_str().unwrap());
+    let n=if p.tiny {4}else{16};let count=if p.tiny {4}else{64};let start=if citation {512}else{0};
+    let raw=binary::read_value_records(&prior.join(format!("eval-{:04}-{}{count}.r3rows",p.origin_step(),if citation {"citation"}else{"value"})))?;
+    let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;
+    let name=if citation {"continuation-parent-citation"}else{"continuation-parent-value"};
+    orbit_observe(&study,name,&root.join("initial.r3m"),&c.validation[start..start+n],
+        &binary::record!({"policy":digest(&p)?,"checkpoint":p.initial}),Some(&raw[1..n+1]),observation_control(&p,n,0)?)?;
+    println!("CONTINUATION_PARENT {name} matched{n} generation{n} teacher0 optimizer0");Ok(())
 }
 pub(in super::super::super) fn mean_prepare(previous:&Path,output:&Path,tiny:bool)->Result<()> {
     if tiny != cfg!(all(test,feature="test-support")) {
@@ -1819,7 +2051,7 @@ fn verify_mean_plan(root:&Path,p:&Plan)->Result<()> {
     if s["costs32"]!=tape_cost(&suffix()[..32],&c.train,&tok)? || s["costs3072"]!=tape_cost(&suffix(),&c.train,&tok)? {
         return Err(bad("mean immutable costs"));
     }
-    unused_seal(previous)?;
+    seal_receipt(previous)?;
     Ok(())
 }
 fn reference_match(study:&Path)->Result<binary::Value> {
@@ -1896,7 +2128,8 @@ pub(in super::super::super) fn mean_parent(study:&Path)->Result<()> {
 }
 pub(in super::super::super) fn mean_report(study:&Path)->Result<()> {
     let study=study.canonicalize()?;
-    for arm in MEAN_ARMS {
+    let selected=historical_plan(&selected_root(&study))?;
+    for &arm in arms(&selected) {
         let root=study.join(arm);let p=historical_plan(&root)?;
         let h=history(&root,&p)?;
         if let Some(end)=h.last() {
@@ -1917,7 +2150,7 @@ pub(in super::super::super) fn mean_report(study:&Path)->Result<()> {
             }
         }else {println!("ANSWER_MEAN_STATE arm={arm} NOT_RUN");}
     }
-    if !history(&study.join(MEAN_ARMS[0]),&historical_plan(&study.join(MEAN_ARMS[0]))?)?.is_empty() {
+    if !continuation(&selected) && !history(&study.join(MEAN_ARMS[0]),&historical_plan(&study.join(MEAN_ARMS[0]))?)?.is_empty() {
         println!("TOKEN_REFERENCE {}",reference_match(&study)?);
     }
     println!("GOAL1_READY=false GOAL1_ACCEPTED=false");Ok(())
@@ -1926,7 +2159,8 @@ pub(in super::super::super) fn mean_review(root:&Path,citation:bool)->Result<()>
     let root=root.canonicalize()?;let p=historical_plan(&root)?;
     if !is_mean(&p) {return Err(bad("mean reviewer scope"));}
     let (end,_)=close(&root,&p)?;
-    if !["QUALITY_REGRESSION".to_string(),format!("FINAL_QUALITY_FAIL_AT_{}",end.step),format!("CANDIDATE_FIXED_AT_{}",end.step)].contains(&end.stop) {
+    if !["QUALITY_REGRESSION".to_string(),format!("FINAL_QUALITY_FAIL_AT_{}",end.step),format!("CANDIDATE_FIXED_AT_{}",end.step)].contains(&end.stop)
+        && !(continuation(&p)&&["SEVERE_RETENTION_REGRESSION","PERSISTENT_RETENTION_REGRESSION"].contains(&end.stop.as_str())) {
         return Err(bad("mean reviewer requires complete quality endpoint"));
     }
     let panel=panels(&root,&p,end.step)?.into_iter().find(|(n,_,_)|n.starts_with(if citation {"citation"}else{"value"})).ok_or_else(||bad("mean reproduction panel"))?;
@@ -1940,6 +2174,217 @@ pub(in super::super::super) fn mean_review(root:&Path,citation:bool)->Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn random_updates(input:&Path,output:&Path,root:&Path,steps:usize)->Result<()> {
+        let p=historical_plan(root)?;let mut l=checkpoint::load(input,Device::Cpu,true)?;
+        let mut s=l.manifest.training.clone().ok_or_else(||bad("random native state"))?;
+        if s.resume_binding!=Some(p.binding(&s,&l.tokenizer)?) {return Err(bad("random native exact objective policy"));}
+        let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;
+        let ss=samples(&c.train,&l.tokenizer,p.config.seq_len)?;
+        let mut adam=Adam{moments:l.optimizer};
+        for _ in 0..steps {
+            let ids=p.training_draw(s.step);let b=batch(&ss,&ids,&Device::Cpu)?;
+            let logits=l.model.forward(&b.input,Some(&b.valid))?;
+            let (ce,loss,n,den)=crate::training::response_objective(&logits,&b,1.,true)?;
+            assert_eq!(den,ids.len());let grads=loss.backward()?;
+            let gs=l.model.vars.iter().map(|(name,v)|Ok((name.clone(),grads.get(v).ok_or_else(||bad("random native gradient"))?.detach()))).collect::<Result<BTreeMap<_,_>>>()?;
+            adam.step_constant(&l.model.vars,&gs,&p.config,s.step+1,p.learning_rate(s.step+1))?;
+            s.step+=1;s.sampler_state=s.step as u64;s.consumed_tokens+=b.tokens as u64;s.target_tokens+=n as u64;
+            s.train_loss=Some(f64::from(ce.to_scalar::<f32>()?));s.validation_loss=None;
+        }
+        l.model.refresh_identity()?;l.manifest.training=Some(s);
+        checkpoint::save(output,&l.model,&l.tokenizer,l.manifest,&adam.moments)?;
+        println!("RANDOM_ANSWER_NATIVE optimizer={steps} forward={steps} backward={steps} generation0 teacher0");Ok(())
+    }
+    #[test]
+    fn citation_continuation_guard_and_record_boundaries()->Result<()> {
+        assert_eq!(retention_decision(60,12,0,1),(0,None));
+        assert_eq!(retention_decision(59,11,0,0),(1,None));
+        assert_eq!(retention_decision(59,11,0,1),(2,Some("PERSISTENT_RETENTION_REGRESSION")));
+        assert_eq!(retention_decision(48,12,0,0).1,Some("SEVERE_RETENTION_REGRESSION"));
+        assert_eq!(retention_decision(64,16,4,0).1,Some("SEVERE_RETENTION_REGRESSION"));
+        let tmp=tempfile::tempdir()?;let fixture=super::super::tests::orbit_fixture(tmp.path())?;
+        let p=plan_read(&fixture.join("BOTH"))?;let tok=ByteBpe::load(&fixture.join("BOTH/tokenizer.r3b"))?;
+        let c=verified_corpus(&fixture.join("BOTH/corpus.r3cor"),&p.corpus)?;
+        for count in [0,1,511,512] {
+            let root=tmp.path().join(format!("records-{count}"));std::fs::create_dir(&root)?;
+            let es=&c.validation[..count];let checkpoint="synthetic record boundary; no native model calls";
+            let binding=binary::record!({"fixture":"explicit writer/reader panel; no model calls","cases":digest(&&c.validation[..512])?,
+                "identity":{"policy":digest(&p)?},"checkpoint":checkpoint,"source":p.source,"binary":p.binary});
+            let mut f=std::fs::OpenOptions::new().create_new(true).write(true).open(root.join("confirmation.r3rows"))?;append_row(&mut f,&binding)?;
+            let control=recovery::RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),std::time::Duration::from_secs(30),0)?;
+            for (i,e) in es.iter().enumerate() {
+                let attempt=prepare_call(&root,"confirmation","generation",&binding,e,i)?;
+                let mut row=gold(e,&tok)?;row["attempt"]=binary::record!(attempt.file_name().unwrap().to_string_lossy());
+                append_row(&mut f,&row)?;resolve_call(&attempt,Some(&row),&control)?;
+            }
+            drop(f);assert_eq!(confirmation_prefix(&root,&binding,es,&tok)?.len(),count);
+            publish_confirmed(&root.join("confirmation-finished.r3b"),&binary::record!({"fixture":"synthetic logical rows; actual model calls0",
+                "policy":digest(&p)?,"checkpoint":checkpoint,"binding":binding,"completed":count,"matched":0,"error":null,
+                "raw":file_hash(&root.join("confirmation.r3rows"))?,"control":{"generation_calls":count,"teacher_calls":0,"terminal_reason":"COMPLETED"}}))?;
+            let complete=observed(&root,"confirmation",&p,checkpoint,&c.validation[..512],false);
+            assert_eq!(complete.is_ok(),count==512);
+            let altered=binary::record!({"fixture":"different model/candidate","cases":digest(&es)?});
+            assert!(confirmation_prefix(&root,&altered,es,&tok).is_err());
+            let bytes=std::fs::read(root.join("confirmation.r3rows"))?;
+            let truncated=root.join("truncated.r3rows");std::fs::write(&truncated,&bytes[..bytes.len()-1])?;
+            assert!(binary::read_value_records(&truncated).is_err());
+            if count>0 {
+                let missing=&es[..count-1];assert!(confirmation_prefix(&root,&binding,missing,&tok).is_err());
+                let mut changed=es.to_vec();changed[0].answer.push('0');assert!(confirmation_prefix(&root,&binding,&changed,&tok).is_err());
+                let resolved=root.join("confirmation-generation-0000-000-resolved.r3b");let original=std::fs::read(&resolved)?;
+                let mut mixed:binary::Value=binary::from_slice(&original)?;
+                mixed["control"]["observed_conditions"]=binary::record!(["TIME_BUDGET","CANCELLED"]);
+                std::fs::write(&resolved,binary::to_vec(&mixed)?)?;
+                assert!(confirmation_prefix(&root,&binding,es,&tok).is_err());std::fs::write(&resolved,original)?;
+                let extra=root.join("confirmation-generation-0000-002-prepared.r3b");write(&extra,&binary::record!({"fixture":"attempt gap"}))?;
+                assert!(confirmation_prefix(&root,&binding,es,&tok).is_err());
+            }
+        }
+        println!("CITATION_CONTINUATION_RECORDS counts0/1/511/512 optimizer0 generation0 teacher0 FD0");Ok(())
+    }
+    #[test]
+    fn citation_continuation_process()->Result<()> {
+        const TEST:&str="training::fresh::identifiable::binding::citation::tests::citation_continuation_process";
+        if let Ok(path)=std::env::var("R3_CONT_CHILD") {
+            let root=Path::new(&path);let action=std::env::var("R3_CONT_ACTION").unwrap();
+            let result=match action.as_str() {
+                "random-step"=>random_updates(&root.join("../random-one.r3m"),&root.join("../random-split.r3m"),root,1),
+                "random-eval"|"random-eval-split"|"random-reentry"=>{
+                    let p=historical_plan(root)?;let (name,es,ms)=base_panels(root,&p,p.config.max_steps)?.remove(0);
+                    let out=root.join(if action=="random-eval" {"random-eval"}else{"random-eval-split"});
+                    if !out.exists(){std::fs::create_dir(&out)?;}
+                    let mut control=recovery::RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),std::time::Duration::from_secs(30),16*1024*1024)?;
+                    control.set_call_limits(4,4);
+                    let native=root.join("../random-split.r3m");let before=file_hash(&native)?;
+                    let prefix=format!("eval-{:04}-{name}",p.config.max_steps);
+                    if action=="random-reentry" {
+                        let raw=out.join(format!("{prefix}.r3rows"));let hash=file_hash(&raw)?;
+                        let rows=binary::read_value_records(&raw)?;
+                        assert!(prepare_call(&out,&prefix,"generation",&rows[0]["binding"],&es[0],0).is_err());
+                        assert_eq!(file_hash(&raw)?,hash);assert_eq!(control.receipt()["generation_calls"],0);
+                        println!("RANDOM_RETURNED_REENTRY blocked=true optimizer0 generation0 teacher0");Ok(())
+                    }else{
+                        let result=evaluate_panel(&p,&out,&native,p.config.max_steps,&name,&es,&ms,&mut control);
+                        assert_eq!(file_hash(&native)?,before);
+                        let time=control.receipt()["observed_conditions"]==binary::record!(["TIME_BUDGET"]);
+                        publish_confirmed(&out.join(if time {"no-call-control.r3b"}else{"returned-control.r3b"}),&control.receipt())?;
+                        if time {assert_eq!(control.receipt()["generation_calls"],0);result.map(|_|())}else{
+                            assert!(result.unwrap_err().to_string().contains("INTEGRITY_FAIL"));
+                            let rows=binary::read_value_records(&out.join(format!("{prefix}.r3rows")))?;
+                            assert_eq!(rows.len(),2);assert_eq!(rows[1]["error_class"],"control_token");
+                            assert_eq!(control.receipt()["generation_calls"],1);assert_eq!(control.receipt()["teacher_calls"],0);
+                            println!("RANDOM_EVALUATION expected_control_token_failure=true completed=false optimizer0 generation1 teacher0 native_unchanged=true");Ok(())
+                        }
+                    }
+                },
+                "old-v"=>parent_observe(root,false),"old-vc"=>parent_observe(root,true),"mean-parent"=>mean_parent(root),
+                "parent-v"=>continuation_parent(root,false),"parent-vc"=>continuation_parent(root,true),
+                "review-v"=>mean_review(root,false),"review-vc"=>mean_review(root,true),"confirm"=>confirm(root),
+                "report"=>{let p=historical_plan(&selected_root(root))?;let (e,d)=close(&selected_root(root),&p)?;println!("PURE_CONFIRM {}",verified_confirmation(root,&p,&e,&d)?);Ok(())},
+                _=>run(root,action=="continuous"),
+            };
+            if std::env::var("R3_CONT_EXPECT_TIME").as_deref()==Ok("1") {assert!(result.unwrap_err().to_string().contains("TIME_BUDGET"));Ok(())}else{result}
+        }else{
+            if !cfg!(feature="test-support") {return Err(bad("explicit continuation TINY test profile"));}
+            let base=std::env::var_os("R3_CONT_TEST_ROOT").map(PathBuf::from).unwrap_or_else(||std::env::temp_dir().join(format!("replica-citation-continuation-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())));
+            std::fs::create_dir(&base)?;let base=base.canonicalize()?;
+            let child=|root:&Path,action:&str,fault:Option<&str>,time:bool,label:&str|->Result<()> {
+                let mut cmd=std::process::Command::new(std::env::current_exe()?);
+                cmd.args(["--exact",TEST,"--nocapture"]).env("R3_CONT_CHILD",root).env("R3_CONT_ACTION",action)
+                    .env("VECLIB_MAXIMUM_THREADS","1").env("OMP_NUM_THREADS","1");
+                if let Some(f)=fault {if f=="candidate" {cmd.env("R3_CONFIRM_STOP",f);}else{cmd.env("R3_FRESH_CALL_STOP",f);}}
+                if time {cmd.env("R3_CONT_EXPECT_TIME","1");}
+                let out=cmd.output()?;std::fs::write(base.join(format!("{label}.stdout")),&out.stdout)?;std::fs::write(base.join(format!("{label}.stderr")),&out.stderr)?;
+                assert!(out.status.success(),"{label}: {} {}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));
+                assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));Ok(())
+            };
+            let parents=super::super::tests::orbit_fixture(&base)?;
+            for arm in ["FIXED","BOTH"] {child(&parents.join(arm),"continuous",None,false,arm)?;}
+            let parent=parents.join("BOTH");let (public,private,used)=fixture_reservation(&parent,&base)?;
+            let old=base.join("reference");prepare_inner(&parent,&old,&public,&used,true)?;seal(&old,&private)?;
+            super::super::tests::fixture_review(&old)?;
+            child(&old,"old-v",None,false,"old-v")?;child(&old,"old-vc",None,false,"old-vc")?;
+            child(&old.join(ARM),"continuous",None,false,"old-run")?;
+            let mean=base.join("mean");mean_prepare(&old,&mean,true)?;super::super::tests::fixture_review(&mean)?;
+            child(&mean,"mean-parent",None,false,"mean-parent")?;
+            for arm in MEAN_ARMS {child(&mean.join(arm),"continuous",None,false,arm)?;}
+            let mut endpoints=vec![];let mut model_outputs=vec![];let mut totals=[0usize;3];
+            for mode in ["split","eval-only","continuous"] {
+                let study=base.join(mode);continuation_prepare(&mean,&study,true)?;super::super::tests::fixture_review(&study)?;
+                child(&study,"parent-v",None,false,&format!("{mode}-parent-v"))?;child(&study,"parent-vc",None,false,&format!("{mode}-parent-vc"))?;
+                let root=selected_root(&study);
+                let fault=(mode=="eval-only").then_some("eval-0006-citation4/generation/1/fresh_panel_row_durable");
+                child(&root,if mode=="split" {"one"}else{"continuous"},fault,false,&format!("{mode}-run0"))?;
+                let p=historical_plan(&root)?;
+                if mode!="continuous" {
+                    let prior=history(&root,&p)?.last().unwrap().clone();
+                    if mode=="eval-only" {assert_eq!(prior.step,6);assert_eq!(prior.phase.as_deref(),Some("EvaluationPending"));}
+                    child(&root,"continuous",None,false,&format!("{mode}-run1"))?;
+                    if mode=="eval-only" {assert_eq!(read::<binary::Value>(&root.join("segment-0001/train-control.r3b"))?["optimizer_calls"],0);}
+                }
+                let (e,d)=close(&root,&p)?;let l=checkpoint::load(&root.join(&e.checkpoint),Device::Cpu,true)?;
+                endpoints.push((l.model.weights_content_id()?,optimizer_hash(&l.optimizer)?));
+                for end in history(&root,&p)? {totals[0]+=read::<binary::Value>(&root.join(&end.checkpoint).parent().unwrap().join("train-control.r3b"))?["optimizer_calls"].as_u64().unwrap() as usize;totals[1]+=end.generations;totals[2]+=end.teachers;}
+                if mode=="eval-only" {continue;}
+                child(&root,"review-v",None,false,&format!("{mode}-review-v"))?;child(&root,"review-vc",None,false,&format!("{mode}-review-vc"))?;
+                let comp=comparison(&study,&p,&e,&d)?;let report=study.join("fixture-b.txt");std::fs::write(&report,b"TINY fixture B only; no SMALL acceptance")?;
+                publish_confirmed(&study.join("review-b.r3b"),&binary::record!({"verdict":"PASS","preparation":file_hash(&study.join("preparation.r3b"))?,"endpoints":comp["endpoints"],"report_path":report,"report_hash":file_hash(&report)?}))?;
+                publish_confirmed(&study.join("fixture-confirmation-admission.r3b"),&binary::record!({"scope":"TINY confirmation protocol only; no quality acceptance","policy":digest(&p)?,"checkpoint":e.checkpoint_hash,"count":8}))?;
+                // Each fixture uses a distinct sealed reservation owner. A second
+                // study opening the actual same seal must remain blocked.
+                if mode=="split" {continue;}
+                for (label,fault) in [("candidate","candidate"),("no-call","confirmation/generation/0/case_started"),("returned","confirmation/generation/0/confirmation_row_durable"),("last","confirmation/generation/7/confirmation_before_final")] {
+                    child(&study,"confirm",Some(fault),true,label)?;
+                }
+                child(&study,"confirm",None,false,"confirmation-finish")?;
+                let before=file_hash(&study.join("confirmation.r3rows"))?;
+                child(&study,"confirm",None,false,"confirmation-repeat")?;child(&study,"report",None,false,"confirmation-pure")?;
+                assert_eq!(file_hash(&study.join("confirmation.r3rows"))?,before);
+                assert_eq!(confirmation_usage(&study)?.1,8);
+                let rows=binary::read_value_records(&study.join("confirmation.r3rows"))?;
+                model_outputs.push(rows.iter().skip(1).map(|r|r["raw_tokens"].clone()).collect::<Vec<_>>());
+                let seal=seal_receipt(&study)?;let sealed=verified_corpus(&seal_owner(&study)?.join("sealed/confirmation.r3cor"),seal["corpus"].as_str().unwrap())?;
+                let es=[sealed.validation[..4].to_vec(),sealed.validation[256..260].to_vec()].concat();
+                let observation=base.join("continuous-observation");std::fs::create_dir(&observation)?;
+                let mut control=recovery::RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),std::time::Duration::from_secs(30),16*1024*1024)?;
+                control.set_call_limits(8,0);
+                let reference=confirmation_collect(&observation,&root.join(&e.checkpoint),&es,&l.tokenizer,&rows[0]["identity"],control)?;
+                assert_eq!(reference.iter().map(|r|r["raw_tokens"].clone()).collect::<Vec<_>>(),model_outputs[0]);
+                let model=Transformer::init(l.model.config.clone(),93,Device::Cpu)?;
+                let mut manifest=l.manifest.clone();let mut state=manifest.training.clone().unwrap();
+                state.step=p.origin_step();state.sampler_state=state.step as u64;state.consumed_tokens=p.fork.as_ref().unwrap().origin_input;
+                state.target_tokens=p.fork.as_ref().unwrap().origin_target;state.train_loss=None;state.validation_loss=None;
+                state.initial_weight_hash=model.weight_hash()?;state.resume_binding=Some(p.binding(&state,&l.tokenizer)?);
+                manifest.initial_weight_hash=model.weight_hash()?;manifest.init_seed=93;manifest.training=Some(state);
+                let initial=study.join("random-initial.r3m");let adam=Adam::new(&model.vars)?;
+                checkpoint::save(&initial,&model,&l.tokenizer,manifest,&adam.moments)?;
+                random_updates(&initial,&study.join("random-continuous.r3m"),&root,2)?;
+                random_updates(&initial,&study.join("random-one.r3m"),&root,1)?;
+                child(&root,"random-step",None,false,"random-step")?;totals[0]+=4;
+                let a=checkpoint::load(&study.join("random-continuous.r3m"),Device::Cpu,true)?;
+                let b=checkpoint::load(&study.join("random-split.r3m"),Device::Cpu,true)?;
+                assert_eq!(a.model.weights_content_id()?,b.model.weights_content_id()?);assert_eq!(optimizer_hash(&a.optimizer)?,optimizer_hash(&b.optimizer)?);assert_eq!(a.manifest.training,b.manifest.training);
+                child(&root,"random-eval",None,false,"random-eval")?;
+                child(&root,"random-eval-split",Some("eval-0006-value4/generation/0/case_started"),true,"random-eval-stop")?;
+                child(&root,"random-eval-split",None,false,"random-eval-resume")?;totals[1]+=2;
+                child(&root,"random-reentry",None,false,"random-returned-reentry")?;
+                let x=binary::read_value_records(&root.join("random-eval/eval-0006-value4.r3rows"))?;
+                let y=binary::read_value_records(&root.join("random-eval-split/eval-0006-value4.r3rows"))?;
+                assert_eq!(x[0],y[0]);
+                for field in ["raw_tokens","raw_bytes","actual","error","error_class","finish_reason","generation_completed","expected","id"] {assert_eq!(x[1][field],y[1][field]);}
+                let after=checkpoint::load(&study.join("random-split.r3m"),Device::Cpu,true)?;
+                assert_eq!(b.model.weights_content_id()?,after.model.weights_content_id()?);assert_eq!(optimizer_hash(&b.optimizer)?,optimizer_hash(&after.optimizer)?);assert_eq!(b.manifest.training,after.manifest.training);
+            }
+            assert!(endpoints.windows(2).all(|w|w[0]==w[1]));
+            for root in [parents.join("FIXED"),parents.join("BOTH"),old.join(ARM),mean.join(MEAN_ARMS[0]),mean.join(MEAN_ARMS[1])] {
+                let p=historical_plan(&root)?;for end in history(&root,&p)? {totals[0]+=read::<binary::Value>(&root.join(&end.checkpoint).parent().unwrap().join("train-control.r3b"))?["optimizer_calls"].as_u64().unwrap() as usize;totals[1]+=end.generations;totals[2]+=end.teachers;}
+            }
+            totals[1]+=12+3*8+2*8+16;
+            println!("CITATION_CONTINUATION_TINY optimizer={} generation={} teacher={} FD0 evidence={}",totals[0],totals[1],totals[2],base.display());
+            write(&base.join("usage.r3b"),&binary::record!({"optimizer":totals[0],"generation":totals[1],"teacher":totals[2],"FD":0}))?;
+            Ok(())
+        }
+    }
     fn gold(e: &Episode, tok: &ByteBpe) -> Result<binary::Value> {
         let tokens = tok.encode(e.answer.as_bytes())?;
         let mut raw = tokens.clone();
@@ -2115,27 +2560,6 @@ mod tests {
         const CHILD:&str="R3_MEAN_CHILD";
         // Random native numeric continuation supplements the full fresh/evaluation
         // process fixture below. It does not generate, force EOS or claim quality.
-        fn random_updates(input:&Path,output:&Path,root:&Path,steps:usize)->Result<()> {
-            let p=historical_plan(root)?;let mut l=checkpoint::load(input,Device::Cpu,true)?;
-            let mut s=l.manifest.training.clone().ok_or_else(||bad("random native state"))?;
-            if s.resume_binding!=Some(p.binding(&s,&l.tokenizer)?) {return Err(bad("random native exact objective policy"));}
-            let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;
-            let ss=samples(&c.train,&l.tokenizer,p.config.seq_len)?;
-            let mut adam=Adam{moments:l.optimizer};
-            for _ in 0..steps {
-                let ids=p.training_draw(s.step);let b=batch(&ss,&ids,&Device::Cpu)?;
-                let logits=l.model.forward(&b.input,Some(&b.valid))?;
-                let (ce,loss,n,den)=crate::training::response_objective(&logits,&b,1.,true)?;
-                assert_eq!(den,ids.len());let grads=loss.backward()?;
-                let gs=l.model.vars.iter().map(|(name,v)|Ok((name.clone(),grads.get(v).ok_or_else(||bad("random native gradient"))?.detach()))).collect::<Result<BTreeMap<_,_>>>()?;
-                adam.step_constant(&l.model.vars,&gs,&p.config,s.step+1,p.learning_rate(s.step+1))?;
-                s.step+=1;s.sampler_state=s.step as u64;s.consumed_tokens+=b.tokens as u64;s.target_tokens+=n as u64;
-                s.train_loss=Some(f64::from(ce.to_scalar::<f32>()?));s.validation_loss=None;
-            }
-            l.model.refresh_identity()?;l.manifest.training=Some(s);
-            checkpoint::save(output,&l.model,&l.tokenizer,l.manifest,&adam.moments)?;
-            println!("RANDOM_ANSWER_NATIVE optimizer={steps} forward={steps} backward={steps} generation0 teacher0");Ok(())
-        }
         if let Ok(root)=std::env::var(CHILD) {
             let root=Path::new(&root);
             return match std::env::var("R3_MEAN_ACTION").as_deref() {
@@ -2457,7 +2881,7 @@ fn verified_confirmation(
     end: &Segment,
     d: &binary::Value,
 ) -> Result<binary::Value> {
-    if d["eligible"] != true {
+    if !confirmation_admitted(study,p,end,d)? {
         return Err(bad("confirmation without eligible endpoint"));
     }
     let comparison = comparison(study, p, end, d)?;
@@ -2474,40 +2898,52 @@ fn verified_confirmation(
     {
         return Err(bad("citation historical B binding"));
     }
-    let candidate: binary::Value = read(&study.join("confirmation-candidate.r3b"))?;
+    let candidate: binary::Value = read_confirmed(&study.join("confirmation-candidate.r3b"))?;
+    let seal = seal_receipt(study)?;
     if candidate
-        != binary::record!({"checkpoint":end.checkpoint_hash,"comparison":comparison,"seal":file_hash(&seal_owner(study)?.join("confirmation-seal.r3b"))?,
-        "review":file_hash(&study.join("review-b.r3b"))?,"framing":p.framing()})
+        != confirmation_candidate(study,p,end,&comparison,&seal)?
     {
         return Err(bad("citation candidate changed"));
     }
-    let seal = seal_receipt(study)?;
+    let claim:binary::Value=read_confirmed(&seal_owner(study)?.join("confirmation-claim.r3b"))?;
+    if claim!=binary::record!({"root":study,"candidate":file_hash(&study.join("confirmation-candidate.r3b"))?,"seal":candidate["seal"]}) {
+        return Err(bad("confirmation seal claim mismatch"));
+    }
     let corpus = verified_corpus(
         &seal_owner(study)?.join("sealed/confirmation.r3cor"),
         seal["corpus"]
             .as_str()
             .ok_or_else(|| bad("citation seal corpus"))?,
     )?;
-    let es = corpus.validation;
-    let ms: Vec<Meta> = read(&seal_owner(study)?.join("sealed/metadata.r3b"))?;
+    let mut es = corpus.validation;
+    let mut ms: Vec<Meta> = read(&seal_owner(study)?.join("sealed/metadata.r3b"))?;
     if es.len() != 512 || ms.len() != 512 {
         return Err(bad("citation confirmation full denominator"));
     }
+    if p.tiny {es=[es[..4].to_vec(),es[256..260].to_vec()].concat();ms=[ms[..4].to_vec(),ms[256..260].to_vec()].concat();}
+    let n=es.len()/2;
     let rows = observed(study, "confirmation", p, &end.checkpoint_hash, &es, false)?;
-    let header: binary::Value = read(&study.join("confirmation-started.r3b"))?;
+    let (elapsed,calls,_)=confirmation_usage(study)?;
+    let finished:binary::Value=read_confirmed(&study.join("confirmation-finished.r3b"))?;
+    if calls!=es.len() || finished["control"]["elapsed_seconds"]!=elapsed {return Err(bad("confirmation aggregate usage"));}
+    let header: binary::Value = read_confirmed(&study.join("confirmation-started.r3b"))?;
     if header["identity"]["candidate"] != file_hash(&study.join("confirmation-candidate.r3b"))? {
         return Err(bad("citation opening identity"));
     }
     let tok = ByteBpe::load(&selected_root(study).join("tokenizer.r3b"))?;
-    orbit_validate(&es[..256], &ms[..256], &tok, 256)?;
-    check_variant(&es[..256], &es[256..], &ms[256..], &tok, true)?;
-    let v = orbit_score(&es[..256], &ms[..256], &rows[..256], &tok)?;
-    let vc = score_citation(&es[256..], &ms[256..], &rows[256..], &tok)?;
+    if confirmation_prefix(study,&header,&es,&tok)?!=rows
+        || finished["control"]["observed_conditions"]!=binary::record!([]) {
+        return Err(bad("confirmation report call/prefix/terminal disagreement"));
+    }
+    orbit_validate(&es[..n], &ms[..n], &tok, n)?;
+    check_variant(&es[..n], &es[n..], &ms[n..], &tok, true)?;
+    let v = orbit_score(&es[..n], &ms[..n], &rows[..n], &tok)?;
+    let vc = score_citation(&es[n..], &ms[n..], &rows[n..], &tok)?;
     let passed = pass(&v, 256, 244, 116, 58)
         && pass(&vc.joint, 256, 244, 116, 58)
         && vc.value_correct >= 254
         && vc.citation_support_correct >= 254
-        && if is_mean(p) {valid_outside_ids(&es[256..],&rows[256..])==0}else{vc.outside_id == 0};
+        && if is_mean(p) {valid_outside_ids(&es[n..],&rows[n..])==0}else{vc.outside_id == 0};
     let expected = binary::record!({"checkpoint":end.checkpoint_hash,"V":v,"VC":vc,"value_citation_baseline_verified":passed,
         "scope":"two current records, one-digit key/value, fixed grammar, eight-digit event ID","goal1_ready":false,"goal1_accepted":false,"s4":false,"s5":false,"s6":false});
     if read_confirmed::<binary::Value>(&study.join("confirmation-result.r3b"))? != expected {

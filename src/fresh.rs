@@ -21,6 +21,8 @@ mod identifiable;
 pub enum Command {
     /// Same sealed citation data/tape, TOKEN reference and answer-mean CE fork.
     AnswerMeanPrepare { #[arg(long)] previous: PathBuf, #[arg(long)] output: PathBuf },
+    CitationContinuePrepare { #[arg(long)] previous: PathBuf, #[arg(long)] output: PathBuf },
+    CitationContinueParent { #[arg(long)] study: PathBuf, #[arg(long)] citation: bool },
     AnswerMeanParent { #[arg(long)] study: PathBuf },
     AnswerMeanReport { #[arg(long)] study: PathBuf },
     /// Explicit read-only reproduction of complete endpoints, including quality guard stops.
@@ -1727,6 +1729,8 @@ fn source_digest() -> Result<String> {
 pub fn execute(command: Command) -> Result<()> {
     match command {
         Command::AnswerMeanPrepare { previous,output } => identifiable::binding::citation::mean_prepare(&previous,&output,false),
+        Command::CitationContinuePrepare { previous,output } => identifiable::binding::citation::continuation_prepare(&previous,&output,false),
+        Command::CitationContinueParent { study,citation } => identifiable::binding::citation::continuation_parent(&study,citation),
         Command::AnswerMeanParent { study } => identifiable::binding::citation::mean_parent(&study),
         Command::AnswerMeanReport { study } => identifiable::binding::citation::mean_report(&study),
         Command::AnswerMeanReview { root,citation } => identifiable::binding::citation::mean_review(&root,citation),

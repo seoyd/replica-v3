@@ -1499,8 +1499,15 @@ fn teacher_observation(
     if !preserve_returned {
         complete_stop?;
     }
+    let after_value = if (e.family.starts_with("value-citation-bridge-v1/") || e.family.starts_with("foundation-orbit-v1/") || e.family.starts_with("learned-binding-expansion-v1/")) && gold.len()>=2 {
+        let prefix=l.tokenizer.encode(format!("{}입니다. [event:",e.answer.chars().next().ok_or_else(||Error::Invalid("empty citation target".into()))?).as_bytes())?;
+        if prefix.len()<2 || prefix[0]!=gold[0] {return Err(Error::Invalid("citation first-value tokenizer boundary".into()));}
+        Some(record!({"position":1,"eos_id":EOS,"citation_start_id":prefix[1],"eos_log_probability":lp[1][EOS as usize],
+            "citation_start_log_probability":lp[1][prefix[1] as usize],"eos_minus_citation_logit":f64::from(lp[1][EOS as usize])-f64::from(lp[1][prefix[1] as usize]),
+            "scope":"same existing gold-prefix forward; no extra model call; generation unchanged"}))
+    } else {None};
     Ok(
-        record!({"target_token_observation":(e.family.starts_with("value-citation-bridge-v1/") || e.family.starts_with("binding-learnability-v1/") || e.family.starts_with("foundation-orbit-v1/") || e.family.starts_with("learned-binding-expansion-v1/")).then(||record!({"gold":gold,"nll":nll,"argmax":predicted,"scope":"gold-prefix teacher; separate from free generation"})),"conditional_foil":foil_difference,"target_tokens_including_eos":gold.len(),"mean_nll":nll.iter().sum::<f64>()/gold.len() as f64,"first_target_nll":nll[0],
+        record!({"after_value":after_value,"target_token_observation":(e.family.starts_with("value-citation-bridge-v1/") || e.family.starts_with("binding-learnability-v1/") || e.family.starts_with("foundation-orbit-v1/") || e.family.starts_with("learned-binding-expansion-v1/")).then(||record!({"gold":gold,"nll":nll,"argmax":predicted,"scope":"gold-prefix teacher; separate from free generation"})),"conditional_foil":foil_difference,"target_tokens_including_eos":gold.len(),"mean_nll":nll.iter().sum::<f64>()/gold.len() as f64,"first_target_nll":nll[0],
         "remaining_mean_nll":nll.iter().skip(1).sum::<f64>()/(gold.len()-1).max(1) as f64,"objective":(nll.iter().sum::<f64>()+(w-1.)*nll[0])/gold.len() as f64,"first_target_weight":w,
         "objective_scope":"per-example first-target-weighted response CE; batch/pair/span auxiliary not measured here",
         "teacher_forced_correct_tokens":gold.iter().zip(&predicted).filter(|(a,b)|a==b).count(),"first_target_correct":gold[0]==predicted[0],"last_content_correct":gold.len()>1 && gold[gold.len()-2]==predicted[gold.len()-2],"eos_correct":predicted.last()==Some(&EOS),

@@ -1,5 +1,51 @@
 # 진단 및 구현 상태
 
+## 2026-09-22 인용 continuation — C0/C1/C2 구현 및 직접 회귀
+
+보호된 scalar4352의 기존 confirmation254/256·ALL4 62/64와 TOKEN/ANSWER4384의
+QUALITY_REGRESSION/resume=false를 그대로 보존한다. 이번 부모는 완료된
+ANSWER4384 native `838754d751a71e4fe7971a4127a76c17a0ed05c4d8efdf524c79248324c7a1dd`다.
+독립 읽기 전용 C0에서 실제136 Adam tensors, family6/normalizer2, step/sampler4384,
+input5086464/target72064와 원 corpus/tape/raw를 검증했다. V64 오답은 네 개의
+서로 다른 orbit에 하나씩 있으며 FULL60/QB28/SB28/ALL4 12/EOS64다.
+VC64 FULL/문법/support0, 첫 값50이다. 기존11607개 파일의 전후 hash가 일치했다.
+
+동일 confirmation 후보의 confirmed publication, seal 소유권, per-call
+prepared/resolved, 부분 raw, segment 사용량, 최종 report를 연결했다.
+RETURNED 오답·length·반환 timeout은 재사용하고 순수 TIME_BUDGET의 미호출만
+같은 cursor에서 계속한다. pending/UNKNOWN/취소/혼합 오류와 다른 candidate는
+차단한다. 보고도 동일 prefix를 순수 검증하며 누락된 완료 증거를 만들지 않는다.
+새 continuation은 기존4384 weights/Adam/목적/자료를 유지하고 원 tape index32부터
+최대3040회만 소비한다. 이전 실패의 재개 권한은 변경하지 않는다.
+
+직접 process04의 두 테스트는 PASS(exit0)이며 TINY optimizer20/generation174/
+teacher104/FD0이었다. 정상 EOS fixture에서 연속2, 새 process1+1, 평가-only2+0의
+weights/Adam이 일치했다. 별도 seed93 무작위 TINY의2 대1+1 native/state도 일치했다.
+무작위 모델의 실제 생성은 control token으로 INTEGRITY_FAIL이다. 연속 평가와
+미호출 TIME 후 새 process 평가가 같은 raw/error를 남기고 optimizer0과 native
+불변을 확인했다. 이를 정상 평가 완료나 모델 품질 PASS로 계산하지 않는다.
+
+이전 직접 시험의 실패도 보존한다. process01은 teacher 진단의 V family 누락으로
+1 PASS/1 FAIL, process02는2 PASS, process03은 무작위 생성 실패를 잘못 정상 완료로
+기대한 시험 때문에1 PASS/1 FAIL이었다. process01의 일부 자동 임시 fixture는
+종료 후 없어져 전체 canonical 증거가 없으며, 이후 모든 process fixture는
+보존 경로를 사용한다. 그 실행의 도달 경로 비용12/100/80은 SOURCE_DERIVED로
+계상하고 없는 token별 raw/개별 시간은 UNKNOWN으로 남긴다. process03은 독립
+재집계에서20/173/104, 미해결 호출0, input23712/target1280으로 확인됐다.
+이전 실패를 최종 quick PASS에 합산하지 않는다.
+
+process05도 개별 두 회귀는 PASS(20/174/104)였지만 검사 중 최종512행 단위 검사를
+추가해 checker가 `source changed during checks`로 전체 exit1을 반환했다.
+전체 quick PASS가 아니다. 고정 source의 독립 quick은 A에서 실제 실행한다.
+그 직전 구현자 누적 TINY 비용은88/793/496이며 첫 실패의 출처 구분을 유지한다.
+추가한 고정512행 final reader 단위 검사는1 PASS/exit0(37.27초), 모델 호출0이다.
+부분 prefix와 최종 완료를 구분해0/1/511은 최종 거부,512만 통과했다.
+
+현재 신규 SMALL optimizer/generation/teacher는0이며 독립 A와 실제 학습은
+아직 NOT_RUN이다. citation confirmation은 미개봉이고 S4/S5/S6·Goal1은 미수용이다.
+로컬 실행 증거는 `artifacts/citation-continuation-20260922-review/`에 보존한다.
+공개 Git에는 source/tests/최소 상태 문서만 포함한다.
+
 ## 2026-09-22 문항 평균 CE — 두 군32회 실행, ALL4 보존 guard 종료
 
 동결 source `70d933b4b798b9d73be5b5f99db4db1c980889b9`에서 TOKEN32와

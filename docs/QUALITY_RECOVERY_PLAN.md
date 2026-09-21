@@ -1,5 +1,71 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: citation continuation from complete ANSWER4384
+
+R3-CITATION-CONTINUATION-1.0 preserves the accepted scalar4352 and both
+TOKEN/ANSWER4384 QUALITY_REGRESSION endpoints. The latest independent rereview
+accepted their numerical and execution evidence but found same-candidate
+confirmation reentry incomplete. This narrowly scoped repair precedes learning.
+No historical failure, receipt, unused budget or resume=false is changed.
+
+Confirmation binds the immutable candidate, physical native/model/step, policy,
+source/binary, tokenizer/framing, development result, B approval/report and the
+existing citation seal. Candidate publication is confirmed before reading sealed
+answers. A claim under the actual seal owner excludes another study. The same
+candidate may reuse confirmed RETURNED rows, including wrong, length and returned
+command-timeout rows. Only pure command TIME_BUDGET may continue. Cancellation,
+request timeout, mixed error, pending publication or an unresolved call/command
+remain blocking. Existing prepared/resolved records, native collector, scorer and
+confirmed no-clobber publisher are reused. All segment costs count; only remaining
+unreturned rows are reserved. Complete reports are pure reads and never generate
+missing evidence. Small protocol fixtures are not model-quality acceptance.
+
+The sole new arm copies complete ANSWER4384 weights/Adam and the exact objective
+family6/normalizer2. It consumes original citation suffix indices32..3071, keeping
+QE, tokenizer, F32/Accelerate/thread1, LOCAL5, CE answer mean, first-target1,
+LR3e-4, batch8, accumulation1, clipping/betas/decay and actual Adam clock unchanged.
+Native policy binding changes explicitly at this new parent-bound entry. The
+3072-row historical suffix is not restarted. New updates are capped at3040;
+new input3623680/target231040/padding97280 and24320 samples are planned. These
+comprise V12160 and VC0/VC1 each6080; inherited32 updates remain separate.
+
+Preservation checks use the original first16 V orbits. FULL<=48/64 or scorer
+errors>=4 stops immediately. FULL<60 or ALL4<12 is a warning; two consecutive
+distinct scheduled warnings stop for persistent retention regression. Equal60/12
+resets the streak. Immutable raw/step/decision links prevent repeated application
+on resume. The parent does not count as a warning. The old immediate ALL4-drop
+guard remains unchanged in historical studies. Early citation0 alone is not a stop.
+
+Save4385 then restart a fresh process. Evaluate V64/VC64 at4416/4480/4608;
+add ID64 at4736/5120. At5888/7424 evaluate V512/VC512/ID512 and fixed VC-train128;
+conditionally evaluate the complete4608 training panel if development passes.
+Safe saves5632/6400/6912 keep segments<=512 updates. Last-step evaluation may
+resume with zero additional optimizer calls. First eligible5888 fixes immediately;
+otherwise7424 is final, without automatic extension or new LR/loss/seed search.
+
+Final gates remain: V old512 full508/QB252/ALL4124, new1024 1016/504/248,
+dev512 488/232/116; VC0 and VC1 train1536 each1524/756/372; VC and renamed
+dev512 each488/232/116 plus first-value508/support508, no valid foreign citation,
+EOS512/errors0. B independently recounts the actual endpoint and reproduces
+V16/VC16, including a complete negative quality endpoint. Only eligible+B may
+open the existing unused citation V256/VC256 confirmation once. Each requires
+full244/QB116/ALL458/errors0, and citation first-value254/support254/foreign0.
+After confirmation passes only, run preserved primary512/transfer128 once as a
+no-learning scope check, or report missing/incompatible inputs explicitly.
+
+Caps include all failed work: SMALL3040 updates, input4000000/target260000,
+generation16384/teacher16384, diagnostic backward0; TINY128 updates,
+generation2048/teacher1024, finite-difference0. Worst-case planned generation14528
+and teacher13312 include parent32, B32, confirmation512 and QA gap640.
+Active10800s, segment900s plus cleanup120s, RSS16GiB. Unknown usage is not zero.
+Use `replica-check quick --citation-continuation` for directly changed boundaries.
+Prepare with `fresh citation-continue-prepare`, perform independently reviewed
+parent checks using `fresh citation-continue-parent [--citation]`, then existing
+`fresh run`, `fresh answer-mean-report`, `fresh answer-mean-review` and
+`fresh citation-confirm` commands. A is required before parent generation/learning.
+S4 independent200, S5 actual memory/correction/restart, S6 INT4/M4 and Goal1
+remain separate and unaccepted even if this narrow citation baseline passes.
+
 ## Closed at retention guard: answer-mean citation reduction from accepted4352
 
 Actual frozen source `70d933b4b798b9d73be5b5f99db4db1c980889b9` ran both arms
