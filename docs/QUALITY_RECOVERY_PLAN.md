@@ -1,6 +1,37 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: one REBIND continuation with joint endpoint gates
+## Closed: REBIND4352 minimal binding baseline accepted
+
+Execution source `c52f7fbd1a60464cc55961b48d9b73952ee625b6` and its frozen
+production binary completed768 additional updates from REBIND3584. Independent
+A verified the actual preparation and TINY process boundaries. The4352 endpoint
+passed all joint gates: old FULL512/QB256/SB256/ALL4 128,
+new1024/512/512/256, dev508/252/252/125; errors0 and all EOS. It closed
+CANDIDATE_FIXED_AT_4352/resume=false. No4864/5120 or extra candidate was run.
+
+Independent B recounted full raw/native/Adam/trace and reproduced16/16 outputs.
+The single original sealed confirmation then passed FULL254/256,QB126/128,
+SB126/128,ALL4 62/64,errors0/EOS256. The confirmed result marks
+MINIMAL_BINDING_BASELINE_ACCEPTED=true for two records, one-digit key/value,
+fixed grammar and new semantic skeletons only. It does not grant S4/S5/S6 or
+GOAL1_READY/ACCEPTED, and it does not change the product's default model pointer.
+
+Actual new training consumption is768 updates,6144 sample exposures,
+input890880/target12288/padding0, every1536 train row4 times; Adam clock/sampler
+continues to4352. New SMALL generation2544 and teacher2240 include parent16,
+scheduled2240, implementer16, independent16 and confirmation256. There is no
+new optimizer/teacher in confirmation and no diagnostic backward. Unspent budget
+is closed rather than rolled into another experiment. Existing parents and all
+failed/closed records remain unchanged. Versioned source/model/data/recipe/raw
+and independent evidence identities are registered in EXPERIMENT_STATUS.
+
+One proposed next scope is to vary key length alone while retaining record count,
+value grammar and normal generation, with a separate prepared train/heldout split
+and the accepted short-key baseline checked alongside it. This proposal is
+NOT_RUN; citation, time selection, wider language and new cores are not combined
+with it. There is no automatic B/C/D training under this completed plan.
+
+The following is the completed study's frozen design, not new run permission.
 
 R3-REBIND-CONSOLIDATION-1.0 is a new, single REBIND-CONTINUE study from the
 closed REBIND3584 endpoint. The previous expansion A/B and QS-R1 acceptance

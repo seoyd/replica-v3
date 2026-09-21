@@ -1297,6 +1297,8 @@ Use the frozen production executable built with `cargo build --release --locked
 --offline --features accelerate --bin replica-train`; retain its source and file
 digests. All model work uses `VECLIB_MAXIMUM_THREADS=1 OMP_NUM_THREADS=1`.
 The existing closed REBIND directory is read-only. `NEW_STUDY` must not exist.
+Use absolute paths for `NEW_STUDY` and its arm on every command: the plan binds
+that exact root and rejects a relative alias before observation or training.
 
 ```sh
 cargo build --locked --offline --features accelerate --bin replica-check

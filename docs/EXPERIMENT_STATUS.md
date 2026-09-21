@@ -1,5 +1,183 @@
 # 진단 및 구현 상태
 
+## 2026-09-21 REBIND consolidation — 4352 최소 binding 기준선 독립 수용
+
+실행 source는 `c52f7fbd1a60464cc55961b48d9b73952ee625b6`이다. 해당 source를
+정상 push하고 원격 전체 SHA 일치를 직접 확인한 뒤 실행 동안 동결했다.
+기존 REBIND3584에서 새768 updates를 실제 실행했고, 같은4352 checkpoint가
+old/new/dev 공동 gate를 통과해 `Finished / CANDIDATE_FIXED_AT_4352 /
+resume=false`로 종료됐다. 4864/5120은 실행하지 않았다. 남은768회는 추가
+실험이나 다른 후보에 사용할 수 없다. 기존 부모의 FINAL_QUALITY_FAIL과 모든
+원본·실패는 보존했다. 아래 C0/C1의 NOT_RUN은 그 단계 당시의 상태다.
+
+### 같은 checkpoint의 정상 생성과 실제 추가 노출
+
+|Panel|FULL|QUERY_BOTH|SWAP_BOTH|ALL4|EOS / errors|
+|---|---:|---:|---:|---:|---|
+|old512, train|512/512|256/256|256/256|128/128|512 / 0|
+|new1024, train|1024/1024|512/512|512/512|256/256|1024 / 0|
+|dev512, optimizer 미노출|508/512|252/256|252/256|125/128|512 / 0|
+
+Dev는 과거 여러 연구에서 관측한 개발자료다. 위 old/new 모두 학습자료이며
+이름의 new를 미학습이라고 해석하지 않는다. 부모3584 대비 FULL gain/loss는
+old5/0,new20/0,dev34/2; ALL4 gain/loss는 old5/0,new20/0,dev27/1이다.
+비교 단위는 각각128/256/128 skeleton이며 네 view를 독립표본으로 세지 않는다.
+추가 노출 trajectory의 결과로, REPEAT3584와 동일 예산의 새 A/B가 아니다.
+
+3840의 고정 첫16 skeleton 표본 FULL/QB/SB/ALL4는 old63/31/31/15,
+new64/32/32/16,dev62/30/30/14였다. 오류0이고 심각한 회귀 조건은 없었다.
+이 표본을 전수 합격으로 사용하지 않고4352의 전수 panel을 평가했다.
+
+|4352 panel|Digit NLL|EOS NLL|Binary NLL|Mean abs(c)|Mean d|
+|---|---:|---:|---:|---:|---:|
+|old512|0.000269646|0.000004270|0.000116089|1.132295|11.182540|
+|new1024|0.000256094|0.000004365|0.000099689|1.018592|11.084236|
+|dev512|0.017984886|0.000004411|0.013308243|1.440173|10.322427|
+
+부모 digit NLL은 old0.052767259,new0.057154771,dev0.248019048이었다.
+Dev 오답4개는 모두 다른 기록의 값이며 기타 숫자0, malformed0이다.
+같은 query/assignment 출력쌍은 각각4개다. Full-vocabulary NLL과 두 후보만
+재정규화한 binary NLL은 다른 지표다. 진단 backward나 별도 foil forward는0이다.
+
+동일 부모 weights/Adam136/QE/tokenizer562/CE/first-target1, LR3e-4,
+batch8/accumulation1을 유지했다. 실제 원 suffix의 앞768 batches를 소비했고
+1536행 각각4회, 총6144 sample exposures, input890880/target12288/padding0이다.
+최종 누적 step/sampler4352,input5048320,target69632다. 첫3585에서 실제 LR
+0.0003, gradient norm0.26773724, delta L2 0.20145663, CE0.006942514를 기록했다.
+이는 관측용 gradient를 섞은 값이 아니라 실제 optimizer update의 trace다.
+
+|Fresh process|신규 updates|신규 input / target|Generation / teacher|마지막 저장 / 중단|
+|---|---:|---|---|---|
+|segment-0000|1|1160 / 16|0 / 0|3585, TRAINING|
+|segment-0001|255|295800 / 4080|192 / 192|3840, TRAINING|
+|segment-0002|512|593920 / 8192|2048 / 2048|4352, CANDIDATE_FIXED_AT_4352|
+
+세 process 모두 exit0이고 discarded/uncommitted input/target0, UNKNOWN0,
+저장 오류0이다. 첫 저장 뒤 새 process가 같은 Adam·clock에서 실제로 이어갔다.
+최종 native physical은 `d5d1b61e4df7cc7bfa911a03766006d71f7e883b870e55283ef85e4b4ebe62da`다.
+TRAIN_END의 `e41631...`은 마지막 resume binding 전 trainer 파일 hash이므로
+최종 native의 physical identity로 사용하지 않는다. 평가 weight ID는
+`3aac4013e5ffb17e94a889bb5c0e0ff9bdb01c08e859d7381c27dd91eceaa651`이다.
+독립 native reader가 계산한 tensor content ID는
+`18c1ff90dd9be84ede87f05698a4d06b8436c7b2badd4b53176312197b44dd4a`,
+Adam136 digest는 `ddc38f4983d003c08f4d8db847875d844541161ae943e9e055a11708e0437f72`다.
+전체 training-state digest는
+`cb679606b6922c68e94b1fbbf0f287bd1a2177cd575a6379695295e8df5c6a3e`이며
+full native에 weights와 Adam·누적 clock이 함께 보존됐다.
+
+### 직접 수용·검증 및 허용된 실행 근거
+
+새 독립 A는 같은 source/실제 준비물에서 T1/T3/T2 각1 PASS(3/3), exit0;
+자료·mask·native/Adam·동적 후검산도 exit0이다. 독립 TINY6/48/36을 포함한
+전체 TINY optimizer/generation/teacher는26/208/172다. 실제 EOS tensor fixture이며
+SMALL 품질 증거와 분리한다. 독립 A report hash는
+`615cf53427f537797850d3dba3ff7f4cebf229b6e6b825f7fe744b1b3552761f`,
+confirmed review-a hash는 `25fb76fecb5c231ac1aecc25aaf7942b38b655999b06a152ff7d8bd43d5072c0`이다.
+
+새 실행 source의 부모 dev첫16 parity와 고정 후보첫16 parity는 각각16/16,
+exit0, teacher/optimizer0이다. 첫 상대경로 parent 명령은 등록된 절대경로와
+달라 사전검증 exit1로 거부됐으며 시작 receipt/모델 호출0이었다. 그 로그를
+보존하고 등록된 절대경로로 실행했다. 관측 실패·UNKNOWN을 재시도한 것이 아니다.
+`fresh consolidation-report`는 전수 raw/teacher·종료·trace를 순수 재검산해 exit0,
+동일 후보를 반환했다. 이 시점 SMALL generation2272/teacher2240,
+receipt active578.423801126초다. 명령의 사전 자료 검산·빌드 wall time을 모델
+성능 시간으로 합치지 않는다. 학습 중 샘플링한 최대 RSS4912240 KiB는
+상한16GiB 아래이며 S6 자원 수용 시험을 대신하지 않는다.
+
+허용된 로컬 study는 `artifacts/rebind-consolidation-20260921-study/`,
+실제 final은 `REBIND-CONTINUE/segment-0002/final`, train/validation은
+`REBIND-CONTINUE/corpus.r3cor`, metadata와 tokenizer는 같은 디렉터리다.
+`eval-4352-{old512,new1024,dev512}.r3rows`와 대응 teacher/summary,
+`consolidation-decision-4352.r3b`, segment의 updates/control/terminal을 보존한다.
+준비물 `preparation.r3b` hash는
+`0afca9eb7e3fae21d128e712689bb84c4a5940c5caaaeb069b8ab43a1e40986e`,
+전체 tape digest는 `9f5cc87de17842c29e4fc959fe6b4bfba39f01448e6faf0def735960da05e999`이다.
+자료·모델·raw·봉인 정답은 Git에 게시하지 않는다.
+
+등록된 원문 schema는 기존 R3CORP v1이다. Corpus 전체 physical hash는
+`c0462f4861a1c67d9509305e9841bc6a07753a213ef92d253dbe918d7126e06a`,
+metadata는 `c3428b8ee012d95b210350e12700e77821640f3cfb4d21438fb33fb6c8a816fc`다.
+Train384 skeleton/1536행, dev128 skeleton/512행, 별도 confirmation64 skeleton/
+256행 split을 유지한다. Tokenizer semantic ID는
+`ec945ee5f3cbd87992bdfa13f199de2a671b94b64337dff04d85e01d982ab9ef`;
+실제 neural block 순서는 QuestionEvidence(QE), outer prompt schema는
+native-role-bytes-v1이다. LOCAL5 SMALL 9513408 parameters, F32/CPU/Accelerate/
+thread1과 기존 tensor 구조를 유지했다.
+
+실행 근거 디렉터리 `artifacts/rebind-consolidation-20260921-review/`에는
+candidate.diff(base b5e0d504→source c52f7fbd), prepare.log,
+parent-parity.log(사전검증 실패), parent-parity-absolute.log,
+segment-0000/0001/0002.log, endpoint-parity.log, C3-pure-report.log,
+독립 A 보고서와 직접 테스트 로그가 있다. Frozen executable은
+`artifacts/rebind-consolidation-20260921-executable`, SHA256
+`eae1892f6a692c4bf4dbbf46e8d81348ef5f034748daa88172555cd1f7c200da`;
+compiled source digest `d97678c82dbd2a77c72adc27237a0cc69749ee72a220939d7eee16da616405f5`.
+Source/preparation와 결과 보고 commit은 구분한다.
+
+### 독립 B·confirmation·최소 기준선 등록
+
+독립 B의3840/4352 pure recount, native/Adam·source/data/trace 검증은 exit0;
+별도 process의 정상 출력16개가16/16 일치했다. 보고서
+`B-FINAL-REVIEW.md` hash는
+`905ca3385a22f0ff787d631f9a1da54190def7ba2584e6ea7680289f2f75fbe9`,
+confirmed `review-b.r3b`는
+`25b53173b75771923b8d182dea97c8dbe869bbe9cfdc1012808db9452e49d2df`다.
+구현자의 parity와 독립 B의 parity는 각각 새 generation16회이며 중복 합산하지 않는다.
+
+B 수용 후 검토자가 같은 fixed4352와 기존 seal의 confirmation256을 정확히 한 번
+실행해 exit0으로 마쳤다. FULL254/256, QUERY_BOTH126/128, SWAP_BOTH126/128,
+ALL4 62/64, errors0/EOS256으로 모든 사전 기준을 통과했다. 생성256회,
+teacher0/optimizer0, control COMPLETED, error=null이다. 다른 후보·새 confirmation·
+실패 재시도는 없었다. 구현자는 봉인 본문/정답을 열어 학습을 조정하지 않았다.
+
+|확정 confirmation artifact|SHA256|
+|---|---|
+|confirmation-candidate.r3b|aef27f964196bf679fa6f682fefd77e2faaf6c480e4441d64fa9c5df8a314029|
+|confirmation.r3rows|4628aaea024fdbdc3509842888e165977ca2487ea54e344e2102fac3c4429c32|
+|confirmation-finished.r3b|453739c9ebf80cc02a9fcddec0dd7903e3235fabdcb4d10bb91c9e758c75b423|
+|confirmation-result.r3b|9446035282e93bf9c94bf7c56056dc977f6b85c998b0372e1f7a5a6781a4810f|
+
+최종 SMALL optimizer768 / generation2544 / teacher2240,
+input890880 / target12288, diagnostic backward0이다. Generation 구성은
+parent16 + screen192 + full2048 + 구현자16 + 독립16 + confirmation256이다.
+Teacher2240은 각 평가 sample당 한 번의 기존 batch-forward2240과 대응한다.
+남은 update768은 닫힌 예산으로 재사용하지 않는다. TINY26/208/172는 별도다.
+실제 work ledger의 segment elapsed와 관측 elapsed 합은591.775316834초;
+RunControl.elapsed만 합하면591.101074333초다. 차이는 segment 외곽 기록 시간이며
+둘 다 전체 task wall time 또는 컴파일/사전 자료 검산 시간이 아니다.
+confirmation control의12.055215417초는 해당 관측 실행 시간이다.
+
+독립 최종 pure closure도 exit0이며 원본71개 보존 manifest의 모든 hash가
+일치했다. 새 source/binary/preparation/selection/plan/corpus/tokenizer/final도
+동결 신원을 유지한다. `CONFIRMATION-CLOSURE.md` SHA256은
+`b362ca8142f7f7cb6a6517328211f5c26775c5216fb99c69d7e8aa4f5dc5613d`다.
+공개 seal의 hash는 `55524d144ec83d584703b42d7a952774fb5b8c48a4d5430ea78a9aaf68d36056`,
+그 receipt에 등록된 confirmation corpus ID는
+`de3db6b154471634f2dec491d431892a22b28044f9cbbd99ae2aca21715f22e3`다.
+독립 closure는 완성 raw를 재채점했으며 sealed corpus 검증은 고정된 실제
+confirmation command가 수행했다. 별도 전체 CLI wall time은 미계측/UNKNOWN이다.
+
+|최종 판정|상태|
+|---|---|
+|EXISTING_A_B_ACCEPTED / QS-R1|기존 수용 보존|
+|NEW_SCOPE_A / 직접 코드 경계|PASS|
+|PARENT_PARITY / 고정 후보 구현자·독립 parity|각16/16 PASS|
+|CONTINUATION_EXECUTED|신규768회 실제 완료, absolute4352 종료|
+|OLD_FIT / NEW_FIT / DEV_BINDING|같은4352 공동 gate PASS|
+|CANDIDATE_FIXED_STEP|4352, 한 후보, resume=false|
+|INDEPENDENT_B / CONFIRMATION|PASS / PASS|
+|MINIMAL_BINDING_BASELINE_ACCEPTED|true, 한 자리 key/value·두 기록·고정 문법 한정|
+|S4 / S5 / S6|미수용, 이번에 실행하지 않음|
+|GOAL1_READY / GOAL1_ACCEPTED|false / false|
+
+기준선 식별자는 R3-REBIND-CONSOLIDATION-1.0/REBIND-CONTINUE4352다.
+등록은 위 fixed source/native/tensor/Adam/tokenizer/QE, parent3584 계보,
+1536-row native corpus와 실제 suffix/tape/6144 exposures, dev 및 원래 seal,
+정상 raw·teacher·review·parity·confirmation의 묶음이다. 제품 기본 모델 포인터를
+자동 변경하지 않았다. 다음 제안은 key 길이만 확대하는 한 요인 계획 하나이며
+NOT_RUN이다. 이 작은 성공을 전체 QA·긴 ID·인용·시간 선택·기억 AI 완료로
+해석하거나 새 코어/새 loss의 근거로 확대하지 않는다.
+
 ## 2026-09-21 REBIND consolidation — C0/C1 검증, 새 A 전
 
 기존 source `b5e0d504a6a23ea8df9a7a1236690361cd13c86b`, 보고 HEAD
