@@ -1099,7 +1099,7 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
         }
     };
     state.config = config.clone();
-    if run.replace_corpus {
+    if run.replace_corpus || (fresh_parent && fresh.is_some_and(|(p,_)|fresh::is_binding_expansion(p))) {
         if state.corpus_hash != corpus_hash && !state.previous_corpora.contains(&state.corpus_hash)
         {
             state.previous_corpora.push(state.corpus_hash.clone());
@@ -1228,9 +1228,13 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                 reason = "TRAINING";
                 break;
             }
-            if let Some((p,root))=fresh {
-                signal_observation=fresh::SignalObservation::start(p,root,state.step+1,&loaded.tokenizer)?;
-                if let Some(obs)=&mut signal_observation {obs.before(&loaded.model,control)?;}
+            if let Some((p,root))=fresh && fresh::SignalObservation::due(p,state.step+1) {
+                    let path=run.output.join(format!("signal-before-{:04}",state.step+1));
+                    loaded.model.refresh_identity()?;
+                    let mut manifest=loaded.manifest.clone();manifest.training=Some(state.clone());
+                    checkpoint::save(&path,&loaded.model,&loaded.tokenizer,manifest,&adam.moments)?;
+                    signal_observation=fresh::SignalObservation::start(p,root,state.step+1,&loaded.tokenizer,&path)?;
+                    if let Some(obs)=&mut signal_observation {obs.before(&loaded.model,control)?;}
             }
             let sampler_before = rng.state;
             let mut gradients: BTreeMap<String, Tensor> = BTreeMap::new();
@@ -1358,8 +1362,9 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                 if state.step==config.budget_start_step+1||state.step.is_multiple_of(32){trace.sync_all()?;}
             }
             if let Some(obs)=&mut signal_observation {
+                control.check("signal_optimizer_committed")?;
                 obs.after(&loaded.model,control)?;
-                obs.finish(None)?;
+                if obs.finish(None,state.step,None)?!="COMPLETED" {return Err(Error::Invalid("incomplete signal observation".into()));}
                 let (f,b)=obs.counts();diagnostic_counts.0+=f;diagnostic_counts.1+=b;
                 signal_observation=None;
             }
@@ -1444,10 +1449,8 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
         }
         Ok(())
     })();
-    if let Some(obs)=signal_observation.take() {
+    if let Some(obs)=&signal_observation {
         let (f,b)=obs.counts();diagnostic_counts.0+=f;diagnostic_counts.1+=b;
-        let error=outcome.as_ref().err().map(ToString::to_string).or_else(||Some("incomplete observation".into()));
-        if let Err(e)=obs.finish(error) {outcome=Err(e);}
     }
     if let Err(error) = &outcome {
         control.classify_error(error);
@@ -1510,6 +1513,15 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
     if fresh.is_some() {
         receipt["fresh_stop"] = replica_v3::binary::record!(fresh_stop);
         receipt["validation_loss_kind"] = replica_v3::binary::record!("see fixed-probe evaluation; checkpoint loss is training CE");
+    }
+    if let Some(obs)=signal_observation.take() {
+        let pure_time=matches!(&outcome,Err(Error::Model(message)) if message=="TIME_BUDGET");
+        let error=outcome.as_ref().err().map(ToString::to_string).or_else(||Some("incomplete observation".into()));
+        match obs.finish(error,state.step,Some((&path,&receipt,pure_time))) {
+            Ok("NOT_INVOKED_TIME_PAUSE")=>receipt["signal_observation_state"]=replica_v3::binary::record!("NOT_INVOKED_TIME_PAUSE"),
+            Ok(state)=>{receipt["signal_observation_state"]=replica_v3::binary::record!(state);outcome=Err(Error::Invalid(state.into()));},
+            Err(e)=>{receipt["signal_observation_state"]=replica_v3::binary::record!("BLOCKED_OBSERVATION_PUBLICATION");outcome=Err(e);},
+        }
     }
     neural::write_new(&run.output.join("train-control.r3b"), &replica_v3::binary::to_vec(&receipt)?)?;
     println!("TRAIN_CONTROL {receipt}");

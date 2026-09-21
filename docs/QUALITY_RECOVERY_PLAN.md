@@ -1,5 +1,82 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: learned binding expansion — retained QE2048, separate bounded fork
+
+R3-LEARNED-BINDING-EXPANSION-1.0 preserves every old run, including the
+QE2048 FINAL_QUALITY_FAIL/resume=false endpoint. The latest independent query
+signal review rejected QS-R1 despite the earlier A/B reports. Those historical
+reports describe different review dates; old model scores remain valid evidence.
+This plan authorizes a repair and one comparison, not reopening that old budget.
+
+E0 binds the actual QE2048 native file, tensor content, Adam, clock2048, tokenizer,
+corpus, metadata and raw. E1 repairs only observer no-call deadline admission:
+policy/sample/update/pre-update native binding, durable entry counters, uncommitted
+update, unchanged saved native state and pure TIME_BUDGET must agree. A confirmed
+NOT_INVOKED_TIME_PAUSE creates a new immutable attempt linked to the old finish.
+Missing/corrupt finish, orphan attempts, cancellation, I/O, nonfinite values,
+mixed conditions and partial/unreturned calls block; post-commit interruption
+cannot repeat that update. Legacy successes remain readable, failures immutable.
+Actual TINY subprocess RED/GREEN and independent fault tests precede learning.
+
+E2 preserves old512 rows byte/order/target and adds two key pairs for each of128
+old skeletons. The common pool has1536 rows: old512, new1 512, new2 512. Keys alone
+change in the query and two record excerpts. Values, IDs/time/source/status,
+physical order, system, limits, digit target and EOS remain identical per slot.
+External episode/sequence/base/source-reference metadata is unique. Hypothetical
+records never enter operating memory. Finite ranked candidates exclude old train128,
+dev128 and confirmation64. Only the public reservation algorithm and seal digest
+are used; confirmation examples/answers stay unopened. Capacity shortage blocks.
+Actual token checks require146 prompt+target+EOS,145 input,144 response start,
+identical two target tokens/masks, two provided records and zero excluded records.
+Request-only resolution, swap negatives and conflicting-token-prompt checks apply.
+
+Both arms inherit the same QE2048 weights/Adam and tokenizer562, LOCAL5,
+CPU/F32/Accelerate/thread1, QE framing and ordinary full-vocabulary digit+EOS CE
+with first-target1. LR3e-4 is constant, warmup/reset0, original clip/decay/betas.
+Each adds1536 optimizer updates, absolute2048→3584. The512-step BOTH tape repeats
+three times. REPEAT uses old512 rows24 times; REBIND cycles each logical slot
+old/new1/new2 by visit modulo3 and uses1536 rows8 times. Both consume12288 examples,
+input1781760/target24576. The actual key/edge frequency change is reported as part
+of the coverage intervention. REPEAT's unused new pool is not called train fit.
+Batch8 remains four logical slots with both queries, identical targets and shape.
+
+Independent A must approve actual repair source and preparation. Commit/push and
+freeze source/binary before SMALL. Parent dev16 parity and parent new64 generation
+plus teacher run once. Parent old/dev64 use verified historical raw. Save the first
+new update and continue in a fresh process. Segments remain at most512 updates.
+Evaluate old64/new64/dev64 at absolute2304 and2816; final3584 evaluates
+old512/new1024/dev512 at the same saved endpoint. Final evaluation can resume
+without additional optimizer work. New observer-gradient probes are0.
+
+Only two consecutive scheduled screens with both old FULL<32/64 and dev FULL<16/64
+stop QUALITY_REGRESSION. Otherwise ordinary low scores do not trigger early
+extension or search; execute the registered final subject to safety/budget.
+Cancellation, NaN/Inf, shape/data/policy/source/storage errors and UNKNOWN block
+the peer. A normally completed low-quality REPEAT permits REBIND. Stopped or
+unequal endpoints cannot support a matched superiority claim.
+
+Final old fit for both: FULL>=508/512, QUERY_BOTH>=252/256, ALL4>=124/128.
+REBIND new fit: FULL>=1016/1024, QB>=504/512, ALL4>=248/256. REPEAT new is diagnostic.
+Common dev: FULL>=488/512, QB>=232/256, ALL4>=116/128. All require errors0/normal EOS.
+Only a final3584 candidate meeting all its gates is eligible. Tie order is dev
+ALL4/QB/FULL, old FULL, then REPEAT. Recount full/QB/SB/ALL4, foil/other, digit/EOS
+NLL and c/d separately; paired gain/loss uses128 whole dev skeletons.
+Own and independent endpoint16 parity, independent B, then one fixed candidate
+may open the existing confirmation256 once: FULL>=244, QB>=116, ALL4>=58, errors0.
+Failure authorizes no alternate candidate, seed/LR/loss exploration or extension.
+Narrow binding acceptance never grants S4/S5/S6 or Goal1 acceptance.
+
+New SMALL cap3072; committed input3563520/target49152; executed including discarded
+input4300000/target60000; generation5504; teacher/sample rows5120; extra gS backward0.
+Planned generation5280 includes scheduled4864,parent new64,parent parity32,
+two-arm own/review parity64,conditional confirmation256. TINY caps128 optimizer,
+512 generation,512 teacher rows including failures; scalar work is separate.
+Unknown killed work stays UNKNOWN, not zero. One heavy process, active10800s,
+segment900s+cleanup120s, trainer16GiB. Compile time is not model performance.
+Only related Rust source/tests and minimal plan/status are published; original
+models, raw, corpus, Adam, DBs and scratch remain local. Report execution source,
+report commit and actual remote SHA separately.
+
 ## Closed: query signal convergence — delayed train fit, joint gate unmet
 
 Source a8c7f0fa261b2bf6804e02783d6f78bdcb0c7b28 was independently approved,

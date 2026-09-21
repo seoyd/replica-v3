@@ -1,5 +1,78 @@
 # 진단 및 구현 상태
 
+## 2026-09-21 Learned binding expansion — 수리·준비 검증, 학습 전
+
+R3-LEARNED-BINDING-EXPANSION-1.0은 종료된 QE2048의 weights/Adam을 읽는
+별도 연구다. 이전 FINAL_QUALITY_FAIL/resume=false 및 모든 원자료는 보존한다.
+이전 A/B PASS 보고와 최신 독립 QS-R1 미수용 보고는 다른 시점의 증거다.
+이번 수리가 과거 점수의 원인을 입증하거나 모델 품질을 회복했다는 뜻은 아니다.
+
+### 이번 실행 증거
+
+* QS-R1 수정 전 실제 subprocess 시험은 exit101로 재현했다. 관측 첫 forward
+  이전 순수 TIME_BUDGET은0회 호출인데 다음 process admission이 거부됐다.
+* 수정 후 동일 직접 시험1 PASS: 새 immutable attempt로 재개하고 연속 실행과
+  weights/Adam/clock/sampler/input/target 및 train/dev raw가 같았다.
+* 독립 검토자도 RED, GREEN 및 실패 경계10개를 실제 실행했다. finish 누락/손상,
+  orphan, 잘못된 samples, advanced cursor, timeout+cancel, timeout+I/O,
+  partial return, commit 이후 중단, entered/unreturned kill은 차단됐다.
+  독립 E1 보고 SHA256는
+  `af01cb4c579f0e87bb3c6c49943d562044b0737b4e7529de50f0f0d7e17c1837`이다.
+* 기존 observer off/on·새 process1+1·평가만 재개2+0 회귀1 PASS.
+* 새 native pool/tape/panel writer→publisher→reader→strict score 시험 PASS.
+  64/512/1024/1536행, 누락/중복/순서 변경, key 외 변경, target 불일치를 검사했다.
+  새 family의 실제 TINY teacher1행에서 target NLL/gold/foil logits도 확인했다.
+* 기존 checker `quick --binding-expansion`은 check 및 지정 test3개를 실행해
+  CHECKED_SCOPE_PASS, source_unchanged=true다. 0-test를 PASS로 세지 않았다.
+  release build/check와 diff whitespace 검사도 통과했다. fmt 전체 검사는 기존
+  compact source 포맷 부채로 실패했다. strict clippy는 기존32개 진단으로 실패했고,
+  새 구현 블록의 경고는 수정했다. 무관한 전체 소스를 재포맷/리팩터링하지 않았다.
+
+여기까지 실제 합계 TINY optimizer15/generation56/teacher 예산차감249행이다.
+teacher241행은 반환/종료 기록으로 확인됐고, kill 시험의 미반환8행은 UNKNOWN으로
+보존하고 보수적으로 차감했다. scalar finite-difference0, SMALL optimizer/
+generation/teacher0이다. 단순 native load/init, fixture writer와 raw 재집계를
+모델 호출로 세지 않는다.
+
+독립 A는 실제 preparation의 전수 data/token/target/tape/parent native·Adam 검산과
+독립 E1 동적 증거 결속 후 PASS를 발행했다. 보고서는
+`artifacts/binding-expansion-20260921-math-review/ACTUAL-A-PREPARATION-REVIEW.md`,
+SHA256 `80aae5d9a68cc4a2306c912cd656b4b977f64307f5d543f2fc6564761e8a6d2e`이며,
+확정된 `review-a.r3b` SHA256는
+`00cd957b44a8889b49302918b6dba4080cf1f574f55649f42e8facd96b3d9a98`이다.
+이 검토의 모델 호출은0이다. 이후 부모 관측/학습/품질 수용은 별도 기록한다.
+
+### 실제 준비 identity와 로컬 인계 경로
+
+|준비 항목|SHA256 또는 실제 값|
+|---|---|
+|Compiled source digest|95e07dba3de9008bb7c38bfa6031878a5ee4cb87398a2cf672408fb9fcfd3a2e|
+|Production executable|8719097f96d04bfaf2af15a1288544c88ed8bfa03e04d2890bb86d00b947ebe4|
+|Preparation|1288fad5dca2b2d317c279b20b33ac9a25e01c3ac5efd9de8413caaf4967dba7|
+|Selection|2117510c87a7e9345e86578389645ac6f667aaf8f3bcac207c10a6b3122079dc|
+|Shared native corpus|c0462f4861a1c67d9509305e9841bc6a07753a213ef92d253dbe918d7126e06a|
+|Shared metadata|c3428b8ee012d95b210350e12700e77821640f3cfb4d21438fb33fb6c8a816fc|
+|REPEAT policy / tape|e45bbb02476d9fe7df279694a1f7970cf1c7a8d566c5f54736f1c1af033be2d9 / d4cf2c9f1ad0040e5f3fc1720ff1d2feb3498bedc642071a98091ae9a0531210|
+|REBIND policy / tape|f3741bc854f9e1ea0b9cf24bb8e92362043a70b1542f5bb574cf4abcf6f1c4ca / 2ce8a84f5f0198fd8da137ecd6912e4682588a5c064b473508277344ba9b2089|
+|Common parent physical|e9b6c796bf7eccf292b46b040592450339dbe679014cbee46c5bf2952c9e1ab0|
+|Common parent Adam|5d3b93835657a75ae44b27a27fdd105a8258a5fec6db2760bac89c5b30c66762|
+
+공통 pool1536은 원래512행을 보존하고 key-only1024행을 추가했다. public finite
+reservation을 제외한 후보940개에서 필요한256개를 고정 순서로 선택했고 모든
+value-pair의 용량이 충분했다. confirmation 내용/정답은 열지 않았다. 같은1536
+pool에서 REPEAT512행×24회, REBIND1536행×8회이며 각1536 updates의 예정
+input1781760/target24576은 actual token/tape 전수검사 결과다. 아직 학습량이 아니다.
+
+인가된 로컬 검토 범위는 `artifacts/binding-expansion-20260921-study/`의
+preparation/selection, 두 arm의 native corpus/metadata/plan/initial 및 이후 생성할
+해당 연구 raw/checkpoint다. 실행물은 `artifacts/binding-expansion-20260921-executable`,
+명령·검사 증거는 `artifacts/binding-expansion-20260921-evidence/`, checker 결과는
+`artifacts/binding-expansion-20260921-quick/`, 독립 보고는
+`artifacts/binding-expansion-20260921-review/`와
+`artifacts/binding-expansion-20260921-math-review/`에 있다. 이 artifact들은 게시하지 않는다.
+이전 parent `artifacts/query-signal-20260921-study/QE/`는 읽기 전용이다.
+운영 DB/사용자 원문과 봉인 confirmation 내용은 이 인계의 열람 범위가 아니다.
+
 ## 2026-09-21 Query signal2048 — 제한 실행 완료, 학습 적합 개선·공동 품질 미달
 
 R3-QUERY-SIGNAL-CONVERGENCE-1.0의 실제 source는

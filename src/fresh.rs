@@ -9,13 +9,20 @@ use replica_v3::{
     retrieval::{Evidence, EvidenceBundle},
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, io::Write, path::PathBuf};
+use std::{collections::{HashMap, BTreeSet}, io::Write, path::PathBuf};
 const REVISION: &str = "joint-educational-v1";
+pub(super) fn is_binding_expansion(p:&Plan)->bool {identifiable::binding::is_expansion(p)}
 const SYSTEM: &str = "제공된 기록과 질문만으로 답하세요. 요구한 원문 또는 값을 쓰고 근거를 [event:번호]로 인용하세요. 근거가 없거나 모호하면 구별해서 유보하세요. 순서만으로 원인을 단정하지 마세요.";
 #[path = "identifiable.rs"]
 mod identifiable;
 #[derive(Subcommand)]
 pub enum Command {
+    /// Prepare the fixed parent-bound old/new binding comparison; no model calls.
+    ExpansionPrepare { #[arg(long)] parent: PathBuf, #[arg(long)] output: PathBuf },
+    /// Once-only parent parity and new64 generation/teacher observation.
+    ExpansionParent { #[arg(long)] study: PathBuf, #[arg(long)] new_pool: bool },
+    /// Read-only endpoint recount and paired comparison.
+    ExpansionReport { #[arg(long)] study: PathBuf },
     /// Explicit QE512 continuation with unchanged inputs, Adam and constant LR.
     SignalPrepare { #[arg(long)] parent: PathBuf, #[arg(long)] output: PathBuf },
     /// Once-only parent parity before the registered continuation.
@@ -388,87 +395,465 @@ fn digest<T: Serialize>(v: &T) -> Result<String> {
 
 // Read-only, training-tool observation. Its autograd graph and gradient map
 // never enter response CE or Adam; only Adam's already-computed delta is read.
+fn signal_probe_path(root: &Path, step: usize, attempt: usize, kind: &str) -> PathBuf {
+    root.join(if attempt == 0 {
+        format!("signal-probe-{step:04}-{kind}.r3b")
+    } else {
+        format!("signal-probe-{step:04}-attempt-{attempt:03}-{kind}.r3b")
+    })
+}
+// One decision for producer, preserved segment and next admission. Missing
+// counters are UNKNOWN, never zero; a timeout message alone grants no retry.
+fn signal_observation_decision(r: &binary::Value) -> Result<&'static str> {
+    if r["schema"] != 2 {
+        return Err(bad("unsupported signal observation schema"));
+    }
+    let f = r["microbatch_forwards"]
+        .as_u64()
+        .ok_or_else(|| bad("signal entry UNKNOWN"))?;
+    let returned = r["returned_forwards"]
+        .as_u64()
+        .ok_or_else(|| bad("signal return UNKNOWN"))?;
+    let b = r["diagnostic_backwards"]
+        .as_u64()
+        .ok_or_else(|| bad("signal backward UNKNOWN"))?;
+    let committed = r["optimizer_committed"]
+        .as_bool()
+        .ok_or_else(|| bad("signal commit UNKNOWN"))?;
+    if returned > f
+        || f > 4
+        || b > 2
+        || r["sample_forwards"] != f * 8
+        || r["gradient_enters_optimizer"] != false
+    {
+        return Err(bad("signal observation counters"));
+    }
+    let before = &r["before_S_valueNLL_eosNLL"];
+    let after = &r["after_S_valueNLL_eosNLL"];
+    let finite = |v: &binary::Value| {
+        v.as_array().is_some_and(|a| {
+            a.len() == 3 && a.iter().all(|x| x.as_f64().is_some_and(f64::is_finite))
+        })
+    };
+    if r["error"].is_null()
+        && committed
+        && f == 4
+        && returned == 4
+        && finite(before)
+        && finite(after)
+        && b == if r["gradient"] == true { 2 } else { 0 }
+    {
+        return Ok("COMPLETED");
+    }
+    if committed || f != 0 || returned != 0 || b != 0 || !before.is_null() || !after.is_null() {
+        return Ok("BLOCKED_PARTIAL_OBSERVATION");
+    }
+    let c = &r["control"];
+    if r["interruption_is_time"] == true
+        && r["preserved_pre_update"] == true
+        && c["reason"] == "TIME_BUDGET"
+        && c["terminal_reason"] == "TIME_BUDGET"
+        && c["observed_conditions"] == binary::record!(["TIME_BUDGET"])
+        && c["checkpoint_saved"] == true
+        && c["save_error"].is_null()
+        && c["trace_error"].is_null()
+    {
+        return Ok("NOT_INVOKED_TIME_PAUSE");
+    }
+    Ok("BLOCKED_OBSERVATION")
+}
+fn signal_checkpoint_state(path: &Path) -> Result<String> {
+    let l = checkpoint::load(path, Device::Cpu, true)?;
+    digest(&(
+        l.model.weights_content_id()?,
+        optimizer_hash(&l.optimizer)?,
+        &l.manifest.training,
+    ))
+}
+fn signal_preservation_control(c: &binary::Value) -> binary::Value {
+    let mut c = c.clone();
+    if let binary::Value::Object(fields) = &mut c {
+        fields.remove("signal_observation_state");
+    }
+    c
+}
+fn signal_segment_resumable(c: &binary::Value) -> bool {
+    c["signal_observation_state"].is_null()
+        || c["signal_observation_state"] == "NOT_INVOKED_TIME_PAUSE"
+}
+// Pure read: never fills a missing finish or changes an earlier attempt.
+fn signal_probe_next(
+    root: &Path,
+    p: &Plan,
+    step: usize,
+    current_step: usize,
+) -> Result<Option<(usize, Option<String>)>> {
+    let mut prior = None;
+    let prefix = format!("signal-probe-{step:04}-");
+    let mut inventory = std::fs::read_dir(root)?
+        .collect::<std::io::Result<Vec<_>>>()?
+        .iter()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(&prefix))
+        .collect::<BTreeSet<_>>();
+    let expected = if inventory.is_empty() {
+        None
+    } else {
+        let tok = ByteBpe::load(&root.join("tokenizer.r3b"))?;
+        let (samples, _, gradient) =
+            identifiable::binding::signal_probe_cases(p, root, step, &tok)?
+                .ok_or_else(|| bad("unexpected signal probe"))?;
+        Some((
+            digest(
+                &samples
+                    .iter()
+                    .map(|s| (&s.tokens, s.response_start))
+                    .collect::<Vec<_>>(),
+            )?,
+            gradient,
+        ))
+    };
+    for attempt in 0..128 {
+        let start = signal_probe_path(root, step, attempt, "started");
+        let finish = signal_probe_path(root, step, attempt, "finished");
+        if !start.exists() {
+            if !inventory.is_empty() {
+                return Err(bad("signal attempt gap/orphan"));
+            }
+            if prior.is_some() && current_step != step - 1 {
+                return Err(bad("pending observation cursor advanced"));
+            }
+            return Ok(Some((attempt, prior)));
+        }
+        for path in [&start, &finish, &pending_path(&finish)] {
+            inventory.remove(
+                path.file_name()
+                    .unwrap()
+                    .to_str()
+                    .ok_or_else(|| bad("signal attempt filename"))?,
+            );
+        }
+        let a: binary::Value = read(&start)?;
+        let r: binary::Value =
+            read_confirmed(&finish).map_err(|_| bad("signal observation unfinished/UNKNOWN"))?;
+        let (sample_hash, gradient) = expected
+            .as_ref()
+            .ok_or_else(|| bad("signal sample obligation"))?;
+        if a["policy"] != digest(p)?
+            || r["policy"] != a["policy"]
+            || a["step"] != step
+            || r["step"] != step
+            || a["samples"] != sample_hash.as_str()
+            || a["gradient"] != *gradient
+            || a["denominator"] != 16
+            || a["microbatch"] != 8
+        {
+            return Err(bad("signal observation identity"));
+        }
+        if a["schema"].is_null() {
+            if attempt != 0
+                || !r["error"].is_null()
+                || current_step < step
+                || !inventory.is_empty()
+                || r["microbatch_forwards"] != 4
+                || r["sample_forwards"] != 32
+                || r["diagnostic_backwards"] != if *gradient { 2 } else { 0 }
+            {
+                return Err(bad("legacy failed/ambiguous signal observation"));
+            }
+            return Ok(None);
+        }
+        if a["schema"] != 2
+            || r["schema"] != 2
+            || a["attempt"] != attempt
+            || r["attempt"] != attempt
+            || a["previous_finish"] != binary::record!(prior)
+            || r["start"] != file_hash(&start)?
+            || r["samples"] != a["samples"]
+            || r["gradient"] != a["gradient"]
+        {
+            return Err(bad("signal attempt chain"));
+        }
+        let pre = Path::new(
+            a["pre_checkpoint"]
+                .as_str()
+                .ok_or_else(|| bad("signal pre checkpoint"))?,
+        );
+        if a["pre_physical"] != file_hash(pre)? || a["pre_state"] != signal_checkpoint_state(pre)? {
+            return Err(bad("signal pre-update binding"));
+        }
+        let entries = (0..4)
+            .filter(|i| signal_probe_path(root, step, attempt, &format!("entry-{i}")).exists())
+            .count();
+        if r["microbatch_forwards"] != entries {
+            return Err(bad("signal durable entry mismatch"));
+        }
+        for i in 0..entries {
+            let path = signal_probe_path(root, step, attempt, &format!("entry-{i}"));
+            inventory.remove(
+                path.file_name()
+                    .unwrap()
+                    .to_str()
+                    .ok_or_else(|| bad("signal entry filename"))?,
+            );
+            let entry: binary::Value = read(&path)?;
+            if entry["start"] != file_hash(&start)? || entry["ordinal"] != i {
+                return Err(bad("signal call entry binding"));
+            }
+        }
+        let decision = signal_observation_decision(&r)?;
+        if r["state"] != decision {
+            return Err(bad("signal decision mismatch"));
+        }
+        if decision == "COMPLETED" {
+            if current_step < step || !inventory.is_empty() {
+                return Err(bad("duplicate/uncommitted completed observation"));
+            }
+            return Ok(None);
+        }
+        if decision != "NOT_INVOKED_TIME_PAUSE" {
+            return Err(bad(decision));
+        }
+        let segment = Path::new(
+            a["segment"]
+                .as_str()
+                .ok_or_else(|| bad("signal segment path"))?,
+        );
+        let c: binary::Value = read(&segment.join("train-control.r3b"))?;
+        let post = segment.join("final");
+        if signal_preservation_control(&c) != r["control"]
+            || c["signal_observation_state"] != decision
+            || r["checkpoint"] != file_hash(&post)?
+            || signal_checkpoint_state(&post)?
+                != a["pre_state"]
+                    .as_str()
+                    .ok_or_else(|| bad("signal pre state"))?
+            || current_step < step - 1
+        {
+            return Err(bad("signal pause preservation mismatch"));
+        }
+        prior = Some(file_hash(&finish)?);
+    }
+    Err(bad("signal attempt limit"))
+}
 pub(super) struct SignalObservation {
-    root: PathBuf, step: usize, policy: String, samples: Vec<Sample>, foils: Vec<u32>,
-    gradient: bool, gs: BTreeMap<String,Tensor>, before: Option<[f64;3]>, after: Option<[f64;3]>,
-    forwards: usize, backwards: usize, dot: f64, delta2: f64,
+    root: PathBuf,
+    step: usize,
+    policy: String,
+    samples: Vec<Sample>,
+    foils: Vec<u32>,
+    gradient: bool,
+    gs: BTreeMap<String, Tensor>,
+    before: Option<[f64; 3]>,
+    after: Option<[f64; 3]>,
+    forwards: usize,
+    backwards: usize,
+    dot: f64,
+    delta2: f64,
+    returned: usize,
+    attempt: usize,
+    start: binary::Value,
 }
 impl SignalObservation {
-    pub(super) fn start(p:&Plan,root:&Path,step:usize,tok:&ByteBpe)->Result<Option<Self>> {
-        let Some((samples,foils,gradient))=identifiable::binding::signal_probe_cases(p,root,step,tok)? else {return Ok(None)};
-        let policy=digest(p)?;
-        write(&root.join(format!("signal-probe-{step:04}-started.r3b")),&binary::record!({"policy":policy,"step":step,
-            "samples":digest(&samples.iter().map(|s|(&s.tokens,s.response_start)).collect::<Vec<_>>())?,
-            "gradient":gradient,"denominator":16,"microbatch":8,"model_calls_started":0}))?;
-        Ok(Some(Self{root:root.into(),step,policy,samples,foils,gradient,gs:BTreeMap::new(),before:None,after:None,
-            forwards:0,backwards:0,dot:0.,delta2:0.}))
+    pub(super) fn due(p: &Plan, step: usize) -> bool {
+        identifiable::binding::signal_probe_due(p, step)
     }
-    fn measure(&mut self,model:&Transformer,control:&mut recovery::RunControl,backward:bool)->Result<[f64;3]> {
-        let mut result=[0.;3];
-        for offset in [0,8] {
-            let indices=(offset..offset+8).collect::<Vec<_>>();
-            let b=batch(&self.samples,&indices,&model.device)?;
+    pub(super) fn start(
+        p: &Plan,
+        root: &Path,
+        step: usize,
+        tok: &ByteBpe,
+        pre: &Path,
+    ) -> Result<Option<Self>> {
+        let Some((samples, foils, gradient)) =
+            identifiable::binding::signal_probe_cases(p, root, step, tok)?
+        else {
+            return Ok(None);
+        };
+        let policy = digest(p)?;
+        let (attempt, previous) = signal_probe_next(root, p, step, step - 1)?
+            .ok_or_else(|| bad("completed signal update cannot repeat"))?;
+        let (m, _) = checkpoint::metadata(pre)?;
+        if m.training.as_ref().is_none_or(|s| s.step + 1 != step) {
+            return Err(bad("signal pre-update step"));
+        }
+        let start = binary::record!({"schema":2,"policy":policy,"step":step,"attempt":attempt,"previous_finish":previous,
+            "pre_checkpoint":pre,"pre_physical":file_hash(pre)?,"pre_state":signal_checkpoint_state(pre)?,"segment":pre.parent(),
+            "samples":digest(&samples.iter().map(|s|(&s.tokens,s.response_start)).collect::<Vec<_>>())?,
+            "gradient":gradient,"denominator":16,"microbatch":8,"model_calls_started":0});
+        write(&signal_probe_path(root, step, attempt, "started"), &start)?;
+        Ok(Some(Self {
+            root: root.into(),
+            step,
+            policy,
+            samples,
+            foils,
+            gradient,
+            gs: BTreeMap::new(),
+            before: None,
+            after: None,
+            forwards: 0,
+            backwards: 0,
+            dot: 0.,
+            delta2: 0.,
+            returned: 0,
+            attempt,
+            start,
+        }))
+    }
+    fn measure(
+        &mut self,
+        model: &Transformer,
+        control: &mut recovery::RunControl,
+        backward: bool,
+    ) -> Result<[f64; 3]> {
+        let mut result = [0.; 3];
+        for offset in [0, 8] {
+            let indices = (offset..offset + 8).collect::<Vec<_>>();
+            let b = batch(&self.samples, &indices, &model.device)?;
             control.begin_teacher_rows(8)?;
-            self.forwards+=1;
-            let logits=model.forward(&b.input,Some(&b.valid))?;
-            let mut margins=vec![];
-            for (j,&i) in indices.iter().enumerate() {
-                let s=&self.samples[i];let pos=s.response_start-1;
-                let z=logits.narrow(0,j,1)?.narrow(1,pos,1)?.flatten_all()?;
-                let gold=s.tokens[s.response_start] as usize;let foil=self.foils[i] as usize;
-                let margin=(z.narrow(0,gold,1)?.sum_all()?-z.narrow(0,foil,1)?.sum_all()?)?;
-                result[0]+=margin.to_scalar::<f32>()? as f64/16.;
-                for (target,slot) in [(gold,1usize),(EOS as usize,2usize)] {
-                    let z=logits.narrow(0,j,1)?.narrow(1,pos+slot-1,1)?.flatten_all()?;
-                    let logp=candle_nn::ops::log_softmax(&z,0)?;
-                    result[slot]-=logp.narrow(0,target,1)?.sum_all()?.to_scalar::<f32>()? as f64/16.;
+            write(
+                &signal_probe_path(
+                    &self.root,
+                    self.step,
+                    self.attempt,
+                    &format!("entry-{}", self.forwards),
+                ),
+                &binary::record!({"start":file_hash(&signal_probe_path(&self.root,self.step,self.attempt,"started"))?,
+                    "ordinal":self.forwards,"phase":if self.before.is_none(){"before"}else{"after"},"offset":offset}),
+            )?;
+            self.forwards += 1;
+            let logits = model.forward(&b.input, Some(&b.valid))?;
+            self.returned += 1;
+            let mut margins = vec![];
+            for (j, &i) in indices.iter().enumerate() {
+                let s = &self.samples[i];
+                let pos = s.response_start - 1;
+                let z = logits.narrow(0, j, 1)?.narrow(1, pos, 1)?.flatten_all()?;
+                let gold = s.tokens[s.response_start] as usize;
+                let foil = self.foils[i] as usize;
+                let margin =
+                    (z.narrow(0, gold, 1)?.sum_all()? - z.narrow(0, foil, 1)?.sum_all()?)?;
+                result[0] += margin.to_scalar::<f32>()? as f64 / 16.;
+                for (target, slot) in [(gold, 1usize), (EOS as usize, 2usize)] {
+                    let z = logits
+                        .narrow(0, j, 1)?
+                        .narrow(1, pos + slot - 1, 1)?
+                        .flatten_all()?;
+                    let logp = candle_nn::ops::log_softmax(&z, 0)?;
+                    result[slot] -=
+                        logp.narrow(0, target, 1)?.sum_all()?.to_scalar::<f32>()? as f64 / 16.;
                 }
                 margins.push(margin);
             }
             if backward {
-                let s=(Tensor::stack(&margins,0)?.sum_all()?/16.)?;
+                let s = (Tensor::stack(&margins, 0)?.sum_all()? / 16.)?;
                 control.check("signal_before_diagnostic_backward")?;
-                self.backwards+=1;
-                let gradients=s.backward()?;
-                for (name,var) in &model.vars {
-                    let g=gradients.get(var).ok_or_else(||bad("signal disconnected diagnostic gradient"))?;
-                    let next=if let Some(old)=self.gs.get(name) {(old+g)?}else{g.clone()};
-                    self.gs.insert(name.clone(),next);
+                self.backwards += 1;
+                let gradients = s.backward()?;
+                for (name, var) in &model.vars {
+                    let g = gradients
+                        .get(var)
+                        .ok_or_else(|| bad("signal disconnected diagnostic gradient"))?;
+                    let next = if let Some(old) = self.gs.get(name) {
+                        (old + g)?
+                    } else {
+                        g.clone()
+                    };
+                    self.gs.insert(name.clone(), next);
                 }
             }
             control.check("signal_microbatch_returned")?;
         }
-        if result.iter().any(|x|!x.is_finite()) {return Err(bad("signal nonfinite measurement"));}
+        if result.iter().any(|x| !x.is_finite()) {
+            return Err(bad("signal nonfinite measurement"));
+        }
         Ok(result)
     }
-    pub(super) fn before(&mut self,model:&Transformer,control:&mut recovery::RunControl)->Result<()> {
-        self.before=Some(self.measure(model,control,self.gradient)?);Ok(())
+    pub(super) fn before(
+        &mut self,
+        model: &Transformer,
+        control: &mut recovery::RunControl,
+    ) -> Result<()> {
+        #[cfg(feature = "test-support")]
+        if model.config.hidden == 32 && model.config.layers == 2 {
+            control.fixture_boundary = std::env::var("R3_SIGNAL_CALL_STOP").ok();
+        }
+        self.before = Some(self.measure(model, control, self.gradient)?);
+        Ok(())
     }
-    pub(super) fn delta(&mut self,name:&str,old:&Tensor,next:&Tensor)->Result<()> {
-        let delta=(next-old)?;
-        self.delta2+=delta.sqr()?.sum_all()?.to_scalar::<f32>()? as f64;
-        if self.gradient {self.dot+=self.gs.get(name).ok_or_else(||bad("signal gradient name"))?.mul(&delta)?.sum_all()?.to_scalar::<f32>()? as f64;}
-        if !self.dot.is_finite() || !self.delta2.is_finite() {return Err(bad("signal nonfinite Adam delta"));}Ok(())
+    pub(super) fn delta(&mut self, name: &str, old: &Tensor, next: &Tensor) -> Result<()> {
+        let delta = (next - old)?;
+        self.delta2 += delta.sqr()?.sum_all()?.to_scalar::<f32>()? as f64;
+        if self.gradient {
+            self.dot += self
+                .gs
+                .get(name)
+                .ok_or_else(|| bad("signal gradient name"))?
+                .mul(&delta)?
+                .sum_all()?
+                .to_scalar::<f32>()? as f64;
+        }
+        if !self.dot.is_finite() || !self.delta2.is_finite() {
+            return Err(bad("signal nonfinite Adam delta"));
+        }
+        Ok(())
     }
-    pub(super) fn after(&mut self,model:&Transformer,control:&mut recovery::RunControl)->Result<()> {
-        self.after=Some(self.measure(model,control,false)?);Ok(())
+    pub(super) fn after(
+        &mut self,
+        model: &Transformer,
+        control: &mut recovery::RunControl,
+    ) -> Result<()> {
+        self.after = Some(self.measure(model, control, false)?);
+        Ok(())
     }
-    pub(super) fn finish(&self,error:Option<String>)->Result<()> {
-        let gs2=self.gs.values().try_fold(0.,|a,g|->Result<f64>{Ok(a+g.sqr()?.sum_all()?.to_scalar::<f32>()? as f64)})?;
-        let difference=self.before.zip(self.after).map(|(a,b)|b[0]-a[0]);
-        publish_confirmed(&self.root.join(format!("signal-probe-{:04}-finished.r3b",self.step)),&binary::record!({
+    pub(super) fn finish(
+        &self,
+        error: Option<String>,
+        step: usize,
+        preservation: Option<(&Path, &binary::Value, bool)>,
+    ) -> Result<&'static str> {
+        let gs2 = self.gs.values().try_fold(0., |a, g| -> Result<f64> {
+            Ok(a + g.sqr()?.sum_all()?.to_scalar::<f32>()? as f64)
+        })?;
+        let difference = self.before.zip(self.after).map(|(a, b)| b[0] - a[0]);
+        let mut record = binary::record!({"schema":2,"attempt":self.attempt,
+            "start":file_hash(&signal_probe_path(&self.root,self.step,self.attempt,"started"))?,"samples":self.start["samples"],"gradient":self.gradient,
+            "optimizer_committed":step>=self.step,"returned_forwards":self.returned,
+            "checkpoint":preservation.map(|(path,_,_)|file_hash(path)).transpose()?,
+            "control":preservation.map(|(_,c,_)|c),"interruption_is_time":preservation.is_some_and(|(_,_,time)|time),
+            "preserved_pre_update":preservation.map(|(path,_,_)|signal_checkpoint_state(path).map(|s|binary::record!(s)==self.start["pre_state"])).transpose()?.unwrap_or(false),
             "policy":self.policy,"step":self.step,"before_S_valueNLL_eosNLL":self.before,"after_S_valueNLL_eosNLL":self.after,
             "gS_norm":if self.gradient{Some(gs2.sqrt())}else{None},"actual_delta_norm":self.delta2.sqrt(),
             "gS_dot_delta":if self.gradient{Some(self.dot)}else{None},"actual_S_change":difference,
             "first_order_residual":if self.gradient{difference.map(|v|v-self.dot)}else{None},
             "microbatch_forwards":self.forwards,"sample_forwards":self.forwards*8,"diagnostic_backwards":self.backwards,
-            "gradient_enters_optimizer":false,"error":error}))?;
-        println!("SIGNAL_PROBE step={} before={:?} after={:?} gS_dot_delta={} delta_norm={} forwards={} rows={} backwards={} error={:?}",
-            self.step,self.before,self.after,self.dot,self.delta2.sqrt(),self.forwards,self.forwards*8,self.backwards,error);
-        Ok(())
+            "gradient_enters_optimizer":false,"error":error});
+        let decision = signal_observation_decision(&record)?;
+        record["state"] = binary::record!(decision);
+        publish_confirmed(
+            &signal_probe_path(&self.root, self.step, self.attempt, "finished"),
+            &record,
+        )?;
+        println!(
+            "SIGNAL_PROBE step={} before={:?} after={:?} gS_dot_delta={} delta_norm={} forwards={} rows={} backwards={} error={:?}",
+            self.step,
+            self.before,
+            self.after,
+            self.dot,
+            self.delta2.sqrt(),
+            self.forwards,
+            self.forwards * 8,
+            self.backwards,
+            error
+        );
+        Ok(decision)
     }
-    pub(super) fn counts(&self)->(usize,usize) {(self.forwards,self.backwards)}
+    pub(super) fn counts(&self) -> (usize, usize) {
+        (self.forwards, self.backwards)
+    }
 }
+
 fn entity_pool(split: usize, length: usize) -> Vec<String> {
     // Full entity hash partitions a finite namespace. One-digit names are reused
     // within their split, never falsely described as thousands of unique names.
@@ -912,7 +1297,7 @@ impl Plan {
             .ok_or_else(|| bad("paired input budget exhausted"))?))
     }
     pub(super) fn learning_rate(&self, step: usize) -> f64 {
-        if identifiable::binding::is_signal(self) { return self.config.lr; }
+        if identifiable::binding::is_signal(self) || identifiable::binding::is_expansion(self) { return self.config.lr; }
         if identifiable::binding::is(self) { return self.config.lr * (step as f64 / self.config.warmup as f64).min(1.); }
         self.fork
             .as_ref()
@@ -1309,6 +1694,9 @@ fn source_digest() -> Result<String> {
 }
 pub fn execute(command: Command) -> Result<()> {
     match command {
+        Command::ExpansionPrepare {parent,output} => identifiable::binding::expansion_prepare(&parent,&output),
+        Command::ExpansionParent {study,new_pool} => identifiable::binding::expansion_parent_observe(&study,new_pool),
+        Command::ExpansionReport {study} => identifiable::binding::expansion_report(&study),
         Command::SignalPrepare {parent,output} => identifiable::binding::signal_prepare(&parent,&output,false),
         Command::SignalParentParity {study} => identifiable::binding::signal_parent_parity(&study),
         Command::SignalReport {study} => identifiable::binding::signal_report(&study),
@@ -1602,7 +1990,7 @@ fn history(root: &Path, p: &Plan) -> Result<Vec<Segment>> {
                     .ok_or_else(|| bad("teacher usage UNKNOWN"))?
             || !s.elapsed.is_finite()
             || s.elapsed < 0.
-            || (s.resume && !matches!(s.stop.as_str(), "TIME_BUDGET" | "TRAINING"))
+            || (s.resume && (!matches!(s.stop.as_str(), "TIME_BUDGET" | "TRAINING") || !signal_segment_resumable(&c)))
         {
             return Err(bad("segment native/counter/chain mismatch"));
         }
@@ -1661,6 +2049,8 @@ fn run(root: &Path, uninterrupted_fixture: bool) -> Result<()> {
     let output = root.join(format!("segment-{index:04}"));
     let stop_after = if previous.is_empty() && !uninterrupted_fixture {
         p.origin_step() + 1
+    } else if identifiable::binding::is_expansion(&p) {
+        identifiable::binding::expansion_endpoint(&p,step,previous.last().is_some_and(|s|s.phase.as_deref()==Some("EvaluationPending")))?
     } else if identifiable::binding::is_signal(&p) {
         identifiable::binding::signal_endpoint(&p,step,previous.last().is_some_and(|s| s.phase.as_deref()==Some("EvaluationPending")))?
     } else if identifiable::binding::is_framing(&p) {
@@ -1772,12 +2162,14 @@ fn run(root: &Path, uninterrupted_fixture: bool) -> Result<()> {
     let evaluation_pending =
         p.evaluation_due(s.step) && receipt["final_evaluation_complete"] != true;
     let clean_time = matches!(&r,Err(Error::Model(message)) if message=="TIME_BUDGET")
+        && signal_segment_resumable(&receipt)
         && receipt["reason"] == "TIME_BUDGET"
         && receipt["save_error"].is_null()
         && receipt["observed_conditions"]
             .as_array()
             .is_some_and(|v| !v.is_empty() && v.iter().all(|x| x == "TIME_BUDGET"));
     let resume = (s.step < p.config.max_steps || evaluation_pending)
+        && signal_segment_resumable(&receipt)
         && s.consumed_tokens < p.config.max_tokens
         && receipt["fresh_stop"].is_null()
         && receipt["save_error"].is_null()
@@ -2204,7 +2596,7 @@ fn teacher_prefix(
         let attempt = prepare_call(root, prefix, "teacher", binding, e, i)?;
         #[cfg(feature = "test-support")]
         call_fixture(l, control, prefix, "teacher", i);
-        let observed = if e.family.starts_with("foundation-orbit-v1/") {
+        let observed = if e.family.starts_with("foundation-orbit-v1/") || e.family.starts_with("learned-binding-expansion-v1/") {
             let foil = identifiable::binding::orbit_foil(e)?;
             recovery::fresh_teacher_with_foil(l, e, Some(&foil), control)
         } else { recovery::fresh_teacher(l, e, control) };
@@ -2851,7 +3243,7 @@ fn audit_panel(
         if r["native_prompt_digest"] != prompt.token_digest {
             return Err(bad("raw actual framing mismatch"));
         }
-        if (identifiable::binding::is_framing(p) || identifiable::binding::is_signal(p)) && r["framing"] != p.framing().id() {
+        if (identifiable::binding::is_framing(p) || identifiable::binding::is_signal(p) || identifiable::binding::is_expansion(p)) && r["framing"] != p.framing().id() {
             return Err(bad("raw framing descriptor mismatch"));
         }
     }
@@ -2873,7 +3265,7 @@ fn audit_panel(
             if r["id"] != e.id || r["ordinal"] != i || r["case"] != digest(e)? {
                 return Err(bad("teacher case"));
             }
-            if (identifiable::binding::is_framing(p) || identifiable::binding::is_signal(p))
+            if (identifiable::binding::is_framing(p) || identifiable::binding::is_signal(p) || identifiable::binding::is_expansion(p))
                 && r["teacher"]["training_prompt_matches_generation"] != true
             {
                 return Err(bad("teacher actual framing mismatch"));

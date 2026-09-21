@@ -12,6 +12,9 @@ const FRAME_CONTRACT: &str = "R3-CAUSAL-FRAMING-BASELINE-1.0";
 const FRAME_ARMS: [&str; 2] = ["QE", "EQ"];
 const SIGNAL_DATA: &str = "query-signal-convergence-v1";
 const SIGNAL_CONTRACT: &str = "R3-QUERY-SIGNAL-CONVERGENCE-1.0";
+const EXPANSION_DATA: &str = "learned-binding-expansion-v1";
+const EXPANSION_CONTRACT: &str = "R3-LEARNED-BINDING-EXPANSION-1.0";
+const EXPANSION_ARMS: [&str; 2] = ["REPEAT", "REBIND"];
 const SHORT_SYSTEM: &str = "근거에 따라 답하라.";
 const VALUE_QUERY: &str = "현재 값의 숫자 하나만 답하라.";
 const CITATION_QUERY: &str = "현재 값을 인용과 함께 써라.";
@@ -20,7 +23,10 @@ type Skeleton = [u8; 4];
 pub(in super::super) fn is(p: &Plan) -> bool {
     p.identifiable
         .as_ref()
-        .is_some_and(|x| [DATA, ORBIT_DATA, FRAME_DATA, SIGNAL_DATA].contains(&x.dataset.as_str()))
+        .is_some_and(|x| [DATA, ORBIT_DATA, FRAME_DATA, SIGNAL_DATA, EXPANSION_DATA].contains(&x.dataset.as_str()))
+}
+pub(in super::super) fn is_expansion(p: &Plan) -> bool {
+    p.identifiable.as_ref().is_some_and(|x| x.dataset == EXPANSION_DATA)
 }
 pub(in super::super) fn is_signal(p: &Plan) -> bool {
     p.identifiable.as_ref().is_some_and(|x| x.dataset == SIGNAL_DATA)
@@ -31,13 +37,15 @@ pub(in super::super) fn is_framing(p: &Plan) -> bool {
         .is_some_and(|x| x.dataset == FRAME_DATA)
 }
 fn is_orbit(p: &Plan) -> bool {
-    is_signal(p) || is_framing(p)
+    is_expansion(p) || is_signal(p) || is_framing(p)
         || p.identifiable
             .as_ref()
             .is_some_and(|x| x.dataset == ORBIT_DATA)
 }
 fn arms(p: &Plan) -> &'static [&'static str] {
-    if is_signal(p) {
+    if is_expansion(p) {
+        &EXPANSION_ARMS
+    } else if is_signal(p) {
         &["QE"]
     } else if is_framing(p) {
         &FRAME_ARMS
@@ -49,6 +57,14 @@ fn arms(p: &Plan) -> &'static [&'static str] {
 }
 pub(in super::super) fn evaluation_for(p: &Plan) -> EvaluationPolicy {
     let mut e = evaluation(p.tiny);
+    if is_expansion(p) {
+        e.screen_steps.clear();
+        e.train_steps = vec![2304, 2816, 3584];
+        e.generation_limit = 5504;
+        e.teacher_limit = 5120;
+        e.active_seconds = 10800;
+        return e;
+    }
     if is_signal(p) {
         e.screen_steps.clear();
         e.train_steps = if p.tiny {vec![4]} else {vec![768,1024,1536,2048]};
@@ -578,6 +594,7 @@ pub(in super::super) fn prepare(parent: &Path, output: &Path, tiny: bool) -> Res
     Ok(())
 }
 pub(in super::super) fn verify_plan(root: &Path, p: &Plan) -> Result<()> {
+    if is_expansion(p) { return expansion_verify_plan(root, p); }
     if is_signal(p) { return signal_verify_plan(root, p); }
     if is_framing(p) {
         return framing_verify_plan(root, p);
@@ -639,6 +656,17 @@ fn panel_cases(
 ) -> Result<Vec<(String, Vec<Episode>, Vec<Meta>)>> {
     let c = verified_corpus(&root.join("corpus.r3cor"), &p.corpus)?;
     let (tm, dm, _) = verified_metadata(root, p)?;
+    if is_expansion(p) {
+        let final_step = step == p.config.max_steps;
+        let old = if final_step {512} else {64};
+        let new = if final_step {1024} else {64};
+        if c.train.len()!=1536 || tm.len()!=1536 || c.validation.len()!=512 || dm.len()!=512 {
+            return Err(bad("expansion complete pool required"));
+        }
+        return Ok(vec![(format!("old{old}"), c.train[..old].to_vec(), tm[..old].to_vec()),
+            (format!("new{new}"), c.train[512..512+new].to_vec(), tm[512..512+new].to_vec()),
+            (format!("dev{old}"), c.validation[..old].to_vec(), dm[..old].to_vec())]);
+    }
     let nt = if is_orbit(p) {
         if p.tiny {
             4
@@ -693,6 +721,7 @@ pub(in super::super) fn evaluate(
         evaluate_panel(p, root, path, step, &name, &es, &ms, control)?;
     }
     if is_signal(p) { return signal_evaluation_decision(root, p, step); }
+    if is_expansion(p) { return expansion_evaluation_decision(root, p, step); }
     Ok(None)
 }
 pub(in super::super) fn audit(
@@ -719,6 +748,10 @@ pub(in super::super) fn audit(
     Ok((count, out))
 }
 fn gate(root: &Path, p: &Plan) -> Result<bool> {
+    if is_expansion(p) {
+        let h=history(root,p)?;
+        return Ok(h.last().is_some_and(|s| s.step==3584 && s.stop=="CANDIDATE_FIXED" && !s.resume));
+    }
     if is_signal(p) {
         let h = history(root,p)?;
         return Ok(h.last().is_some_and(|s| s.stop == "CANDIDATE_FIXED" && !s.resume));
@@ -777,6 +810,7 @@ pub(in super::super) fn authorize(root: &Path, p: &Plan) -> Result<()> {
         return Err(bad("independent binding review required"));
     }
     if is_signal(p) { return signal_authorize(root,p); }
+    if is_expansion(p) { return expansion_authorize(root,p); }
     for &arm in arms(p) {
         let r = study.join(arm);
         let plan = plan_read(&r)?;
@@ -853,6 +887,7 @@ fn work(p: &Plan) -> Result<(f64, usize, usize, u64, u64)> {
             "review-BOTH",
             "review-QE",
             "review-EQ",
+            "review-REPEAT", "review-REBIND", "parent-new", "review-parent",
         ] {
             let study = &own(p).study;
             if study.join(format!("{name}-started.r3b")).exists() {
@@ -875,7 +910,9 @@ pub(in super::super) fn usage(p: &Plan) -> Result<(f64, usize, usize)> {
 }
 pub(in super::super) fn remaining(p: &Plan, target: bool) -> Result<u64> {
     let w = work(p)?;
-    let (cap, n) = if is_signal(p) {
+    let (cap, n) = if is_expansion(p) {
+        if target {(60_000u64,w.4)} else {(4_300_000u64,w.3)}
+    } else if is_signal(p) {
         if target {(30_000u64,w.4)} else {(2_100_000u64,w.3)}
     } else if is_framing(p) {
         if target {
@@ -1791,7 +1828,12 @@ pub(in super::super) fn orbit_parity(root: &Path, p: &Plan, reviewer: bool) -> R
     authorize(root, p)?;
     let h = history(root, p)?;
     let end = h.last().ok_or_else(|| bad("orbit endpoint missing"))?;
-    if is_signal(p) {
+    if is_expansion(p) {
+        if end.step!=3584 || end.resume || end.phase.as_deref()!=Some("Finished")
+            || !["CANDIDATE_FIXED","FINAL_QUALITY_FAIL"].contains(&end.stop.as_str()) {
+            return Err(bad("expansion final endpoint required"));
+        }
+    } else if is_signal(p) {
         if ![1024,2048].contains(&end.step) || end.resume || end.phase.as_deref()!=Some("Finished")
             || !["CANDIDATE_FIXED","FINAL_QUALITY_FAIL"].contains(&end.stop.as_str()) {
             return Err(bad("signal final endpoint required"));
@@ -1857,9 +1899,12 @@ pub(in super::super) fn orbit_compare(study:&Path) -> Result<()> {
     Ok(())
 }
 pub(in super::super) fn orbit_confirm(study: &Path) -> Result<()> {
+    let expansion = study.join("REPEAT/plan.r3b").exists();
     let framing = study.join("QE/plan.r3b").exists();
     let signal = framing && is_signal(&plan_read(&study.join("QE"))?);
-    let comparison = if signal {
+    let comparison = if expansion {
+        expansion_comparison(study)?
+    } else if signal {
         signal_comparison(study)?
     } else if framing {
         framing_comparison(study)?
@@ -1886,12 +1931,12 @@ pub(in super::super) fn orbit_confirm(study: &Path) -> Result<()> {
     let p = plan_read(&root)?;
     let h = history(&root, &p)?;
     let end = h.last().unwrap();
-    let selection: binary::Value = if framing {
+    let selection: binary::Value = if framing || expansion {
         read(&study.join("selection.r3b"))?
     } else {
         binary::Value::Null
     };
-    let seal_root = if framing {
+    let seal_root = if framing || expansion {
         Path::new(
             selection["seal_root"]
                 .as_str()
@@ -2250,6 +2295,893 @@ fn signal_parent(root: &Path) -> Result<(Plan, Segment)> {
     }
     Ok((p,end))
 }
+// This fork only broadens key-pair coverage. Historical terminal receipts are
+// read under their retained source identities, never reopened for execution.
+fn expansion_parent(root: &Path) -> Result<(Plan, Segment)> {
+    let raw: Plan = read(&root.join("plan.r3b"))?;
+    let p = plan_read_bound(root, &raw.source, &raw.binary)?;
+    let end = history(root, &p)?
+        .last()
+        .cloned()
+        .ok_or_else(|| bad("expansion parent missing"))?;
+    if !is_signal(&p)
+        || p.tiny
+        || own(&p).arm != "QE"
+        || end.step != 2048
+        || end.resume
+        || end.phase.as_deref() != Some("Finished")
+        || end.stop != "FINAL_QUALITY_FAIL"
+        || p.framing() != neural::Framing::QuestionEvidence
+    {
+        return Err(bad("closed QE2048 weights/Adam required"));
+    }
+    let d: binary::Value = read_confirmed(&root.join("signal-decision-2048.r3b"))?;
+    if d != signal_evaluation_result(root, &p, 2048)? {
+        return Err(bad("preserved parent decision/raw mismatch"));
+    }
+    Ok((p, end))
+}
+fn rekey(e: &Episode, s: Skeleton) -> Result<Episode> {
+    let old = semantic_skeleton(e)?;
+    if old[2..] != s[2..] || canonical(s) != s || s.iter().collect::<BTreeSet<_>>().len() != 4 {
+        return Err(bad("rekey must preserve values"));
+    }
+    let mut out = e.clone();
+    let map = |text: &str| -> Result<String> {
+        let offset = "장치".len();
+        let digit = text.as_bytes().get(offset).ok_or_else(|| bad("key span"))?;
+        if !text.starts_with("장치") {
+            return Err(bad("key prefix"));
+        }
+        let side = old[..2]
+            .iter()
+            .position(|v| v + b'0' == *digit)
+            .ok_or_else(|| bad("key outside skeleton"))?;
+        let mut v = text.to_owned();
+        v.replace_range(offset..offset + 1, &s[side].to_string());
+        Ok(v)
+    };
+    out.request.input = map(&e.request.input)?;
+    for r in &mut out.request.evidence.items {
+        r.original_excerpt = map(&r.original_excerpt)?;
+    }
+    if resolve_request(&out.request)? != e.answer || semantic_skeleton(&out)? != s {
+        return Err(bad("rekey resolver/target"));
+    }
+    Ok(out)
+}
+fn verify_rekey(a: &Episode, b: &Episode, tok: &ByteBpe) -> Result<()> {
+    let expected = rekey(a, semantic_skeleton(b)?)?;
+    if digest(&expected.request)? != digest(&b.request)? || a.answer != b.answer {
+        return Err(bad("rekey changed metadata/value/target"));
+    }
+    let sa = samples(std::slice::from_ref(a), tok, 256)?.remove(0);
+    let sb = samples(std::slice::from_ref(b), tok, 256)?.remove(0);
+    let p = tok.prepare(&b.request, 2048, "rekey")?;
+    if sa.tokens.len() != 146
+        || sb.tokens.len() != 146
+        || sa.response_start != 144
+        || sb.response_start != 144
+        || sa.tokens[144..] != sb.tokens[144..]
+        || sa.tokens[145] != EOS
+        || p.provided.len() != 2
+        || !p.excluded.is_empty()
+    {
+        return Err(bad("rekey actual token shape/target"));
+    }
+    let mut allowed = BTreeSet::new();
+    for (i, &role) in sa.tokens[..144].iter().enumerate() {
+        if ![neural::USER_ROLE, neural::EVIDENCE_ROLE].contains(&role) {
+            continue;
+        }
+        let start = i + 1;
+        let end = start
+            + sa.tokens[start..144]
+                .iter()
+                .position(|&v| v == neural::END_ROLE)
+                .ok_or_else(|| bad("key role end"))?;
+        let bytes = tok.decode_bytes(&sa.tokens[start..end])?;
+        let needle = "장치".as_bytes();
+        let spans = bytes
+            .windows(needle.len())
+            .enumerate()
+            .filter_map(|(n, w)| (w == needle).then_some(n + needle.len()))
+            .collect::<Vec<_>>();
+        if spans.len() != 1 {
+            return Err(bad("unique key span per role"));
+        }
+        let mut offset = 0;
+        for j in start..end {
+            let piece = tok.decode_bytes(&[sa.tokens[j]])?;
+            if offset == spans[0] && piece.len() == 1 && piece[0].is_ascii_digit() {
+                allowed.insert(j);
+            }
+            offset += piece.len();
+        }
+    }
+    let changed = sa
+        .tokens
+        .iter()
+        .zip(&sb.tokens)
+        .enumerate()
+        .filter_map(|(i, (x, y))| (x != y).then_some(i))
+        .collect::<BTreeSet<_>>();
+    if allowed.len() != 3 || changed.is_empty() || !changed.is_subset(&allowed) {
+        return Err(bad("non-key token intervention"));
+    }
+    Ok(())
+}
+fn expansion_pool(parent: &Path, old: &Plan) -> Result<(Vec<Episode>, Vec<Meta>, binary::Value)> {
+    let c = verified_corpus(&parent.join("corpus.r3cor"), &old.corpus)?;
+    let (tm, dm, _) = verified_metadata(parent, old)?;
+    if c.train.len() != 512 || c.validation.len() != 512 {
+        return Err(bad("expansion parent pool size"));
+    }
+    let tok = ByteBpe::load(&parent.join("tokenizer.r3b"))?;
+    let previous: binary::Value = read(&own(old).study.join("selection.r3b"))?;
+    let seal_root = Path::new(
+        previous["seal_root"]
+            .as_str()
+            .ok_or_else(|| bad("reserved seal path"))?,
+    );
+    expansion_pool_from(&c, tm, &dm, &tok, seal_root)
+}
+fn expansion_pool_from(
+    c: &data::native::Corpus,
+    tm: Vec<Meta>,
+    dm: &[Meta],
+    tok: &ByteBpe,
+    seal_root: &Path,
+) -> Result<(Vec<Episode>, Vec<Meta>, binary::Value)> {
+    orbit_validate(&c.train, &tm, tok, 512)?;
+    orbit_validate(&c.validation, dm, tok, 512)?;
+    let tr = c
+        .train
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|q| semantic_skeleton(&q[0]))
+        .collect::<Result<Vec<_>>>()?;
+    let dev = c
+        .validation
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|q| semantic_skeleton(&q[0]))
+        .collect::<Result<Vec<_>>>()?;
+    // Public finite rank algorithm and the existing seal digest only. No
+    // confirmation episode, answer or metadata is opened for preparation.
+    let seal: binary::Value = read_confirmed(&seal_root.join("confirmation-seal.r3b"))?;
+    let reserved = heldout_skeletons(&[tr.clone(), dev.clone()].concat(), 64);
+    if seal["skeleton_digest"] != digest(&reserved)? || seal["count"] != 256 {
+        return Err(bad("reserved skeleton digest"));
+    }
+    let mut used = tr
+        .iter()
+        .chain(&dev)
+        .chain(&reserved)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let mut candidates = universe()
+        .into_iter()
+        .filter(|s| !used.contains(s))
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|&s| rank(s));
+    let mut capacity = BTreeMap::new();
+    for s in &tr {
+        let key = format!("{},{}", s[2], s[3]);
+        let needed = tr.iter().filter(|v| v[2..] == s[2..]).count() * 2;
+        let available = candidates.iter().filter(|v| v[2..] == s[2..]).count();
+        if available < needed {
+            return Err(bad("BLOCKED_DATA_CAPACITY"));
+        }
+        capacity.insert(
+            key,
+            binary::record!({"available":available,"required":needed}),
+        );
+    }
+    let mut es = c.train.clone();
+    let mut ms = tm;
+    let mut chosen = vec![];
+    for group in 1..=2 {
+        for (base, &s) in tr.iter().enumerate() {
+            let next = *candidates
+                .iter()
+                .find(|v| v[2..] == s[2..] && !used.contains(*v))
+                .ok_or_else(|| bad("BLOCKED_DATA_CAPACITY"))?;
+            used.insert(next);
+            chosen.push(next);
+            let key = format!("{EXPANSION_DATA}/new{group}/{base}");
+            for view in 0..4 {
+                let old_e = &c.train[base * 4 + view];
+                let mut e = rekey(old_e, next)?;
+                e.id = format!("{key}/{view}");
+                e.family = key.clone();
+                e.sequence = key.clone();
+                e.binding = digest(&e.request.evidence)?;
+                let mut m = ms[base * 4 + view].clone();
+                m.id = e.id.clone();
+                m.base = key.clone();
+                m.split = "train".into();
+                m.entities = vec![format!("장치{}", next[0]), format!("장치{}", next[1])];
+                m.source_id = Some(format!("{}/{group}", old_e.id));
+                verify_rekey(old_e, &e, tok)?;
+                es.push(e);
+                ms.push(m);
+            }
+        }
+    }
+    let mut audits = vec![];
+    for group in 0..3 {
+        audits.push(orbit_validate(
+            &es[group * 512..(group + 1) * 512],
+            &ms[group * 512..(group + 1) * 512],
+            tok,
+            512,
+        )?);
+    }
+    let mut prompts = BTreeMap::new();
+    let mut edges = BTreeMap::new();
+    for e in &es {
+        let s = samples(std::slice::from_ref(e), tok, 256)?.remove(0);
+        if prompts
+            .insert(s.tokens[..s.response_start].to_vec(), e.answer.clone())
+            .is_some_and(|v| v != e.answer)
+        {
+            return Err(bad("conflicting identical prompt"));
+        }
+        for r in &e.request.evidence.items {
+            let (k, _, v) = parsed_record(r)?;
+            bump(&mut edges, format!("{k}->{v}"));
+        }
+    }
+    if es.iter().map(|e| &e.id).collect::<BTreeSet<_>>().len() != 1536
+        || ms.iter().map(|m| &m.id).collect::<BTreeSet<_>>().len() != 1536
+    {
+        return Err(bad("expansion duplicate external ID"));
+    }
+    Ok((
+        es,
+        ms,
+        binary::record!({"capacity":capacity,"old":tr,"new":chosen,"dev":dev,"reserved_digest":seal["skeleton_digest"],
+        "seal_root":seal_root,"seal":file_hash(&seal_root.join("confirmation-seal.r3b"))?,"sealed_corpus":seal["corpus"],
+        "groups":audits,"edge_frequency_pool":edges,"input_length":145,"target_length":2,"rows":1536,"changed":"query/record key digits only"}),
+    ))
+}
+fn expansion_rows(old: &Plan, arm: &str) -> Result<Vec<[usize; 8]>> {
+    if !EXPANSION_ARMS.contains(&arm) || own(old).rows.len() != 2048 {
+        return Err(bad("expansion tape parent"));
+    }
+    let base = &own(old).rows[..512];
+    let mut visits = [0usize; 128];
+    let mut out = own(old).rows.clone();
+    for local in 0..1536 {
+        let mut row = base[local % 512];
+        for pair in row.as_chunks_mut::<2>().0 {
+            let b = pair[0] / 4;
+            if b >= 128 || pair[0] % 2 != 0 || pair[1] != pair[0] + 1 {
+                return Err(bad("parent paired slot"));
+            }
+            let group = if arm == "REBIND" { visits[b] % 3 } else { 0 };
+            visits[b] += 1;
+            pair[0] += group * 512;
+            pair[1] += group * 512;
+        }
+        out.push(row);
+    }
+    if visits.iter().any(|&n| n != 48) {
+        return Err(bad("expansion slot visits"));
+    }
+    Ok(out)
+}
+fn expansion_exposure(
+    rows: &[[usize; 8]],
+    arm: &str,
+    es: &[Episode],
+    tok: &ByteBpe,
+) -> Result<binary::Value> {
+    if rows.len() != 1536 || es.len() != 1536 {
+        return Err(bad("expansion tape/pool counts"));
+    }
+    let ss = samples(es, tok, 256)?;
+    let mut counts = vec![0usize; 1536];
+    let mut assignments = vec![[0usize; 2]; 384];
+    let mut input = 0;
+    let mut target = 0;
+    let mut edges = BTreeMap::new();
+    let mut keys = BTreeMap::new();
+    for row in rows {
+        let mut logical = BTreeSet::new();
+        for pair in row.as_chunks::<2>().0 {
+            if pair[0] >= 1536
+                || pair[0] % 2 != 0
+                || pair[1] != pair[0] + 1
+                || !logical.insert(pair[0] % 512 / 4)
+            {
+                return Err(bad("expansion paired batch"));
+            }
+            assignments[pair[0] / 4][pair[0] % 4 / 2] += 1;
+            for &i in pair {
+                if ss[i].tokens.len() != 146 || ss[i].tokens[144..] != ss[i % 512].tokens[144..] {
+                    return Err(bad("paired target/shape mismatch"));
+                }
+                counts[i] += 1;
+                input += 145;
+                target += 2;
+                for r in &es[i].request.evidence.items {
+                    let (k, _, v) = parsed_record(r)?;
+                    bump(&mut keys, k.to_owned());
+                    bump(&mut edges, format!("{k}->{v}"));
+                }
+            }
+        }
+    }
+    for (i, &n) in counts.iter().enumerate() {
+        if n != if arm == "REPEAT" {
+            if i < 512 { 24 } else { 0 }
+        } else {
+            8
+        } {
+            return Err(bad("expansion exact per-row exposure"));
+        }
+    }
+    if assignments.iter().enumerate().any(|(b, &n)| {
+        n != if arm == "REPEAT" {
+            if b < 128 { [24, 24] } else { [0, 0] }
+        } else {
+            [8, 8]
+        }
+    }) || input != 1_781_760
+        || target != 24_576
+    {
+        return Err(bad("expansion target/input/assignment budget"));
+    }
+    Ok(
+        binary::record!({"updates":1536,"rows":12288,"unique":counts.iter().filter(|&&n|n>0).count(),"counts":counts,
+        "per_assignment":assignments,"input":input,"target":target,"key_frequency":keys,"edge_frequency":edges}),
+    )
+}
+fn expansion_plan(
+    old: &Plan,
+    state: &TrainingState,
+    study: &Path,
+    arm: &str,
+    s: &binary::Value,
+) -> Result<Plan> {
+    let mut p = old.clone();
+    p.source = s["source"]
+        .as_str()
+        .ok_or_else(|| bad("expansion source"))?
+        .into();
+    p.binary = s["binary"]
+        .as_str()
+        .ok_or_else(|| bad("expansion binary"))?
+        .into();
+    p.initial = s["parent_endpoint"]["checkpoint_hash"]
+        .as_str()
+        .ok_or_else(|| bad("expansion physical"))?
+        .into();
+    p.initial_weights = s["parent_weights"]
+        .as_str()
+        .ok_or_else(|| bad("expansion weights"))?
+        .into();
+    p.config.budget_start_step = 2048;
+    p.config.budget_start_tokens = state.consumed_tokens;
+    p.config.max_steps = 3584;
+    p.config.max_tokens = state.consumed_tokens + 4_300_000;
+    p.config.warmup = 0;
+    p.config.lr = 3e-4;
+    let rows = expansion_rows(old, arm)?;
+    p.identifiable = Some(Policy {
+        study: study.into(),
+        arm: arm.into(),
+        dataset: EXPANSION_DATA.into(),
+        rows: rows.clone(),
+    });
+    p.train_order = digest(&rows)?;
+    p.order = vec![(0..1536).collect()];
+    p.corpus = s["corpus"]
+        .as_str()
+        .ok_or_else(|| bad("expansion corpus"))?
+        .into();
+    p.metadata = s["metadata"]
+        .as_str()
+        .ok_or_else(|| bad("expansion metadata"))?
+        .into();
+    p.fork = Some(Fork {
+        study: study.into(),
+        study_hash: file_hash(&study.join("selection.r3b"))?,
+        arm: arm.into(),
+        parent_policy: digest(old)?,
+        parent_state: digest(state)?,
+        parent_adam: s["parent_adam"]
+            .as_str()
+            .ok_or_else(|| bad("expansion Adam"))?
+            .into(),
+        origin_step: 2048,
+        origin_input: state.consumed_tokens,
+        origin_target: state.target_tokens,
+        original_corpus: old.corpus.clone(),
+        tokenizer_training_hash: ByteBpe::load(
+            &Path::new(s["parent"].as_str().unwrap()).join("tokenizer.r3b"),
+        )?
+        .train_hash,
+        variants: None,
+        variant_metadata: None,
+        alternate_first: vec![],
+        selector: None,
+        selector_metadata: None,
+        flip_first: vec![],
+        constant_lr: 3e-4,
+        target_limit: 60_000,
+    });
+    p.evaluation = evaluation_for(&p);
+    Ok(p)
+}
+pub(in super::super) fn expansion_prepare(parent: &Path, output: &Path) -> Result<()> {
+    if cfg!(feature = "test-support") {
+        return Err(bad("production expansion binary required"));
+    }
+    let (parent, output) = (parent.canonicalize()?, std::path::absolute(output)?);
+    let (old, end) = expansion_parent(&parent)?;
+    let cp = parent.join(&end.checkpoint);
+    let l = checkpoint::load(&cp, Device::Cpu, true)?;
+    let state = l
+        .manifest
+        .training
+        .as_ref()
+        .ok_or_else(|| bad("expansion Adam state"))?;
+    let (es, tm, data) = expansion_pool(&parent, &old)?;
+    let c = verified_corpus(&parent.join("corpus.r3cor"), &old.corpus)?;
+    let (_, dm, xm) = verified_metadata(&parent, &old)?;
+    let native = orbit_native(es.clone(), c.validation)?;
+    std::fs::create_dir(&output)?;
+    let first = output.join("REPEAT");
+    std::fs::create_dir(&first)?;
+    data::native::write(&first.join("corpus.r3cor"), &native, true)?;
+    write(&first.join("metadata.r3b"), &(tm, dm, xm))?;
+    let selection = binary::record!({"contract":EXPANSION_CONTRACT,"source":source_digest()?,"binary":file_hash(&std::env::current_exe()?)?,
+        "parent":parent,"parent_policy":file_hash(&parent.join("plan.r3b"))?,"parent_source":old.source,"parent_binary":old.binary,
+        "parent_endpoint":end,"parent_content":l.model.weights_content_id()?,"parent_weights":l.model.weight_hash()?,
+        "parent_adam":optimizer_hash(&l.optimizer)?,"parent_state":digest(state)?,"old_decision":file_hash(&parent.join("signal-decision-2048.r3b"))?,
+        "corpus":file_hash(&first.join("corpus.r3cor"))?,"metadata":file_hash(&first.join("metadata.r3b"))?,
+        "data":data,"seal_root":data["seal_root"],"seal":data["seal"],"sealed_corpus":data["sealed_corpus"],
+        "origin":2048,"maximum":3584,"new_updates":3072,"observer_backwards":0,"counter_offset":0});
+    write(&output.join("selection.r3b"), &selection)?;
+    let mut arms = BTreeMap::new();
+    for arm in EXPANSION_ARMS {
+        let root = output.join(arm);
+        if arm != "REPEAT" {
+            std::fs::create_dir(&root)?;
+            for name in ["corpus.r3cor", "metadata.r3b"] {
+                copy_native(&first.join(name), &root.join(name))?;
+            }
+        }
+        for name in ["transfer.r3cor", "tokenizer.r3b"] {
+            copy_native(&parent.join(name), &root.join(name))?;
+        }
+        copy_native(&cp, &root.join("initial.r3m"))?;
+        let p = expansion_plan(&old, state, &output, arm, &selection)?;
+        write(&root.join("plan.r3b"), &p)?;
+        expansion_verify_plan(&root, &p)?;
+        if !p.parent_entry(&root.join("initial.r3m"), &l)? {
+            return Err(bad("expansion native parent readback"));
+        }
+        let exposure = expansion_exposure(&own(&p).rows[2048..], arm, &es, &l.tokenizer)?;
+        arms.insert(arm,binary::record!({"policy":file_hash(&root.join("plan.r3b"))?,"tape":p.train_order,
+            "corpus":p.corpus,"metadata":p.metadata,"initial":p.initial,"content":selection["parent_content"],
+            "adam":selection["parent_adam"],"tokenizer":p.tokenizer,"exposure":exposure}));
+    }
+    publish_confirmed(
+        &output.join("preparation.r3b"),
+        &binary::record!({"contract":EXPANSION_CONTRACT,
+        "source":selection["source"],"binary":selection["binary"],"selection":file_hash(&output.join("selection.r3b"))?,
+        "arms":arms,"data":data,"optimizer":0,"generation":0,"teacher":0}),
+    )?;
+    println!(
+        "EXPANSION_PREPARED pool1536 old512 new1024 dev512 repeat512x24 rebind1536x8 updates3072 REVIEW_PENDING"
+    );
+    Ok(())
+}
+fn expansion_verify_plan(root: &Path, p: &Plan) -> Result<()> {
+    let o = own(p);
+    let s: binary::Value = read(&o.study.join("selection.r3b"))?;
+    let parent = Path::new(
+        s["parent"]
+            .as_str()
+            .ok_or_else(|| bad("expansion parent"))?,
+    );
+    let (old, end) = expansion_parent(parent)?;
+    let (m, _) = checkpoint::metadata(&parent.join(&end.checkpoint))?;
+    let state = m
+        .training
+        .as_ref()
+        .ok_or_else(|| bad("expansion parent state"))?;
+    let expected = expansion_plan(&old, state, &o.study, &o.arm, &s)?;
+    if *p != expected
+        || root != o.study.join(&o.arm)
+        || s["contract"] != EXPANSION_CONTRACT
+        || s["parent_endpoint"] != binary::record!(end)
+        || s["parent_policy"] != file_hash(&parent.join("plan.r3b"))?
+        || s["parent_source"] != old.source
+        || s["parent_binary"] != old.binary
+        || s["old_decision"] != file_hash(&parent.join("signal-decision-2048.r3b"))?
+    {
+        return Err(bad("expansion policy/parent/tape mismatch"));
+    }
+    let (es, ms, data) = expansion_pool(parent, &old)?;
+    let c = verified_corpus(&root.join("corpus.r3cor"), &p.corpus)?;
+    let parent_c = verified_corpus(&parent.join("corpus.r3cor"), &old.corpus)?;
+    let (tm, dm, xm) = verified_metadata(root, p)?;
+    let (_, parent_dm, parent_xm) = verified_metadata(parent, &old)?;
+    if data != s["data"]
+        || digest(&es)? != digest(&c.train)?
+        || digest(&ms)? != digest(&tm)?
+        || digest(&c.validation)? != digest(&parent_c.validation)?
+        || digest(&(dm, xm))? != digest(&(parent_dm, parent_xm))?
+        || file_hash(&root.join("initial.r3m"))? != end.checkpoint_hash
+        || file_hash(&root.join("tokenizer.r3b"))? != file_hash(&parent.join("tokenizer.r3b"))?
+    {
+        return Err(bad("expansion frozen owned inputs"));
+    }
+    let tok = ByteBpe::load(&root.join("tokenizer.r3b"))?;
+    expansion_exposure(&o.rows[2048..], &o.arm, &c.train, &tok)?;
+    Ok(())
+}
+fn expansion_review(p: &Plan) -> Result<()> {
+    let study = &own(p).study;
+    let r: binary::Value = read_confirmed(&study.join("review-a.r3b"))?;
+    if r["verdict"] != "PASS"
+        || r["source"] != p.source
+        || r["preparation"] != file_hash(&study.join("preparation.r3b"))?
+        || r["report_hash"]
+            != file_hash(Path::new(
+                r["report_path"]
+                    .as_str()
+                    .ok_or_else(|| bad("expansion review path"))?,
+            ))?
+    {
+        return Err(bad("independent expansion A required"));
+    }
+    Ok(())
+}
+fn expansion_parent_receipt(p: &Plan, name: &str, n: usize, t: usize) -> Result<binary::Value> {
+    let study = &own(p).study;
+    let r: binary::Value = read_confirmed(&study.join(format!("{name}-finished.r3b")))?;
+    if r["checkpoint"] != p.initial
+        || r["binding"]["source"] != p.source
+        || r["binding"]["binary"] != p.binary
+        || !r["error"].is_null()
+        || r["control"]["terminal_reason"] != "COMPLETED"
+        || r["control"]["generation_calls"] != n
+        || r["control"]["teacher_calls"] != t
+        || (name == "legacy"
+            && (r["matched"] != 16 || r["raw"] != file_hash(&study.join("legacy.r3rows"))?))
+    {
+        return Err(bad("expansion parent observation incomplete"));
+    }
+    if name == "parent-new" {
+        let path = study.join("eval-2048-new64.r3rows");
+        let rows = binary::read_value_records(&path)?;
+        let header = rows.first().ok_or_else(|| bad("parent observation header"))?;
+        if r["raw"] != file_hash(&path)? || header["physical"] != p.initial
+            || header["binding"]["model"] != p.initial_weights {
+            return Err(bad("parent new64 differs from fixed native"));
+        }
+    }
+    Ok(r)
+}
+fn expansion_authorize(root: &Path, p: &Plan) -> Result<()> {
+    let study = &own(p).study;
+    expansion_review(p)?;
+    if root.canonicalize()? != study.join(&own(p).arm).canonicalize()? {
+        return Err(bad("expansion registered root"));
+    }
+    let prep: binary::Value = read_confirmed(&study.join("preparation.r3b"))?;
+    if prep["selection"] != file_hash(&study.join("selection.r3b"))? {
+        return Err(bad("expansion reviewed selection changed"));
+    }
+    for arm in EXPANSION_ARMS {
+        let r = study.join(arm);
+        let pp = plan_read(&r)?;
+        let h = history(&r, &pp)?;
+        if h.last().is_some_and(|s| {
+            s.phase.as_deref() == Some("Failed")
+                || ![
+                    "TRAINING",
+                    "TIME_BUDGET",
+                    "CANDIDATE_FIXED",
+                    "FINAL_QUALITY_FAIL",
+                ]
+                .contains(&s.stop.as_str())
+                || (!s.resume && (s.step != 3584 || s.phase.as_deref() != Some("Finished")))
+        }) {
+            return Err(bad("expansion failed peer remains closed"));
+        }
+        if own(p).arm == "REBIND"
+            && arm == "REPEAT"
+            && h.last().is_none_or(|s| {
+                s.step != 3584 || s.resume || s.phase.as_deref() != Some("Finished")
+            })
+        {
+            return Err(bad("normal REPEAT endpoint required"));
+        }
+    }
+    expansion_parent_receipt(p, "legacy", 16, 0)?;
+    let r = expansion_parent_receipt(p, "parent-new", 64, 64)?;
+    let s: binary::Value = read(&study.join("selection.r3b"))?;
+    let parent = Path::new(s["parent"].as_str().unwrap());
+    let (old, _) = expansion_parent(parent)?;
+    let c = verified_corpus(&root.join("corpus.r3cor"), &p.corpus)?;
+    let (tm, _, _) = verified_metadata(root, p)?;
+    let stats = signal_stats_cases(
+        study,
+        &old,
+        2048,
+        "new64",
+        &c.train[512..576],
+        &tm[512..576],
+        64,
+    )?;
+    if r["statistics"] != stats || r["raw"] != stats["raw"] {
+        return Err(bad("expansion parent new64/raw mismatch"));
+    }
+    Ok(())
+}
+pub(in super::super) fn expansion_parent_observe(study: &Path, new_pool: bool) -> Result<()> {
+    let root = study.join("REPEAT");
+    let p = plan_read(&root)?;
+    if !is_expansion(&p) {
+        return Err(bad("expansion parent observation scope"));
+    }
+    expansion_review(&p)?;
+    let s: binary::Value = read(&study.join("selection.r3b"))?;
+    let parent = Path::new(s["parent"].as_str().unwrap());
+    let (old, end) = expansion_parent(parent)?;
+    let c = verified_corpus(&root.join("corpus.r3cor"), &p.corpus)?;
+    let (tm, dm, _) = verified_metadata(&root, &p)?;
+    let tok = ByteBpe::load(&root.join("tokenizer.r3b"))?;
+    if !new_pool {
+        audit_panel(parent, &old, 2048, "dev512", &c.validation, &dm, &tok)?;
+        let raw = binary::read_value_records(&parent.join("eval-2048-dev512.r3rows"))?;
+        orbit_observe(
+            study,
+            "legacy",
+            &root.join("initial.r3m"),
+            &c.validation[..16],
+            &binary::record!({"policy":digest(&p)?,"parent":parent,"checkpoint":end.checkpoint_hash}),
+            Some(&raw[1..17]),
+            observation_control(&p, 16, 0)?,
+        )?;
+        println!("EXPANSION_PARENT_PARITY matched16/16 optimizer0 teacher0");
+        return Ok(());
+    }
+    expansion_parent_receipt(&p, "legacy", 16, 0)?;
+    let mut control = observation_control(&p, 64, 64)?;
+    let binding = binary::record!({"source":p.source,"binary":p.binary,"policy":digest(&p)?,"checkpoint":p.initial,
+        "parent_policy":digest(&old)?,"cases":digest(&&c.train[512..576])?,"selection":"first16 new skeletons, both assignments/queries"});
+    write(&study.join("parent-new-started.r3b"), &binding)?;
+    // The copied native is still bound to its historical policy at step2048.
+    // Reuse the exact evaluator with that policy, in a new observation root.
+    let result = (|| -> Result<binary::Value> {
+        copy_native(&root.join("tokenizer.r3b"), &study.join("tokenizer.r3b"))?;
+        evaluate_panel(
+            &old,
+            study,
+            &root.join("initial.r3m"),
+            2048,
+            "new64",
+            &c.train[512..576],
+            &tm[512..576],
+            &mut control,
+        )?;
+        signal_stats_cases(
+            study,
+            &old,
+            2048,
+            "new64",
+            &c.train[512..576],
+            &tm[512..576],
+            64,
+        )
+    })();
+    if let Err(e) = &result {
+        control.classify_error(e);
+    }
+    let terminal = control.seal_terminal();
+    let result = result.and_then(|stats| terminal.map(|()| stats));
+    let statistics = result.as_ref().ok();
+    let raw = study.join("eval-2048-new64.r3rows");
+    publish_confirmed(
+        &study.join("parent-new-finished.r3b"),
+        &binary::record!({"binding":binding,"checkpoint":p.initial,
+        "statistics":statistics,"raw":if raw.exists(){Some(file_hash(&raw)?)}else{None},
+        "control":control.receipt(),"error":result.as_ref().err().map(ToString::to_string)}),
+    )?;
+    println!("EXPANSION_PARENT_NEW64 {}", result?);
+    Ok(())
+}
+pub(in super::super) fn expansion_endpoint(p: &Plan, step: usize, pending: bool) -> Result<usize> {
+    if !is_expansion(p) || !(2048..=3584).contains(&step) {
+        return Err(bad("expansion cursor"));
+    }
+    if pending && p.evaluation_due(step) {
+        return Ok(step);
+    }
+    [2304, 2816, 3328, 3584]
+        .into_iter()
+        .find(|&s| s > step)
+        .ok_or_else(|| bad("expansion budget closed"))
+}
+fn expansion_evaluation_result(root: &Path, p: &Plan, step: usize) -> Result<binary::Value> {
+    let mut panels = BTreeMap::new();
+    for (name, es, _) in panel_cases(root, p, step)? {
+        panels.insert(name.clone(), signal_stats(root, p, step, &name, es.len())?);
+    }
+    let final_step = step == 3584;
+    let mut streak = 0;
+    for s in [2304, 2816].into_iter().filter(|&s| s <= step) {
+        let old = orbit_panel(root, p, s, "old64")?;
+        let dev = orbit_panel(root, p, s, "dev64")?;
+        streak = if old.full < 32 && dev.full < 16 {
+            streak + 1
+        } else {
+            0
+        };
+    }
+    let eligible = if final_step {
+        let old = orbit_panel(root, p, step, "old512")?;
+        let new = orbit_panel(root, p, step, "new1024")?;
+        let dev = orbit_panel(root, p, step, "dev512")?;
+        orbit_candidate_scores(&old, &dev)
+            && (own(p).arm == "REPEAT"
+                || (new.full >= 1016
+                    && new.query_both >= 504
+                    && new.all4 >= 248
+                    && new.errors == 0
+                    && new.eos == 1024))
+    } else {
+        false
+    };
+    let stop = if streak >= 2 {
+        Some("QUALITY_REGRESSION")
+    } else if final_step {
+        Some(if eligible {
+            "CANDIDATE_FIXED"
+        } else {
+            "FINAL_QUALITY_FAIL"
+        })
+    } else {
+        None
+    };
+    Ok(
+        binary::record!({"policy":digest(p)?,"step":step,"panels":panels,"regression_streak":streak,"eligible":eligible,"stop":stop}),
+    )
+}
+fn expansion_evaluation_decision(root: &Path, p: &Plan, step: usize) -> Result<Option<String>> {
+    let d = expansion_evaluation_result(root, p, step)?;
+    let path = root.join(format!("expansion-decision-{step:04}.r3b"));
+    if path.exists() {
+        let r: binary::Value = read_confirmed(&path)?;
+        if r != d {
+            return Err(bad("expansion decision/raw mismatch"));
+        }
+    } else {
+        publish_confirmed(&path, &d)?;
+    }
+    println!("EXPANSION_DECISION {d}");
+    Ok(d["stop"].as_str().map(str::to_owned))
+}
+fn expansion_comparison(study: &Path) -> Result<binary::Value> {
+    let mut endpoints = BTreeMap::new();
+    let mut scores = vec![];
+    let mut candidates = vec![];
+    for arm in EXPANSION_ARMS {
+        let root = study.join(arm);
+        let p = plan_read(&root)?;
+        authorize(&root, &p)?;
+        let h = history(&root, &p)?;
+        let end = h.last().ok_or_else(|| bad("expansion endpoint absent"))?;
+        if end.step != 3584 || end.resume || end.phase.as_deref() != Some("Finished") {
+            return Err(bad("expansion matched endpoint incomplete"));
+        }
+        let d = expansion_evaluation_result(&root, &p, 3584)?;
+        let saved: binary::Value = read_confirmed(&root.join("expansion-decision-3584.r3b"))?;
+        if d != saved || d["stop"] != end.stop {
+            return Err(bad("expansion terminal/raw disagreement"));
+        }
+        let old = orbit_panel(&root, &p, 3584, "old512")?;
+        let new = orbit_panel(&root, &p, 3584, "new1024")?;
+        let dev = orbit_panel(&root, &p, 3584, "dev512")?;
+        let parity = parity_verified(&root, &p)?;
+        if d["eligible"] == true && parity {
+            candidates.push((arm, dev.all4, dev.query_both, dev.full, old.full));
+        }
+        endpoints.insert(
+            arm,
+            binary::record!({"policy":digest(&p)?,"checkpoint":end.checkpoint_hash,"step":3584,
+            "old":old,"new":new,"dev":dev,"eligible":d["eligible"],"parity":parity}),
+        );
+        scores.push(dev);
+    }
+    let mut gain = 0;
+    let mut loss = 0;
+    let mut differences = vec![];
+    for (a, b) in scores[0]
+        .exact
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(scores[1].exact.as_chunks::<4>().0)
+    {
+        gain += usize::from(!a.iter().all(|&v| v) && b.iter().all(|&v| v));
+        loss += usize::from(a.iter().all(|&v| v) && !b.iter().all(|&v| v));
+        differences.push(
+            (b.iter().filter(|&&v| v).count() as f64 - a.iter().filter(|&&v| v).count() as f64)
+                / 4.,
+        );
+    }
+    candidates.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then(b.2.cmp(&a.2))
+            .then(b.3.cmp(&a.3))
+            .then(b.4.cmp(&a.4))
+            .then_with(|| {
+                if a.0 == "REPEAT" {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                }
+            })
+    });
+    Ok(
+        binary::record!({"contract":EXPANSION_CONTRACT,"source":source_digest()?,"preparation":file_hash(&study.join("preparation.r3b"))?,
+        "endpoints":endpoints,"selected":candidates.first().map(|v|v.0),"dev_all4_gain":gain,"dev_all4_loss":loss,
+        "dev_skeleton_full_fraction_differences":differences,"independent_units":128,
+        "selection_rule":"eligible final3584 only; dev ALL4/QB/FULL, old FULL, REPEAT tie",
+        "minimal_baseline_verified":false,"confirmation":"NOT_OPENED","goal1_ready":false}),
+    )
+}
+pub(in super::super) fn expansion_report(study: &Path) -> Result<()> {
+    let mut complete = true;
+    for arm in EXPANSION_ARMS {
+        let root = study.join(arm);
+        let p = plan_read(&root)?;
+        let h = history(&root, &p)?;
+        let Some(end) = h.last() else {
+            complete = false;
+            println!("EXPANSION_RESULT arm={arm} NOT_RUN");
+            continue;
+        };
+        for &step in p.evaluation.train_steps.iter().filter(|&&s| s <= end.step) {
+            if step == end.step && end.phase.as_deref() == Some("EvaluationPending") {
+                continue;
+            }
+            let d = expansion_evaluation_result(&root, &p, step)?;
+            let r: binary::Value =
+                read_confirmed(&root.join(format!("expansion-decision-{step:04}.r3b")))?;
+            if d != r {
+                return Err(bad("expansion report/raw disagreement"));
+            }
+            println!("EXPANSION_PANEL arm={arm} {d}");
+        }
+        println!(
+            "EXPANSION_RESULT arm={arm} step={} new_updates={} durable={} stop={} resume={} usage={:?}",
+            end.step,
+            end.step - 2048,
+            end.checkpoint_hash,
+            end.stop,
+            end.resume,
+            usage(&p)?
+        );
+        complete &= end.step == 3584 && !end.resume && end.phase.as_deref() == Some("Finished");
+    }
+    if complete {
+        println!("EXPANSION_COMPARISON {}", expansion_comparison(study)?);
+    }
+    Ok(())
+}
+
 fn signal_config(old:&Plan,state:&TrainingState) -> TrainConfig {
     let mut c=old.config.clone();
     c.budget_start_step=state.step;c.budget_start_tokens=state.consumed_tokens;
@@ -2344,16 +3276,13 @@ fn signal_verify_plan(root:&Path,p:&Plan)->Result<()> {
 }
 fn signal_authorize(root:&Path,p:&Plan)->Result<()> {
     let study=&own(p).study;
+    if root.canonicalize()?!=study.join(&own(p).arm).canonicalize()? {return Err(bad("signal registered root mismatch"));}
     let prep:binary::Value=read_confirmed(&study.join("preparation.r3b"))?;
     if prep["selection"]!=file_hash(&study.join("selection.r3b"))? {return Err(bad("reviewed signal selection changed"));}
     let h=history(root,p)?;
     for local in if p.tiny {vec![1]}else{vec![1,8,32,128]} {
         let step=p.origin_step()+local;
-        if root.join(format!("signal-probe-{step:04}-started.r3b")).exists() {
-            let r:binary::Value=read_confirmed(&root.join(format!("signal-probe-{step:04}-finished.r3b")))
-                .map_err(|_|bad("signal observation unfinished/UNKNOWN"))?;
-            if !r["error"].is_null() {return Err(bad("signal observation failed"));}
-        }
+        signal_probe_next(root,p,step,h.last().map_or(p.origin_step(),|s|s.step))?;
     }
     if h.last().is_some_and(|s|s.phase.as_deref()==Some("Failed") || !["TRAINING","TIME_BUDGET","CANDIDATE_FIXED","BUDGET_REACHED","FINAL_QUALITY_FAIL"].contains(&s.stop.as_str())) {
         return Err(bad("signal failed endpoint remains closed"));
@@ -2402,9 +3331,13 @@ fn signal_margins(m0:f64,m1:f64)->Result<[f64;4]> {
 }
 fn signal_stats(root:&Path,p:&Plan,step:usize,name:&str,count:usize)->Result<binary::Value> {
     let (_,es,ms)=panel_cases(root,p,step)?.into_iter().find(|(n,_,_)|n==name).ok_or_else(||bad("signal panel"))?;
+    signal_stats_cases(root,p,step,name,&es,&ms,count)
+}
+#[allow(clippy::too_many_arguments)] // The same frozen panel scorer also reads the parent new64 observation.
+fn signal_stats_cases(root:&Path,p:&Plan,step:usize,name:&str,es:&[Episode],ms:&[Meta],count:usize)->Result<binary::Value> {
     if count>es.len() || count==0 || count%4!=0 {return Err(bad("signal panel denominator"));}
     let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
-    audit_panel(root,p,step,name,&es,&ms,&tok)?;
+    audit_panel(root,p,step,name,es,ms,&tok)?;
     let teachers=binary::read_value_records(&root.join(format!("eval-{step:04}-{name}-teachers.r3rows")))?;
     let raw=binary::read_value_records(&root.join(format!("eval-{step:04}-{name}.r3rows")))?;
     let score=orbit_score(&es[..count],&ms[..count],&raw[1..count+1],&tok)?;
@@ -2508,11 +3441,8 @@ fn signal_comparison(study:&Path)->Result<binary::Value> {
         "selected":if eligible {Some("QE")}else{None},"minimal_baseline_verified":false,"goal1_ready":false}))
 }
 pub(in super::super) fn signal_probe_cases(p:&Plan,root:&Path,step:usize,tok:&ByteBpe)->Result<Option<(Vec<Sample>,Vec<u32>,bool)>> {
-    if !is_signal(p) {return Ok(None);}
+    if !signal_probe_due(p,step) {return Ok(None);}
     let local=step.checked_sub(p.origin_step()).ok_or_else(||bad("signal probe cursor"))?;
-    if !(if p.tiny {vec![1]}else{vec![1,8,32,128]}).contains(&local) {return Ok(None);}
-    #[cfg(feature="test-support")]
-    if p.tiny && std::env::var("R3_SIGNAL_OBSERVER_OFF").as_deref()==Ok("1") {return Ok(None);}
     let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;
     let (ms,_,_)=verified_metadata(root,p)?;
     for (i,e) in c.train[..16].iter().enumerate() {
@@ -2521,6 +3451,12 @@ pub(in super::super) fn signal_probe_cases(p:&Plan,root:&Path,step:usize,tok:&By
     let samples=samples_with_framing(&c.train[..16],tok,p.config.seq_len,p.framing())?;
     let foils=c.train[..16].iter().map(|e|Ok(tok.encode(orbit_foil(e)?.as_bytes())?[0])).collect::<Result<Vec<_>>>()?;
     Ok(Some((samples,foils,local!=128)))
+}
+pub(in super::super) fn signal_probe_due(p:&Plan,step:usize)->bool {
+    #[cfg(feature="test-support")]
+    if p.tiny && std::env::var("R3_SIGNAL_OBSERVER_OFF").as_deref()==Ok("1") {return false;}
+    is_signal(p)&&step.checked_sub(p.origin_step()).is_some_and(|local|
+        if p.tiny {local==1}else{[1,8,32,128].contains(&local)})
 }
 fn framing_stage(study: &Path, step: usize, latest: bool) -> Result<binary::Value> {
     framing_action(step, false, false)?;
@@ -2870,6 +3806,130 @@ mod tests {
         println!("QUERY_SIGNAL_COMPARISON writer/publisher/reader1024 endpoint/candidate/missing/mixed rejection; reserved_teacher_rows16 simulated_model_calls0");
         Ok(())
     }
+    #[test]
+    fn query_signal_no_call_time_pause_process() -> Result<()> {
+        const NAME: &str = "training::fresh::identifiable::binding::tests::query_signal_no_call_time_pause_process";
+        if let Ok(root) = std::env::var("R3_SIGNAL_PAUSE_CHILD") {
+            return run(Path::new(&root), true);
+        }
+        let base = PathBuf::from(
+            std::env::var_os("R3_SIGNAL_PAUSE_ROOT")
+                .ok_or_else(|| bad("explicit retained evidence root required"))?,
+        );
+        let parent = PathBuf::from(
+            std::env::var_os("R3_SIGNAL_TEST_PARENT")
+                .ok_or_else(|| bad("explicit retained TINY parent required"))?,
+        );
+        std::fs::create_dir(&base)?;
+        let child = |root: &Path, stop: bool, label: &str| -> Result<()> {
+            let mut command = std::process::Command::new(std::env::current_exe()?);
+            command
+                .args(["--exact", NAME, "--nocapture"])
+                .env("R3_SIGNAL_PAUSE_CHILD", root)
+                .env("VECLIB_MAXIMUM_THREADS", "1")
+                .env("OMP_NUM_THREADS", "1");
+            if stop {
+                command.env("R3_SIGNAL_CALL_STOP", "before_teacher_budget");
+            }
+            let out = command.output()?;
+            std::fs::write(base.join(format!("{label}.stdout")), &out.stdout)?;
+            std::fs::write(base.join(format!("{label}.stderr")), &out.stderr)?;
+            assert!(
+                out.status.success(),
+                "{label}: {} {}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            Ok(())
+        };
+        let mut endpoints = vec![];
+        let mut raws = vec![];
+        let mut usage = [0u64; 3];
+        for name in ["paused", "continuous"] {
+            let study = base.join(name);
+            signal_prepare(&parent, &study, true)?;
+            fixture_review(&study)?;
+            let root = study.join("QE");
+            let p = plan_read(&root)?;
+            if name == "paused" {
+                child(&root, true, "pause")?;
+                let h = history(&root, &p)?;
+                assert_eq!(h.len(), 1);
+                let s = &h[0];
+                assert_eq!(s.step, p.origin_step());
+                assert!(s.resume);
+                assert_eq!(s.stop, "TIME_BUDGET");
+                let c: binary::Value = read(&root.join("segment-0000/train-control.r3b"))?;
+                for key in [
+                    "optimizer_calls",
+                    "teacher_calls",
+                    "generation_calls",
+                    "diagnostic_microbatch_forwards",
+                    "diagnostic_backwards",
+                ] {
+                    assert_eq!(c[key], 0, "{key}");
+                }
+                assert_eq!(c["observed_conditions"], binary::record!(["TIME_BUDGET"]));
+                let started = root.join(format!(
+                    "signal-probe-{:04}-started.r3b",
+                    p.origin_step() + 1
+                ));
+                let finished = root.join(format!(
+                    "signal-probe-{:04}-finished.r3b",
+                    p.origin_step() + 1
+                ));
+                let hashes = (file_hash(&started)?, file_hash(&finished)?);
+                child(&root, false, "resume")?;
+                assert_eq!(hashes, (file_hash(&started)?, file_hash(&finished)?));
+            } else {
+                child(&root, false, "continuous")?;
+            }
+            let h = history(&root, &p)?;
+            let end = h.last().unwrap();
+            assert_eq!(end.step, p.config.max_steps);
+            assert!(!end.resume);
+            let l = checkpoint::load(&root.join(&end.checkpoint), Device::Cpu, true)?;
+            let s = l.manifest.training.as_ref().unwrap();
+            endpoints.push((
+                l.model.weights_content_id()?,
+                optimizer_hash(&l.optimizer)?,
+                s.step,
+                s.sampler_state,
+                s.consumed_tokens,
+                s.target_tokens,
+            ));
+            for panel in ["train4", "dev4"] {
+                let rows = binary::read_value_records(
+                    &root.join(format!("eval-{:04}-{panel}.r3rows", end.step)),
+                )?;
+                raws.push(
+                    rows[1..]
+                        .iter()
+                        .map(|r| r["raw_tokens"].clone())
+                        .collect::<Vec<_>>(),
+                );
+            }
+            for (i, s) in h.iter().enumerate() {
+                let c: binary::Value =
+                    read(&root.join(format!("segment-{i:04}/train-control.r3b")))?;
+                usage[0] += c["optimizer_calls"].as_u64().unwrap();
+                usage[1] += s.generations as u64;
+                usage[2] += s.teachers as u64;
+            }
+        }
+        assert_eq!(endpoints[0], endpoints[1]);
+        assert_eq!(raws[..2], raws[2..]);
+        assert_eq!(usage, [4, 16, 80]);
+        println!(
+            "QS_R1_PROCESS no_call_time_pause_new_attempt weights_Adam_clock_sampler_tokens_train_dev_raw_EQUAL actual_optimizer={} generation={} teacher_rows={} evidence={}",
+            usage[0],
+            usage[1],
+            usage[2],
+            base.display()
+        );
+        Ok(())
+    }
+
     #[test]
     fn query_signal_tiny_observer_and_process_resume()->Result<()> {
         const CHILD:&str="R3_SIGNAL_TEST_CHILD";
@@ -3228,6 +4288,122 @@ mod tests {
         println!("FOUNDATION_T1_T2_T3 native pool512 split128/128/64 FIXED256x16 BOTH512x8 equal_input={} target8192 optimizer0 generation0 teacher0",observed[0]);
         Ok(())
     }
+    #[test]
+    fn learned_expansion_pool_tape_and_native_panels() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let study = orbit_fixture(temp.path())?;
+        let root = study.join("BOTH");
+        let mut p = plan_read(&root)?;
+        let c = verified_corpus(&root.join("corpus.r3cor"), &p.corpus)?;
+        let (tm, dm, _) = verified_metadata(&root, &p)?;
+        let tok = ByteBpe::load(&root.join("tokenizer.r3b"))?;
+        let (es, ms, selection) = expansion_pool_from(&c, tm.clone(), &dm, &tok, &study)?;
+        assert_eq!(digest(&&es[..512])?, digest(&c.train)?);
+        assert_eq!(digest(&&ms[..512])?, digest(&tm)?);
+        assert_eq!(selection["rows"], 1536);
+        p.identifiable.as_mut().unwrap().rows = (0..2048)
+            .map(|i| orbit_rows("BOTH", 512)[i % 512])
+            .collect();
+        let repeat = expansion_rows(&p, "REPEAT")?;
+        let rebind = expansion_rows(&p, "REBIND")?;
+        let mut exposures = vec![];
+        for (arm, rows) in [("REPEAT", &repeat), ("REBIND", &rebind)] {
+            exposures.push(expansion_exposure(&rows[2048..], arm, &es, &tok)?);
+            assert_eq!(rows[..2048], own(&p).rows);
+        }
+        assert_eq!(exposures[0]["unique"], 512);
+        assert_eq!(exposures[1]["unique"], 1536);
+        assert_eq!(exposures[0]["input"], exposures[1]["input"]);
+        assert_eq!(exposures[0]["target"], exposures[1]["target"]);
+        let ss = samples(&es, &tok, 256)?;
+        for (a, b) in repeat[2048..].iter().zip(&rebind[2048..]) {
+            for (&x, &y) in a.iter().zip(b) {
+                assert_eq!(x, y % 512);
+                assert_eq!(ss[x].tokens[144..], ss[y].tokens[144..]);
+            }
+        }
+        let native = temp.path().join("pool.r3cor");
+        data::native::write(&native, &orbit_native(es.clone(), c.validation)?, true)?;
+        let readback = data::native::read(&native)?;
+        assert_eq!(digest(&readback.train)?, digest(&es)?);
+        for count in [64, 512, 1024, 1536] {
+            let path = temp.path().join(format!("panel-{count}.r3rows"));
+            let mut f = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&path)?;
+            append_row(
+                &mut f,
+                &binary::record!({"expected":count,"ids":digest(&es[..count].iter().map(|e|&e.id).collect::<Vec<_>>())?}),
+            )?;
+            for e in &es[..count] {
+                let mut ids = tok.encode(e.answer.as_bytes())?;
+                ids.push(EOS);
+                append_row(
+                    &mut f,
+                    &binary::record!({"id":e.id,"expected":e.answer,"question":e.request.input,
+                    "generated_evidence":e.request.evidence,"actual":e.answer,"raw_tokens":ids,"finish_reason":"stop",
+                    "generation_completed":true,"error":null,"exact_match":true}),
+                )?;
+            }
+            f.sync_all()?;
+            drop(f);
+            let rows = binary::read_value_records(&path)?;
+            let score = orbit_score(&es[..count], &ms[..count], &rows[1..], &tok)?;
+            assert_eq!(
+                (
+                    score.total,
+                    score.full,
+                    score.query_both,
+                    score.swap_both,
+                    score.all4
+                ),
+                (count, count, count / 2, count / 2, count / 4)
+            );
+            let receipt = temp.path().join(format!("panel-{count}.r3b"));
+            publish_confirmed(&receipt, &score)?;
+            assert_eq!(read_confirmed::<OrbitScore>(&receipt)?, score);
+            assert!(orbit_score(&es[..count], &ms[..count], &rows[1..count], &tok).is_err());
+            let mut invalid = rows[1..].to_vec();
+            invalid.swap(0, 1);
+            assert!(orbit_score(&es[..count], &ms[..count], &invalid, &tok).is_err());
+            invalid[0] = invalid[1].clone();
+            assert!(orbit_score(&es[..count], &ms[..count], &invalid, &tok).is_err());
+        }
+        let mut bad_case = es[512].clone();
+        bad_case.request.evidence.items[0].event_id += 1;
+        assert!(verify_rekey(&es[0], &bad_case, &tok).is_err());
+        bad_case = es[512].clone();
+        bad_case.answer = orbit_foil(&bad_case)?;
+        assert!(verify_rekey(&es[0], &bad_case, &tok).is_err());
+        p.identifiable.as_mut().unwrap().dataset = EXPANSION_DATA.into();
+        p.config.max_steps = 3584;
+        p.evaluation = evaluation_for(&p);
+        for (step, pending, next) in [
+            (2049, false, 2304),
+            (2304, false, 2816),
+            (2816, false, 3328),
+            (3328, false, 3584),
+            (3584, true, 3584),
+        ] {
+            assert_eq!(expansion_endpoint(&p, step, pending)?, next);
+        }
+        assert!(expansion_endpoint(&p, 3584, false).is_err());
+        let loaded = checkpoint::load(&root.join("initial.r3m"), Device::Cpu, false)?;
+        let mut control = recovery::RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),
+            std::time::Duration::from_secs(30), 16 * 1024 * 1024)?;
+        control.set_call_limits(0, 1);
+        let teacher = match recovery::fresh_teacher_with_foil(&loaded, &es[512], Some(&orbit_foil(&es[512])?), &mut control) {
+            recovery::ObservedCall::Returned(result) => result?,
+            recovery::ObservedCall::NotInvoked(_) => return Err(bad("new family teacher not invoked")),
+        };
+        assert_eq!(control.teacher_calls, 1);
+        assert_eq!(teacher["target_token_observation"]["gold"], binary::record!([tok.encode(es[512].answer.as_bytes())?[0], EOS]));
+        assert!(teacher["conditional_foil"]["gold_logit"].as_f64().is_some_and(f64::is_finite));
+        println!("EXPANSION_NATIVE pool1536 targets_equal tape1536x8 REPEAT512x24 REBIND1536x8 panels64/512/1024/1536 strict_writer_reader_score; TINY_teacher1 optimizer0 generation0");
+        Ok(())
+    }
+
     #[test]
     fn foundation_t5_strict_orbit_scores_and_seen_mask() -> Result<()> {
         let temp=tempfile::tempdir()?;let study=orbit_fixture(temp.path())?;

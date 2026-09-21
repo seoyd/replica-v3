@@ -28,6 +28,9 @@ struct Cli {
 enum Checks {
     /// Offline source checks and direct regressions; no quality evaluation or learning.
     Quick {
+        /// Binding expansion data/tape/panel and endpoint regressions, including one TINY teacher row.
+        #[arg(long, conflicts_with_all = ["fresh", "fresh_selector", "native_corpus", "bridge_receipts"])]
+        binding_expansion: bool,
         /// Only fresh joint corpus, numerical, native resume and runtime gates.
         #[arg(long, conflicts_with_all = ["native_corpus", "bridge_receipts"])]
         fresh: bool,
@@ -417,11 +420,19 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
     write_new(&r.output.join("boundaries.r3b"), &boundaries(files)?)?;
     match &cli.command {
         Checks::Quick {
+            binding_expansion,
             fresh,
             fresh_selector,
             native_corpus,
             bridge_receipts,
         } => {
+            if *binding_expansion {
+                r.cargo("check", &["--bin", "replica-train"], false)?;
+                for filter in ["learned_expansion_pool_tape_and_native_panels", "framing_final_action_is_endpoint_bound", "query_signal_comparison_published_endpoint_and_row_budget"] {
+                    r.cargo("test", &["--bin", "replica-train", filter, "--", "--nocapture", "--test-threads=1"], true)?;
+                }
+                return Ok(());
+            }
             if *fresh || *fresh_selector {
                 r.cargo("check", &["--bin", "replica-train"], false)?;
                 for (target, filter) in [
