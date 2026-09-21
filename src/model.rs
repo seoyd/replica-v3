@@ -70,6 +70,7 @@ impl Model for LocalModel {
             )));
         }
         let (manifest, tokenizer) = crate::neural::checkpoint::metadata(&self.config.checkpoint)?;
+        manifest.require_default_framing()?;
         if manifest.trained_steps == 0 {
             return Err(model_error(
                 "native checkpoint has no actual optimizer updates",
@@ -285,6 +286,7 @@ pub fn worker(config: ModelConfig) -> Result<()> {
     use crate::neural::{checkpoint, cpu_backend};
     let load_start = Instant::now();
     let loaded = checkpoint::load(&config.checkpoint, candle_core::Device::Cpu, false)?;
+    loaded.manifest.require_default_framing()?;
     if loaded.manifest.trained_steps == 0 {
         return Err(model_error(
             "native checkpoint has no actual optimizer updates",

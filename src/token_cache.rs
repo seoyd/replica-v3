@@ -54,7 +54,7 @@ fn key(s: &RunSnapshot, raw: &[u8], l: &Loaded) -> Result<Key> {
         .ok_or_else(|| bad("cache training config absent"))?
         .config
         .seq_len;
-    let mut framing = neural::PROMPT_FORMAT.as_bytes().to_vec();
+    let mut framing = l.manifest.framing()?.id().as_bytes().to_vec();
     framing.extend(include_bytes!("neural.rs"));
     framing.extend((seq as u64).to_le_bytes());
     let mut objective = target_loss::REVISION.as_bytes().to_vec();
@@ -416,10 +416,11 @@ pub(super) fn framed(
         .iter()
         .map(|i| s.cases[*i as usize].clone())
         .collect::<Vec<_>>();
-    let f = samples(
+    let f = samples_with_framing(
         &episodes,
         &l.tokenizer,
         l.manifest.training.as_ref().unwrap().config.seq_len,
+        l.manifest.framing()?,
     )?;
     let annotations = target_loss::annotations(
         &episodes,
@@ -689,7 +690,12 @@ pub(super) fn measure(
                     }
                     phase[2] += point.elapsed().as_secs_f64();
                     point = Instant::now();
-                    let f = samples(&episodes, &l.tokenizer, key.seq)?;
+                    let f = samples_with_framing(
+                        &episodes,
+                        &l.tokenizer,
+                        key.seq,
+                        l.manifest.framing()?,
+                    )?;
                     let a = target_loss::annotations(
                         &episodes,
                         &f,
@@ -962,7 +968,7 @@ pub(super) fn measure_source(
             let t = Instant::now();
             let plain = episodes
                 .as_ref()
-                .map(|e| samples(e, &l.tokenizer, k.seq))
+                .map(|e| samples_with_framing(e, &l.tokenizer, k.seq, l.manifest.framing()?))
                 .transpose()?;
             phase[3] = if plain.is_some() {
                 t.elapsed().as_secs_f64()
@@ -1079,6 +1085,64 @@ pub(super) fn measure_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn token_cache_actual_native_framing_separates_same_tokenizer() -> Result<()> {
+        let d = tempfile::tempdir()?;
+        let root = d.path().join("fixture");
+        super::super::fixture(&root)?;
+        let s = read_inputs(&root)?;
+        let raw = std::fs::read(root.join("inputs.r3er"))?;
+        let mut l = checkpoint::load(&root.join("parent.r3m"), Device::Cpu, true)?;
+        let qe = key(&s, &raw, &l)?;
+        let es = s
+            .train
+            .iter()
+            .map(|&i| s.cases[i as usize].clone())
+            .collect::<Vec<_>>();
+        let f = samples_with_framing(&es, &l.tokenizer, qe.seq, l.manifest.framing()?)?;
+        let a = f
+            .iter()
+            .map(|f| target_loss::Annotation {
+                spans: vec![],
+                fractions: vec![0.; f.tokens.len() - f.response_start],
+                roles: vec![],
+                supported: false,
+            })
+            .collect::<Vec<_>>();
+        let bytes = encode(&qe, &f, &a)?;
+        decode(bytes.clone(), &qe)?;
+        l.manifest
+            .training
+            .as_mut()
+            .unwrap()
+            .resume_binding
+            .as_mut()
+            .unwrap()
+            .framing = neural::Framing::EvidenceQuestion.digest();
+        let eq = key(&s, &raw, &l)?;
+        assert_ne!(qe.hashes[4], eq.hashes[4]);
+        for i in [0, 1, 2, 3, 5] {
+            assert_eq!(qe.hashes[i], eq.hashes[i]);
+        }
+        assert!(decode(bytes, &eq).is_err());
+        let bytes = encode(&eq, &f, &a)?;
+        decode(bytes.clone(), &eq)?;
+        assert!(decode(bytes, &qe).is_err());
+        l.manifest
+            .training
+            .as_mut()
+            .unwrap()
+            .resume_binding
+            .as_mut()
+            .unwrap()
+            .framing = [0; 32];
+        assert!(key(&s, &raw, &l).is_err());
+        println!(
+            "FRAMING_CACHE actual native descriptor cross-layout rejection and unknown rejection PASS optimizer0 generation0 teacher0"
+        );
+        Ok(())
+    }
     fn fixture() -> (Key, Vec<Sample>, Vec<target_loss::Annotation>) {
         let key = Key {
             hashes: std::array::from_fn(|i| hash(&[i as u8])),

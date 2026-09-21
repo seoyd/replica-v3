@@ -155,6 +155,14 @@ pub struct Sample {
     pub curriculum: bool,
 }
 pub fn samples(episodes: &[Episode], tok: &ByteBpe, seq_len: usize) -> Result<Vec<Sample>> {
+    samples_with_framing(episodes, tok, seq_len, neural::Framing::QuestionEvidence)
+}
+pub fn samples_with_framing(
+    episodes: &[Episode],
+    tok: &ByteBpe,
+    seq_len: usize,
+    framing: neural::Framing,
+) -> Result<Vec<Sample>> {
     let mut out = Vec::new();
     for e in episodes {
         if e.answer.is_empty() {
@@ -175,7 +183,7 @@ pub fn samples(episodes: &[Episode], tok: &ByteBpe, seq_len: usize) -> Result<Ve
             let mut request = e.request.clone();
             request.limits.context_tokens = seq_len as u32;
             request.limits.max_tokens = (answer.len() + 1) as u32;
-            let prompt = tok.prepare(&request, seq_len as u32, "training")?;
+            let prompt = tok.prepare_with_framing(&request, framing, seq_len as u32, "training")?;
             if citations(&e.answer)?
                 .iter()
                 .any(|id| !prompt.provided.contains(id))
@@ -879,7 +887,16 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
     }
     let started = Instant::now();
     let mut loaded = checkpoint::load(run.checkpoint, Device::Cpu, run.resume)?;
-    let fresh_parent=match fresh{Some((p,_))=>p.parent_entry(run.checkpoint,&loaded)?,None=>false};
+    let framing = fresh.map_or(neural::Framing::QuestionEvidence, |(p, _)| p.framing());
+    if loaded.manifest.training.is_some() && loaded.manifest.framing()? != framing {
+        return Err(Error::Invalid(
+            "ACTUAL_FRAMING_BINDING_MISMATCH; optimizer_calls=0".into(),
+        ));
+    }
+    let fresh_parent = match fresh {
+        Some((p, _)) => p.parent_entry(run.checkpoint, &loaded)?,
+        None => false,
+    };
     control.check("training_loaded")?;
     let mut config = if run.resume {
         loaded
@@ -1001,16 +1018,21 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
             return Err(Error::Corrupt("tokenizer/corpus mismatch".into()));
         }
         (
-            samples(&train, &loaded.tokenizer, config.seq_len)?,
-            samples(&validation, &loaded.tokenizer, loaded.model.config.context)?,
+            samples_with_framing(&train, &loaded.tokenizer, config.seq_len, framing)?,
+            samples_with_framing(
+                &validation,
+                &loaded.tokenizer,
+                loaded.model.config.context,
+                framing,
+            )?,
             manifest.train.sha256.clone(),
             manifest.validation.sha256.clone(),
             Some(manifest),
         )
     };
-    if let Some((p,root))=fresh {
-        train.extend(p.additional_samples(root,&loaded.tokenizer)?);
-        p.apply_training_values(root,&loaded.tokenizer,&mut train)?;
+    if let Some((p, root)) = fresh {
+        train.extend(p.additional_samples(root, &loaded.tokenizer)?);
+        p.apply_training_values(root, &loaded.tokenizer, &mut train)?;
     }
     let grounding = match fresh {
         Some((p,root))=>p.grounding_labels(root,&loaded.tokenizer,&train)?,
@@ -1328,7 +1350,11 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
                 if state.step==config.budget_start_step+1||state.step.is_multiple_of(32){trace.sync_all()?;}
             }
             #[cfg(feature = "test-support")]
-            if fresh.is_some_and(|(p, _)| p.is_tiny()) && state.step == config.max_steps {
+            if fresh.is_some_and(|(p, _)| p.is_tiny())
+                && (state.step == config.max_steps
+                    || (fresh.is_some_and(|(p, _)| p.framing() == neural::Framing::EvidenceQuestion)
+                        && run.stop_after == Some(state.step)))
+            {
                 control.fixture_boundary = std::env::var("R3_FRESH_TRAIN_STOP").ok();
             }
             control.check("training_optimizer_returned")?;

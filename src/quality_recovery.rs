@@ -1149,8 +1149,9 @@ pub(super) fn observe_generation(
     let result = (|| -> Result<()> {
         control.check("case_started")?;
         control.attempted_case_count += 1;
-        let prompt = loaded.tokenizer.prepare(
+        let prompt = loaded.tokenizer.prepare_with_framing(
             request,
+            loaded.manifest.framing()?,
             loaded.model.config.context as u32,
             &loaded.model.config.id()?,
         )?;
@@ -1223,6 +1224,7 @@ pub(super) fn observe_generation(
         row["request_digest"] = record!(digest(request)?);
         row["prompt_digest"] = record!(digest(&prompt.token_ids)?);
         row["native_prompt_digest"] = record!(prompt.token_digest);
+        row["framing"] = record!(loaded.manifest.framing()?.id());
         row["prompt_length"] = record!(prompt.token_ids.len());
         row["exact_match"] = record!(strict_answer_match(
             text.as_deref(),
@@ -1317,8 +1319,9 @@ pub(super) fn fresh_teacher_with_foil(
 ) -> ObservedCall<Result<Value>> {
     let mut entered = false;
     let result = (|| {
-        let p = l.tokenizer.prepare(
+        let p = l.tokenizer.prepare_with_framing(
             &e.request,
+            l.manifest.framing()?,
             l.model.config.context as u32,
             &l.model.config.id()?,
         )?;
@@ -1446,13 +1449,14 @@ fn teacher_observation(
         .zip(&bytes)
         .position(|(a, b)| a != b)
         .or_else(|| (e.answer.len() != bytes.len()).then_some(e.answer.len().min(bytes.len())));
-    let framed = samples(
+    let framed = samples_with_framing(
         std::slice::from_ref(e),
         &l.tokenizer,
         l.manifest
             .training
             .as_ref()
             .map_or(512, |s| s.config.seq_len),
+        l.manifest.framing()?,
     )?;
     let w = l
         .manifest

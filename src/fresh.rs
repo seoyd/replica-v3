@@ -16,6 +16,26 @@ const SYSTEM: &str = "제공된 기록과 질문만으로 답하세요. 요구�
 mod identifiable;
 #[derive(Subcommand)]
 pub enum Command {
+    /// Existing BOTH data and tensor; QE/EQ block order is the sole intervention.
+    FramingPrepare {
+        #[arg(long)]
+        parent: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Freeze the matched512 decision; no optimizer calls.
+    FramingDecide {
+        #[arg(long)]
+        study: PathBuf,
+    },
+    FramingCompare {
+        #[arg(long)]
+        study: PathBuf,
+    },
+    FramingLegacyParity {
+        #[arg(long)]
+        study: PathBuf,
+    },
     /// Prepare the bounded four-condition selection learnability study.
     BindingPrepare {
         #[arg(long)] parent: PathBuf,
@@ -223,6 +243,8 @@ fn verified_metadata(root: &Path, p: &Plan) -> Result<(Vec<Meta>, Vec<Meta>, Vec
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    framing: Option<neural::Framing>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     identifiable: Option<identifiable::Policy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -733,6 +755,9 @@ fn corpus(train: Vec<Episode>, dev: Vec<Episode>, seed: u64) -> Result<data::nat
     data::native::from_episodes(m, train, dev)
 }
 impl Plan {
+    pub(super) fn framing(&self) -> neural::Framing {
+        self.framing.unwrap_or_default()
+    }
     pub(super) fn reuses_tokenizer_mapping(&self, tok: &ByteBpe) -> bool {
         self.identifiable.is_some() && self.tokenizer == tok.id()
     }
@@ -930,6 +955,7 @@ impl Plan {
         t: &ByteBpe,
     ) -> Result<checkpoint::ResumeBinding> {
         let mut b = checkpoint::ResumeBinding::default_for(s, t);
+        b.framing = self.framing().digest();
         b.execution = 1;
         b.policy = checkpoint::ResumeBinding::digest_bytes(&binary::to_vec(self)?);
         b.provenance = b.policy;
@@ -1107,6 +1133,7 @@ fn prepare(root: &Path, tiny: bool) -> Result<()> {
         })
         .collect();
     let plan = Plan {
+        framing: None,
         identifiable: None,
         schema: Some(2),
         fork: None,
@@ -1174,6 +1201,8 @@ fn source_digest() -> Result<String> {
         include_bytes!("data.rs").as_slice(),
         include_bytes!("native_corpus.rs").as_slice(),
         include_bytes!("neural.rs").as_slice(),
+        include_bytes!("model.rs").as_slice(),
+        include_bytes!("token_cache.rs").as_slice(),
         include_bytes!("neural/transformer.rs").as_slice(),
         include_bytes!("neural/artifact.rs").as_slice(),
         include_bytes!("neural/checkpoint.rs").as_slice(),
@@ -1189,7 +1218,17 @@ fn source_digest() -> Result<String> {
 }
 pub fn execute(command: Command) -> Result<()> {
     match command {
-        Command::BindingPrepare { parent, output } => identifiable::binding::prepare(&parent, &output, false),
+        Command::FramingPrepare { parent, output } => {
+            identifiable::binding::framing_prepare(&parent, &output, false)
+        }
+        Command::FramingDecide { study } => identifiable::binding::framing_decide(&study),
+        Command::FramingCompare { study } => identifiable::binding::framing_compare(&study),
+        Command::FramingLegacyParity { study } => {
+            identifiable::binding::framing_legacy_parity(&study)
+        }
+        Command::BindingPrepare { parent, output } => {
+            identifiable::binding::prepare(&parent, &output, false)
+        }
         Command::BindingReport { root } => identifiable::binding::report(&root),
         Command::BindingParity { root } => identifiable::binding::parity(&root),
         Command::BindingProbe { root } => identifiable::binding::probe(&root),
@@ -1528,7 +1567,23 @@ fn run(root: &Path, uninterrupted_fixture: bool) -> Result<()> {
     let output = root.join(format!("segment-{index:04}"));
     let stop_after = if previous.is_empty() && !uninterrupted_fixture {
         p.origin_step() + 1
-    } else if p.identifiable.is_some() && !identifiable::binding::is(&p) && (step < 1024 || (step == 1024 && previous.last().is_some_and(|s|s.phase.as_deref()==Some("EvaluationPending")))) {
+    } else if identifiable::binding::is_framing(&p) {
+        identifiable::binding::framing_run_endpoint(
+            root,
+            &p,
+            step,
+            previous
+                .last()
+                .is_some_and(|s| s.phase.as_deref() == Some("EvaluationPending")),
+        )?
+    } else if p.identifiable.is_some()
+        && !identifiable::binding::is(&p)
+        && (step < 1024
+            || (step == 1024
+                && previous
+                    .last()
+                    .is_some_and(|s| s.phase.as_deref() == Some("EvaluationPending"))))
+    {
         1024
     } else {
         p.config.max_steps
@@ -1553,7 +1608,7 @@ fn run(root: &Path, uninterrupted_fixture: bool) -> Result<()> {
         &root.join(format!("segment-{index:04}-started.r3b")),
         &binary::record!({"schema":2,"policy":digest(&p)?,"checkpoint":input,"physical":file_hash(&input)?,"step":step,"prior_seconds":elapsed,"generation_limit":p.evaluation.generation_limit-generations,"teacher_limit":p.evaluation.teacher_limit-teachers}),
     )?;
-    let r = if step == p.config.max_steps {
+    let r = if step == stop_after {
         // No trainer/Adam call on evaluation-only continuation, including final row publication.
         std::fs::create_dir(&output)?;
         let evaluated = evaluate_boundary(&p, root, &input, step, &mut control);
@@ -1570,7 +1625,9 @@ fn run(root: &Path, uninterrupted_fixture: bool) -> Result<()> {
         }
         let _ = control.seal_terminal();
         let mut receipt = control.receipt();
-        receipt["reason"] = binary::record!(control.reason().unwrap_or("BUDGET_REACHED"));
+        receipt["reason"] = binary::record!(control.reason().unwrap_or(
+            if step < p.config.max_steps { "TRAINING" } else { "BUDGET_REACHED" }
+        ));
         receipt["checkpoint_saved"] = binary::record!(saved.is_ok());
         receipt["save_error"] = binary::record!(saved.as_ref().err().map(ToString::to_string));
         receipt["work_error"] = binary::record!(evaluated.as_ref().err().map(ToString::to_string));
@@ -2689,13 +2746,17 @@ fn audit_panel(
             call_attempt(root, &key, "generation", &header["binding"], e, i, Some(r))?;
         }
         verify_generated(r, tok)?;
-        let prompt = tok.prepare(
+        let prompt = tok.prepare_with_framing(
             &e.request,
+            p.framing(),
             l.model.config.context as u32,
             &l.model.config.id()?,
         )?;
         if r["native_prompt_digest"] != prompt.token_digest {
             return Err(bad("raw actual framing mismatch"));
+        }
+        if identifiable::binding::is_framing(p) && r["framing"] != p.framing().id() {
+            return Err(bad("raw framing descriptor mismatch"));
         }
     }
     let mut s = score(&rows[1..], es, ms)?;
@@ -2715,6 +2776,11 @@ fn audit_panel(
             }
             if r["id"] != e.id || r["ordinal"] != i || r["case"] != digest(e)? {
                 return Err(bad("teacher case"));
+            }
+            if identifiable::binding::is_framing(p)
+                && r["teacher"]["training_prompt_matches_generation"] != true
+            {
+                return Err(bad("teacher actual framing mismatch"));
             }
         }
         s.teachers_completed = Some(es.len());
@@ -6656,6 +6722,7 @@ mod tests {
         wrong.evidence.items[0].original_excerpt.push('!');
         assert!(resolve(&wrong).is_err());
         let p = Plan {
+            framing: None,
             identifiable: None,
             schema: None,
             fork: None,

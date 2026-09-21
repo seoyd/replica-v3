@@ -215,7 +215,7 @@ impl ResumeBinding {
             || self.execution > 1
             || self.first_target_weight_bits != state.config.first_target_weight.to_bits()
             || self.tokenizer != Self::digest_bytes(tok.semantic_id().as_bytes())
-            || self.framing != Self::digest_bytes(super::PROMPT_FORMAT.as_bytes())
+            || super::Framing::from_digest(self.framing).is_err()
             || self.config != Self::config_digest(&state.config)
             || self.corpus != Self::digest_bytes(state.corpus_hash.as_bytes())
             || self.validation != Self::digest_bytes(state.validation_hash.as_bytes())
@@ -335,6 +335,24 @@ pub struct Loaded {
     pub tokenizer: ByteBpe,
     pub manifest: Manifest,
     pub optimizer: BTreeMap<String, Tensor>,
+}
+impl Manifest {
+    pub fn framing(&self) -> Result<super::Framing> {
+        self.training
+            .as_ref()
+            .and_then(|s| s.resume_binding.as_ref())
+            .map_or(Ok(super::Framing::QuestionEvidence), |b| {
+                super::Framing::from_digest(b.framing)
+            })
+    }
+    pub fn require_default_framing(&self) -> Result<()> {
+        if self.framing()? != super::Framing::QuestionEvidence {
+            return Err(Error::Invalid(
+                "EQ_FRAMING_REQUIRES_BOUND_RESEARCH_PATH".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 pub(super) fn expected(m: &Manifest) -> BTreeMap<String, Vec<usize>> {
     let shapes = m.architecture.shapes();

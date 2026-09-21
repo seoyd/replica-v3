@@ -1,5 +1,61 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: causal framing baseline
+
+R3-CAUSAL-FRAMING-BASELINE-1.0 continues source13969c6fe2b7b9232297a0796b037b202add350b
+and independently reviewed report4ba5a3d713f4de15c2fde3aa01021c61c17255c9.
+All old endpoints, failures, Adam, tokenizer and data remain immutable. The only
+intervention is question/evidence block order. QE retains native-role-bytes-v1;
+EQ uses native-role-bytes-evidence-question-v1. System, record internals/order,
+question bytes, answer and EOS are unchanged. The shared serializer is used by
+samples, generation, teacher and verifier. Native resume binding, cache keys and
+raw policy bind the actual framing. Generic product inference and exports that
+lose the descriptor reject EQ. Product default remains QE.
+
+F0 verifies the preserved BOTH corpus, initial tensor, tape and old512 endpoint.
+F1 runs only directly affected literal block/mask/cache/binding tests and actual
+EQ TINY continuous2 versus new-process1+1, including evaluation-only continuation.
+F2 independently approves identical corpus512train/512dev, initial tensor,
+fresh Adam-zero, tokenizer562 and paired tape before source/push/binary freeze.
+Each row has146 tokens including digit+EOS. Both arms use SMALL9,513,408,
+LOCAL5, CPU/F32/Accelerate/thread1, first-target1 CE, batch8/accumulation1,
+seq256, warmup32 then constant3e-4, beta.9/.999, epsilon1e-8, decay.01, clip1.
+No seed/LR/loss/core/storage search or automatic extension is authorized.
+
+F3 runs QE and EQ with first1 durable update then511 in a fresh process.
+Steps0/128/256 evaluate the fixed64train+64dev;512 evaluates all512+512.
+First512 tape equals old BOTH exactly; each unique row appears8 times.
+QE512 weights, Adam, cursor, counters and1024 raw outputs must reproduce old
+BOTH512 bitwise. A mismatch blocks continuation and is preserved.
+
+F4 is decided only after both verified512 endpoints. Any full gate stops at512.
+Otherwise extend both by512 only if either arm has train QUERY_BOTH>=64 and
+ALL4>=16, or dev QUERY_BOTH>=32 and ALL4>=8, with zero final generation errors
+and valid execution. Repeat the identical512 tape without clock/Adam reset.
+An immutable paired decision is revalidated against original512 raw on resume.
+No joint signal closes both at512. At1024 evaluate all train/dev once, with no
+additional intermediate panels. Segment arrays never exceed512 updates.
+
+Full gate: train FULL>=508/512, QUERY_BOTH>=252/256, ALL4>=124/128;
+dev FULL>=488/512, QUERY_BOTH>=232/256, ALL4>=116/128; errors0 and normal EOS.
+F5 independently recounts all raw/teacher and regenerates first16 per arm.
+Select only eligible candidates by dev ALL4, then QUERY_BOTH, then FULL, then QE.
+Fix one candidate before independent one-time opening of the old sealed256:
+FULL>=244, QUERY_BOTH>=116/128, ALL4>=58/64, errors0. Without eligibility it stays
+unopened. Compare paired skeleton units128, not512 independent rows. Report
+SWAP_BOTH, gold/foil/other/errors, identical query outputs, digit/EOS full-vocab
+NLL and separately normalized gold/foil NLL; only the latter compares with ln2.
+
+Caps: SMALL optimizer2048, input3,000,000, target40,000; generation5632,
+self-teacher5120; TINY optimizer128/generation512/teacher512. Active7200seconds,
+segment900 plus cleanup120, one heavy process. Record committed/discarded/unknown
+work and durable state. Cancellation, numerical/storage/policy errors and UNKNOWN
+block continuation; initial random zero quality is not a runtime failure.
+Evaluation-only continuation adds no optimizer calls. Existing pending/confirmed
+publication and RunControl remain authoritative. Closed old runs are not reopened.
+Code execution acceptance, narrow selection baseline, S4/S5/S6 and Goal1 remain
+separate; neither framing is automatically promoted to product default.
+
 ## Closed: foundation orbit — bounded comparison complete, binding baseline not established
 
 Source13969c6fe2b7b9232297a0796b037b202add350b was independently preparation-bound,

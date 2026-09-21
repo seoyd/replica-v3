@@ -30,6 +30,33 @@ pub const MAX_VOCAB: usize = 4096;
 pub const MAX_TOKENIZER_BYTES: usize = 2 * 1024 * 1024;
 pub const PROMPT_FORMAT: &str = "native-role-bytes-v1";
 
+/// Input layout identity is independent of the tokenizer and model equations.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Framing {
+    #[default]
+    #[serde(rename = "native-role-bytes-v1")]
+    QuestionEvidence,
+    #[serde(rename = "native-role-bytes-evidence-question-v1")]
+    EvidenceQuestion,
+}
+impl Framing {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::QuestionEvidence => PROMPT_FORMAT,
+            Self::EvidenceQuestion => "native-role-bytes-evidence-question-v1",
+        }
+    }
+    pub fn digest(self) -> [u8; 32] {
+        Sha256::digest(self.id().as_bytes()).into()
+    }
+    pub fn from_digest(digest: [u8; 32]) -> Result<Self> {
+        [Self::QuestionEvidence, Self::EvidenceQuestion]
+            .into_iter()
+            .find(|f| f.digest() == digest)
+            .ok_or_else(|| Error::Corrupt("UNKNOWN_PROMPT_FRAMING".into()))
+    }
+}
+
 pub fn cpu_backend() -> &'static str {
     if cfg!(feature = "accelerate") {
         "CPU/Accelerate"
@@ -377,6 +404,15 @@ impl ByteBpe {
         context: u32,
         config_id: &str,
     ) -> Result<PreparedPrompt> {
+        self.prepare_with_framing(request, Framing::QuestionEvidence, context, config_id)
+    }
+    pub fn prepare_with_framing(
+        &self,
+        request: &ModelRequest,
+        framing: Framing,
+        context: u32,
+        config_id: &str,
+    ) -> Result<PreparedPrompt> {
         request.limits.validate()?;
         check_refs(
             &request
@@ -405,22 +441,43 @@ impl ByteBpe {
         {
             return Err(Error::ContextTooSmall);
         }
+        let mut system = vec![BOS, SYSTEM_ROLE];
+        system.extend(self.encode(request.system.as_bytes())?);
+        system.push(END_ROLE);
+        let mut question = vec![USER_ROLE];
+        question.extend(self.encode(request.input.as_bytes())?);
+        question.push(END_ROLE);
+        let mut record_blocks = vec![None; evidence.len()];
         loop {
-            let mut ids = vec![BOS, SYSTEM_ROLE];
-            ids.extend(self.encode(request.system.as_bytes())?);
-            ids.extend([END_ROLE, USER_ROLE]);
-            ids.extend(self.encode(request.input.as_bytes())?);
-            ids.push(END_ROLE);
+            let mut ids = system.clone();
+            if framing == Framing::QuestionEvidence {
+                ids.extend(&question);
+            }
             let mut rendered_bytes = request.system.len() + request.input.len();
-            for e in &evidence {
-                ids.push(EVIDENCE_ROLE);
-                let text = evidence_text(e);
-                rendered_bytes += text.len();
+            for (i, e) in evidence.iter().enumerate() {
+                let (bytes, block) = match &record_blocks[i] {
+                    Some(cached) => cached,
+                    None => {
+                        let text = evidence_text(e);
+                        if rendered_bytes + text.len() > MAX_REQUEST {
+                            rendered_bytes = MAX_REQUEST + 1;
+                            break;
+                        }
+                        let mut block = vec![EVIDENCE_ROLE];
+                        block.extend(self.encode(text.as_bytes())?);
+                        block.push(END_ROLE);
+                        record_blocks[i] = Some((text.len(), block));
+                        record_blocks[i].as_ref().unwrap()
+                    }
+                };
+                rendered_bytes += bytes;
                 if rendered_bytes > MAX_REQUEST {
                     break;
                 }
-                ids.extend(self.encode(text.as_bytes())?);
-                ids.push(END_ROLE);
+                ids.extend(block);
+            }
+            if framing == Framing::EvidenceQuestion {
+                ids.extend(&question);
             }
             ids.push(ASSISTANT_ROLE);
             if rendered_bytes <= MAX_REQUEST
@@ -438,7 +495,11 @@ impl ByteBpe {
                     provided: evidence.iter().map(|e| e.event_id).collect(),
                     excluded,
                     tokenizer_id: self.semantic_id(),
-                    config_id: config_id.into(),
+                    config_id: if framing == Framing::QuestionEvidence {
+                        config_id.into()
+                    } else {
+                        format!("{config_id};framing={}", framing.id())
+                    },
                     token_digest: format!("{:x}", digest.finalize()),
                 });
             }

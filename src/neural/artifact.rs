@@ -804,6 +804,8 @@ pub fn save_with_stats(
     Ok((manifest, stats))
 }
 pub fn export_inference(path: &Path, loaded: &Loaded) -> Result<Manifest> {
+    // This inference schema drops training/binding; it cannot preserve opt-in EQ.
+    loaded.manifest.require_default_framing()?;
     let mut manifest = loaded.manifest.clone();
     manifest.trained_steps = manifest
         .training

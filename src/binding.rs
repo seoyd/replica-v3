@@ -7,19 +7,50 @@ const ARMS: [&str; 4] = ["A", "B", "C", "D"];
 const ORBIT_DATA: &str = "foundation-orbit-v1";
 const ORBIT_CONTRACT: &str = "R3-FOUNDATION-ORBIT-1.0";
 const ORBIT_ARMS: [&str; 2] = ["FIXED", "BOTH"];
+const FRAME_DATA: &str = "causal-framing-v1";
+const FRAME_CONTRACT: &str = "R3-CAUSAL-FRAMING-BASELINE-1.0";
+const FRAME_ARMS: [&str; 2] = ["QE", "EQ"];
 const SHORT_SYSTEM: &str = "근거에 따라 답하라.";
 const VALUE_QUERY: &str = "현재 값의 숫자 하나만 답하라.";
 const CITATION_QUERY: &str = "현재 값을 인용과 함께 써라.";
 type Skeleton = [u8; 4];
 
 pub(in super::super) fn is(p: &Plan) -> bool {
-    p.identifiable.as_ref().is_some_and(|x| x.dataset == DATA || x.dataset == ORBIT_DATA)
+    p.identifiable
+        .as_ref()
+        .is_some_and(|x| [DATA, ORBIT_DATA, FRAME_DATA].contains(&x.dataset.as_str()))
 }
-fn is_orbit(p: &Plan) -> bool { p.identifiable.as_ref().is_some_and(|x| x.dataset == ORBIT_DATA) }
-fn arms(p: &Plan) -> &'static [&'static str] { if is_orbit(p) { &ORBIT_ARMS } else { &ARMS } }
+pub(in super::super) fn is_framing(p: &Plan) -> bool {
+    p.identifiable
+        .as_ref()
+        .is_some_and(|x| x.dataset == FRAME_DATA)
+}
+fn is_orbit(p: &Plan) -> bool {
+    is_framing(p)
+        || p.identifiable
+            .as_ref()
+            .is_some_and(|x| x.dataset == ORBIT_DATA)
+}
+fn arms(p: &Plan) -> &'static [&'static str] {
+    if is_framing(p) {
+        &FRAME_ARMS
+    } else if is_orbit(p) {
+        &ORBIT_ARMS
+    } else {
+        &ARMS
+    }
+}
 pub(in super::super) fn evaluation_for(p: &Plan) -> EvaluationPolicy {
     let mut e = evaluation(p.tiny);
-    if is_orbit(p) { e.teacher_limit = 3072; e.primary_min = 488; }
+    if is_orbit(p) {
+        e.teacher_limit = 3072;
+        e.primary_min = 488;
+    }
+    if is_framing(p) {
+        e.teacher_limit = 5120;
+        e.generation_limit = 5632;
+        e.train_steps.push(if p.tiny { 4 } else { 1024 });
+    }
     e
 }
 fn own(p: &Plan) -> &Policy {
@@ -485,6 +516,7 @@ pub(in super::super) fn prepare(parent: &Path, output: &Path, tiny: bool) -> Res
             return Err(bad("initial native identity"));
         }
         let plan = Plan {
+            framing: None,
             identifiable: Some(Policy {
                 study: output.to_owned(),
                 arm: arm.into(),
@@ -531,7 +563,15 @@ pub(in super::super) fn prepare(parent: &Path, output: &Path, tiny: bool) -> Res
     Ok(())
 }
 pub(in super::super) fn verify_plan(root: &Path, p: &Plan) -> Result<()> {
-    if is_orbit(p) { return orbit_verify_plan(root, p); }
+    if is_framing(p) {
+        return framing_verify_plan(root, p);
+    }
+    if p.framing.is_some() {
+        return Err(bad("legacy plan cannot select a new framing"));
+    }
+    if is_orbit(p) {
+        return orbit_verify_plan(root, p);
+    }
     let o = own(p);
     if o.dataset != DATA
         || !ARMS.contains(&o.arm.as_str())
@@ -584,7 +624,13 @@ fn panel_cases(
     let c = verified_corpus(&root.join("corpus.r3cor"), &p.corpus)?;
     let (tm, dm, _) = verified_metadata(root, p)?;
     let nt = if is_orbit(p) {
-        if p.tiny { 4 } else if step == 512 { 512 } else { 64 }
+        if p.tiny {
+            4
+        } else if step >= 512 {
+            512
+        } else {
+            64
+        }
     } else if p.tiny {
         4
     } else if step == 512 {
@@ -593,7 +639,13 @@ fn panel_cases(
         32
     };
     let nd = if is_orbit(p) {
-        if p.tiny { 4 } else if step == 512 { 512 } else { 64 }
+        if p.tiny {
+            4
+        } else if step >= 512 {
+            512
+        } else {
+            64
+        }
     } else if p.tiny {
         4
     } else if step == 512 {
@@ -650,7 +702,19 @@ pub(in super::super) fn audit(
     Ok((count, out))
 }
 fn gate(root: &Path, p: &Plan) -> Result<bool> {
-    if is_orbit(p) { return orbit_gate(root, p); }
+    if is_framing(p) {
+        let h = history(root, p)?;
+        let Some(s) = h.last() else { return Ok(false) };
+        return Ok(!p.tiny
+            && [512, 1024].contains(&s.step)
+            && orbit_candidate_scores(
+                &orbit_panel(root, p, s.step, "train512")?,
+                &orbit_panel(root, p, s.step, "dev512")?,
+            ));
+    }
+    if is_orbit(p) {
+        return orbit_gate(root, p);
+    }
     if p.tiny {
         return Ok(false);
     }
@@ -700,6 +764,9 @@ pub(in super::super) fn authorize(root: &Path, p: &Plan) -> Result<()> {
         }) {
             return Err(bad("binding failed peer"));
         }
+    }
+    if is_framing(p) {
+        return framing_authorize(root, p);
     }
     if is_orbit(p) {
         return orbit_authorize(root, p);
@@ -756,7 +823,15 @@ fn work(p: &Plan) -> Result<(f64, usize, usize, u64, u64)> {
         }
     }
     if is_orbit(p) {
-        for name in ["swap", "confirmation", "review-FIXED", "review-BOTH"] {
+        for name in [
+            "swap",
+            "legacy",
+            "confirmation",
+            "review-FIXED",
+            "review-BOTH",
+            "review-QE",
+            "review-EQ",
+        ] {
             let study = &own(p).study;
             if study.join(format!("{name}-started.r3b")).exists() {
                 let r: binary::Value = read_confirmed(&study.join(format!("{name}-finished.r3b")))
@@ -778,8 +853,18 @@ pub(in super::super) fn usage(p: &Plan) -> Result<(f64, usize, usize)> {
 }
 pub(in super::super) fn remaining(p: &Plan, target: bool) -> Result<u64> {
     let w = work(p)?;
-    let (cap, n) = if is_orbit(p) {
-        if target { (20_000u64, w.4) } else { (2_000_000u64, w.3) }
+    let (cap, n) = if is_framing(p) {
+        if target {
+            (40_000u64, w.4)
+        } else {
+            (3_000_000u64, w.3)
+        }
+    } else if is_orbit(p) {
+        if target {
+            (20_000u64, w.4)
+        } else {
+            (2_000_000u64, w.3)
+        }
     } else if target {
         (1_000_000u64, w.4)
     } else {
@@ -1671,22 +1756,39 @@ fn orbit_authorize(_root:&Path,p:&Plan) -> Result<()> {
     }
     Ok(())
 }
-fn orbit_peer_can_proceed(s:&Segment) -> bool {
-    ["TRAINING","TIME_BUDGET","BUDGET_REACHED"].contains(&s.stop.as_str())
-        && (s.phase.as_deref()!=Some("Finished") || s.stop=="BUDGET_REACHED")
+fn orbit_peer_can_proceed(s: &Segment) -> bool {
+    ["TRAINING", "TIME_BUDGET", "BUDGET_REACHED"].contains(&s.stop.as_str())
+        && (s.phase.as_deref() != Some("Finished") || s.stop == "BUDGET_REACHED")
 }
-pub(in super::super) fn orbit_parity(root:&Path,p:&Plan,reviewer:bool) -> Result<()> {
-    if !is_orbit(p) || p.tiny {return Err(bad("SMALL orbit parity scope"));}
-    authorize(root,p)?;
-    let h=history(root,p)?;let end=h.last().ok_or_else(||bad("orbit endpoint missing"))?;
-    if end.step!=512 || end.resume || end.phase.as_deref()!=Some("Finished") {return Err(bad("orbit final endpoint"));}
-    let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;
-    let (_,dm,_)=verified_metadata(root,p)?;let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
-    audit_panel(root,p,512,"dev512",&c.validation,&dm,&tok)?;
-    let raw=binary::read_value_records(&root.join("eval-0512-dev512.r3rows"))?;
-    let destination=if reviewer {own(p).study.clone()}else{root.to_owned()};
-    let name=if reviewer {format!("review-{}",own(p).arm)}else{"parity".into()};
-    let identity=binary::record!({"policy":digest(p)?,"checkpoint":end.checkpoint_hash,"selection":"first16 frozen dev rows",
+pub(in super::super) fn orbit_parity(root: &Path, p: &Plan, reviewer: bool) -> Result<()> {
+    if !is_orbit(p) || p.tiny {
+        return Err(bad("SMALL orbit parity scope"));
+    }
+    authorize(root, p)?;
+    let h = history(root, p)?;
+    let end = h.last().ok_or_else(|| bad("orbit endpoint missing"))?;
+    if is_framing(p) {
+        framing_final_step(&own(p).study)?;
+    } else if end.step != 512 || end.resume || end.phase.as_deref() != Some("Finished") {
+        return Err(bad("orbit final endpoint"));
+    }
+    let c = verified_corpus(&root.join("corpus.r3cor"), &p.corpus)?;
+    let (_, dm, _) = verified_metadata(root, p)?;
+    let tok = ByteBpe::load(&root.join("tokenizer.r3b"))?;
+    audit_panel(root, p, end.step, "dev512", &c.validation, &dm, &tok)?;
+    let raw =
+        binary::read_value_records(&root.join(format!("eval-{:04}-dev512.r3rows", end.step)))?;
+    let destination = if reviewer {
+        own(p).study.clone()
+    } else {
+        root.to_owned()
+    };
+    let name = if reviewer {
+        format!("review-{}", own(p).arm)
+    } else {
+        "parity".into()
+    };
+    let identity = binary::record!({"policy":digest(p)?,"checkpoint":end.checkpoint_hash,"selection":"first16 frozen dev rows",
         "reviewer":reviewer,"cases":digest(&&c.validation[..16])?});
     orbit_observe(&destination,&name,&root.join(&end.checkpoint),&c.validation[..16],&identity,Some(&raw[1..17]),observation_control(p,16,0)?)?;
     println!("ORBIT_PARITY arm={} reviewer={reviewer} matched16/16 optimizer0 teacher0",own(p).arm);Ok(())
@@ -1725,42 +1827,826 @@ pub(in super::super) fn orbit_compare(study:&Path) -> Result<()> {
     println!("ORBIT_COMPARISON {comparison}");
     Ok(())
 }
-pub(in super::super) fn orbit_confirm(study:&Path) -> Result<()> {
-    let comparison=orbit_comparison(study)?;
-    let arm=comparison["selected"].as_str().ok_or_else(||bad("NOT_RUN_PREREQUISITE: no baseline candidate"))?;
-    let review:binary::Value=read_confirmed(&study.join("review-b.r3b"))?;
-    if review["verdict"]!="PASS" || review["preparation"]!=file_hash(&study.join("preparation.r3b"))?
-        || review["endpoints"]!=comparison["endpoints"]
-        || review["report_hash"]!=file_hash(Path::new(review["report_path"].as_str().ok_or_else(||bad("result review path"))?))? {
+pub(in super::super) fn orbit_confirm(study: &Path) -> Result<()> {
+    let framing = study.join("QE/plan.r3b").exists();
+    let comparison = if framing {
+        framing_comparison(study)?
+    } else {
+        orbit_comparison(study)?
+    };
+    let arm = comparison["selected"]
+        .as_str()
+        .ok_or_else(|| bad("NOT_RUN_PREREQUISITE: no baseline candidate"))?;
+    let review: binary::Value = read_confirmed(&study.join("review-b.r3b"))?;
+    if review["verdict"] != "PASS"
+        || review["preparation"] != file_hash(&study.join("preparation.r3b"))?
+        || review["endpoints"] != comparison["endpoints"]
+        || review["report_hash"]
+            != file_hash(Path::new(
+                review["report_path"]
+                    .as_str()
+                    .ok_or_else(|| bad("result review path"))?,
+            ))?
+    {
         return Err(bad("independent endpoint recount required"));
     }
-    let root=study.join(arm);let p=plan_read(&root)?;let h=history(&root,&p)?;let end=h.last().unwrap();
-    let seal=verify_seal(study)?;
+    let root = study.join(arm);
+    let p = plan_read(&root)?;
+    let h = history(&root, &p)?;
+    let end = h.last().unwrap();
+    let selection: binary::Value = if framing {
+        read(&study.join("selection.r3b"))?
+    } else {
+        binary::Value::Null
+    };
+    let seal_root = if framing {
+        Path::new(
+            selection["seal_root"]
+                .as_str()
+                .ok_or_else(|| bad("seal root"))?,
+        )
+    } else {
+        study
+    };
+    let seal = verify_seal(seal_root)?;
     // Candidate is fixed durably before reading the sealed examples or answers.
-    write(&study.join("confirmation-candidate.r3b"),&binary::record!({"arm":arm,"checkpoint":end.checkpoint_hash,
-        "comparison":comparison,"seal":file_hash(&study.join("confirmation-seal.r3b"))?,"review":file_hash(&study.join("review-b.r3b"))?}))?;
-    let c=verified_corpus(&study.join("sealed/confirmation.r3cor"),seal["corpus"].as_str().ok_or_else(||bad("seal corpus"))?)?;
-    let ms:Vec<Meta>=read(&study.join("sealed/metadata.r3b"))?;let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
-    orbit_validate(&c.validation,&ms,&tok,256)?;
-    let identity=binary::record!({"policy":digest(&p)?,"checkpoint":end.checkpoint_hash,"candidate":file_hash(&study.join("confirmation-candidate.r3b"))?});
-    let rows=orbit_observe(study,"confirmation",&root.join(&end.checkpoint),&c.validation,&identity,None,observation_control(&p,256,0)?)?;
-    let s=orbit_score(&c.validation,&ms,&rows,&tok)?;
-    let pass=s.full>=244&&s.query_both>=116&&s.all4>=58&&s.errors==0&&s.eos==256;
-    publish_confirmed(&study.join("confirmation-result.r3b"),&binary::record!({"arm":arm,"checkpoint":end.checkpoint_hash,
+    write(
+        &study.join("confirmation-candidate.r3b"),
+        &binary::record!({"arm":arm,"checkpoint":end.checkpoint_hash,
+        "framing":p.framing(),"comparison":comparison,"seal":file_hash(&seal_root.join("confirmation-seal.r3b"))?,"review":file_hash(&study.join("review-b.r3b"))?}),
+    )?;
+    let c = verified_corpus(
+        &seal_root.join("sealed/confirmation.r3cor"),
+        seal["corpus"].as_str().ok_or_else(|| bad("seal corpus"))?,
+    )?;
+    let ms: Vec<Meta> = read(&seal_root.join("sealed/metadata.r3b"))?;
+    let tok = ByteBpe::load(&root.join("tokenizer.r3b"))?;
+    orbit_validate(&c.validation, &ms, &tok, 256)?;
+    let identity = binary::record!({"policy":digest(&p)?,"checkpoint":end.checkpoint_hash,"candidate":file_hash(&study.join("confirmation-candidate.r3b"))?});
+    let rows = orbit_observe(
+        study,
+        "confirmation",
+        &root.join(&end.checkpoint),
+        &c.validation,
+        &identity,
+        None,
+        observation_control(&p, 256, 0)?,
+    )?;
+    let s = orbit_score(&c.validation, &ms, &rows, &tok)?;
+    let pass =
+        s.full >= 244 && s.query_both >= 116 && s.all4 >= 58 && s.errors == 0 && s.eos == 256;
+    publish_confirmed(
+        &study.join("confirmation-result.r3b"),
+        &binary::record!({"arm":arm,"checkpoint":end.checkpoint_hash,
         "score":s,"minimal_binding_baseline_verified":pass,"scope":"K1-V finite digits; two records; new key/value sets",
         "goal1_ready":false,"s4":false,"s5":false,"s6":false}))?;
     println!("ORBIT_CONFIRMATION arm={arm} full={} query_both={} all4={} errors={} minimal_baseline={pass} GOAL1=false",s.full,s.query_both,s.all4,s.errors);Ok(())
 }
 
+fn framing_config(tiny: bool) -> TrainConfig {
+    let mut c = orbit_config(tiny);
+    c.max_steps = if tiny { 4 } else { 1024 };
+    c.max_tokens = 3_000_000;
+    c
+}
+fn framing_rows(tiny: bool) -> Vec<[usize; 8]> {
+    let rows = orbit_rows("BOTH", if tiny { 2 } else { 512 });
+    [rows.clone(), rows].concat()
+}
+fn framing_parent(parent: &Path) -> Result<Plan> {
+    let raw: Plan = read(&parent.join("plan.r3b"))?;
+    let p = plan_read_bound(parent, &raw.source, &raw.binary)?;
+    if own(&p).dataset != ORBIT_DATA || own(&p).arm != "BOTH" {
+        return Err(bad("preserved BOTH reference required"));
+    }
+    Ok(p)
+}
+fn framing_equivalence(es: &[Episode], tok: &ByteBpe, seq: usize) -> Result<()> {
+    let qe = samples_with_framing(es, tok, seq, neural::Framing::QuestionEvidence)?;
+    let eq = samples_with_framing(es, tok, seq, neural::Framing::EvidenceQuestion)?;
+    for ((e, a), b) in es.iter().zip(&qe).zip(&eq) {
+        let mut starts = a.tokens[..a.response_start]
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &v)| {
+                [
+                    neural::SYSTEM_ROLE,
+                    neural::USER_ROLE,
+                    neural::EVIDENCE_ROLE,
+                    neural::ASSISTANT_ROLE,
+                ]
+                .contains(&v)
+                .then_some((i, v))
+            })
+            .collect::<Vec<_>>();
+        if starts.iter().map(|x| x.1).collect::<Vec<_>>()
+            != [
+                neural::SYSTEM_ROLE,
+                neural::USER_ROLE,
+                neural::EVIDENCE_ROLE,
+                neural::EVIDENCE_ROLE,
+                neural::ASSISTANT_ROLE,
+            ]
+            || a.tokens.len() != 146
+            || a.tokens.len() != b.tokens.len()
+            || a.response_start != b.response_start
+        {
+            return Err(bad("frame block/target boundary"));
+        }
+        starts.push((a.response_start, EOS));
+        let expected = [
+            &a.tokens[..starts[1].0],
+            &a.tokens[starts[2].0..starts[4].0],
+            &a.tokens[starts[1].0..starts[2].0],
+            &a.tokens[starts[4].0..],
+        ]
+        .concat();
+        if expected != b.tokens {
+            return Err(bad("EQ must be exact block permutation including target"));
+        }
+        for (framing, s) in [
+            (neural::Framing::QuestionEvidence, a),
+            (neural::Framing::EvidenceQuestion, b),
+        ] {
+            let p = tok.prepare_with_framing(&e.request, framing, 2048, "frame-check")?;
+            if p.provided.len() != 2
+                || !p.excluded.is_empty()
+                || p.token_ids != s.tokens[..s.response_start]
+                || s.tokens[s.response_start..] != [tok.encode(e.answer.as_bytes())?[0], EOS]
+            {
+                return Err(bad("frame train/generation/target parity"));
+            }
+        }
+    }
+    Ok(())
+}
+pub(in super::super) fn framing_prepare(parent: &Path, output: &Path, tiny: bool) -> Result<()> {
+    if cfg!(feature = "test-support") && !tiny {
+        return Err(bad("production framing binary required"));
+    }
+    let old = framing_parent(parent)?;
+    if old.tiny != tiny {
+        return Err(bad("framing initial profile"));
+    }
+    let c = verified_corpus(&parent.join("corpus.r3cor"), &old.corpus)?;
+    let tok = ByteBpe::load(&parent.join("tokenizer.r3b"))?;
+    let initial = checkpoint::load(&parent.join("initial.r3m"), Device::Cpu, false)?;
+    if initial.manifest.training.is_some()
+        || initial.model.weight_hash()? != old.initial_weights
+        || initial.model.config != old.architecture
+        || initial.tokenizer.id() != old.tokenizer
+    {
+        return Err(bad("untrained common A tensor required"));
+    }
+    framing_equivalence(
+        &[c.train.clone(), c.validation.clone()].concat(),
+        &tok,
+        old.config.seq_len,
+    )?;
+    let adam = Adam::new(&initial.model.vars)?;
+    if adam.moments.values().any(|t| {
+        t.flatten_all()
+            .and_then(|x| x.to_vec1::<f32>())
+            .map_or(true, |v| v.iter().any(|x| x.to_bits() != 0))
+    }) {
+        return Err(bad("Adam must start at zero"));
+    }
+    let seal = verify_seal(&own(&old).study)?; // hashes only, no sealed examples read
+    std::fs::create_dir(output)?;
+    write(
+        &output.join("selection.r3b"),
+        &binary::record!({"contract":FRAME_CONTRACT,"parent":parent,"parent_policy":file_hash(&parent.join("plan.r3b"))?,
+        "corpus":old.corpus,"metadata":old.metadata,"initial":old.initial,"tokenizer":old.tokenizer,
+        "seal_root":own(&old).study,"seal":file_hash(&own(&old).study.join("confirmation-seal.r3b"))?,"sealed_corpus":seal["corpus"],
+        "extension_rule":"512: any full gate stops; else train QB>=64 AND ALL4>=16 OR dev QB>=32 AND ALL4>=8 permits both additional512",
+        "source":source_digest()?}),
+    )?;
+    let mut plans = BTreeMap::new();
+    for (arm, frame) in [
+        ("QE", neural::Framing::QuestionEvidence),
+        ("EQ", neural::Framing::EvidenceQuestion),
+    ] {
+        let root = output.join(arm);
+        std::fs::create_dir(&root)?;
+        for name in [
+            "corpus.r3cor",
+            "transfer.r3cor",
+            "metadata.r3b",
+            "tokenizer.r3b",
+            "initial.r3m",
+        ] {
+            copy_native(&parent.join(name), &root.join(name))?;
+        }
+        let rows = framing_rows(tiny);
+        let mut p = old.clone();
+        p.framing = Some(frame);
+        p.config = framing_config(tiny);
+        p.source = source_digest()?;
+        p.binary = file_hash(&std::env::current_exe()?)?;
+        p.identifiable = Some(Policy {
+            study: output.to_owned(),
+            arm: arm.into(),
+            dataset: FRAME_DATA.into(),
+            rows: rows.clone(),
+        });
+        p.train_order = digest(&rows)?;
+        p.evaluation = evaluation_for(&p);
+        write(&root.join("plan.r3b"), &p)?;
+        framing_verify_plan(&root, &p)?;
+        let f = samples_with_framing(&c.train, &tok, p.config.seq_len, frame)?;
+        let n = if tiny { 2 } else { 512 };
+        plans.insert(arm,binary::record!({"policy":file_hash(&root.join("plan.r3b"))?,"framing":frame.id(),"corpus":p.corpus,"metadata":p.metadata,
+            "initial":p.initial,"initial_content":initial.model.weights_content_id()?,"input_first_stage":rows[..n].iter().flatten().map(|&i|f[i].tokens.len()-1).sum::<usize>(),
+            "target_first_stage":n*16,"tape":p.train_order,"exposure_first_stage":orbit_exposure(&rows[..n])?}));
+    }
+    publish_confirmed(
+        &output.join("preparation.r3b"),
+        &binary::record!({"contract":FRAME_CONTRACT,"source":source_digest()?,"binary":file_hash(&std::env::current_exe()?)?,
+        "arms":plans,"selection":file_hash(&output.join("selection.r3b"))?,"parameters":initial.model.config.parameters(),"tokenizer":tok.id(),
+        "initial_content":initial.model.weights_content_id()?,"adam_zero":optimizer_hash(&adam.moments)?,"optimizer":0,"generation":0,"teacher":0,
+        "confirmation":"PRIOR_SEAL_UNOPENED","max_updates":if tiny {8}else{2048},"stage_updates":if tiny {2}else{512}}),
+    )?;
+    println!(
+        "FRAMING_PREPARED same corpus/tensor/tape QE/EQ only block order; optimizer0 generation0 teacher0 REVIEW_PENDING"
+    );
+    Ok(())
+}
+fn framing_verify_plan(root: &Path, p: &Plan) -> Result<()> {
+    let o = own(p);
+    let expected = match o.arm.as_str() {
+        "QE" => neural::Framing::QuestionEvidence,
+        "EQ" => neural::Framing::EvidenceQuestion,
+        _ => return Err(bad("unknown framing arm")),
+    };
+    if root != o.study.join(&o.arm)
+        || p.framing != Some(expected)
+        || p.config != framing_config(p.tiny)
+        || o.rows != framing_rows(p.tiny)
+        || p.fork.is_some()
+        || p.paired.is_some()
+        || p.grounding.is_some()
+        || p.training_values.is_some()
+    {
+        return Err(bad("framing policy/tape mismatch"));
+    }
+    let s: binary::Value = read(&o.study.join("selection.r3b"))?;
+    let parent = Path::new(s["parent"].as_str().ok_or_else(|| bad("framing parent"))?);
+    let old = framing_parent(parent)?;
+    if s["parent_policy"] != file_hash(&parent.join("plan.r3b"))?
+        || s["source"] != p.source
+        || p.corpus != old.corpus
+        || p.metadata != old.metadata
+        || p.initial != old.initial
+        || p.initial_weights != old.initial_weights
+        || p.tokenizer != old.tokenizer
+        || p.architecture != old.architecture
+        || p.order != old.order
+        || p.transfer != old.transfer
+        || p.model_seed != old.model_seed
+        || p.data_seed != old.data_seed
+        || p.split_policy != old.split_policy
+    {
+        return Err(bad("framing frozen parent mismatch"));
+    }
+    for (name, hash) in [
+        ("corpus.r3cor", &old.corpus),
+        ("transfer.r3cor", &old.transfer),
+        ("metadata.r3b", &old.metadata),
+        ("initial.r3m", &old.initial),
+    ] {
+        if file_hash(&root.join(name))? != *hash {
+            return Err(bad("framing copied bytes mismatch"));
+        }
+    }
+    let tok = ByteBpe::load(&root.join("tokenizer.r3b"))?;
+    if tok.id() != old.tokenizer {
+        return Err(bad("framing tokenizer mapping mismatch"));
+    }
+    let c = verified_corpus(&root.join("corpus.r3cor"), &p.corpus)?;
+    framing_equivalence(&[c.train, c.validation].concat(), &tok, p.config.seq_len)
+}
+fn framing_authorize(_root: &Path, p: &Plan) -> Result<()> {
+    let study = &own(p).study;
+    let s: binary::Value = read(&study.join("selection.r3b"))?;
+    let seal_root = Path::new(
+        s["seal_root"]
+            .as_str()
+            .ok_or_else(|| bad("framing seal root"))?,
+    );
+    if s["seal"] != file_hash(&seal_root.join("confirmation-seal.r3b"))?
+        || verify_seal(seal_root)?["corpus"] != s["sealed_corpus"]
+    {
+        return Err(bad("framing seal changed"));
+    }
+    let prep: binary::Value = read_confirmed(&study.join("preparation.r3b"))?;
+    if prep["selection"] != file_hash(&study.join("selection.r3b"))? {
+        return Err(bad("framing reviewed selection changed"));
+    }
+    for arm in FRAME_ARMS {
+        let r = study.join(arm);
+        let peer = plan_read(&r)?;
+        let h = history(&r, &peer)?;
+        if h.last().is_some_and(|s| !orbit_peer_can_proceed(s)) {
+            return Err(bad("framing failed peer"));
+        }
+    }
+    if !p.tiny {
+        let legacy: binary::Value = read_confirmed(&study.join("legacy-finished.r3b"))?;
+        let parent = Path::new(s["parent"].as_str().ok_or_else(|| bad("legacy parent"))?);
+        let old = framing_parent(parent)?;
+        let h = history(parent, &old)?;
+        let end = h.last().ok_or_else(|| bad("legacy final endpoint"))?;
+        if legacy["matched"] != 16
+            || legacy["completed"] != 16
+            || legacy["binding"]["source"] != p.source
+            || legacy["binding"]["binary"] != p.binary
+            || legacy["binding"]["identity"]["parent"] != s["parent"]
+            || legacy["binding"]["identity"]["framing"] != neural::PROMPT_FORMAT
+            || legacy["checkpoint"] != end.checkpoint_hash
+            || end.step != 512 || end.resume
+            || !legacy["error"].is_null()
+            || legacy["control"]["generation_calls"] != 16
+            || legacy["control"]["teacher_calls"] != 0
+            || legacy["control"]["terminal_reason"] != "COMPLETED"
+            || legacy["raw"] != file_hash(&study.join("legacy.r3rows"))?
+        {
+            return Err(bad("QE legacy parity required"));
+        }
+    }
+    Ok(())
+}
+fn framing_stage(study: &Path, step: usize, latest: bool) -> Result<binary::Value> {
+    let mut endpoints = BTreeMap::new();
+    let mut full = false;
+    let mut signal = false;
+    for arm in FRAME_ARMS {
+        let root = study.join(arm);
+        let p = plan_read(&root)?;
+        authorize(&root, &p)?;
+        let h = history(&root, &p)?;
+        let s = if latest {
+            h.last()
+        } else {
+            h.iter()
+                .rev()
+                .find(|s| s.step == step && s.phase.as_deref() != Some("EvaluationPending"))
+        }
+        .ok_or_else(|| bad("matched framing endpoint missing"))?;
+        if s.step != step
+            || s.phase.as_deref() == Some("EvaluationPending")
+            || !orbit_peer_can_proceed(s)
+        {
+            return Err(bad("matched framing endpoint incomplete"));
+        }
+        let tr = orbit_panel(&root, &p, step, "train512")?;
+        let dv = orbit_panel(&root, &p, step, "dev512")?;
+        if tr.errors > 0 || dv.errors > 0 || tr.eos != 512 || dv.eos != 512 {
+            return Err(bad("framing endpoint error"));
+        }
+        full |= orbit_candidate_scores(&tr, &dv);
+        signal |= (tr.query_both >= 64 && tr.all4 >= 16) || (dv.query_both >= 32 && dv.all4 >= 8);
+        endpoints.insert(arm,binary::record!({"checkpoint":s.checkpoint_hash,"step":step,"policy":digest(&p)?,"framing":p.framing(),"train":tr,"dev":dv}));
+    }
+    Ok(
+        binary::record!({"endpoints":endpoints,"full_gate":full,"joint_signal":signal,"extend":!full&&signal,
+        "decision":if full{"CANDIDATE_AT_512"}else if signal{"EXTEND_BOTH_TO_1024"}else{"CLOSE_NO_JOINT_SIGNAL"},"source":source_digest()?}),
+    )
+}
+pub(in super::super) fn framing_decide(study: &Path) -> Result<()> {
+    framing_legacy_reproduction(study)?;
+    let decision = framing_stage(study, 512, true)?;
+    publish_confirmed(&study.join("framing-decision.r3b"), &decision)?;
+    println!("FRAMING_DECISION {}", decision["decision"]);
+    Ok(())
+}
+fn framing_decision(study: &Path) -> Result<binary::Value> {
+    let decision: binary::Value = read_confirmed(&study.join("framing-decision.r3b"))?;
+    if decision != framing_stage(study, 512, false)? {
+        return Err(bad("extension decision/raw endpoint binding"));
+    }
+    Ok(decision)
+}
+pub(in super::super) fn framing_run_endpoint(
+    _root: &Path,
+    p: &Plan,
+    step: usize,
+    pending: bool,
+) -> Result<usize> {
+    let midpoint = if p.tiny { 2 } else { 512 };
+    if step < midpoint || (step == midpoint && pending) {
+        return Ok(midpoint);
+    }
+    let decision = framing_decision(&own(p).study)?;
+    if decision["extend"] != true {
+        return Err(bad(
+            "FRAMING_STUDY_CLOSED: no authorized additional updates",
+        ));
+    }
+    Ok(p.config.max_steps)
+}
+fn framing_final_step(study: &Path) -> Result<usize> {
+    let d = framing_decision(study)?;
+    let step = if d["extend"] == true { 1024 } else { 512 };
+    framing_stage(study, step, true)?;
+    Ok(step)
+}
+pub(in super::super) fn framing_legacy_parity(study: &Path) -> Result<()> {
+    let p = plan_read(&study.join("QE"))?;
+    let review: binary::Value = read_confirmed(&study.join("review-a.r3b"))?;
+    if review["verdict"] != "PASS"
+        || review["preparation"] != file_hash(&study.join("preparation.r3b"))?
+        || review["source"] != p.source
+        || review["report_hash"]
+            != file_hash(Path::new(
+                review["report_path"]
+                    .as_str()
+                    .ok_or_else(|| bad("review report"))?,
+            ))?
+    {
+        return Err(bad("actual framing review required"));
+    }
+    let s: binary::Value = read(&study.join("selection.r3b"))?;
+    let parent = Path::new(s["parent"].as_str().ok_or_else(|| bad("parent"))?);
+    let old = framing_parent(parent)?;
+    let h = history(parent, &old)?;
+    let end = h.last().ok_or_else(|| bad("legacy endpoint"))?;
+    if end.step != 512 || end.resume {
+        return Err(bad("closed BOTH512 required"));
+    }
+    let c = verified_corpus(&parent.join("corpus.r3cor"), &old.corpus)?;
+    let (_, ms, _) = verified_metadata(parent, &old)?;
+    let tok = ByteBpe::load(&parent.join("tokenizer.r3b"))?;
+    audit_panel(parent, &old, 512, "dev512", &c.validation, &ms, &tok)?;
+    let raw = binary::read_value_records(&parent.join("eval-0512-dev512.r3rows"))?;
+    orbit_observe(
+        study,
+        "legacy",
+        &parent.join(&end.checkpoint),
+        &c.validation[..16],
+        &binary::record!({"parent":parent,"checkpoint":end.checkpoint_hash,"framing":neural::PROMPT_FORMAT}),
+        Some(&raw[1..17]),
+        observation_control(&p, 16, 0)?,
+    )?;
+    println!("FRAMING_LEGACY_PARITY matched16/16 optimizer0 teacher0");
+    Ok(())
+}
+pub(in super::super) fn framing_compare(study: &Path) -> Result<()> {
+    println!("FRAMING_COMPARISON {}", framing_comparison(study)?);
+    Ok(())
+}
+fn framing_legacy_reproduction(study: &Path) -> Result<()> {
+    let selection: binary::Value = read(&study.join("selection.r3b"))?;
+    let old_root = Path::new(
+        selection["parent"]
+            .as_str()
+            .ok_or_else(|| bad("legacy parent"))?,
+    );
+    let qe = study.join("QE");
+    let old = framing_parent(old_root)?;
+    let p = plan_read(&qe)?;
+    let old_history = history(old_root, &old)?;
+    let new_history = history(&qe, &p)?;
+    let old_end = old_history
+        .iter()
+        .rev()
+        .find(|s| s.step == 512 && s.phase.as_deref() == Some("Finished"))
+        .ok_or_else(|| bad("old512"))?;
+    let new_end = new_history
+        .iter()
+        .rev()
+        .find(|s| s.step == 512 && s.phase.as_deref() != Some("EvaluationPending"))
+        .ok_or_else(|| bad("QE512"))?;
+    let a = checkpoint::load(&old_root.join(&old_end.checkpoint), Device::Cpu, true)?;
+    let b = checkpoint::load(&qe.join(&new_end.checkpoint), Device::Cpu, true)?;
+    let sa = a
+        .manifest
+        .training
+        .as_ref()
+        .ok_or_else(|| bad("legacy Adam state"))?;
+    let sb = b
+        .manifest
+        .training
+        .as_ref()
+        .ok_or_else(|| bad("QE Adam state"))?;
+    if a.model.weights_content_id()? != b.model.weights_content_id()?
+        || optimizer_hash(&a.optimizer)? != optimizer_hash(&b.optimizer)?
+        || (
+            sa.step,
+            sa.sampler_state,
+            sa.consumed_tokens,
+            sa.target_tokens,
+        ) != (
+            sb.step,
+            sb.sampler_state,
+            sb.consumed_tokens,
+            sb.target_tokens,
+        )
+    {
+        return Err(bad(
+            "QE_LEGACY_REPRODUCTION bitwise weights/Adam/cursor/token mismatch",
+        ));
+    }
+    for name in ["train512", "dev512"] {
+        let (_, es, ms) = panel_cases(old_root, &old, 512)?
+            .into_iter()
+            .find(|(n, _, _)| n == name)
+            .unwrap();
+        audit_panel(old_root, &old, 512, name, &es, &ms, &a.tokenizer)?;
+        audit_panel(&qe, &p, 512, name, &es, &ms, &b.tokenizer)?;
+        let ra = binary::read_value_records(&old_root.join(format!("eval-0512-{name}.r3rows")))?;
+        let rb = binary::read_value_records(&qe.join(format!("eval-0512-{name}.r3rows")))?;
+        for (i, (a, b)) in ra[1..].iter().zip(&rb[1..]).enumerate() {
+            for key in [
+                "raw_tokens",
+                "actual",
+                "error",
+                "finish_reason",
+                "generation_completed",
+            ] {
+                if a[key] != b[key] {
+                    return Err(bad(&format!("QE_LEGACY_REPRODUCTION {name} row{i} {key}")));
+                }
+            }
+        }
+    }
+    println!("QE_LEGACY_REPRODUCTION weights/Adam/cursor/tokens BITWISE_EQUAL raw1024/1024 calls0");
+    Ok(())
+}
+fn framing_comparison(study: &Path) -> Result<binary::Value> {
+    let step = framing_final_step(study)?;
+    framing_legacy_reproduction(study)?;
+    let mut result = framing_stage(study, step, true)?;
+    let mut scores = vec![];
+    let mut candidates = vec![];
+    for arm in FRAME_ARMS {
+        let root = study.join(arm);
+        let p = plan_read(&root)?;
+        let tr = orbit_panel(&root, &p, step, "train512")?;
+        let dv = orbit_panel(&root, &p, step, "dev512")?;
+        if !parity_verified(&root, &p)? {
+            return Err(bad("framing final first16 parity required"));
+        }
+        if orbit_candidate_scores(&tr, &dv) {
+            candidates.push((arm, dv.all4, dv.query_both, dv.full));
+        }
+        scores.push(dv);
+    }
+    let mut gain = 0;
+    let mut loss = 0;
+    let mut differences = vec![];
+    for (a, b) in scores[0]
+        .exact
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(scores[1].exact.as_chunks::<4>().0)
+    {
+        for (&a, &b) in a.iter().zip(b) {
+            gain += usize::from(!a && b);
+            loss += usize::from(a && !b);
+        }
+        differences.push(
+            (b.iter().filter(|&&v| v).count() as f64 - a.iter().filter(|&&v| v).count() as f64)
+                / 4.,
+        );
+    }
+    let mean = differences.iter().sum::<f64>() / 128.;
+    let se = (differences.iter().map(|d| (d - mean).powi(2)).sum::<f64>() / 127. / 128.).sqrt();
+    candidates.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then(b.2.cmp(&a.2))
+            .then(b.3.cmp(&a.3))
+            .then((a.0 != "QE").cmp(&(b.0 != "QE")))
+    });
+    result["contract"] = binary::record!(FRAME_CONTRACT);
+    result["step"] = binary::record!(step);
+    result["preparation"] = binary::record!(file_hash(&study.join("preparation.r3b"))?);
+    result["selected"] = binary::record!(candidates.first().map(|x| x.0));
+    result["selection_rule"] =
+        binary::record!("eligible only; dev ALL4 then QUERY_BOTH then FULL then QE");
+    result["paired_dev"] = binary::record!({"gain":gain,"loss":loss,"orbit_mean_difference":mean,"standard_error":se,
+        "normal_approx_95_interval":[mean-1.96*se,mean+1.96*se],"independent_units":128,"scope":"paired skeleton means; one seed"});
+    result["confirmation"] = binary::record!(if candidates.is_empty() {
+        "NOT_RUN_PREREQUISITE"
+    } else {
+        "PENDING_INDEPENDENT_B"
+    });
+    result["minimal_baseline_verified"] = binary::record!(false);
+    result["goal1_ready"] = binary::record!(false);
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn orbit_fixture(root:&Path) -> Result<PathBuf> {
-        let parent=parent(root)?;let old=root.join("old");
-        prepare(&parent,&old,true)?;
-        let study=root.join("new");
-        orbit_prepare(&old.join("A"),&study,true)?;
-        orbit_seal(&study)?;fixture_review(&study)?;
+    #[test]
+    fn framing_t1_t2_t3_exact_blocks_and_policy() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let old = orbit_fixture(temp.path())?;
+        let study = temp.path().join("frames");
+        framing_prepare(&old.join("BOTH"), &study, true)?;
+        let root = study.join("EQ");
+        let p = plan_read(&root)?;
+        let tok = ByteBpe::load(&root.join("tokenizer.r3b"))?;
+        let c = verified_corpus(&root.join("corpus.r3cor"), &p.corpus)?;
+        let mut req = c.train[0].request.clone();
+        req.system = "S".into();
+        req.input = "Q".into();
+        let system = [
+            vec![BOS, neural::SYSTEM_ROLE],
+            tok.encode(b"S")?,
+            vec![neural::END_ROLE],
+        ]
+        .concat();
+        let question = [
+            vec![neural::USER_ROLE],
+            tok.encode(b"Q")?,
+            vec![neural::END_ROLE],
+        ]
+        .concat();
+        let mut evidence = vec![];
+        for e in &req.evidence.items {
+            evidence.push(neural::EVIDENCE_ROLE);
+            evidence.extend(tok.encode(neural::evidence_text(e).as_bytes())?);
+            evidence.push(neural::END_ROLE);
+        }
+        let qe = tok.prepare(&req, 2048, "fixture")?;
+        let eq =
+            tok.prepare_with_framing(&req, neural::Framing::EvidenceQuestion, 2048, "fixture")?;
+        assert_eq!(
+            qe.token_ids,
+            [
+                system.clone(),
+                question.clone(),
+                evidence.clone(),
+                vec![neural::ASSISTANT_ROLE]
+            ]
+            .concat()
+        );
+        assert_eq!(
+            eq.token_ids,
+            [system, evidence, question, vec![neural::ASSISTANT_ROLE]].concat()
+        );
+        assert_eq!(qe.provided, eq.provided);
+        assert_eq!(qe.provided.len(), 2);
+        assert!(eq.excluded.is_empty());
+        assert_ne!(qe.token_digest, eq.token_digest);
+        assert_ne!(qe.config_id, eq.config_id);
+        assert!(!eq.token_ids.contains(&EOS));
+        framing_equivalence(
+            &[c.train.clone(), c.validation].concat(),
+            &tok,
+            p.config.seq_len,
+        )?;
+        let qe_samples = samples(&c.train, &tok, p.config.seq_len)?;
+        let eq_samples = samples_with_framing(&c.train, &tok, p.config.seq_len, p.framing())?;
+        let a = batch(&qe_samples, &[0, 1], &Device::Cpu)?;
+        let b = batch(&eq_samples, &[0, 1], &Device::Cpu)?;
+        assert_eq!(a.mask.to_vec2::<f32>()?, b.mask.to_vec2::<f32>()?);
+        assert_eq!(
+            a.first_target_mask.to_vec2::<f32>()?,
+            b.first_target_mask.to_vec2::<f32>()?
+        );
+        for (x, y) in qe_samples.iter().zip(&eq_samples) {
+            assert_eq!(x.tokens[x.response_start..], y.tokens[y.response_start..]);
+        }
+        assert!(neural::Framing::from_digest([0; 32]).is_err());
+        assert_eq!(
+            neural::Framing::from_digest(p.framing().digest())?,
+            p.framing()
+        );
+        let mut wrong = p.clone();
+        wrong.framing = Some(neural::Framing::QuestionEvidence);
+        assert!(framing_verify_plan(&root, &wrong).is_err());
+        let rows = framing_rows(false);
+        assert_eq!(rows.len(), 1024);
+        assert_eq!(rows[..512], rows[512..]);
+        assert_eq!(rows[..512], orbit_rows("BOTH", 512));
+        assert_eq!(framing_run_endpoint(&root, &p, 0, false)?, 2);
+        let mut large = p.clone();
+        large.tiny = false;
+        assert_eq!(framing_run_endpoint(&root, &large, 511, false)?, 512);
+        assert_eq!(framing_run_endpoint(&root, &large, 512, true)?, 512);
+        assert!(framing_run_endpoint(&root, &large, 512, false).is_err());
+        println!(
+            "FRAMING_T1_T2_T3 literal arrays, exact permutation, masks/targets, unknown/mismatch, repeated512 tape/staged evaluation PASS optimizer0 generation0 teacher0"
+        );
+        Ok(())
+    }
+    #[test]
+    fn framing_t4_eq_native_new_process_resume() -> Result<()> {
+        const CHILD: &str = "R3_FRAMING_PROCESS_CHILD";
+        if let Ok(root) = std::env::var(CHILD) {
+            return run(
+                Path::new(&root),
+                std::env::var("R3_FRAMING_CONTINUOUS").as_deref() == Ok("1"),
+            );
+        }
+        let temp = tempfile::tempdir()?;
+        let mut ends = vec![];
+        let mut raw = vec![];
+        let mut total = (0, 0, 0);
+        for name in ["continuous", "segmented", "evaluation-only"] {
+            let base = temp.path().join(name);
+            std::fs::create_dir(&base)?;
+            let old = orbit_fixture(&base)?;
+            let study = base.join("frames");
+            framing_prepare(&old.join("BOTH"), &study, true)?;
+            fixture_review(&study)?;
+            let root = study.join("EQ");
+            let p = plan_read(&root)?;
+            for i in 0..if name == "continuous" { 1 } else { 2 } {
+                let mut cmd = std::process::Command::new(std::env::current_exe()?);
+                cmd.args(["--exact","training::fresh::identifiable::binding::tests::framing_t4_eq_native_new_process_resume","--nocapture"])
+                    .env(CHILD,&root).env("R3_FRAMING_CONTINUOUS",if name=="segmented"{"0"}else{"1"})
+                    .env("VECLIB_MAXIMUM_THREADS","1").env("OMP_NUM_THREADS","1");
+                if name == "evaluation-only" && i == 0 {
+                    cmd.env("R3_FRESH_TRAIN_STOP", "training_checkpoint_saved");
+                }
+                let out = cmd.output()?;
+                print!("{}", String::from_utf8_lossy(&out.stdout));
+                assert!(
+                    out.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
+                if name == "evaluation-only" && i == 0 {
+                    assert_eq!(
+                        history(&root, &p)?.last().unwrap().phase.as_deref(),
+                        Some("EvaluationPending")
+                    );
+                }
+            }
+            let h = history(&root, &p)?;
+            let end = h.last().unwrap();
+            assert_eq!(end.step, 2);
+            assert!(end.resume);
+            assert_eq!(end.phase.as_deref(), Some("TrainingPending"));
+            assert_eq!(end.stop, "TRAINING");
+            assert!(framing_run_endpoint(&root, &p, 2, false).is_err());
+            let l = checkpoint::load(&root.join(&end.checkpoint), Device::Cpu, true)?;
+            assert_eq!(l.manifest.framing()?, neural::Framing::EvidenceQuestion);
+            assert!(l.manifest.require_default_framing().is_err());
+            assert!(neural::artifact::export_inference(&base.join("export.r3m"), &l).is_err());
+            let moved = base.join("moved.r3m");
+            std::fs::copy(root.join(&end.checkpoint), &moved)?;
+            let moved = checkpoint::load(&moved, Device::Cpu, true)?;
+            assert_eq!(moved.manifest.framing()?, p.framing());
+            let blocked = base.join("blocked-generic-resume");
+            let error = train(Run {
+                checkpoint: &root.join(&end.checkpoint), corpus: Some(&root.join("corpus.r3cor")),
+                output: &blocked, resume: true, numeric_probe: false, config: p.config.clone(),
+                stop_after: None, measure_rss: false, extend_steps: None, extend_microbatch: None,
+                extend_sample_group_size: None, extend_curriculum_steps: None,
+                extend_first_target_weight: None, extend_lr: None, extend_warmup: None,
+                source_id: None, replace_corpus: false,
+            }, std::sync::Arc::new(AtomicBool::new(false))).unwrap_err();
+            assert!(error.to_string().contains("OBJECTIVE_POLICY_UNSUPPORTED"));
+            assert!(!blocked.exists());
+            let state = l.manifest.training.as_ref().unwrap();
+            assert!(checkpoint::ResumeBinding::require_default(state, &l.tokenizer).is_err());
+            ends.push((
+                l.model.weights_content_id()?,
+                optimizer_hash(&l.optimizer)?,
+                state.step,
+                state.sampler_state,
+                state.consumed_tokens,
+                state.target_tokens,
+            ));
+            raw.push(
+                binary::read_value_records(&root.join("eval-0002-dev4.r3rows"))?[1..]
+                    .iter()
+                    .map(|r| r["raw_tokens"].clone())
+                    .collect::<Vec<_>>(),
+            );
+            total.0 += state.step;
+            total.1 += h.iter().map(|s| s.generations).sum::<usize>();
+            total.2 += h.iter().map(|s| s.teachers).sum::<usize>();
+            if name == "evaluation-only" {
+                let r: binary::Value = read(&root.join("segment-0001/train-control.r3b"))?;
+                assert_eq!(r["optimizer_calls"], 0);
+            }
+            for (panel, es, ms) in panel_cases(&root, &p, 2)? {
+                audit_panel(&root, &p, 2, &panel, &es, &ms, &l.tokenizer)?;
+            }
+        }
+        assert!(ends.windows(2).all(|w| w[0] == w[1]));
+        assert!(raw.windows(2).all(|w| w[0] == w[1]));
+        println!(
+            "FRAMING_T4 actual EQ continuous2/newprocess1+1/evaluation-only weights Adam clock cursor token raw SAME; optimizer={} generation={} teacher={}",
+            total.0, total.1, total.2
+        );
+        Ok(())
+    }
+    fn orbit_fixture(root: &Path) -> Result<PathBuf> {
+        let parent = parent(root)?;
+        let old = root.join("old");
+        prepare(&parent, &old, true)?;
+        let study = root.join("new");
+        orbit_prepare(&old.join("A"), &study, true)?;
+        orbit_seal(&study)?;
+        fixture_review(&study)?;
         Ok(study)
     }
     #[test]

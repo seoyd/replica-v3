@@ -1,5 +1,67 @@
 # 진단 및 구현 상태
 
+## 2026-09-21 Causal framing — F0/F1 구현·직접 검증, F2 준비
+
+R3-CAUSAL-FRAMING-BASELINE-1.0. 시작 HEAD는
+4ba5a3d713f4de15c2fde3aa01021c61c17255c9이며 source13969c6… 이후 차이는
+기존 독립 보고/상태/계획 문서뿐이었다. 기존 BOTH corpus·initial·tokenizer·
+모델/Adam·raw와 미추적 사용자 파일을 보존했다. 이 절의 시점에는 신규
+SMALL optimizer/generation/teacher 모두0이며 독립 준비 A는 PASS로 닫혔다.
+
+QE의 기존 PROMPT_FORMAT/기본 제품 입력은 유지했다. EQ는 독립 typed ID
+native-role-bytes-evidence-question-v1을 사용한다. 같은 serializer를
+train sample·normal greedy·teacher·raw 검산에 연결했고, native resume의
+framing digest와 실제 실행을 비교한다. Cache key/scope도 실제 framing을
+사용한다. EQ 파일의 폴더 이동은 의미를 바꾸지 않으며, 일반 QE resume와
+descriptor를 잃는 제품 직접 생성·inference export는 EQ를 거부한다.
+모델 수식·tokenizer mapping·저장 형식·SQLite는 변경하지 않았다.
+
+독립 source 검토에서 두 연결 누락을 실행 전에 수정했다. EQ teacher의
+training-prompt 검산도 실제 framing을 사용하며, 전체 한도보다 이른 단계의
+평가-only 완료는 TRAINING으로 기록해 history의 resume 판정과 일치한다.
+기존 실패나 종료 기록을 수정한 작업은 아니다.
+
+직접 검증은 Rust1.98.1/locked/offline/Accelerate로 수행했다.
+`framing-stage-verified.log`는 관련4test PASS이고, EQ 실제 TINY를 전체4/
+단계2 명시 spec으로 continuous2, 새 process1+1, checkpoint 시간 종료 후
+평가-only0 optimizer로 비교했다. Weights/Adam/cursor/token/raw가 일치하고
+추가 단계는 decision 부재로 차단됐다. 이 실행 자체의 optimizer6,
+generation48, teacher48은 품질 학습과 별도다. Native prompt 회귀1 PASS,
+Record writer→publisher→reader의0/1/2/128/255/256/257/511/512 경계1 PASS.
+잘못된 exact filter의0-test는 PASS에서 제외했다. 최초 TINY 검증 파일명
+오류와 stage<max에서 주입되지 않던 fixture 실패도 로그에 보존했다.
+구현자 전체 TINY 실행 사용량은 optimizer20/generation160/teacher160;
+컴파일 실패·metadata/자료 검산·cache 시험은 모델 호출0이다.
+독립 검토자가 같은 정확한 EQ TINY 시험을 별도로1회 통과해 optimizer6/
+generation48/teacher48을 추가했다. 이 단계 전체 TINY 합계는26/208/208이다.
+독립 실제 준비 보고 SHA256은
+26739fd7eac67d0280876143a35b0b116af749cc1154c2ec9f9e069fdc0d5e0e,
+review-a.r3b는5077559ad6fd4c6d4a9a197ac28da1bb09a8bf111fe1377a5b23d453e242837a.
+Source digest acdc8119b6a62137410bdd3240058376c934bd90b903af1b4b1e179ef895b6fd와
+아래 preparation/executable에 결속되며 원본5713/5713 hash 보존도 확인했다.
+독립 수학/자료 검산 보고557f5e291feffd6fd6bf6650f29404e38c9f7aff52e866b7a4a5d135f0659682도 PASS다.
+
+Check/release/clippy는 종료0. Clippy의 기존29경고는 별도 부채이며 새 경고는
+없다. 전체 변경 파일 fmt check는 기존 compact 코드의 형식 차이를 남긴다.
+무관한 전체 재포맷은 하지 않았고 `git diff --check`는 통과했다.
+
+준비 경로는 artifacts/causal-framing-20260921-study. preparation.r3b SHA256
+fbe06036068067eb9d67323b53eec19049afbb088dcb3e15ed08a9d1fdff324f.
+Production executable artifacts/causal-framing-20260921-executable SHA256
+4a77b920e898016e1d1da9daf8414fa062871831f0c1b2f4d75c1b982d18228d.
+Test binary SHA256 5d4061c0767678a71c60043588685aaccf361c7f325fff2ac4415ad8eb54ec08.
+두 군은 같은 native train512/dev512, 보존 A initial/fresh Adam-zero,
+tokenizer562와 BOTH 첫512 tape를 사용하며 필요시 그 tape만 한 번 반복한다.
+준비 과정에서 전수1024행의 정확 block permutation, 길이146, target 동일,
+근거 제공2/제외0을 검사했다. 미사용 confirmation 내용은 열지 않았다.
+
+구현/실행 증거는 artifacts/causal-framing-20260921-evidence,
+독립 근거는 artifacts/causal-framing-20260921-review 및
+artifacts/causal-framing-20260921-math-review에 보존한다. Source code는
+기존 neural/training/fresh/binding/model/cache/checkpoint/artifact 모듈을
+수정했으며 새 제품 source 파일·framework는0이다. 이 준비/검증 결과는
+새 품질 관측이 아니다. MINIMAL_BASELINE/S4/S5/S6/GOAL1은 미수용이다.
+
 ## 2026-09-21 Foundation orbit512 비교 종료 — 공동 선택 기준선 미확립
 
 R3-FOUNDATION-ORBIT-1.0의 준비·검토 A 후 FIXED/BOTH를 각각 실제512회

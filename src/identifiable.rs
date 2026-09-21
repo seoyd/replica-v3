@@ -1159,6 +1159,7 @@ pub(super) fn prepare(parent: &Path, output: &Path) -> Result<()> {
             })
             .collect();
         let policy = Plan {
+            framing: None,
             identifiable: Some(Policy {
                 study: output.to_owned(),
                 arm: arm.into(),
