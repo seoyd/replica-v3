@@ -1,5 +1,51 @@
 **Independent review A: PASS. Endpoint recount and reproduction: PASS. Both model candidates: FAIL.**
 
+**Explicit B-stage closure, 2026-09-21: REVIEW_B_INTEGRITY=PASS;
+FIXED_BASELINE_CANDIDATE=FAIL; BOTH_BASELINE_CANDIDATE=FAIL.**
+
+Following the separate B request, the reviewer reread the full contract and
+verified that source/tests/Cargo still match candidate
+`13969c6fe2b7b9232297a0796b037b202add350b`. The preceding review-report commit
+and freshly queried remote main were both
+`91f22a894a79157564fe78b0678cbe8a3bd35fdd`. There is no new source candidate.
+
+Fresh read-only executions recounted all16 scheduled panels,2,816 generated
+rows,2,816 teacher rows and both512-update traces into a new output directory.
+All16 panel checks, two usage checks and two endpoint-content checks exited0;
+their native recount outputs match the preceding independently calculated
+outputs byte for byte. Strict decoding, EOS, returned-call bindings, labels,
+FULL/QUERY_BOTH/SWAP_BOTH/ALL4, exposed masks, LR/Adam clocks, input/target and
+discarded costs were checked again. These are DERIVED_EXISTING_RAW results,
+not newly sampled model outputs.
+
+A separate Rust B checker also verified every prepared/returned row of the
+earlier32 actual reviewer generations against the unchanged endpoint, policy,
+prompt and original raw. Both arms remain16/16 identical, including errors in
+answer selection. Those generations were executed during the preceding review
+turn and are not claimed as new B-stage calls. No source change required another
+TINY run. This explicit B follow-up used optimizer0, generation0, teacher0 and
+scalar/finite-difference0.
+
+The final score table below is reconfirmed. FIXED exposed fit remains213/256;
+BOTH exposed fit256/512. Dev FULL gain143/loss124 does not offset the drop in
+QUERY_BOTH46→1 and ALL4 1→0. Both candidate gates fail.
+CONFIRMATION=NOT_RUN_PREREQUISITE and MINIMAL_BINDING_BASELINE_VERIFIED=false;
+S4/S5/S6 and Goal1 remain unaccepted. B did not read sealed confirmation contents,
+generate confirmation examples, reopen a run or infer a new code defect from low
+quality. Confirmed new code findings:0.
+
+The40-file source manifest and14,820-file original manifest pass both before and
+after B; the earlier reproduction evidence and executable hashes also pass.
+Local B evidence is `artifacts/foundation-review-b-20260921-1VHghB/`, including
+`check_b.rs`, `logs/`, `results/` and `result.r3b`. Result SHA256:
+`3d3fb8f788732dc1589330b3fca72731c5d6b6417f4fa7cc85a5aa24d96685a5`.
+B-checker binary SHA256:
+`deeb2ad2700eb1f344fba849ba11a67ef464535d38ced80b31bc64c78104bbc8`.
+Evidence-manifest SHA256:
+`232397ee383ab116d10b7040f91851d368083d091e9f035e8bb7079cbe02ea3f`.
+Only this report update is published. The detailed preceding review below retains
+its separate execution counts and evidence scope.
+
 This review applies R3-FOUNDATION-ORBIT-1.0 to source
 `13969c6fe2b7b9232297a0796b037b202add350b`, relative to
 `a4267d308c233f7bab47e1c4bcf39f4f4e21d3cb`. The implementation-report HEAD was
