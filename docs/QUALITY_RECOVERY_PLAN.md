@@ -1,6 +1,29 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: citation continuation from complete ANSWER4384
+## Closed learning budget: citation continuation from complete ANSWER4384
+
+The c9c1210 source passed independent A and ran all3040 newly authorized updates
+from4384 to7424. First update4385 was saved and restored in a fresh process.
+All11 segments completed normally; the final endpoint is
+`FINAL_QUALITY_FAIL_AT_7424 / Finished / resume=false`. There is no remaining
+learning authorization. Physical final hash:
+`8c2e9b0f670be09acbae40efb6e2d4cb4e5a3c01315b0d7e3a51aa467270ec47`.
+
+At7424, V dev511/512 (ALL4127), citation492/512 (ALL4113) and renamed495/512
+(ALL4116) all have normal EOS512/errors0. Citation support495 and renamed497
+miss508; valid foreign IDs17/15 miss0. Citation ALL4113 misses116. Thus no
+eligible candidate exists despite better value/citation output than at4384.
+Conditional full-train4608, confirmation512 and broader QA640 are NOT_RUN because
+their common development prerequisite failed. B independently verifies this
+complete negative endpoint; it cannot promote it or reopen its budget.
+
+The next required quality step is to obtain an independently eligible value+
+citation candidate before S4. The remaining observed gap is exact event-ID
+binding/copying across assignment/query variants; its cause is not established.
+Any further experiment needs a new explicit plan and budget. No new learning,
+data/LR/loss/core sweep or protected4352 recheck is authorized here.
+
+The registered policy below is retained as the explanation of this closed run.
 
 R3-CITATION-CONTINUATION-1.0 preserves the accepted scalar4352 and both
 TOKEN/ANSWER4384 QUALITY_REGRESSION endpoints. The latest independent rereview

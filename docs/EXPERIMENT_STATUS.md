@@ -1,5 +1,73 @@
 # 진단 및 구현 상태
 
+## 2026-09-22 인용 continuation — C3 학습 상한 완료, 공동 품질 미달
+
+Code source `c9c121077bbe1aadc546e344ab237d38728e3d3e`의 독립 A가 실제 PASS했다.
+별도 A 보고서 commit/확인한 remote는 `8d1c2ff42e90094cd168ccc504baa1521f142af2`다.
+최종 quick은2/2 PASS(exit0), 전체 TINY 비용은128 updates/1149 generation/
+704 teacher/FD0이다. 이 상한 이후 TINY optimizer를 더 실행하지 않았다.
+부모 V16/VC16 raw token·오답·EOS parity32도 exit0로 일치했다.
+
+같은 ANSWER4384의 weights/Adam/ANSWER CE/QE/tokenizer/LR3e-4/batch8과
+원 tape index32..3071을 유지해 실제 SMALL3040 updates를 실행했다.
+학습 segment11개는 모두 exit0이며 첫4385 저장 후 새 process 재개를 거쳤다.
+최종 absolute7424, 총 citation3072=상속32+신규3040이며,
+`FINAL_QUALITY_FAIL_AT_7424 / Finished / resume=false`로 닫혔다.
+초기 상대경로 명령1개는 등록된 절대경로 검사에서 학습 진입 전에 exit1이었다.
+segment/optimizer/generation은0이고 실패 로그를 보존했다. 이후 같은 등록 root의
+절대경로로 실행했으며 모델·정책을 바꾸거나 실패 receipt를 덮어쓰지 않았다.
+
+|절대 step / 이번 신규|V FULL / ALL4|VC FULL / ALL4|ID 재배정 FULL / ALL4|상태|
+|---|---|---|---|---|
+|4384 / 0|60/64 / 12/16|0/64 / 0/16|NOT_RUN|기존 실패, 수정 없음|
+|4416 / 32|59/64 / 12/16|0/64 / 0/16|NOT_RUN|경고1; VC length2|
+|4480 / 96|62/64 / 14/16|3/64 / 0/16|NOT_RUN|경고0|
+|4608 / 224|63/64 / 15/16|4/64 / 0/16|NOT_RUN|경고0|
+|4736 / 352|64/64 / 16/16|7/64 / 0/16|6/64 / 0/16|경고0|
+|5120 / 736|63/64 / 15/16|30/64 / 3/16|36/64 / 5/16|경고0|
+|5888 / 1504|508/512 / 124/128|474/512 / 103/128|488/512 / 112/128|공동 dev 미달|
+|7424 / 3040|511/512 / 127/128|492/512 / 113/128|495/512 / 116/128|최종 공동 dev 미달|
+
+5632/6400/6912는 예정 중간 저장이며 추가 평가0이다. 최종 세 dev 모두 EOS512,
+생성/UTF-8/길이 오류0, 인용 문법512다. VC 첫 값509/support495/유효 외부ID17,
+ID 재배정 첫 값510/support497/유효 외부ID15다. 최종 support>=508·외부ID0 및
+VC ALL4>=116 조건에 미달한다. FULL이95%를 넘었다고 공동 합격으로 바꾸지 않는다.
+고정 citation train128은5888의126/128·ALL430에서7424의127/128·ALL431로
+관측됐다. dev gate가 실패해 전체 train4608은 호출하지 않았다. 서로 다른64/512
+분모의 중간값을 동일 패널의 정확도 상승분으로 계산하지 않는다.
+
+신규 실제 input3,623,680/target231,040/padding97,280, samples24,320이다.
+V12,160/VC0 6,080/VC1 6,080 노출이며 상속32를 더한 전체 citation 계보에서
+V1536 각8회, VC0/VC1 각1536은4회다. 종료 누적 input8,710,144/target303,104.
+폐기 optimizer/input/target0이며 SMALL diagnostic backward0이다.
+B 전 실제 generation4128=부모32+평가4096, teacher4096이다.
+canonical 관측 active1621.653515375초; command wall/컴파일/순수 검산은 별도다.
+최대 관측 training RSS6,305,008KiB; `/usr/bin/time -l`의 최대 process RSS는
+7,225,114,624bytes이며 단위·측정 범위가 다르다.16GiB 제한 내였다.
+
+실제 원자료/준비물/동결 executable은 로컬 ignored 경로에 보존한다.
+
+- Study: `artifacts/citation-continuation-20260922-study-02/`
+- Final: `ANSWER-MEAN/segment-0010/final` physical SHA256
+  `8c2e9b0f670be09acbae40efb6e2d4cb4e5a3c01315b0d7e3a51aa467270ec47`.
+- Final manifest tensor SHA256 `66c16ddf00396df00fae1266c628c95384a94a2a2f195eabc4eb30352634b875`;
+  evaluator model identity `1d071953549a7b5da4cc88c25f364b104a824f6d8232255ccc1448306eb84225`.
+  `TRAIN_END sha256`은 manifest의 tensor hash이며 physical file hash와 구분한다.
+- Executable: `artifacts/citation-continuation-20260922-executable-02`, SHA256
+  `9f150bf0d5855c2956db8802ee91f3038389765afaaeddf1d336cd2868981d31`.
+- Preparation SHA256 `5be75f097064ac5156409adaab0ebfe23c5321e59534fc0aa35422f7af8205f2`;
+  source digest `65cee12e4d3c0c4149a7b02c7026614eb93206c2c61f6bdcab97ce33d92bd0c8`.
+- Evidence: `artifacts/citation-continuation-20260922-review/`; `candidate-02.diff`,
+  `A2-quick/`, `parent-*.stdout`, `train-segment-*.stdout/stderr`,
+  `final-report-before-b.stdout/stderr`를 보존한다. 최종 순수 report는 exit0,
+  모델/teacher/optimizer0이며 실제 terminal/raw/trace와 일치했다.
+
+C3 실행은 완료, 독립 B는 진행 중이다. 적격 후보가 없어 citation confirmation은
+미개봉이며 QA gap640도 NOT_RUN이다. 기존 scalar4352와 TOKEN/ANSWER4384 실패,
+원본·Adam·corpus·사용자 기억은 보존한다. 코드 수용, 값 보존, 인용 공동 품질과
+S4/S5/S6·Goal1을 분리한다. 값 dev 보존은 관측됐지만 전체 train gate 미측정,
+인용 공동 PASS=false, GOAL1_READY/ACCEPTED=false다.
+
 ## 2026-09-22 인용 continuation — C0/C1/C2 구현 및 직접 회귀
 
 보호된 scalar4352의 기존 confirmation254/256·ALL4 62/64와 TOKEN/ANSWER4384의
