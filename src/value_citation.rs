@@ -2248,6 +2248,26 @@ mod tests {
         if let Ok(path)=std::env::var("R3_CONT_CHILD") {
             let root=Path::new(&path);let action=std::env::var("R3_CONT_ACTION").unwrap();
             let result=match action.as_str() {
+                "confirmation-io"|"confirmation-io-retry"=>{
+                    let p=historical_plan(root)?;let end=history(root,&p)?.last().unwrap().clone();
+                    let native=root.join(&end.checkpoint);let l=checkpoint::load(&native,Device::Cpu,false)?;
+                    let (_,es,_)=base_panels(root,&p,end.step)?.remove(0);
+                    let out=root.join("confirmation-io");if !out.exists(){std::fs::create_dir(&out)?;}
+                    let before=confirmation_call_files(&out)?;
+                    let mut control=recovery::RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),std::time::Duration::from_secs(30),16*1024*1024)?;
+                    control.set_call_limits(1,0);
+                    let result=confirmation_collect(&out,&native,&es[..1],&l.tokenizer,&binary::record!({"fixture":"resolution failure accounting","policy":digest(&p)?}),control);
+                    let error=result.unwrap_err().to_string();
+                    if action=="confirmation-io" {assert!(error.contains("injected resolution sync failure"));}
+                    else {assert!(error.contains("non-time failure"));assert_eq!(confirmation_call_files(&out)?,before);}
+                    let rows=binary::read_value_records(&out.join("confirmation.r3rows"))?;
+                    let final_record:binary::Value=read_confirmed(&out.join("confirmation-segment-000-finished.r3b"))?;
+                    assert_eq!(rows.len(),2);assert_eq!(final_record["returned_after"],1);
+                    let tokens=rows[1]["raw_tokens"].as_array().unwrap().len();assert!(tokens>0);
+                    assert_eq!(final_record["generated_tokens"],tokens);assert_eq!(final_record["control"]["generation_calls"],1);
+                    assert!(!final_record["error"].is_null());assert!(confirmation_usage(&out).is_err());
+                    println!("CONFIRMATION_IO known_tokens={tokens} pending_sticky=true new_generation={} optimizer0 teacher0",usize::from(action=="confirmation-io"));Ok(())
+                },
                 "random-step"=>random_updates(&root.join("../random-one.r3m"),&root.join("../random-split.r3m"),root,1),
                 "random-eval"|"random-eval-split"|"random-reentry"=>{
                     let p=historical_plan(root)?;let (name,es,ms)=base_panels(root,&p,p.config.max_steps)?.remove(0);
@@ -2292,7 +2312,7 @@ mod tests {
                 let mut cmd=std::process::Command::new(std::env::current_exe()?);
                 cmd.args(["--exact",TEST,"--nocapture"]).env("R3_CONT_CHILD",root).env("R3_CONT_ACTION",action)
                     .env("VECLIB_MAXIMUM_THREADS","1").env("OMP_NUM_THREADS","1");
-                if let Some(f)=fault {if f=="candidate" {cmd.env("R3_CONFIRM_STOP",f);}else{cmd.env("R3_FRESH_CALL_STOP",f);}}
+                if let Some(f)=fault {if f=="candidate" {cmd.env("R3_CONFIRM_STOP",f);}else if f=="resolution" {cmd.env("R3_FRESH_RESOLUTION_FAIL","1");}else{cmd.env("R3_FRESH_CALL_STOP",f);}}
                 if time {cmd.env("R3_CONT_EXPECT_TIME","1");}
                 let out=cmd.output()?;std::fs::write(base.join(format!("{label}.stdout")),&out.stdout)?;std::fs::write(base.join(format!("{label}.stderr")),&out.stderr)?;
                 assert!(out.status.success(),"{label}: {} {}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));
@@ -2350,6 +2370,8 @@ mod tests {
                 control.set_call_limits(8,0);
                 let reference=confirmation_collect(&observation,&root.join(&e.checkpoint),&es,&l.tokenizer,&rows[0]["identity"],control)?;
                 assert_eq!(reference.iter().map(|r|r["raw_tokens"].clone()).collect::<Vec<_>>(),model_outputs[0]);
+                child(&root,"confirmation-io",Some("resolution"),false,"confirmation-io")?;
+                child(&root,"confirmation-io-retry",None,false,"confirmation-io-retry")?;totals[1]+=1;
                 let model=Transformer::init(l.model.config.clone(),93,Device::Cpu)?;
                 let mut manifest=l.manifest.clone();let mut state=manifest.training.clone().unwrap();
                 state.step=p.origin_step();state.sampler_state=state.step as u64;state.consumed_tokens=p.fork.as_ref().unwrap().origin_input;

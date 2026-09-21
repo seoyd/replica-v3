@@ -1928,8 +1928,12 @@ fn confirmation_collect(root:&Path,path:&Path,es:&[Episode],tok:&ByteBpe,identit
                     recovery::ObservedCall::Returned(row)=>row,
                 };
                 row["attempt"]=binary::record!(attempt.file_name().unwrap().to_string_lossy());
-                append_row(&mut f,&row)?;resolve_call(&attempt,Some(&row),&control)?;
-                rows.push(row);verify_generated(rows.last().unwrap(),&tok)?;
+                // A returned call consumes tokens even if its durable resolution
+                // fails. Accounting does not authorize reuse of a pending call.
+                rows.push(row);
+                let row=rows.last().unwrap();
+                append_row(&mut f,row)?;resolve_call(&attempt,Some(row),&control)?;
+                verify_generated(row,&tok)?;
                 control.check("confirmation_row_durable")?;
             }
         }

@@ -41,8 +41,17 @@ process05도 개별 두 회귀는 PASS(20/174/104)였지만 검사 중 최종512
 추가한 고정512행 final reader 단위 검사는1 PASS/exit0(37.27초), 모델 호출0이다.
 부분 prefix와 최종 완료를 구분해0/1/511은 최종 거부,512만 통과했다.
 
-현재 신규 SMALL optimizer/generation/teacher는0이며 독립 A와 실제 학습은
-아직 NOT_RUN이다. citation confirmation은 미개봉이고 S4/S5/S6·Goal1은 미수용이다.
+독립 A는 고정4930255의 quick 두 회귀를 실제 통과시켰고, 별도 I/O fault에서
+반환 raw4토큰이 종료 사용량0으로 기록되는 결함을 확인했다. pending 재진입은
+이미 차단됐으나 알려진 비용이 맞지 않았다. 반환 계수를 append/resolution보다
+먼저 보존하도록 좁게 수정하고 기존 process 회귀에 실제 저장 실패·새 process
+차단·raw와 종료 token 일치 검사를 추가했다. A의 이전44건 진입점 검사와
+7회 native fault 생성, 실패한 문자열 assertion과 잘못 선택된 시험의 중지도
+보존한다. 최종 source의 독립 quick은 남은 TINY optimizer20회로 한 번 수행한다.
+이전4930255 binary/preparation은 덮어쓰지 않고 새 준비물을 별도로 동결한다.
+
+현재 신규 SMALL optimizer/generation/teacher는0이며 독립 A 최종 수용과 실제
+학습은 아직 NOT_RUN이다. citation confirmation은 미개봉이고 S4/S5/S6·Goal1은 미수용이다.
 로컬 실행 증거는 `artifacts/citation-continuation-20260922-review/`에 보존한다.
 공개 Git에는 source/tests/최소 상태 문서만 포함한다.
 
