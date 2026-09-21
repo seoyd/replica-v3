@@ -1,5 +1,157 @@
 # 진단 및 구현 상태
 
+## 2026-09-21 Learned binding expansion — 실행 완료, 전이 개선·최종 기준 미달
+
+**STUDY_COMPLETE_QUALITY_FAIL**. 실행 source는
+`b5e0d504a6a23ea8df9a7a1236690361cd13c86b`이며 정상 push 후 원격 전체 SHA
+일치를 직접 확인하고 SMALL 실행 동안 고정했다. 아래 준비 단계의 NOT_RUN은
+당시 상태이며, 이번 두 군은 각각 새1536회, 합3072회를 실제 실행했다.
+두 final3584 모두 `Finished / FINAL_QUALITY_FAIL / resume=false`다.
+이전 QE2048과 실패·Adam·raw·원문은 보존했다. 모델·loss·LR·tokenizer·framing
+탐색이나 추가 재초기화는0이다.
+
+### 같은 checkpoint의 전수 정상 생성
+
+|모델 / panel|FULL|QUERY_BOTH|SWAP_BOTH|ALL4|Gold / foil / other|EOS / errors|
+|---|---:|---:|---:|---:|---|---|
+|부모2048 old512|472/512|216/256|217/256|96/128|472 /38 /2|512 /0|
+|부모2048 dev512|294/512|77/256|101/256|21/128|294 /172 /46|512 /0|
+|REPEAT3584 old512|509/512|253/256|253/256|125/128|509 /3 /0|512 /0|
+|REPEAT3584 new1024|694/1024|227/512|289/512|83/256|694 /173 /157|1024 /0|
+|REPEAT3584 dev512|292/512|84/256|110/256|26/128|292 /139 /81|512 /0|
+|REBIND3584 old512|507/512|251/256|251/256|123/128|507 /5 /0|512 /0|
+|REBIND3584 new1024|1004/1024|492/512|492/512|236/256|1004 /20 /0|1024 /0|
+|REBIND3584 dev512|476/512|220/256|223/256|99/128|476 /25 /11|512 /0|
+
+부모 old/dev는 기존 raw의 재검산이며 이번에 다시 생성한 전수 평가는 아니다.
+부모 new1024는 NOT_RUN이다. 이번 고정 parent new64는 FULL43/64, QB16/32,
+SB16/32, ALL4 4/16, EOS64/errors0이며 두 군에 공유했다.
+REPEAT new1024는 미학습 준비 pool이므로 train fit으로 부르지 않는다.
+
+같은 dev128 skeleton의 paired 비교에서 REBIND는 REPEAT 대비 row 정답
+194개 증가·10개 감소, ALL4 73개 증가·0개 감소다. FULL 차이는184/512,
+ALL4 차이는73/128이다. 전체512행을 독립표본으로 취급하지 않았다.
+REBIND는 실제로 넓어진 결합을 배웠고 미학습 dev에서도 공동 정답이 증가했다.
+다만 이는 이번 고정 seed·자료·예산의 비교이며 내부 회로나 일반적인 언어 능력의
+증명이 아니다. REPEAT도 old fit은 개선됐으므로 '학습을 전혀 못 한다'는 해석은
+맞지 않는다. REBIND의 old FULL은 REPEAT보다2개 낮고 공동 기준은 미달이다.
+
+REPEAT old gate는 PASS지만 dev gate는 FAIL이다. REBIND old는
+FULL507<508/QB251<252/ALL4 123<124, new는1004<1016/492<504/236<248,
+dev는476<488/220<232/99<116이다. 후보를 선정하지 않았고 confirmation은
+**NOT_OPENED**다. 중간 최고점 선택·다른 후보 재시험·추가학습은0이다.
+
+### 손실·질문 신호를 정상 생성과 분리
+
+|모델 / panel|Mean abs(c)|Mean d|Mean min margin|Digit NLL|EOS NLL|Binary NLL|
+|---|---:|---:|---:|---:|---:|---:|
+|부모 old512|1.503517|3.602308|2.098791|0.222023|0.00002404|0.198583|
+|부모 dev512|2.155598|1.074871|-1.080727|1.400022|0.00002422|1.090279|
+|부모 new64|1.931728|2.380773|0.449044|0.737585|0.00002481|0.555790|
+|REPEAT old512|1.360741|9.833626|8.472885|0.013446|0.00000748|0.012323|
+|REPEAT new1024|3.399134|4.427685|1.028551|1.798513|0.00000713|1.077615|
+|REPEAT dev512|3.794303|2.912587|-0.881716|2.503964|0.00000740|1.728593|
+|REBIND old512|1.807615|8.328381|6.520766|0.052767|0.00001376|0.047435|
+|REBIND new1024|1.863043|8.175983|6.312940|0.057155|0.00001377|0.053586|
+|REBIND dev512|2.294474|6.828476|4.534001|0.248019|0.00001394|0.201576|
+
+이 수치는 실제 teacher raw의 full-vocabulary 첫 digit/EOS NLL 및 gold/foil
+margin 재집계다. Binary NLL은 두 후보를 재정규화한 별도 값이다. 관측 gradient나
+gS backward를 optimizer에 섞지 않았고 이번 SMALL 추가 관측 backward는0이다.
+Dev의 같은 query 출력은 부모120쌍→REPEAT85/REBIND25, 같은 assignment 출력은
+80→55/20이다. REBIND의 dev NLL·공동 정답 개선을 함께 관측했지만 최종 gate를
+대신하지 않는다. 분포 전체와 pair별 값은 독립 scratch TSV/log에 보존한다.
+
+### 실제 단계·사용량·재시작
+
+|군 / absolute step|old64 FULL/QB/SB/ALL4|new64 FULL/QB/SB/ALL4|dev64 FULL/QB/SB/ALL4|
+|---|---|---|---|
+|REPEAT2304|60/28/28/13|41/14/19/6|40/13/15/4|
+|REPEAT2816|64/32/32/16|44/15/19/7|43/13/17/4|
+|REBIND2304|59/27/27/11|51/19/20/8|44/13/16/4|
+|REBIND2816|60/28/28/12|58/26/27/12|50/18/22/6|
+
+위 중간값은64/32/32/16 분모이고 최종 전수와 섞지 않는다. 각 군은 별도 process의
+2049→2304→2816→3328→3584 다섯 segment를 거쳤다. 첫1회는1536에 포함한다.
+실제 첫 batch가 같아 두 군2049의 loss0.1987816244와 weight delta L2
+0.20340192 및 weights hash가 일치했다. 이후 새 key 노출 tape가 달라진다.
+모든 신규2049..3584 trace에 gap/중복 없이 LR3e-4, Adam 누적 clock·sampler,
+sample_indices·target·EOS·input shape가 고정 정책과 일치한다.
+
+* REPEAT: actual old512×24회/new0회; input1,781,760/target24,576.
+* REBIND: actual1536행×8회; input1,781,760/target24,576.
+* 합3072 optimizer, committed/executed input3,563,520/target49,152;
+  discarded input0/target0, padding0. 부모 누적 input2,375,680/target32,768은
+  신규 예산에 합산하지 않는다. 각 final native 누적은4,157,440/57,344다.
+* 예정 평가 generation4864/teacher4864행과 parent generation80/teacher64행을
+  실행했다. 구현자 endpoint parity32회도 모두16/16 일치, teacher/optimizer0이다.
+  독립 endpoint parity32회도 각각16/16, exit0이다. 총 신규 SMALL generation
+  5008/5504, teacher4928/5120, optimizer3072/3072이며 재시도0이다.
+  이 teacher 경로는 매번 batch1의 한 sample을 한 forward로 평가한다. 따라서
+  확인된 teacher4928행은 teacher forward4928회이며, gold/foil logits는 같은
+  반환 tensor에서 읽는다. 추가 foil forward나 관측 backward는0이다.
+* TINY는 optimizer15/generation56/teacher 예산차감249행. teacher241행은 확인,
+  kill 미반환8행은 UNKNOWN으로 보존·보수 차감했다. scalar finite-difference0.
+* 정상 반환된 모든SMALL평가에 오류0. final3584에서 학습 budget을 닫았으며
+  시간/취소/NaN/I/O/UNKNOWN으로 이어간 예산이나 재시도는 없다.
+* Runtime work ledger의 segment/observation receipt elapsed 합은1681.6739795초,
+  내부 RunControl elapsed 합은1679.553183293초로 active10800초 상한 이내다.
+  사전 파일/정책 검산·컴파일을 포함한 전체 wall time 또는 처리속도 benchmark로
+  해석하지 않는다. 학습 로그의 최대 sampled RSS는
+  6,612,720KiB이며16GiB 상한 이내다. 강제 선점/전체 process peak 측정은 아니다.
+
+### Native identity와 실제 실행 증거
+
+|Identity|REPEAT3584|REBIND3584|
+|---|---|---|
+|Physical native SHA256|13d75c269771743ad3df58bd8508265a8c855248d90106ba6db45cc8d94f7908|385600c2ad9ae99e496fa1b404aec192e2cb0cf1770fc1f6071b0bc75c469f11|
+|Evaluation weight ID|f274862ba90f28158aa28e0deb1bfad5418781e5c916a1977c153b5634f7a496|543c242c03e142433414bfa912c8a6cfa8116cb5d5497f427eb2c1e64c1bd9c0|
+|Adam136 digest|cd1aeaaf280b64cca0012d949c8d03989f02368680fcc0c227d75052b2fdd392|cd4d9ab576b59ddf48b667140a21dfa2b81f4924615a4e5b4652218f64de2d04|
+
+최종 파일은 각 arm의 `segment-0004/final`이다. TRAIN_END의 `sha256` 표시는
+manifest weights digest이며 위 physical file hash와 다르다. 기존 .r3m schema는
+바꾸지 않았다. Source digest `95e07dba3de9008bb7c38bfa6031878a5ee4cb87398a2cf672408fb9fcfd3a2e`,
+실행물 SHA256 `8719097f96d04bfaf2af15a1288544c88ed8bfa03e04d2890bb86d00b947ebe4`는
+준비·독립 A·실행 동안 동일했다. test-support 없이 release로 빌드했다.
+
+실제명령은 고정 실행물의 `fresh expansion-prepare`, `fresh expansion-parent`
+(legacy16 및 `--new-pool`64), 각 군 `fresh run --root ARM`5회,
+`fresh binding-parity --root ARM`, 독립 `fresh orbit-review-parity`, 최종
+`fresh expansion-report --study STUDY`다. 모두 exit0이며
+VECLIB_MAXIMUM_THREADS=1/OMP_NUM_THREADS=1, Rust1.98.1, locked/offline/accelerate다.
+E1 RED의 의도된exit101과 기존 fmt/clippy FAIL은 아래 준비 검증 기록에 별도 보존했다.
+최종 production report가 실제 양군 raw/teacher/종료/policy/native/parity를 다시
+검산하고 dev ALL4 gain73/loss0, selected=null, confirmation=NOT_OPENED,
+goal1_ready=false를 반환했다. 이는 새 generation/teacher가 없는 read 검산이다.
+실제 stdout 전체는 `artifacts/binding-expansion-20260921-evidence/final-report.log`다.
+해당 로그 SHA256는
+`e9a9a0b0b12f94914623aa8e266aed52cfe021f2afb359d49982bb8153ea181e`다.
+
+현재 변경 source는 기존 `src/fresh.rs`, `training.rs`, `binding.rs`,
+`quality_recovery.rs`, `check_main.rs` 다섯 파일과 기존 계획·상태 문서다.
+새 tracked source 파일은0이다. 실제 candidate diff는
+`artifacts/binding-expansion-20260921-evidence/candidate.diff`이며 SHA256
+`277a8e044ed2b59a186e4c73e9a40e05d47646f8f620ce091fc4aed5720536c0`이다.
+인가된 준비·raw·checkpoint·원본 읽기 경로는 바로 아래 준비 기록에 명시했다.
+개인 DB·봉인 confirmation·임시 지시문·원본/모델은 게시하지 않는다.
+
+QS_R1_SOURCE/DYNAMIC와 INDEPENDENT_A는PASS, 실제 신규 학습·전수 재채점은완료다.
+독립 E4/B numerical 검산과 final parity는PASS지만 후보자격은양군FAIL이다.
+최종 독립 보고서는
+`artifacts/binding-expansion-20260921-math-review/E4-B-FINAL-REVIEW.md`, SHA256
+`d2b6bb872affc99177c915384656613897714da73dd831c258aaa37bff7f1a6f`다.
+독립 실제32 generation과 별도 pure panel/native/trace/paired/usage 검산을
+완료했으며 품질 승인용 review-b receipt는 발행하지 않았다.
+UNSEEN_BINDING은개선관측/최종gateFAIL, MINIMAL_BASELINE=NOT_ESTABLISHED,
+S4/S5/S6=NOT_ACCEPTED, GOAL1_READY=false, GOAL1_ACCEPTED=false다.
+
+마지막 요구 대조에서 E0 원본/부모22개 hash 보존, E1 실제 no-call pause
+RED/GREEN·실패 차단, E2 원자료/key-only/token/tape/policy·독립A,
+E3 두 군 실제1536회·첫 저장/새 process·정해진 screen/전수 평가,
+E4 실제 raw 재채점·노출·같은3584 비교를 확인했다. E5는 공동 gate 미달에 따른
+NOT_RUN_PREREQUISITE이며 누락된 학습으로 채우지 않는다. 추가 source/model 변경은0,
+임시 전달문을 source/빌드/영구 문서의 의존으로 추가하지 않았다.
+
 ## 2026-09-21 Learned binding expansion — 수리·준비 검증, 학습 전
 
 R3-LEARNED-BINDING-EXPANSION-1.0은 종료된 QE2048의 weights/Adam을 읽는

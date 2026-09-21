@@ -1,6 +1,30 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: learned binding expansion — retained QE2048, separate bounded fork
+## Closed: learned binding expansion — transfer improved, full gates unmet
+
+Execution source b5e0d504a6a23ea8df9a7a1236690361cd13c86b was independently
+approved for the QS-R1 repair and actual preparation, normally pushed and frozen.
+REPEAT and REBIND each completed1536 new updates, absolute2048→3584, in five
+fresh processes including the first saved update. Actual traces confirm
+REPEAT old512×24 and REBIND1536×8, with identical per-slot targets, unchanged
+LR3e-4/Adam/CE/QE/tokenizer and input1781760/target24576 per arm. No discarded
+input/target or extra optimizer updates were observed. This plan has no budget left.
+
+Final FULL/QB/SB/ALL4: REPEAT old509/253/253/125, new694/227/289/83,
+dev292/84/110/26; REBIND old507/251/251/123, new1004/492/492/236,
+dev476/220/223/99. Old/dev denominators are512/256/256/128; new denominators
+are1024/512/512/256. Errors0 and EOS complete on every panel. Native bindings,
+actual traces and all raw scores were independently recounted. These are same-step
+3584 outcomes, not a combination of intermediate best panels.
+
+REBIND improves unseen development selection but misses old/new/dev joint gates.
+REPEAT passes old fit and fails dev. Both close FINAL_QUALITY_FAIL, Finished,
+resume=false. No candidate is eligible, confirmation remains NOT_OPENED,
+minimal baseline/S4/S5/S6/Goal1 remain unaccepted. Narrow progress is preserved;
+no additional training, candidate sweep or automatic continuation is authorized.
+Final parity/review details and physical identities are in EXPERIMENT_STATUS.
+
+The following is the completed study's frozen design, not new run permission.
 
 R3-LEARNED-BINDING-EXPANSION-1.0 preserves every old run, including the
 QE2048 FINAL_QUALITY_FAIL/resume=false endpoint. The latest independent query
