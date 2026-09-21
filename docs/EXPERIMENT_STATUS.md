@@ -18,9 +18,15 @@ exit0으로 마쳤지만 모델 품질은 `QUALITY_REGRESSION / resume=false`다
 |새4384 VC|0/64|0/32|0/32|0/16|55 / 9|
 
 V의 FULL23개·ALL4 11개 하락과 오류15개는 각각 등록한16/4/4 중단조건을
-넘었다. VC 첫 값 정답은34→47/64로 늘었지만 정확한 인용 문법·제공된 사건의
+넘었다. 이 오류 지표는 raw.error뿐 아니라 비EOS 종료도 포함한다.
+독립 raw 확인에서 두 panel 모두 raw.error는0이며 V15/VC9개는 전부32-token
+길이 종료다. 이를 native 호출 미반환이나 UNKNOWN 실행 오류로 해석하지 않는다.
+V의 첫 값 정답은58/64이나 전체 답변은41/64로, 값·출력 형식·EOS를 구분한다.
+VC 첫 값 정답은34→47/64로 늘었지만 정확한 인용 문법·제공된 사건의
 인용·선택 근거 인용은 모두0/64다. 따라서 일부 값 개선을 전체 답변 성공으로
-바꾸지 않는다. 원 출력의 외부 ID 검출은10개, 첫 불일치는 값15/형식40/EOS9다.
+바꾸지 않는다. 외부 ID 진단10개는 잘못된 `[event:` prefix를 포함한 기존
+parser 지표이며 유효한 외부 ID10개를 파싱했다는 뜻이 아니다(파싱 ID는 모두null).
+첫 불일치는 값15/형식40/EOS9다.
 전체 필드 오류는 값17/형식64/인용 숫자64/EOS9로 중복 집계되며 첫 오류 분포와
 다르다. ID재명명64/전수dev/학습전수는 선행 guard 실패로 NOT_RUN이다.
 
@@ -84,9 +90,64 @@ evaluation weights는 `312602c0ad6b318818c1ed70047975f2795630e35890c5d15529ea553
 새 process에서2회, `fresh citation-report --study ABS_STUDY`를1회 실행했다.
 모두 exit0, one heavy process, Accelerate/F32/thread1이었다. 순수 report hash는
 `3619447605af8b6329e600801336fc35c1c74c70440132620d13284a9cc5e68f`다.
-이 학습 결과의 독립 B 감사는 진행 중이다. QUALITY_REGRESSION은 정상 최종
-품질실패 재현 허가에 포함하지 않으며 권한 확대를 위해 종료를 바꾸지 않는다.
-S4/S5/S6, VALUE_CITATION_BASELINE_VERIFIED, GOAL1_READY/ACCEPTED는 false다.
+학습 종료 문서 commit `c5e4a423c5241e3058625de602bb4e32a1a74828`도 정상 push
+후 실제 remote SHA 일치를 확인했다. 구현자 요구사항 최종 대조에서 코드/자료/
+재개/보고 구현과 품질조건에 따른 후속 미실행을 구분했다. 새 release 전체
+fmt/strict-clippy 또는 무관한 전체 테스트의 PASS를 주장하지 않는다.
+
+### 독립 B 감사와 최종 판정
+
+독립 B는 원자료·native·trace·사용량 감사 PASS, 실제 실험은
+QUALITY_REGRESSION으로 닫았다. 보고서
+`artifacts/value-citation-20260921-review/B-FINAL-REVIEW.md`의 SHA256은
+`5a080847684bcc43e670171fff925760026e418e9440a1033b4491a23a280330`이다.
+reviewed source는 동결된 `04b5624f0855d9f1ff35c1a8a4a48df459ef3d8b`이며
+그 이후 보고서 commit과 구분한다. 추가 SMALL/TINY forward/optimizer/
+generation/teacher/backward는0이다. 학습 전후의 원본128개, 준비자료·corpus·
+실행물·새 seal의 hash 불변을 검산했고 기존 scalar 수용은 보존됐다.
+
+순수 Rust reader는 두64 raw/teacher 및 부모80 관측을 각 call-journal의
+준비 identity·RETURNED resolution·row digest와 대조했다. 총208 generation과
+128 teacher가 모두 RETURNED, UNKNOWN0이며32개 실제 update trace의 tape,
+LR bits, response-token 가중 CE, finite grad/delta, 모델·Adam clock이 일치한다.
+독립 reader 최초 집계가 raw.error만 세어 score.errors와 달랐던 exit101은
+`B-pure.log`에 보존했다. 기존 scorer의 비EOS 포함 정의로 고친 reader는
+`B-pure-corrected.log` exit0, hash
+`34c812da844e3861f6fbe72785fa2d3d79ef61e7b406b977d1f75c1e988a7eb1`이다.
+제품 source나 모델을 고친 일이 아니며 추가 생성도 없다.
+
+4384 tensor content는
+`6058acb491de09d64a99743cb1c47e2da147e8125240f36116eb813c52766ae3`,
+Adam136은 `91ae9a1d9a35ea8cec38c88ec17f87e878ee12a9d1f805f80a9f0ac8e9e4ca53`,
+training-state digest는 `c01594c85fd059d9bde52ae4b9d3bd59acf67338eee57dcf59ce0edd4e2b9039`다.
+두 native4353/4384의 clock/sampler·136개 Adam tensor·tokenizer/QE와 평가
+모델의 결속을 확인했다. runtime/UTF8/control-token/timeout 오류는0이다.
+
+실제 새 process `fresh citation-parity --study ABS_STUDY --reviewer`는
+예상한 exit1로 순수 close 뒤, 관측 시작 전에 거부됐다. 로그
+`B-parity-guard-rejection.log`의 hash는
+`96105333236cd12ae31f36fa3c671f37cc90a97125a49ce74bc1e3011a569620`이다.
+V16/VC16는 NOT_RUN_GUARD_INELIGIBLE이며 성공한 재생성으로 세지 않는다.
+QUALITY_REGRESSION은 정상 최종 품질실패 재현 허가에 포함하지 않으므로
+권한을 확대하거나 종료를 바꾸지 않았다. 성공자격 review-b receipt와 새
+confirmation candidate/start/result는 발행하지 않았고 새 확인 생성은0이다.
+
+|판정|최종 상태|
+|---|---|
+|FIX_REVIEW_PARITY / FIX_CONFIRMATION_REPORT|독립 V1 PASS|
+|BASELINE_PRESERVED / DATA_READY|독립 A/B 보존·자료 검사 PASS|
+|TRAINING_EXECUTED|실제32회, 저장4384, QUALITY_REGRESSION 종료|
+|VALUE_RETAINED|FAIL, 고정 V64 보존 guard 3조건 모두 위반|
+|CITATION_DEV_PASS|미수용:64 FULL0, 전수512/ID평가 NOT_RUN|
+|INDEPENDENT_B|수치·원자료·종료 감사 PASS, 모델 수용 아님|
+|ENDPOINT_PARITY|NOT_RUN_GUARD_INELIGIBLE, 새 process 사전거부 확인|
+|NEW_CONFIRMATION|NOT_RUN_GUARD_INELIGIBLE, 봉인·기존 확인자료 보존|
+|NEW_BASELINE_SCOPE|NONE, 기존 scalar4352 범위만 수용 유지|
+|S4/S5/S6 / GOAL1_READY / GOAL1_ACCEPTED|미수용 / false / false|
+
+이 고정표본은 출력모드·형식·EOS 실패를 보여 주지만 일반적 망각 기전이나
+저장 binary가 원인이라는 결론은 아니다. 이름/근거 길이 확장은 계획만 남기며
+이번 미소비 예산으로 새로운 학습을 시작하지 않는다.
 
 ### 완료된 V0/V1/V2 및 독립 A의 근거
 
@@ -222,8 +283,8 @@ citation syntax/provided/support0, EOS64/errors0이다. 인용 형식64개 불�
 값30개 불일치는 중복 가능한 필드 통계다. 이는 새 요구의 낮은 시작 점수이며
 실행 오류가 아니다. 두 명령 exit0, SMALL generation80/teacher0/optimizer0이다.
 로그는 `artifacts/value-citation-20260921-evidence/v3-parent-value.log`와
-`v3-parent-citation.log`에 보존했다. 신규 학습을 시작했으며 결과는 아직
-미판정이다. 기존 최소 scalar 기준선은 유지하고 새 값 보존·인용 dev·
+`v3-parent-citation.log`에 보존했다. 이후의32회 학습과 독립 B 결과는 위 최종
+판정에 기록했다. 기존 최소 scalar 기준선은 유지하고 새 값 보존·인용 dev·
 confirmation, S4/S5/S6와 GOAL1_READY/ACCEPTED는 별도로 미수용이다.
 
 ## 2026-09-21 REBIND consolidation — 4352 최소 binding 기준선 독립 수용
