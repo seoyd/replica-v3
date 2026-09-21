@@ -1,6 +1,113 @@
 # 진단 및 구현 상태
 
-## 2026-09-22 문항 평균 CE — 준비·직접 회귀 완료, 독립 A 대기
+## 2026-09-22 문항 평균 CE — 두 군32회 실행, ALL4 보존 guard 종료
+
+동결 source `70d933b4b798b9d73be5b5f99db4db1c980889b9`에서 TOKEN32와
+ANSWER32를 실제로 실행했다. 각 군은 같은4352 부모의1회 저장 후 새 process31회다.
+실행4개 모두 exit0, 마지막 durable step4384이며 두 군 모두
+`QUALITY_REGRESSION / Finished / resume=false`로 종료했다. 신규 SMALL64회다.
+ANSWER128 이후는 NOT_RUN이며 미사용3040회를 자동 이월하지 않는다.
+
+TOKEN의 원래 실패4384 raw128은 token·문자열·종료·오류·입력·정답이 정확히
+재현됐고 tensor와 Adam136도 bitwise 일치했다. 정상 음성 대조를 검증한 후에만
+같은4352에서 ANSWER를 시작했다. 파일의 정책·계보가 달라 native physical hash는
+다르며 이를 tensor 불일치로 해석하지 않는다. 원래 실패와 수용된4352는 불변이다.
+
+|동일32회·고정64개|TOKEN|ANSWER|
+|---|---:|---:|
+|V FULL / 첫 값|41 / 58|60 / 60|
+|V QUERY_BOTH / SWAP_BOTH / ALL4|14 / 14 / 5|28 / 28 / 12|
+|V EOS / length|49 / 15|64 / 0|
+|V 첫 값 오류 / 맞는 값 뒤 추가 출력|6 / 17|4 / 0|
+|VC FULL / 첫 값|0 / 47|0 / 50|
+|VC 문법 / 제공ID / 선택사건|0 / 0 / 0|0 / 0 / 0|
+|VC EOS / length|55 / 9|64 / 0|
+|VC 파싱 실패 / 유효 외부ID|64 / 0|64 / 0|
+
+같은 예산에서 ANSWER의 값 출력·EOS 보존은 개선됐다. 그러나 부모 V64의
+ALL4 16에서12로 정확히4개 하락해 등록된 `>=4` 중단조건을 충족했다.
+FULL60이나 EOS64를 이유로 guard를 완화하지 않았다. 인용문법·선택사건·전체답은
+모두0이므로 인용 품질 수용은 FAIL이다. 실제 raw.error는 네 panel 모두0이며,
+TOKEN의 오류15/9는 완결된 길이 종료다. ANSWER는 EOS/UTF8/runtime 오류0이다.
+VC 첫 오류는 TOKEN 값15/문법40/EOS9, ANSWER 값14/문법50이다. 중복을 허용하는
+전체 필드 오류는 TOKEN 값17/문법64/인용64/EOS9, ANSWER 값14/문법64/인용64다.
+
+각 군의 실제256 samples는 V128/VC0 64/VC1 64이며 고유 행 수도 동일하다.
+각 군 input38144/target2432/padding1024, 합계76288/4864/2048이다.
+objective 분모는 TOKEN76, ANSWER8이나 실제 사용량은 매 batch76 targets다.
+첫 step의 token CE12.17605/answer CE6.80430은 같았다. TOKEN/ANSWER의
+실제 목적은 각각12.17605/6.80430, grad15.82748/8.84466,
+clip0.06318/0.11306, parameter delta0.418927/0.418930이었다.
+마지막 step의 token CE는1.657058/1.665294, answer CE1.319711/1.028755,
+실제 목적1.657058/1.028755, grad2.726822/2.338943,
+clip0.366727/0.427543, delta0.455345/0.462428이다.
+재계산한 V/VC0/VC1 scalar 기여는 마지막 TOKEN0.093937/0.807612/0.755509,
+ANSWER0.111236/0.445549/0.471970이다. 과제별 gradient norm은 측정하지 않았다.
+추가 진단 backward는0이며 teacher NLL은 gold-prefix 진단으로만 해석한다.
+
+|같은4384의 teacher 진단 평균 NLL|TOKEN|ANSWER|
+|---|---:|---:|
+|V 첫 값 / EOS|0.303329 / 1.622083|0.304915 / 0.301122|
+|VC 첫 값 / EOS|0.715728 / 0.403956|0.863883 / 0.307577|
+|VC 첫 값 뒤 suffix / ID token|1.792763 / 2.541199|1.881878 / 2.660056|
+
+이 수치는 정답 prefix를 넣은 같은 자체 모델의 무학습 관측이다. teacher의
+token 평균 NLL을 ANSWER 훈련 목적이나 실제 greedy 성공률로 바꾸지 않는다.
+
+학습4개 process wall18.02/45.83/29.68/56.07초와 controller의 실제 작업시간은
+다르다. 부모16을 포함한 B 전 공동 accounted elapsed68.974716583초,
+generation272/teacher256이다. 네 process의 관측 maximum RSS 최고는
+5023186944B, 별도 peak memory footprint 최고는5749806456B다.
+이를 장치 전체 최대 메모리 보장이나 학습 커널 속도 비교로 확대하지 않는다.
+
+최종 native: 연구 root의 `TOKEN-CONTROL/segment-0001/final`
+SHA `659053b395532d2968d152ea054f4243bb86f758ee260fe041fdbd8e0842a5c3`,
+`ANSWER-MEAN/segment-0001/final`
+SHA `838754d751a71e4fe7971a4127a76c17a0ed05c4d8efdf524c79248324c7a1dd`.
+중간 TRAIN_END 저장 hash와 최종 계보 결속 후 physical hash를 구분한다.
+실행 log/exit·순수 전수 report는 아래 evidence root의 `m3-*`, `m4-*`다.
+`m4-final-report.log` SHA `360e26be7cc21861df70a5f8a902fd9a7ffb57ce594318d21ff7bc6343f737d6`.
+
+독립 A의5개 실제 테스트와 부모16 raw 검산은 PASS다. 직접+독립 전체 TINY는
+86updates/500generation/404teacher/40 finite-difference로 실패 시도를 포함한다.
+독립 B의 전수 재채점과 네 새 process의 V16/VC16은 모두 PASS로 확인됐다.
+총64개 실패 포함 출력이 raw token/문자열/종료에서 정확히 재현됐다.
+추가64generation/teacher0/optimizer0, 최종 SMALL 합계64updates/336generation/
+256teacher다. 최종 순수 report도 exit0이며 source·자료·모델을 수정하지 않는다.
+학습/평가/재현을 합친 accounted elapsed74.409960292초와 독립 RunControl 합
+73.536569126초는 범위가 다르다. 336/256 generation/teacher journal 전부
+RETURNED1회, UNKNOWN0/NOT_INVOKED0/pending0 및 기존128개 hash 보존을 확인했다.
+`m5-closed-report.log` SHA `c34a4c415995d39de2e260b35656badff275c1fd078675fd8283c6c0293f6c39`.
+독립 B의 confirmed receipt 발행·readback도 exit0으로 완료했다.
+review-b SHA `3ce9bbb2ce92bc9824e8f1dec3bdc1e4f3f5c758f1d699d7d16481000990c418`,
+[독립 보고서](ANSWER_MEAN_INDEPENDENT_REVIEW_2026-09-22.md) 파일 SHA
+`5645a1dc2ea02f3ff715afb2e0ebea5b535b5667fedae599431acc7eb85f5bcb`다.
+후보는 없고 새 citation confirmation은 NOT_ELIGIBLE/호출0이다.
+기존 scalar confirmation은 재사용하지 않았다. S4/S5/S6 및 Goal1은 미수용이다.
+
+|최종 판정|결과|
+|---|---|
+|BASELINE_PRESERVED / CE_REDUCTION_VERIFIED / RESUME_OBJECTIVE_BOUND|PASS / PASS / PASS|
+|TOKEN32_REFERENCE_MATCH|PASS, 오답 포함128행 및 tensor/Adam exact|
+|ANSWER_VALUE_RETAINED / ANSWER_CITATION_QUALITY|FAIL / FAIL|
+|INDEPENDENT_A / INDEPENDENT_B|PASS / PASS|
+|NEW_CONFIRMATION|NOT_ELIGIBLE, NOT_RUN, 호출0|
+|S4 / S5 / S6 / GOAL1_READY / GOAL1_ACCEPTED|미수용 / 미수용 / 미수용 / false / false|
+
+실제 candidate [코드](https://github.com/seoyd/replica-v3/tree/70d933b4b798b9d73be5b5f99db4db1c980889b9)와
+[기준 source 이후 diff](https://github.com/seoyd/replica-v3/compare/04b5624f0855d9f1ff35c1a8a4a48df459ef3d8b...70d933b4b798b9d73be5b5f99db4db1c980889b9)는
+학습 때 동결한 소스다. 후속 문서 commit은 학습 source와 구분한다.
+변경 Rust 파일은 `training.rs`, `neural/checkpoint.rs`, `neural/artifact.rs`,
+`fresh.rs`, `value_citation.rs`, `binding.rs`, `check_main.rs`이며 새 Rust 파일은 없다.
+새 영구 파일은 위 독립 보고서 하나다. 준비·native·정책·raw의 허용 로컬 경로는
+`artifacts/answer-mean-citation-20260922-study/`, 실행·exit·patch는
+`artifacts/answer-mean-citation-20260922-evidence/`, 독립 검산·실패·재현은
+`artifacts/answer-mean-citation-20260922-review/`다. 이 자료는 Git에 올리지 않는다.
+관련5개 테스트의 직접·독립 실행만 수용하며 전역 fmt/clippy는 NOT_RUN이다.
+
+## 2026-09-22 문항 평균 CE — 학습 전 준비·직접 회귀 기록
+
+다음은 SMALL 실행 전의 준비 시점 기록이며, 실제 결과는 위 종료 절을 따른다.
 
 현재 연구는 같은4352 부모에서 TOKEN32와 ANSWER 최대3072의 reduction만
 비교한다. 기존4384 QUALITY_REGRESSION/resume=false 및 모든 원본은 보존한다.

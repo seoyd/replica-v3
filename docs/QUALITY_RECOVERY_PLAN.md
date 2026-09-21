@@ -1,6 +1,20 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: answer-mean citation reduction from accepted4352
+## Closed at retention guard: answer-mean citation reduction from accepted4352
+
+Actual frozen source `70d933b4b798b9d73be5b5f99db4db1c980889b9` ran both arms
+for32 updates each, using1 plus a fresh-process31. TOKEN exactly reproduced
+the prior128 raw outputs, tensor and Adam; its negative quality endpoint
+permitted the registered ANSWER fork. ANSWER improved V FULL41→60/EOS49→64
+at the same32-update budget, but V ALL4 fell from parent16 to12 and triggered
+the unchanged >=4 regression guard. VC FULL/syntax/selected citation remained0.
+Both final4384 endpoints are durable, Finished/QUALITY_REGRESSION/resume=false.
+No128-or-later training is authorized by this closed run. No candidate exists;
+the unused citation confirmation remains unopened. Independent A/B passed;
+B recounted all256 raw/teacher rows and reproduced each arm's V16/VC16 once
+(64 fresh generations). Final new SMALL64 updates/336 generations/256 teacher
+calls are complete with UNKNOWN0. B does not reopen training or grant quality.
+The following preregistered policy is retained to explain this result.
 
 R3-ANSWER-MEAN-CITATION-1.0 preserves the accepted scalar4352 and the complete
 VALUE-CITATION4384 negative endpoint. The latest independent review reproduced
