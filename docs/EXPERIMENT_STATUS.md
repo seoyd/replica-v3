@@ -67,7 +67,45 @@ F01 실제 전체 경로 및 F02 순수 보고는 각각 독립 PASS이며 최�
 최초 실패 회귀의 정확한 사용량은 UNKNOWN(소스상 최대4회)으로 남긴다.
 확인된 optimizer10/teacher68이며 독립 보고 실행의 추가 모델 호출은0이다.
 
-V2 준비, 최종 독립 A, 새 SMALL 학습·값 보존·인용 dev·새 confirmation은
+V2는 기존 binding/fresh 학습 하네스의 단일 VALUE-CITATION 경로에 연결했다.
+응집된 training-only `src/value_citation.rs`가 자료변환·tape·인용 scorer와
+일정/판정을 맡고, 기존 native loader/publisher/evaluate_panel/RunControl을
+호출한다. `src/fresh.rs`는 CLI·framing·부모 corpus 재결속·평가-only 재개,
+`src/binding.rs`는 기존 승인/사용량/패널 분기, `src/quality_recovery.rs`는
+같은 teacher forward의 기존 target-token 관측을 연결한다. 제품 inference,
+TR++ 수식·가중치 포맷·SQLite·loss·tokenizer mapping은 변경하지 않았다.
+
+직접 TINY 첫 통합 시험은 corpus 교체가 trainer의 기존 parent-entry 경로에
+등록되지 않아 학습 전 실패했다. 원 실패/root를 보존했고 그 호출의 신규
+값·인용 optimizer는0이다(부모 fixture optimizer4/generation32/teacher32와
+부모 대조generation8은 별도 실제 소비). 연결 후 연속2/새 process1+1/
+마지막 평가만2+0의 native weights·Adam·raw equality가 PASS했다.
+반환된 평가2행을 다시 생성하지 않았고 평가 재개의 optimizer0을 확인했다.
+정상 TINY 품질실패 reviewer의 V4/VC4 재현 후에도 후보/confirmation/resume는
+차단됐다. 이 시험은 optimizer10/generation100/teacher68이며 EOS tensor
+fixture의 실행 경계이지 SMALL 품질 성과가 아니다.
+
+`replica-check quick --value-citation`은 관련 data/scorer/native process 검사만
+실행해2 passed/0 failed/0 ignored를 기록했다. 실제 writer→confirmed publisher
+→reader의512/1024/1536/3072행 및512 LR trace, malformed index·wrong support·
+외부 인용·문법·누락 행을 시험했다. quick의 모델 사용은 TINY10/100/68이다.
+quick까지 확인된 전체 TINY는 optimizer34/generation330/teacher236,
+최초 V1 실패의 generation 정확한 수는 별도 UNKNOWN(소스상 최대4)이다.
+SMALL 신규 optimizer/generation/teacher는 아직0이다.
+실행 로그와 작은 native fixture는 로컬 `artifacts/value-citation-20260921-evidence/`
+아래에 있으며 Git 게시 대상이 아니다. 전체 무관한 테스트는 실행하지 않았다.
+
+실제 production `fresh citation-prepare`는 exit0, optimizer/generation/teacher0으로
+V1536/VC01536/VC11536 및 Vdev512/VCdev512/VC-ID512를 만들었다.
+전체3072 tape는 input3661824/target233472, V12288+VC06144+VC16144 samples이며
+각 V행8회/각 VC행4회다. 같은배치 V4/VC02/VC12, 네 base·각 두 질문을 검산했다.
+초기 native physical은 보호된4352와 동일한 `d5d1b61e4df7cc7bfa911a03766006d71f7e883b870e55283ef85e4b4ebe62da`다.
+새 경로는 `artifacts/value-citation-20260921-study/`, 실행물은
+`artifacts/value-citation-20260921-executable`이며 binary SHA256은
+`ab4495bd4a6a4ae3b1ba58130fe2e438629f4d841cb03fe69711ee70fc9cadc6`이다.
+preparation physical `29e532da1a142c7c7ae80b84fb859ac19ea245704772a291721ffc7e7d765363`,
+corpus physical `80b43942dc4854e114558f17a2b5d71e1ad0c71685511ded7c9b4457d4091c81`.
+실제 독립 A 실행은 PENDING이다. 신규 학습·값 보존·인용 dev·새 confirmation은
 아직 NOT_RUN이다. 기존 최소 scalar 기준선의 수용은 유지하며,
 S4/S5/S6와 GOAL1_READY/ACCEPTED는 여전히 false다.
 

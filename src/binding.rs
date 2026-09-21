@@ -1,6 +1,8 @@
 //! Training-only finite selection study. Reuses fresh plans, native corpora,
 //! the decoder/trainer, immutable call receipts and the strict panel scorer.
 use super::*;
+#[path = "value_citation.rs"]
+pub(in super::super) mod citation;
 const DATA: &str = "binding-learnability-v1";
 const CONTRACT_ID: &str = "R3-BINDING-LEARNABILITY-1.0";
 const ARMS: [&str; 4] = ["A", "B", "C", "D"];
@@ -24,7 +26,7 @@ const CITATION_QUERY: &str = "현재 값을 인용과 함께 써라.";
 type Skeleton = [u8; 4];
 
 pub(in super::super) fn is(p: &Plan) -> bool {
-    p.identifiable
+    citation::is(p) || p.identifiable
         .as_ref()
         .is_some_and(|x| [DATA, ORBIT_DATA, FRAME_DATA, SIGNAL_DATA, EXPANSION_DATA, CONSOLIDATION_DATA].contains(&x.dataset.as_str()))
 }
@@ -43,12 +45,13 @@ pub(in super::super) fn is_framing(p: &Plan) -> bool {
         .is_some_and(|x| x.dataset == FRAME_DATA)
 }
 fn is_orbit(p: &Plan) -> bool {
-    is_consolidation(p) || is_expansion(p) || is_signal(p) || is_framing(p)
+    citation::is(p) || is_consolidation(p) || is_expansion(p) || is_signal(p) || is_framing(p)
         || p.identifiable
             .as_ref()
             .is_some_and(|x| x.dataset == ORBIT_DATA)
 }
 fn arms(p: &Plan) -> &'static [&'static str] {
+    if citation::is(p) { return &[citation::ARM]; }
     if is_consolidation(p) {
         &[CONTINUE_ARM]
     } else if is_expansion(p) {
@@ -64,6 +67,7 @@ fn arms(p: &Plan) -> &'static [&'static str] {
     }
 }
 pub(in super::super) fn evaluation_for(p: &Plan) -> EvaluationPolicy {
+    if citation::is(p) { return citation::evaluation(p); }
     let mut e = evaluation(p.tiny);
     if is_consolidation(p) {
         e.screen_steps.clear();
@@ -610,6 +614,7 @@ pub(in super::super) fn prepare(parent: &Path, output: &Path, tiny: bool) -> Res
     Ok(())
 }
 pub(in super::super) fn verify_plan(root: &Path, p: &Plan) -> Result<()> {
+    if citation::is(p) { return citation::verify_plan(root,p); }
     if is_consolidation(p) { return consolidation_verify_plan(root, p); }
     if is_expansion(p) { return expansion_verify_plan(root, p); }
     if is_signal(p) { return signal_verify_plan(root, p); }
@@ -671,6 +676,7 @@ fn panel_cases(
     p: &Plan,
     step: usize,
 ) -> Result<Vec<(String, Vec<Episode>, Vec<Meta>)>> {
+    if citation::is(p) { return citation::panels(root,p,step); }
     let c = verified_corpus(&root.join("corpus.r3cor"), &p.corpus)?;
     let (tm, dm, _) = verified_metadata(root, p)?;
     if is_consolidation(p) {
@@ -748,6 +754,7 @@ pub(in super::super) fn evaluate(
     step: usize,
     control: &mut recovery::RunControl,
 ) -> Result<Option<String>> {
+    if citation::is(p) { return citation::evaluate(p,root,path,step,control); }
     for (name, es, ms) in panel_cases(root, p, step)? {
         evaluate_panel(p, root, path, step, &name, &es, &ms, control)?;
     }
@@ -780,6 +787,7 @@ pub(in super::super) fn audit(
     Ok((count, out))
 }
 fn gate(root: &Path, p: &Plan) -> Result<bool> {
+    if citation::is(p) { return citation::gate(root,p); }
     if is_consolidation(p) {
         let h = history(root, p)?;
         return Ok(h.last().is_some_and(|s| [4352,5120].contains(&s.step)
@@ -847,6 +855,7 @@ pub(in super::super) fn authorize(root: &Path, p: &Plan) -> Result<()> {
     {
         return Err(bad("independent binding review required"));
     }
+    if citation::is(p) { return citation::authorize(root,p); }
     if is_consolidation(p) {
         if root.canonicalize()? != study.join(CONTINUE_ARM).canonicalize()? {
             return Err(bad("consolidation registered root"));
@@ -933,6 +942,8 @@ fn work(p: &Plan) -> Result<(f64, usize, usize, u64, u64)> {
             "review-QE",
             "review-EQ",
             "review-REPEAT", "review-REBIND", "parent-new", "review-parent", "review-REBIND-CONTINUE",
+            "citation-parent", "citation-review-value", "citation-review-citation",
+            "citation-parity-value", "citation-parity-citation",
         ] {
             let study = &own(p).study;
             if study.join(format!("{name}-started.r3b")).exists() {
@@ -955,7 +966,9 @@ pub(in super::super) fn usage(p: &Plan) -> Result<(f64, usize, usize)> {
 }
 pub(in super::super) fn remaining(p: &Plan, target: bool) -> Result<u64> {
     let w = work(p)?;
-    let (cap, n) = if is_consolidation(p) {
+    let (cap, n) = if citation::is(p) {
+        if target {(800_000u64,w.4)} else {(6_300_000u64,w.3)}
+    } else if is_consolidation(p) {
         if target {(30_000u64,w.4)} else {(2_100_000u64,w.3)}
     } else if is_expansion(p) {
         if target {(60_000u64,w.4)} else {(4_300_000u64,w.3)}
@@ -5615,7 +5628,7 @@ mod tests {
         );
         Ok(())
     }
-    fn orbit_fixture(root: &Path) -> Result<PathBuf> {
+    pub(super) fn orbit_fixture(root: &Path) -> Result<PathBuf> {
         let parent = parent(root)?;
         let old = root.join("old");
         prepare(&parent, &old, true)?;
@@ -5880,7 +5893,7 @@ mod tests {
         super::super::super::prepare(&p, true)?;
         Ok(p)
     }
-    fn fixture_review(study: &Path) -> Result<()> {
+    pub(super) fn fixture_review(study: &Path) -> Result<()> {
         let path = study.join("fixture-review.txt");
         std::fs::write(&path, b"TINY fixture authorization; no SMALL approval")?;
         publish_confirmed(

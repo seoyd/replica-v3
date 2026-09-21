@@ -28,6 +28,9 @@ struct Cli {
 enum Checks {
     /// Offline source checks and direct regressions; no quality evaluation or learning.
     Quick {
+        /// Only value/citation data, scorer and native TINY process regressions.
+        #[arg(long, conflicts_with_all = ["rebind_consolidation", "binding_expansion", "fresh", "fresh_selector", "native_corpus", "bridge_receipts"])]
+        value_citation: bool,
         /// Only consolidation native tape, endpoint and TINY process regressions.
         #[arg(long, conflicts_with_all = ["binding_expansion", "fresh", "fresh_selector", "native_corpus", "bridge_receipts"])]
         rebind_consolidation: bool,
@@ -423,6 +426,7 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
     write_new(&r.output.join("boundaries.r3b"), &boundaries(files)?)?;
     match &cli.command {
         Checks::Quick {
+            value_citation,
             rebind_consolidation,
             binding_expansion,
             fresh,
@@ -430,6 +434,10 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
             native_corpus,
             bridge_receipts,
         } => {
+            if *value_citation {
+                r.cargo("test", &["--release", "--bin", "replica-train", "binding::citation::tests::", "--", "--nocapture", "--test-threads=1"], true)?;
+                return Ok(());
+            }
             if *rebind_consolidation {
                 r.cargo("check", &["--bin", "replica-train"], false)?;
                 for filter in ["consolidation_t1_actual_suffix_and_native_plan", "consolidation_t3_gate_and_actions", "consolidation_t2_native_process_resume"] {

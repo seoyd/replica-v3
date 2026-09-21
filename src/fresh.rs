@@ -11,12 +11,21 @@ use replica_v3::{
 use serde::{Deserialize, Serialize};
 use std::{collections::{HashMap, BTreeSet}, io::Write, path::PathBuf};
 const REVISION: &str = "joint-educational-v1";
-pub(super) fn is_binding_expansion(p:&Plan)->bool {identifiable::binding::is_expansion(p)}
+pub(super) fn is_binding_expansion(p:&Plan)->bool {
+    identifiable::binding::is_expansion(p) || identifiable::binding::citation::is(p)
+}
 const SYSTEM: &str = "제공된 기록과 질문만으로 답하세요. 요구한 원문 또는 값을 쓰고 근거를 [event:번호]로 인용하세요. 근거가 없거나 모호하면 구별해서 유보하세요. 순서만으로 원인을 단정하지 마세요.";
 #[path = "identifiable.rs"]
 mod identifiable;
 #[derive(Subcommand)]
 pub enum Command {
+    /// Prepare the single parent-bound value/citation continuation.
+    CitationPrepare { #[arg(long)] parent: PathBuf, #[arg(long)] output: PathBuf, #[arg(long)] reservation: PathBuf, #[arg(long)] used_ids: PathBuf },
+    CitationParent { #[arg(long)] study: PathBuf, #[arg(long)] citation: bool },
+    CitationReport { #[arg(long)] study: PathBuf },
+    CitationParity { #[arg(long)] study: PathBuf, #[arg(long)] citation: bool, #[arg(long)] reviewer: bool },
+    CitationSeal { #[arg(long)] study: PathBuf, #[arg(long)] reservation_private: PathBuf },
+    CitationConfirm { #[arg(long)] study: PathBuf },
     /// One bounded fork from closed REBIND; repeats its actual tape suffix.
     ConsolidationPrepare { #[arg(long)] parent: PathBuf, #[arg(long)] output: PathBuf },
     /// Once-only first16 parent dev parity, after independent preparation review.
@@ -1303,7 +1312,7 @@ impl Plan {
             .ok_or_else(|| bad("paired input budget exhausted"))?))
     }
     pub(super) fn learning_rate(&self, step: usize) -> f64 {
-        if identifiable::binding::is_signal(self) || identifiable::binding::is_expansion(self) || identifiable::binding::is_consolidation(self) { return self.config.lr; }
+        if identifiable::binding::citation::is(self) || identifiable::binding::is_signal(self) || identifiable::binding::is_expansion(self) || identifiable::binding::is_consolidation(self) { return self.config.lr; }
         if identifiable::binding::is(self) { return self.config.lr * (step as f64 / self.config.warmup as f64).min(1.); }
         self.fork
             .as_ref()
@@ -1316,6 +1325,9 @@ impl Plan {
         step / if identifiable::binding::is(self) { 32 } else { 1024 }
     }
     pub(super) fn observes_target_tokens(&self, step: usize) -> bool {
+        if identifiable::binding::citation::is(self) {
+            return step == self.origin_step() || self.evaluation_due(step + 1);
+        }
         identifiable::binding::is(self) && step == 0
     }
     pub(super) fn pair_position(&self, absolute: usize) -> Option<binary::Value> {
@@ -1679,6 +1691,7 @@ fn source_digest() -> Result<String> {
         include_bytes!("fresh.rs").as_slice(),
         include_bytes!("identifiable.rs").as_slice(),
         include_bytes!("binding.rs").as_slice(),
+        include_bytes!("value_citation.rs").as_slice(),
         include_bytes!("training.rs").as_slice(),
         include_bytes!("data.rs").as_slice(),
         include_bytes!("native_corpus.rs").as_slice(),
@@ -1700,6 +1713,12 @@ fn source_digest() -> Result<String> {
 }
 pub fn execute(command: Command) -> Result<()> {
     match command {
+        Command::CitationPrepare {parent,output,reservation,used_ids} => identifiable::binding::citation::prepare(&parent,&output,&reservation,&used_ids),
+        Command::CitationParent {study,citation} => identifiable::binding::citation::parent_observe(&study,citation),
+        Command::CitationReport {study} => identifiable::binding::citation::report(&study),
+        Command::CitationParity {study,citation,reviewer} => identifiable::binding::citation::parity(&study,citation,reviewer),
+        Command::CitationSeal {study,reservation_private} => identifiable::binding::citation::seal(&study,&reservation_private),
+        Command::CitationConfirm {study} => identifiable::binding::citation::confirm(&study),
         Command::ConsolidationPrepare {parent,output} => identifiable::binding::consolidation_prepare(&parent,&output,false),
         Command::ConsolidationParent {study} => identifiable::binding::consolidation_parent_parity(&study),
         Command::ConsolidationReport {study} => identifiable::binding::consolidation_report(&study),
@@ -2058,6 +2077,8 @@ fn run(root: &Path, uninterrupted_fixture: bool) -> Result<()> {
     let output = root.join(format!("segment-{index:04}"));
     let stop_after = if previous.is_empty() && !uninterrupted_fixture {
         p.origin_step() + 1
+    } else if identifiable::binding::citation::is(&p) {
+        identifiable::binding::citation::endpoint(&p,step,previous.last().is_some_and(|s|s.phase.as_deref()==Some("EvaluationPending")))?
     } else if identifiable::binding::is_consolidation(&p) {
         identifiable::binding::consolidation_endpoint(&p,step,previous.last().is_some_and(|s|s.phase.as_deref()==Some("EvaluationPending")))?
     } else if identifiable::binding::is_expansion(&p) {
@@ -3254,7 +3275,7 @@ fn audit_panel(
         if r["native_prompt_digest"] != prompt.token_digest {
             return Err(bad("raw actual framing mismatch"));
         }
-        if (identifiable::binding::is_framing(p) || identifiable::binding::is_signal(p) || identifiable::binding::is_expansion(p) || identifiable::binding::is_consolidation(p)) && r["framing"] != p.framing().id() {
+        if (identifiable::binding::citation::is(p) || identifiable::binding::is_framing(p) || identifiable::binding::is_signal(p) || identifiable::binding::is_expansion(p) || identifiable::binding::is_consolidation(p)) && r["framing"] != p.framing().id() {
             return Err(bad("raw framing descriptor mismatch"));
         }
     }
@@ -3276,7 +3297,7 @@ fn audit_panel(
             if r["id"] != e.id || r["ordinal"] != i || r["case"] != digest(e)? {
                 return Err(bad("teacher case"));
             }
-            if (identifiable::binding::is_framing(p) || identifiable::binding::is_signal(p) || identifiable::binding::is_expansion(p) || identifiable::binding::is_consolidation(p))
+            if (identifiable::binding::citation::is(p) || identifiable::binding::is_framing(p) || identifiable::binding::is_signal(p) || identifiable::binding::is_expansion(p) || identifiable::binding::is_consolidation(p))
                 && r["teacher"]["training_prompt_matches_generation"] != true
             {
                 return Err(bad("teacher actual framing mismatch"));

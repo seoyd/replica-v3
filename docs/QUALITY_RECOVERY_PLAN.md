@@ -20,10 +20,16 @@ answer repair, vocabulary, core, auxiliary loss or storage change is permitted.
 
 Each batch has four distinct bases and both queries: two V bases and two VC
 bases. At3072 updates V rows receive8 exposures each and VC rows4 each, totaling
-24576 samples. VC0/VC1 exposures are equal. Actual target/input/padding costs and
+24576 samples. Every batch has one VC0 base and one VC1 base, two queries each.
+The finite tape rotates V base pairs, offsets citation bases by192, and rotates
+assignment and ID variant clocks; no model score chooses rows.
+VC0/VC1 exposures are equal. Actual target/input/padding costs and
 per-row exposures are prepared and bound; token weighting is not asserted to be
 50:50 merely because sample counts are. Native parent_entry binds the new
 corpus/tape and budget without resetting the parent Adam clock.
+Existing sample traces provide CE/input/targets and scheduled token NLL.
+Gradient norm and actual delta are measured for the whole batch. Separate
+V/VC gradients are NOT_MEASURED; diagnostic backward remains0.
 
 Vdev512 remains byte-identical. VCdev512 changes only the output request/gold;
 VC-ID512 renames event IDs only. Their128 skeletons are shared, not1536 independent
@@ -35,7 +41,9 @@ The old confirmation is read only for preservation/report integrity.
 First save is4353, followed by chunks of at most512 updates. Screen at+32/+128
 uses V64/VC64; +384/+768 adds VC-ID64. At+1536/+3072 use all three dev512 panels
 and fixed VCtrain128. A joint dev pass triggers Vtrain1536 and VCtrain3072 at
-that same checkpoint before eligibility. A first train miss preserves the result
+that same checkpoint before eligibility. The fixed citation train sample is the
+first64 metadata rows of VC0 and first64 of VC1, retained in that order. It is a
+training diagnostic, not heldout evidence. A first train miss preserves the result
 and may continue only to the registered maximum7424. Evaluation-only time resume
 adds no optimizer step and never retries a returned failure row.
 
