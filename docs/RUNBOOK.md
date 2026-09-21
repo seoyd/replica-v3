@@ -1324,3 +1324,43 @@ NEW_STUDY/REBIND-CONTINUE`; independent B uses `fresh orbit-review-parity` with
 that same root. After independent B accepts, `fresh orbit-confirm --study NEW_STUDY`
 opens the preserved confirmation once. These narrow selection checks do not grant
 S4/S5/S6 or Goal1 acceptance. There is no permission to train beyond5120.
+
+## Value and selected-event citation continuation
+
+Use one frozen production executable and absolute study paths. Preserve the
+accepted4352 parent and its used confirmation. The new corpus and finite tape
+are a separate3072-update study; no closed plan is resumed.
+
+```sh
+cargo build --release --locked --offline --features accelerate --bin replica-check
+R3_FRESH_FIXTURE_EOS=1 VECLIB_MAXIMUM_THREADS=1 OMP_NUM_THREADS=1 target/release/replica-check --output NEW_CHECK_DIRECTORY quick --value-citation
+FROZEN_EXECUTABLE fresh citation-prepare --parent ACCEPTED_4352_ROOT --output NEW_STUDY --reservation PUBLIC_NEW_RESERVATION --used-ids PUBLIC_USED_CONFIRMATION_IDS
+```
+
+The quick command runs only the two direct data/scorer/native-process tests.
+Its EOS tensor fixture is TINY test evidence, not product quality or SMALL
+training. The separate production binary has no test-support feature.
+The independent preparer uses `fresh citation-seal --study NEW_STUDY
+--reservation-private REVIEWER_PRIVATE_RESERVATION` before learning, verifies
+its V256/VC256 seal, and publishes the actual independent preparation review.
+The implementer does not inspect sealed answers for training or selection.
+
+After A, run each parent observation once, then one segment at a time. All model
+commands use `VECLIB_MAXIMUM_THREADS=1 OMP_NUM_THREADS=1`.
+
+```sh
+FROZEN_EXECUTABLE fresh citation-parent --study NEW_STUDY
+FROZEN_EXECUTABLE fresh citation-parent --study NEW_STUDY --citation
+FROZEN_EXECUTABLE fresh run --root NEW_STUDY/VALUE-CITATION
+FROZEN_EXECUTABLE fresh citation-report --study NEW_STUDY
+```
+
+The first save is4353. Registered segments and screens stop at or before7424;
+inspect the durable stop/resume fields before the next command. Pending final
+evaluation resumes with zero optimizer calls. A returned failure row is retained.
+Normal final quality failure can be reproduced independently with
+`fresh citation-parity --study NEW_STUDY --reviewer` and the same command with
+`--citation`. These commands grant neither candidate nor training permission.
+Only a jointly eligible candidate and independent B permit the single
+`fresh citation-confirm --study NEW_STUDY`. The new value/citation scope is
+separate from the protected scalar baseline and S4/S5/S6/Goal1 acceptance.

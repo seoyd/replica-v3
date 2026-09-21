@@ -1,6 +1,6 @@
 # 진단 및 구현 상태
 
-## 2026-09-21 값·선택사건 인용 — V0/V1 독립 검증 완료
+## 2026-09-21 값·선택사건 인용 — 독립 A 통과, 부모 관측 완료
 
 R3-VALUE-CITATION-BRIDGE-1.0은 수용된 REBIND4352에서 시작하는 별도
 단일 연구다. 시작 HEAD는 `8ccd30c278e3b978a7da12e25bd2a695b902c3ad`,
@@ -105,9 +105,38 @@ V1536/VC01536/VC11536 및 Vdev512/VCdev512/VC-ID512를 만들었다.
 `ab4495bd4a6a4ae3b1ba58130fe2e438629f4d841cb03fe69711ee70fc9cadc6`이다.
 preparation physical `29e532da1a142c7c7ae80b84fb859ac19ea245704772a291721ffc7e7d765363`,
 corpus physical `80b43942dc4854e114558f17a2b5d71e1ad0c71685511ded7c9b4457d4091c81`.
-실제 독립 A 실행은 PENDING이다. 신규 학습·값 보존·인용 dev·새 confirmation은
-아직 NOT_RUN이다. 기존 최소 scalar 기준선의 수용은 유지하며,
-S4/S5/S6와 GOAL1_READY/ACCEPTED는 여전히 false다.
+학습 candidate/source는 `04b5624f0855d9f1ff35c1a8a4a48df459ef3d8b`,
+compiled source digest는 `097e3dbbbc17e2a6557f8255cf718a65306bafc3690ad2214bf279cd466518fa`다.
+이 source를 정상 push하고 실제 remote SHA 일치를 확인한 뒤 동결했다.
+source diff는 로컬 `artifacts/value-citation-20260921-evidence/candidate-04b5624.patch`
+(시작 HEAD 대비 source만), SHA256
+`3263980de7d6269c67594ffe559ce851257ae7a0c250b1593127b4508f75c637`이다.
+
+최종 독립 A는 PASS다. 동일 candidate의 직접 회귀2/2 PASS, exit0이며
+TINY optimizer10/generation100/teacher68을 사용했다. 준비자료 전수검산,
+독립 담당자의 새 V256/VC256 봉인, 순수 seal 검증과 A receipt 발행은
+각각 exit0, SMALL 호출0이다. 독립 보고는 로컬
+`artifacts/value-citation-20260921-review/A-FINAL-REVIEW.md`, SHA256
+`71516bb28a4bceca0058840694c30e1e8644a30df978d3bdcef68e47763db5d6`이다.
+`review-a.r3b` physical은
+`4a3b9624acf0e157b2ee9bb7d34cbcf49900c166e76e622ad321107368ab3424`다.
+독립 A까지 확인된 TINY 총량은 optimizer44/generation430/teacher304이며,
+최초 실패 generation UNKNOWN(최대4)은 별도로 남긴다.
+
+새 confirmation seal physical은
+`dc99a793cdc79f448a8a159bbff436e110f58887600a35ff622ea36aec4ca3d0`이다.
+아직 확인 모델 생성은0이며 후보를 고르기 위해 봉인을 열지 않았다.
+원본128개 보존 목록 및 source/executable 불변도 독립 확인했다.
+
+A 이후 실제 새 process 부모 V16은 raw parity16/16, FULL16/QB8/SB8/ALL4 4,
+EOS16/errors0이었다. 부모 VC64는 FULL0/QB0/SB0/ALL4 0, value34/64,
+citation syntax/provided/support0, EOS64/errors0이다. 인용 형식64개 불일치와
+값30개 불일치는 중복 가능한 필드 통계다. 이는 새 요구의 낮은 시작 점수이며
+실행 오류가 아니다. 두 명령 exit0, SMALL generation80/teacher0/optimizer0이다.
+로그는 `artifacts/value-citation-20260921-evidence/v3-parent-value.log`와
+`v3-parent-citation.log`에 보존했다. 신규 학습을 시작했으며 결과는 아직
+미판정이다. 기존 최소 scalar 기준선은 유지하고 새 값 보존·인용 dev·
+confirmation, S4/S5/S6와 GOAL1_READY/ACCEPTED는 별도로 미수용이다.
 
 ## 2026-09-21 REBIND consolidation — 4352 최소 binding 기준선 독립 수용
 
