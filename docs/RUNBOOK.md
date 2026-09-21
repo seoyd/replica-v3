@@ -1291,3 +1291,34 @@ Independent review A must bind the preparation and source before `fresh run
 --root STUDY/LOCAL5` or GLOBAL6 can enter learning. Missing approval fails before
 segment creation. See the active quality plan for budgets,1024 matched-step gate
 and the unchanged independent product acceptance criteria.
+## Single REBIND continuation
+
+Use the frozen production executable built with `cargo build --release --locked
+--offline --features accelerate --bin replica-train`; retain its source and file
+digests. All model work uses `VECLIB_MAXIMUM_THREADS=1 OMP_NUM_THREADS=1`.
+The existing closed REBIND directory is read-only. `NEW_STUDY` must not exist.
+
+```sh
+cargo build --locked --offline --features accelerate --bin replica-check
+target/debug/replica-check --output NEW_CHECK_DIRECTORY quick --rebind-consolidation
+FROZEN_EXECUTABLE fresh consolidation-prepare --parent PRESERVED_REBIND_ROOT --output NEW_STUDY
+```
+
+Independent A must bind the actual preparation and source before execution.
+The commands below preserve once-only observations and immutable segment receipts.
+Run one segment at a time and inspect its actual resume/stop and remaining budget.
+Do not run a closed study, reinitialize, or interpret a partial evaluation as a gate.
+
+```sh
+FROZEN_EXECUTABLE fresh consolidation-parent --study NEW_STUDY
+FROZEN_EXECUTABLE fresh run --root NEW_STUDY/REBIND-CONTINUE
+FROZEN_EXECUTABLE fresh consolidation-report --study NEW_STUDY
+```
+
+The first run saves3585; subsequent segments target3840/4352/4864/5120,
+with evaluation-only continuation when required. A passing4352 stops immediately.
+For the single eligible fixed candidate only, run `fresh binding-parity --root
+NEW_STUDY/REBIND-CONTINUE`; independent B uses `fresh orbit-review-parity` with
+that same root. After independent B accepts, `fresh orbit-confirm --study NEW_STUDY`
+opens the preserved confirmation once. These narrow selection checks do not grant
+S4/S5/S6 or Goal1 acceptance. There is no permission to train beyond5120.

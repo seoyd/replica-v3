@@ -1,5 +1,62 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: one REBIND continuation with joint endpoint gates
+
+R3-REBIND-CONSOLIDATION-1.0 is a new, single REBIND-CONTINUE study from the
+closed REBIND3584 endpoint. The previous expansion A/B and QS-R1 acceptance
+remain closed. Neither the historical FINAL_QUALITY_FAIL/resume=false nor its
+spent budget changes. There is no REPEAT training, reinitialization, new corpus,
+loss, tokenizer, framing, architecture or learning-rate search.
+
+The full native parent carries weights, Adam136, clock/sampler3584 and cumulative
+input4157440/target57344. The new policy retains the byte-identical native corpus,
+metadata and tokenizer, QE framing, ordinary digit+EOS CE/first-target1, batch8,
+constant LR3e-4 and fresh budget origin3584 without resetting Adam or warming up.
+It appends the original actually consumed tape suffix[2048..3584) once. The old
+prefix is lineage only. Each of1536 train rows receives8 additional exposures:
+12288 samples, planned input1781760/target24576/padding0. Midpoint exposure is
+counted from the tape, not assumed uniform. Old512 and new1024 are both train;
+dev512 remains unseen in learning, but previously observed in research.
+
+The only chunks are first saved3585,3840,4352,4864,5120. At3840 evaluate the
+registered first16 skeletons/four views per old/new/dev panel. At4352 and5120
+evaluate old512/new1024/dev512 in full;4864 saves without a quality evaluation.
+Each generated row has the existing same-model teacher observation, digit/EOS
+full-vocabulary NLL and gold/foil c/d, with no extra backward or foil forward.
+Parent first16 dev parity is mandatory after independent A. Last-step pure time
+expiry may resume evaluation with optimizer0 and preserved Returned rows.
+
+One checkpoint must simultaneously meet old FULL508/QB252/ALL4 124,
+new FULL1016/QB504/ALL4 248, dev FULL488/QB232/ALL4 116, errors0 and full EOS.
+SB is reported without adding a new gate. Full gate at4352 fixes that candidate
+and stops learning; normal miss continues only within the registered cap. At5120
+the result is a fixed candidate or final quality failure, always extend=false.
+Unsupported steps, incomplete rows and mixed models fail closed. Same weights,
+policy and step in different physical step/final native files are permitted.
+Three-panel errors>=16 or simultaneous FULL and ALL4 drops of>=10 percentage
+points in at least two panels stop QUALITY_REGRESSION. Integer comparisons use
+the same parent cases: registered64 for the screen, complete panels otherwise.
+
+New ceilings: optimizer1536, executed input2100000/target30000 including discarded
+work, generation4800, teacher samples4608, active7200 seconds, segment900 plus
+cleanup120, RSS16GiB. TINY implementer and independent checks together are capped
+at optimizer64/generation256/teacher512. Cancellation, nonfinite values, I/O,
+unreturned UNKNOWN and integrity failures remain sticky. No automatic rollover.
+
+C0 verifies parent/native/Adam/raw/tape and preserves their actual hashes. C1
+tests full native tape and policy boundaries, real TINY continuous2 versus fresh
+process1+1 and final evaluation2+0, and all stage/gate boundaries. Independent A
+reviews the frozen changed source and actual preparation before SMALL learning.
+The existing scorer/publisher/RunControl and native formats remain in use.
+Pure recount reports parent FULL/ALL4 gain/loss, NLL, c/d, usage and terminal.
+
+A qualified candidate receives implementer16 and independent B16 parity. Only
+after B accepts can the existing sealed confirmation256 run once, teacher0 and
+optimizer0, requiring FULL244/QB116/ALL4 58, errors0/EOS256. This alone permits
+MINIMAL_BINDING_BASELINE_ACCEPTED for two records, one-digit key/value and fixed
+grammar. S4/S5/S6/Goal1 remain separate and unaccepted. Failure closes the study;
+no alternate candidate, new confirmation or follow-up training is authorized.
+
 ## Closed: learned binding expansion — transfer improved, full gates unmet
 
 Execution source b5e0d504a6a23ea8df9a7a1236690361cd13c86b was independently

@@ -1,5 +1,53 @@
 # 진단 및 구현 상태
 
+## 2026-09-21 REBIND consolidation — C0/C1 검증, 새 A 전
+
+기존 source `b5e0d504a6a23ea8df9a7a1236690361cd13c86b`, 보고 HEAD
+`b20a48c0edf505a39ce688cbc42a624960488c68`에서 단일 REBIND-CONTINUE를
+준비한다. 과거 독립 A/B·QS-R1 수용은 보존하며 새 수리나 두 군 재실험이 아니다.
+기존 REBIND3584의 FINAL_QUALITY_FAIL/resume=false는 그대로다.
+
+C0 독립 pure reader 실행2개 exit0, 신규 모델 호출0. 부모 physical
+`385600c2ad9ae99e496fa1b404aec192e2cb0cf1770fc1f6071b0bc75c469f11`,
+tensor content `d2420af178ea4d948aa2cb7d99bd233e62bc5a13e05c6106c991a82edeb0d063`,
+evaluation weight `543c242c03e142433414bfa912c8a6cfa8116cb5d5497f427eb2c1e64c1bd9c0`,
+Adam136 `cd4d9ab576b59ddf48b667140a21dfa2b81f4924615a4e5b4652218f64de2d04`.
+실제 step/sampler3584, input4157440/target57344와 전량 raw/teacher를 검산했다.
+FULL/QB/SB/ALL4는 old507/251/251/123, new1004/492/492/236,
+dev476/220/223/99. 첫16 skeleton의 고정64는 old64/32/32/16,
+new63/31/31/15, dev59/27/27/11이며 새 생성 결과가 아니다.
+
+이번 실행: SMALL updates/generation/teacher 모두0; 새 A와 학습 NOT_RUN.
+기존 하네스의 새 단일 군 dispatch/부모 native binding/실제 tape suffix/LR/
+4352 조기 후보 고정/5120 최종 종료/부모 대비 회귀 판정을 연결했다.
+old/new/dev는 같은 endpoint에서 재채점하며 원래 두 군의 의미는 유지한다.
+
+직접 `quick --rebind-consolidation`: cargo check exit0, T1/T3/T2 각각 실제1개
+통과(합3/3), checker exit0. T1은 native 전체1536 suffix/12288 노출과
+input1781760/target24576를 확인한다. T2는 EOS tensor fixture의 실제 native
+forward/Adam으로 연속2, 새 process1+1, 평가 중단 뒤2+0의 weights/Adam/
+clock/cursor/token/raw 일치를 확인했다. Returned2행을 유지하고 재개 generation10,
+optimizer0으로 나머지 평가를 끝냈다. 같은 content의 다른 물리 native는 허용하고
+다른 모델과 누락 raw는 거부했다. 해당 최종 T2 비용은 optimizer6/generation48/
+teacher36이며 기존 test parent를 읽기 전용 재사용했다. SMALL 품질 증거가 아니다.
+
+최초 T2는 macOS 임시 경로 별칭으로 준비에서 실패해 fixture 경로를 정규화했다.
+후속 T2는 수치·process PASS였지만 준비 부모의 step0 평가 카운터를 누락한
+표시를 실제 child receipt 기준으로 보정했다(실제10/80/68). 첫 실패 비용4/32/32와
+최종6/48/36을 포함해 현재 TINY 총20/160/136이다. 이후 추가 native-copy 시험의
+첫 컴파일 실패(private counter 접근)는 기존 public receipt 사용으로 고쳤다.
+해당 컴파일 실패의 실행 테스트0·모델 호출0은 PASS에 세지 않았다.
+
+release build/check exit0. 전체 fmt exit1은 기존 포맷 차이, strict clippy exit101은
+기존 진단32건이며 이번 추가 진단은 제거했다. 관련 없는 전체 포맷/리팩터링을 하지
+않았다. 테스트 binary SHA256 `53b3a130da5ecc56959f77401cf5cc7cb1d2ff789582bf0b1b9b1287ebb85a9c`,
+production binary `eae1892f6a692c4bf4dbbf46e8d81348ef5f034748daa88172555cd1f7c200da`.
+새 source/preparation을 동결한 후 독립 A와 실제 학습으로 이어간다.
+최소 기준선/S4/S5/S6/Goal1 미수용.
+허용된 로컬 근거는 `artifacts/rebind-consolidation-20260921-review/`의
+`C0-INDEPENDENT-PARENT-REVIEW.md`, baseline, 71개 객체 보존 manifest다.
+원본 모델·corpus·raw·사용자 자료는 게시하지 않는다.
+
 ## 2026-09-21 Learned binding expansion — 실행 완료, 전이 개선·최종 기준 미달
 
 **STUDY_COMPLETE_QUALITY_FAIL**. 실행 source는

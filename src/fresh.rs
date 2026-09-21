@@ -17,6 +17,12 @@ const SYSTEM: &str = "제공된 기록과 질문만으로 답하세요. 요구�
 mod identifiable;
 #[derive(Subcommand)]
 pub enum Command {
+    /// One bounded fork from closed REBIND; repeats its actual tape suffix.
+    ConsolidationPrepare { #[arg(long)] parent: PathBuf, #[arg(long)] output: PathBuf },
+    /// Once-only first16 parent dev parity, after independent preparation review.
+    ConsolidationParent { #[arg(long)] study: PathBuf },
+    /// Pure consolidation raw/endpoint recount; never changes historical results.
+    ConsolidationReport { #[arg(long)] study: PathBuf },
     /// Prepare the fixed parent-bound old/new binding comparison; no model calls.
     ExpansionPrepare { #[arg(long)] parent: PathBuf, #[arg(long)] output: PathBuf },
     /// Once-only parent parity and new64 generation/teacher observation.
@@ -1297,7 +1303,7 @@ impl Plan {
             .ok_or_else(|| bad("paired input budget exhausted"))?))
     }
     pub(super) fn learning_rate(&self, step: usize) -> f64 {
-        if identifiable::binding::is_signal(self) || identifiable::binding::is_expansion(self) { return self.config.lr; }
+        if identifiable::binding::is_signal(self) || identifiable::binding::is_expansion(self) || identifiable::binding::is_consolidation(self) { return self.config.lr; }
         if identifiable::binding::is(self) { return self.config.lr * (step as f64 / self.config.warmup as f64).min(1.); }
         self.fork
             .as_ref()
@@ -1694,6 +1700,9 @@ fn source_digest() -> Result<String> {
 }
 pub fn execute(command: Command) -> Result<()> {
     match command {
+        Command::ConsolidationPrepare {parent,output} => identifiable::binding::consolidation_prepare(&parent,&output,false),
+        Command::ConsolidationParent {study} => identifiable::binding::consolidation_parent_parity(&study),
+        Command::ConsolidationReport {study} => identifiable::binding::consolidation_report(&study),
         Command::ExpansionPrepare {parent,output} => identifiable::binding::expansion_prepare(&parent,&output),
         Command::ExpansionParent {study,new_pool} => identifiable::binding::expansion_parent_observe(&study,new_pool),
         Command::ExpansionReport {study} => identifiable::binding::expansion_report(&study),
@@ -2049,6 +2058,8 @@ fn run(root: &Path, uninterrupted_fixture: bool) -> Result<()> {
     let output = root.join(format!("segment-{index:04}"));
     let stop_after = if previous.is_empty() && !uninterrupted_fixture {
         p.origin_step() + 1
+    } else if identifiable::binding::is_consolidation(&p) {
+        identifiable::binding::consolidation_endpoint(&p,step,previous.last().is_some_and(|s|s.phase.as_deref()==Some("EvaluationPending")))?
     } else if identifiable::binding::is_expansion(&p) {
         identifiable::binding::expansion_endpoint(&p,step,previous.last().is_some_and(|s|s.phase.as_deref()==Some("EvaluationPending")))?
     } else if identifiable::binding::is_signal(&p) {
@@ -3243,7 +3254,7 @@ fn audit_panel(
         if r["native_prompt_digest"] != prompt.token_digest {
             return Err(bad("raw actual framing mismatch"));
         }
-        if (identifiable::binding::is_framing(p) || identifiable::binding::is_signal(p) || identifiable::binding::is_expansion(p)) && r["framing"] != p.framing().id() {
+        if (identifiable::binding::is_framing(p) || identifiable::binding::is_signal(p) || identifiable::binding::is_expansion(p) || identifiable::binding::is_consolidation(p)) && r["framing"] != p.framing().id() {
             return Err(bad("raw framing descriptor mismatch"));
         }
     }
@@ -3265,7 +3276,7 @@ fn audit_panel(
             if r["id"] != e.id || r["ordinal"] != i || r["case"] != digest(e)? {
                 return Err(bad("teacher case"));
             }
-            if (identifiable::binding::is_framing(p) || identifiable::binding::is_signal(p) || identifiable::binding::is_expansion(p))
+            if (identifiable::binding::is_framing(p) || identifiable::binding::is_signal(p) || identifiable::binding::is_expansion(p) || identifiable::binding::is_consolidation(p))
                 && r["teacher"]["training_prompt_matches_generation"] != true
             {
                 return Err(bad("teacher actual framing mismatch"));
