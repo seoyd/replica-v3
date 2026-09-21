@@ -1,5 +1,167 @@
 # 진단 및 구현 상태
 
+## 2026-09-21 Causal framing512 — 제한 학습 종료, 공동 선택 품질 미달
+
+R3-CAUSAL-FRAMING-BASELINE-1.0의 독립 준비 A 후 QE/EQ를 각각 실제512회
+학습했다. 동일한 무학습 A tensor/fresh Adam에서 첫1회 저장→새 process511회를
+수행했으며 네 학습 command 모두 exit0이다. Source candidate는
+**32df6dcb1c86020b9fc5402ff3b8bc32f3180f0e**이고 학습 전 정상 push/원격 SHA
+일치를 확인했다. 이후 source 변경0이며 동결 production executable SHA256은
+**4a77b920e898016e1d1da9daf8414fa062871831f0c1b2f4d75c1b982d18228d**다.
+학습 기능은 test-support 없이 Rust1.98.1/locked/offline/Accelerate로 빌드했다.
+이 결과를 추가하는 문서 commit은 실행 source와 별도다.
+
+### 같은 saved endpoint의 실제 결과
+
+|Arm / panel|FULL /512|QUERY_BOTH /256|SWAP_BOTH /256|ALL4 /128|Gold / foil / other|EOS / errors|
+|---|---:|---:|---:|---:|---|---|
+|QE train|256|0|31|0|256 /256 /0|512 /0|
+|QE dev|255|1|28|0|255 /257 /0|512 /0|
+|EQ train|255|3|43|0|255 /257 /0|512 /0|
+|EQ dev|253|4|54|0|253 /259 /0|512 /0|
+
+모든 최종 출력은 정상 digit+EOS이며 오답은 다른 제공 기록의 값이다.
+두 군 모두 train부터 ALL4=0이다. 따라서 새로운 조합으로의 일반화 문제만으로
+설명할 수 없고, 이번 예산에서 학습 자료의 공동 선택 조건도 달성하지 못했다.
+전체 정답 약50%·정상 EOS·학습 command 성공을 선택 능력의 성공으로 바꾸지 않는다.
+같은 두 query의 출력이 같은 쌍은 QE train256/256·dev253/256,
+EQ train249/256·dev245/256이다. EQ에서 일부 응답이 바뀌었으나 공동 gate는 미달이다.
+
+|고정64 표본 step|QE train FULL|QE dev FULL|EQ train FULL|EQ dev FULL|
+|---|---:|---:|---:|---:|
+|0|0|0|0|0|
+|128|8|6|9|8|
+|256|29|26|32|30|
+
+Step0의 네64행 panel은32-token 길이 종료/EOS 미학습으로 각각 오류64를 기록했다.
+이는 반환된 실제 초기 출력이며 최종 오류0으로 덮어쓰지 않았다. 이후 평가의
+생성 오류는0이다. 초기 오류는 NaN·저장 실패·사용자 취소 또는 미반환이 아니었다.
+
+|Arm / panel|Digit full-vocab NLL|EOS NLL|Gold/foil binary NLL|
+|---|---:|---:|---:|
+|QE train|0.9241609537|0.0003295292|0.8488742270|
+|QE dev|0.9591515741|0.0003284439|0.8484601666|
+|EQ train|0.8915289384|0.0003977159|0.8147429237|
+|EQ dev|0.9479311485|0.0003984837|0.8596551532|
+
+ln2와 비교 가능한 값은 마지막 이진 재정규화 열뿐이다. EOS NLL 감소가
+정답 digit 선택의 성공을 뜻하지 않는다. Dev의 EQ−QE paired gain134/loss136,
+FULL 차이−2/512=−0.390625 percentage points. 비교 단위는128 skeleton이며
+표준오차0.732844674pp, 단일 seed의 정규근사95% 구간은[−1.82700056,+1.04575056]pp다.
+QUERY_BOTH gain4/loss1, SWAP_BOTH gain36/loss10, ALL4 gain0/loss0이다.
+512행을 독립 표본으로 취급하지 않으며 입력 순서의 총효과에서 causal 경로,
+RoPE 거리, recency 중 하나의 기전을 분리했다고 주장하지 않는다.
+
+### 종료·보존·실제 사용량
+
+양군512 전수와 QE의 이전 BOTH 재현을 확인한 production `framing-decide`는
+exit0, **CLOSE_NO_JOINT_SIGNAL**이다. 어느 군도 train QB>=64 및 ALL4>=16,
+또는 dev QB>=32 및 ALL4>=8 조건을 만족하지 않았다. 조건부 추가512×2는
+**실행0**이다. full gate도 미달하여 confirmation은 NOT_RUN_PREREQUISITE이고
+미개봉 상태를 유지한다. LR/seed/loss/core 탐색·세 번째 arm·기존 run 재개0이다.
+
+원 segment의 TrainingPending/resume=true/TRAINING은 단계512의 저장 상태다.
+이를 Finished로 고치지 않았다. 별도 immutable framing-decision.r3b가
+이 연구의 추가 update 권한을 차단하며 SHA256은
+**1ca5796529ac6b2b015724b05a1b6c77e9c3065346917894172b5aaeea9782ab**다.
+기존 예산이나 실패·종료 receipt는 수정하지 않았다.
+
+각 arm 실제512 committed optimizer, input593920/target8192, unique train512의
+각8회 노출이다. 합계 **1024 updates / input1,187,840 / target16,384**이며
+padding·discarded·uncommitted input/target 모두0이다. 실제 draw/LR f64 bits,
+Adam clock, clipping, CE와 objective 동일성, finite gradient/delta를 독립 검산했다.
+warmup32 이후3e-4 고정이며 새 process에서 schedule/Adam을 초기화하지 않았다.
+
+각 arm 평가 generation1408/teacher1408, 합계2816/2816은 모두 RETURNED이며
+NOT_INVOKED0/UNKNOWN0이다. 초기 길이 종료도 RETURNED에 포함한다.
+기존 BOTH parity16, 구현자 QE/EQ parity 각16, 독립 B QE/EQ parity 각16은
+별도 실제 generation80이며 모두16/16 raw 일치, optimizer/teacher0이다.
+따라서 SMALL 총 generation2896/teacher2816, optimizer1024다.
+Scalar/finite-difference update는0이다. TINY는 실패한 직접 회귀의 사용량도
+포함해 optimizer26/generation208/teacher208이며 SMALL과 합산하지 않는다.
+
+내부 kernel counter를 새로 계측하지 않았다. 보존 raw와 실제 호출 경로에서
+도출한 SMALL forward는 generation16368(평가16128+parity240), teacher2816,
+training1024로 총20208, backward1024다. DERIVED_FROM_EXISTING_LOGS/source이며
+측정 counter라고 하지 않는다. TINY는 training forward/backward26씩,
+prefill416/teacher208은 소스·로그에서 도출되지만 임시 per-token raw가 남지 않아
+decode-forward 정확 횟수는 UNKNOWN이다. TINY total forward는650+미확인 decode로
+남기며650회로 확정하지 않는다. 이는 미반환 모델 호출 UNKNOWN과 다른 계측 한계다.
+독립 부록 artifacts/causal-framing-20260921-math-review/TINY-CALL-ACCOUNTING-APPENDIX.md
+SHA256 f82f83159829d12f79d1a6f96ba0735306f30b456b11bf82dee9851351dbd053에
+실패 회귀·평가-only까지 포함한 실제 호출 합계와 근거 한계를 기록했다.
+
+네 학습 command wall은 QE31.46+351.95초, EQ37.15+361.17초, 합계781.73초다.
+이 시간은 모델 준비·저장·평가를 포함하며 순수 optimizer 성능 측정이 아니다.
+Receipt가 계상한 네 segment active 합은739.773222626초다.
+학습 command 최대 RSS는 QE1,841,004,544/EQ3,518,906,368bytes로 관측됐다.
+이를 단일 통제 자원 benchmark나 S6 수용으로 사용하지 않는다. 재채점·자료
+검증·재생성 command 시간은 학습 시간과 별도로 실행 로그에 남긴다.
+
+### 재현·독립 검산과 실제 경로
+
+QE512는 이전 BOTH512와 actual tensor content 및136 Adam tensor가 bitwise
+동일하다. Step/sampler/input/target도 같다. Production 검산의 최종1024개 raw가
+일치했고, 독립 비교에서는 중간 평가까지 포함한1408개 raw의 tokens/actual/error/
+finish/completed가 전부 일치했다. 파일 전체 hash는 새 framing policy 때문에
+다르며 tensor content 일치와 구분한다. 새 QE/EQ corpus·tokenizer는 원본과
+byte 동일하고 token block 순서만 다르다. 최종 모델은 다음 파일에 보존한다.
+
+|Arm|실제 마지막 durable 경로|Native file SHA256|Tensor content ID|
+|---|---|---|---|
+|QE|artifacts/causal-framing-20260921-study/QE/segment-0001/final|e6895cbe02ab5ecdef0f300d953b60749358e0d6f8ba2d4d31344eece8f15fbb|7d5dce3d545f7fc860de99113e7a74760b450e91f4de60d20cfff8fa60895e6e|
+|EQ|artifacts/causal-framing-20260921-study/EQ/segment-0001/final|3ff8a4249ad833d586a205abef7f1a7b4522826e21bf291e3e4abb1974065163|7e717911aaefbfdd3df5d81e1110ef8f62bd061fcdf63b2da7ddf0ec3389beec|
+
+`eval-0512-{train512,dev512}.r3rows`와 같은 접두어의 teacher/receipt/native가
+각 arm에 있다. Trace는 각 segment의 updates.r3rows, 과정 로그와 source diff는
+artifacts/causal-framing-20260921-evidence에 보존한다. Native corpus.r3cor,
+metadata.r3b, tokenizer.r3b, initial.r3m, plan.r3b 및 study preparation/review-a/
+decision은 artifacts/causal-framing-20260921-study에서 읽을 수 있다.
+이 원자료·모델·scratch는 Git 게시 대상이 아니다.
+
+독립 수학 검산은 다섯 Rust reader가 모두 exit0이며 모델 호출0이다. 전체 raw,
+teacher, gold/foil logits/NLL, trace, native/Adam, 출력 동일 쌍을 직접 확인했다.
+보고서는 artifacts/causal-framing-20260921-math-review/FINAL-RESULT-MATH-REVIEW.md,
+SHA256 **2b2b07562950946845ce0ee80c47b6d3ca24890f802fef8eb15e40203bc7221a**다.
+별도 독립 binding 검토도 양군 각2segment/8panel의 모든 준비→반환 journal과
+frame/policy/native/model-step 연결을 확인했고 원래 orbit5713/5713 hash를 보존했다.
+최종 독립 B도 재생성 QE/EQ 각16/16과 production framing-compare 단1회 exit0을
+확인했다. 비교는 selected=None, extension=false, confirmation=NOT_RUN_PREREQUISITE이며
+독립 재채점과 일치한다. B 보고는
+artifacts/causal-framing-20260921-review/b/FINAL_B_REPORT.md,
+SHA256 **366c7f7ed003e845338570b4a60dc88efee2060fad3f83e44d5cb4f2d9ded2a8**이고
+실제 review-b.r3b SHA256은
+**b5301d0fccdf78bce3b1a15ecb789768f6068d73a902d88fe324e2298ab859bc**다.
+무결성 PASS와 품질 FAIL을 분리하며 원 final receipt hash도 불변이다.
+모든 SMALL 호출을 합산한 receipt elapsed는746.402500209초다. 이 값에는
+CLI 사전검증 전체 시간이 포함되지 않으며 command wall과 구분한다.
+실제 source diff·준비자료·명령·로그 경로를 모은 로컬 인계 문서는
+artifacts/causal-framing-20260921-evidence/HANDOFF.md다.
+
+코드 범위와 frame/resume binding, 직접 회귀는 PASS이며 TRAIN_FIT 및
+UNSEEN_BINDING은 FAIL이다. MINIMAL_BASELINE은 미확립이고 S4/S5/S6는 미수용,
+GOAL1_READY=false, GOAL1_ACCEPTED=false다. 제품 기본 QE나 기존 모델 포인터를
+바꾸지 않았다. EQ를 기본 생성이나 framing 정보가 사라지는 inference export로
+조용히 전달하지 않는다. 원본 기억·SQLite·모델 수식·tokenizer mapping은 그대로다.
+
+|판정|결과|
+|---|---|
+|CODE_SCOPE / FRAME_PARITY / RESUME_BINDING|PASS|
+|RAW_INTEGRITY / INDEPENDENT_A / INDEPENDENT_B|PASS|
+|TRAIN_FIT / UNSEEN_BINDING|FAIL|
+|CONDITIONAL_EXTENSION|NOT_RUN_NO_JOINT_SIGNAL; 추가 update0|
+|CONFIRMATION|NOT_RUN_PREREQUISITE; 봉인 미개봉|
+|MINIMAL_BASELINE|NOT_ESTABLISHED|
+|S4 / S5 / S6|NOT_ACCEPTED|
+|GOAL1_READY / GOAL1_ACCEPTED|false / false|
+|TINY_DECODE_FORWARD_COUNT|UNKNOWN; 임시 raw 미보존 계측 한계|
+
+다음 가설은 하나만 제안하며 실행하지 않았다. 같은 BOTH 구성·framing·수식·
+optimizer에서 학습 skeleton 수만 줄인 한정 비교로 네 조건을 함께 적합할 수
+있는지 확인하는 것이다. 자료 다양성과 사례당 노출도 함께 바뀌는 한계를 공개해야
+하며, 현재 결과만으로 특정 회로나 backend 결함·구조적 불가능성을 단정하지 않는다.
+새 학습은 별도 승인·사전 예산이 필요하다.
+
 ## 2026-09-21 Causal framing — F0/F1 구현·직접 검증, F2 준비
 
 R3-CAUSAL-FRAMING-BASELINE-1.0. 시작 HEAD는

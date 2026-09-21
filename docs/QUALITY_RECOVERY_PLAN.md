@@ -1,6 +1,33 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: causal framing baseline
+## Closed: causal framing baseline — no joint signal at512
+
+Frozen source32df6dcb1c86020b9fc5402ff3b8bc32f3180f0e was independently approved,
+pushed and used unchanged for QE/EQ first1 plus new-process511 updates each.
+Both512 endpoints are durable. Actual pair1024 updates, input1187840/target16384,
+padding/discarded0; no conditional additional updates were executed.
+
+QE train/dev FULL256/255, QUERY_BOTH0/1, SWAP_BOTH31/28, ALL4 0/0.
+EQ train/dev FULL255/253, QUERY_BOTH3/4, SWAP_BOTH43/54, ALL4 0/0.
+FULL denominator512, pair denominators256, ALL4 denominator128; final errors0.
+Neither arm satisfies the joint extension rule or the full candidate gate.
+The immutable paired decision is CLOSE_NO_JOINT_SIGNAL. Existing512 segment
+TrainingPending/resume=true/TRAINING records remain untouched; the study decision
+rejects further optimizer calls. Unused conditional budget is not new authority.
+
+QE reproduces old BOTH512 tensor/Adam bitwise and all1408 recorded generation rows.
+Implementer and independent fresh-process parity each match16/16 per arm. Normal
+EOS and successful execution do not establish conditional selection. Confirmation
+remains unopened/NOT_RUN_PREREQUISITE; MINIMAL_BASELINE is not established,
+S4/S5/S6 are not accepted, GOAL1_READY/GOAL1_ACCEPTED remain false. Product default
+QE and all original artifacts remain preserved. Independent A/B and production
+comparison agree on execution/raw integrity PASS and development quality FAIL.
+Final SMALL usage is1024 updates/2896 generation/2816 teacher; all calls returned,
+not-invoked/unknown0. TINY26/208/208 remains separate, with its exact decode-forward
+count unavailable from retained temporary evidence. No new test run substitutes
+for that missing measurement. The status record retains all evidence paths/hashes.
+
+The following is the completed comparison's fixed design, not permission to resume.
 
 R3-CAUSAL-FRAMING-BASELINE-1.0 continues source13969c6fe2b7b9232297a0796b037b202add350b
 and independently reviewed report4ba5a3d713f4de15c2fde3aa01021c61c17255c9.
