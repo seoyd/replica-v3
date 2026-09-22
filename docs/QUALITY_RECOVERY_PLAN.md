@@ -1,5 +1,66 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: citation precision from complete ANSWER10496
+
+R3-CITATION-PRECISION-1.0 preserves the accepted scalar4352 and all closed
+fidelity A/B evidence. The specific failed10496 parent physical SHA256 is
+`7845eb2e66bf333f07a4fde28d80601f418f212912c7c7b58fc41424646b5ff6`.
+Its Finished / FINAL_QUALITY_FAIL_AT_10496 / resume=false remains unchanged.
+This is a separate parent-bound study: the initial native is a bit-identical copy,
+including136 Adam tensors and cumulative clock. Only actual LR changes3e-4 to
+constant3e-5. ANSWER_MEAN family6/normalizer2, first-target1, QE, tokenizer,
+F32/Accelerate/thread1, model shape, beta/eps/clip/decay and data remain fixed.
+No warmup, optimizer reset, reinitialization or second LR/seed search is permitted.
+
+The unchanged4608-row corpus and dev/metadata are native byte copies. Append only
+the first1536 draws of the original3072 citation cycle after the preserved10496
+prefix. First10497 consumes cycle0 and last12032 consumes1535. Batch8 is
+V4/VC0 2/VC1 2, actual target76 and loss denominator8. Preparation must verify
+input1830912/target116736/padding49152 and V6144/VC0 3072/VC1 3072 exposures;
+the768-update point costs exactly half. These are planned costs until executed.
+
+Direct checks cover the actual LR route, an independent F64 Adam first-delta
+comparison with inherited nonzero moments, native2 versus new-process1+1,
+policy mismatch rejection, tape/exposure, final evaluation-only resumption,
+and the new seal lineage. Existing verified stabilization is not repeated.
+Independent A precedes source/binary freeze and learning. Parent parity uses
+V16/VC16, each at most four complete four-view orbits: wrong orbits first in
+metadata order, then correct orbits. Freeze selection before invocation and
+use normal greedy without passing expected answers to generation. Previous
+wrong4/B32 runs are historical evidence, not calls repeated by this plan.
+
+Save first10497, then10752,11264,11776,12032, with registered command time
+segments as needed. Screen10752 is V64/VC64/ID64. At11264 and12032 evaluate
+V512/VC512/ID512 and diagnostic train128. Only a common dev pass permits full
+fit4608 of that same checkpoint. First dev+fit pass fixes the candidate and
+ends learning; final12032 always has extend=false. Saved-only11776 has no score.
+Final-step TIME_BUDGET resumes remaining evaluation with optimizer0. Cancel,
+nonfinite/I/O/binding/data errors and UNKNOWN remain blocking. The V64 guard
+is unchanged: FULL<=48 or errors>=4 stops; FULL<60 or ALL4<12 warns, and two
+distinct consecutive warnings stop. Immutable decisions count once.
+
+All previous full-fit/dev gates remain, including each citation dev's support508,
+first-value508 and outside-record ID0. Report FULL/QB/SB/ALL4, grammar, provided
+wrong ID, outside ID and EOS separately. train128 is not full-fit acceptance.
+B verifies native/trace/raw/teacher and reproduces V16/VC16 with the same orbit
+rule. Only an eligible candidate plus B PASS may open the existing unused
+citation seal once (V256/VC256), using the existing same-candidate time protocol.
+Confirmation gates remain FULL244/QB116/ALL458/errors0 on each; citation also
+first-value254/support254/outside0. Confirmation PASS accepts only the bounded
+value/citation scope and permits existing primary512+transfer128 once, teacher0.
+Missing/incompatible QA is explicitly BLOCKED/NOT_COMPARABLE, never replaced.
+S4 final200, product memory S5, INT4/M4 S6 and Goal1 remain separate.
+
+New caps: SMALL1536 optimizer, input2000000/target130000, generation14336,
+teacher13120, diagnostic backward0; active7200s, command900s, cleanup120s,
+training16GiB/inference12GiB. TINY direct+independent+failed work is limited to
+64 updates/1200 generations/1024 teachers/16 scalar finite differences.
+Report actual costs, last durable step and stop reason. This is a post-hoc
+development study with no simultaneous high-LR control; improvement would not
+by itself establish the independent causal effect of LR. Never add dev errors
+to learning or repair generated event IDs. Preserve originals and publish only
+verified source/tests and small reports; no private/raw/model/seal artifacts.
+
 ## Closed learning budget: citation fidelity consolidation from ANSWER7424
 
 Source820100a passed independent A, preserved parent parity32/32, and completed

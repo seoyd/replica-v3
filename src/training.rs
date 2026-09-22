@@ -2315,6 +2315,62 @@ mod tests {
         println!("PAIR_CONTRAST_SCALAR optimizer=0 generation=0 teacher=0");
     }
     #[test]
+    fn citation_precision_adam_lr_f64_reference() -> Result<()> {
+        let device=Device::Cpu;
+        let model=Transformer::init(neural::transformer::Config::tiny(264),93,device.clone())?;
+        let ss=vec![Sample{tokens:vec![BOS,8,9,10,EOS],response_start:3,curriculum:false}];
+        let b=batch(&ss,&[0],&device)?;
+        let logits=model.forward(&b.input,Some(&b.valid))?;
+        let (_,loss,_,_)=response_objective(&logits,&b,1.,true)?;
+        let backward=loss.backward()?;
+        let grads=model.vars.iter().map(|(n,v)|Ok((n.clone(),backward.get(v).ok_or_else(||Error::Model("precision disconnected gradient".into()))?.detach()))).collect::<Result<BTreeMap<_,_>>>()?;
+        let config=TrainConfig{lr:3e-4,warmup:0,clip:1.,weight_decay:0.01,..Default::default()};
+        let mut inherited=Adam::new(&model.vars)?;
+        inherited.step_constant(&model.vars,&grads,&config,10496,3e-4)?;
+        let mut vars=Vec::new();let mut adams=Vec::new();
+        for _ in 0..2 {
+            vars.push(model.vars.iter().map(|(n,v)|Ok((n.clone(),Var::from_tensor(&v.as_detached_tensor())?))).collect::<Result<BTreeMap<_,_>>>()?);
+            adams.push(Adam{moments:inherited.moments.iter().map(|(n,v)|(n.clone(),v.clone())).collect()});
+        }
+        let norm=grads.values().map(|g|g.flatten_all()?.to_vec1::<f32>().map(|v|v.into_iter().map(|x|f64::from(x).powi(2)).sum::<f64>())).collect::<candle_core::Result<Vec<_>>>()?.iter().sum::<f64>().sqrt();
+        let clip=(config.clip/(norm+1e-12)).min(1.);
+        let rates=[3e-4,3e-5];
+        for i in 0..2 {adams[i].step_constant(&vars[i],&grads,&config,10497,rates[i])?;}
+        let mut nonzero=0;let mut maximum_error=0f64;let mut coordinates=0;
+        for (name,var) in &model.vars {
+            let old=var.flatten_all()?.to_vec1::<f32>()?;let g=grads[name].flatten_all()?.to_vec1::<f32>()?;
+            let m=inherited.moments[&format!("adam.m.{name}")].flatten_all()?.to_vec1::<f32>()?;
+            let v=inherited.moments[&format!("adam.v.{name}")].flatten_all()?.to_vec1::<f32>()?;
+            let mut next=vec![];
+            for branch in &vars {next.push(branch[name].flatten_all()?.to_vec1::<f32>()?);}
+            for prefix in ["adam.m.","adam.v."] {
+                let key=format!("{prefix}{name}");
+                assert_eq!(adams[0].moments[&key].flatten_all()?.to_vec1::<f32>()?,adams[1].moments[&key].flatten_all()?.to_vec1::<f32>()?);
+            }
+            let actual_m=adams[0].moments[&format!("adam.m.{name}")].flatten_all()?.to_vec1::<f32>()?;
+            let actual_v=adams[0].moments[&format!("adam.v.{name}")].flatten_all()?.to_vec1::<f32>()?;
+            for j in 0..old.len() {
+                coordinates+=1;nonzero+=usize::from(m[j]!=0. && v[j]!=0.);
+                let theta=f64::from(old[j]);let grad=f64::from(g[j])*clip;
+                let mr=config.beta1*f64::from(m[j])+(1.-config.beta1)*grad;
+                let vr=config.beta2*f64::from(v[j])+(1.-config.beta2)*grad*grad;
+                for (a,r) in [(f64::from(actual_m[j]),mr),(f64::from(actual_v[j]),vr)] {assert!((a-r).abs()<=1e-10+2e-6*r.abs());}
+                let u=(mr/(1.-config.beta1.powi(10497)))/((vr/(1.-config.beta2.powi(10497))).sqrt()+config.eps);
+                let mut tolerance=[0.;2];let mut delta=[0.;2];let mut reference=[0.;2];
+                for i in 0..2 {
+                    reference[i]=-rates[i]*(config.weight_decay*theta+u);delta[i]=f64::from(next[i][j])-theta;
+                    tolerance[i]=2.*f64::from(f32::EPSILON)*theta.abs()+2e-5*reference[i].abs()+1e-10;
+                    let error=(delta[i]-reference[i]).abs();maximum_error=maximum_error.max(error);
+                    assert!(error<=tolerance[i],"{name}/{j} LR{} error{error} bound{}",rates[i],tolerance[i]);
+                }
+                assert!((reference[1]-0.1*reference[0]).abs()<=1e-12*reference[0].abs().max(1e-12));
+                assert!((delta[1]-0.1*delta[0]).abs()<=tolerance[1]+0.1*tolerance[0]);
+            }
+        }
+        assert!(nonzero>0);
+        println!("CITATION_PRECISION_ADAM coordinates={coordinates} inherited_nonzero={nonzero} max_absolute_delta_error={maximum_error} optimizer3 forward1 backward1 generation0 teacher0 FD0");Ok(())
+    }
+    #[test]
     fn adam_matches_independent_reference_and_teacher_forcing_masks() {
         let device = Device::Cpu;
         let mut vars = BTreeMap::new();

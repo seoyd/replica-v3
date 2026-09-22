@@ -1040,7 +1040,7 @@ fn observation_control(
         std::time::Duration::from_secs_f64(
             (p.evaluation.active_seconds as f64 - elapsed).min(p.evaluation.segment_seconds as f64),
         ),
-        (if citation::fidelity(p) {12}else{16}) * 1024 * 1024,
+        (if citation::fidelity(p)||citation::precision(p) {12}else{16}) * 1024 * 1024,
     )?;
     control.set_call_limits(generations, teachers);
     Ok(control)

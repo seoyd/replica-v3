@@ -1,5 +1,57 @@
 # 진단 및 구현 상태
 
+## 2026-09-22 인용 precision — ANSWER10496 부모와 새 LR 정책 준비
+
+R3-CITATION-PRECISION-1.0은 기존10496 품질실패를 보존한 별도 연구다.
+시작 HEAD는 `88c7c181a50873ee16cfee23bc1c8eb1189e5c13`이며, 제품 source는
+`820100a6a27eebefe0ba723fc03948ea6f2a0abb` 이후 동일했다. 사용자 `.DS_Store`는
+보존했다. Rust/Cargo1.98.1, 기존 lock/offline/Accelerate/thread1을 사용한다.
+
+P0 native inspect는 exit0이다. 실제 부모의 step/sampler10496,
+input12371968/target536576, ANSWER family6/normalizer2/QE,136 Adam tensors와
+기존 LR3e-4를 확인했다. physical SHA256은
+`7845eb2e66bf333f07a4fde28d80601f418f212912c7c7b58fc41424646b5ff6`다.
+기존 독립 A/B와 오답4 재현은 닫힌 증거로 재사용한다. 이전의 V510/VC510/ID512,
+VC support510·외부ID2와 FINAL_QUALITY_FAIL_AT_10496/resume=false는 바꾸지 않는다.
+
+새 profile은 같은 부모·Adam·corpus·tokenizer에서 실제 LR만3e-5로 바꾸고
+원 citation cycle의 앞1536 draws를 추가한다.11264/12032에 공동 dev+fit를
+검사하고, 조기 합격 시 즉시 고정한다. 새 SMALL 상한1536과 기존 gate를 유지한다.
+새 seal이나 학습자료는 만들지 않는다. 이 절의 준비 비용은 실행된 학습량이 아니다.
+
+직접 quick의 precision 관련3개 시험이 통과했다(exit0,350.87초).
+실제 TINY optimizer29/generation210/teacher140이며 SMALL은0이다. Adam 대조는
+상속된 비영 moment27136좌표에서 F64 기준식과 사전 허용오차를 사용했다.
+최대 절대 delta 오차는1.1578788545701219e-7이다. 이 수치시험의 optimizer3과
+실제 process fixture26을 합산했으며 FD0이다. 연속2와 새 process1+1의 native
+weights/Adam/clock 일치, 평가-only optimizer0 및 마지막 teacher 재사용을 확인했다.
+
+독립 SOURCE_ONLY 검토에서 새 오답 orbit 우선 표본과 confirmation의 기존 prefix
+소비가 다름을 발견했다. 실제 receipt 소비는 수정 전 exit101로 실패했고, 같은
+표본 함수를 공유한 수정 후 무호출 회귀는1/1 통과했다. 최종 보강 시험은 실제
+native+typed raw/teacher/summary reader를 거쳐11264 조기 고정, fit 누락 거부,
+fit 미달 계속,12032 최종 실패를 확인했다(1/1,123.72초, 모델 호출0).
+새 process의 generic 재개는 같은/다른 LR 모두 OBJECTIVE_POLICY_UNSUPPORTED로
+거부됐다(1/1,0.01초, optimizer/generation/teacher0). 같은 B/model은 수용하고
+다른 model·policy·report는 거부했다. 시험용 native 상태 구성의 실패3개와
+최초 helper compile 오류·표본 RED·fixture arm 오류도 원 로그로 남겼다.
+원본 보호·명령·실패를 포함한 로컬 증거는
+`artifacts/citation-precision-20260922-review/`다. 모델/원 raw/임시 지시문은 게시하지 않는다.
+실제 prepare는 exit0, 모델 호출0으로 끝났다. 새 initial은 부모와 바이트 동일하며
+corpus/metadata/tokenizer도 그대로 복사됐다.1536 draws의 input1830912/
+target116736/padding49152를 전수 검산했다. preparation SHA256은
+`5506721dc90eb07361e6de02627c51475eb74aedef386994f6c5e4df1a6d4e1c`,
+policy `64f595d7f0ff1c5a8c3c28412039dd0e68235a154fab9a15ee7320ba74f07080`,
+tape `d23d41239a5e57bf5f30cf17af2e373a902fc72d76183da9d6dcca32ebb3cd78`다.
+실행 source digest는 `704b745d307c05562cce02b7e9f5a94668787859eebebd9911561da59e85c0e0`,
+release executable은 `4344eeb36f793342706fd88cf72f452bca175bd8606c03acb5905c362086ca84`다.
+관련 cargo check/clippy/release build는 exit0이다. Clippy는 기존 bin45/test69
+경고가 있고 release는 기존 cfg별 unused_mut1개가 있다. 전역 fmt는 기존 compact
+source 형식 차이로 exit1이며 PASS로 집계하지 않았다. 이번 diff의 신규 Clippy
+진단은 수정했고 무관한 전역 정리는 하지 않았다. 소비한 원본17개 hash가 일치한다.
+독립 A와 실제 SMALL 학습·품질·confirmation은 아직 완료 판정하지 않았다.
+scalar4352 수용은 유지하며 값+인용·S4/S5/S6·Goal1은 별도 미수용이다.
+
 ## 2026-09-22 인용 fidelity consolidation — 신규3072 완료, 품질 미달·오답 추가 재현
 
 동결 source `820100a6a27eebefe0ba723fc03948ea6f2a0abb`에서 실제 신규3072 updates를

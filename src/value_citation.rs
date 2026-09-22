@@ -15,9 +15,16 @@ const CONT_DATA: &str = "citation-continuation-v1";
 const CONT_CONTRACT: &str = "R3-CITATION-CONTINUATION-1.0";
 const FID_DATA: &str = "citation-fidelity-v1";
 const FID_CONTRACT: &str = "R3-CITATION-FIDELITY-CONSOLIDATION-1.0";
+const PREC_DATA: &str = "citation-precision-v1";
+const PREC_CONTRACT: &str = "R3-CITATION-PRECISION-1.0";
+pub(in super::super::super) fn precision(p:&Plan)->bool {p.identifiable.as_ref().is_some_and(|o|o.dataset==PREC_DATA)}
 pub(in super::super::super) fn fidelity(p:&Plan)->bool {p.identifiable.as_ref().is_some_and(|o|o.dataset==FID_DATA)}
-fn continuation(p:&Plan)->bool {fidelity(p) || p.identifiable.as_ref().is_some_and(|o|o.dataset==CONT_DATA)}
-fn citation_offset(p:&Plan,step:usize)->usize {step-p.origin_step()+if continuation(p)&&!fidelity(p)&&!p.tiny {32}else{0}}
+fn continuation(p:&Plan)->bool {precision(p) || fidelity(p) || p.identifiable.as_ref().is_some_and(|o|o.dataset==CONT_DATA)}
+fn citation_offset(p:&Plan,step:usize)->usize {step-p.origin_step()+if continuation(p)&&!fidelity(p)&&!precision(p)&&!p.tiny {32}else{0}}
+fn full_evaluation(p:&Plan,step:usize)->bool {
+    !p.tiny && if precision(p) {[768,1536].contains(&citation_offset(p,step))}
+        else {[1536,3072].contains(&citation_offset(p,step))}
+}
 pub(in super::super::super) fn is_mean(p: &Plan) -> bool {
     continuation(p) || p.identifiable.as_ref().is_some_and(|o|o.dataset == MEAN_DATA)
 }
@@ -53,6 +60,8 @@ pub(super) fn evaluation(p: &Plan) -> EvaluationPolicy {
     e.screen_steps.clear();
     e.train_steps = if p.tiny {
         vec![p.origin_step() + 2]
+    } else if precision(p) {
+        [256,768,1536].map(|n|p.origin_step()+n).to_vec()
     } else if fidelity(p) {
         [256,768,1536,2304,3072].map(|n|p.origin_step()+n).to_vec()
     } else if continuation(p) {
@@ -60,10 +69,10 @@ pub(super) fn evaluation(p: &Plan) -> EvaluationPolicy {
     } else {
         [32, 128, 384, 768, 1536, 3072].map(|n| ORIGIN + n).to_vec()
     };
-    e.generation_limit = if fidelity(p) {14336}else{16384};
+    e.generation_limit = if fidelity(p)||precision(p) {14336}else{16384};
     // TINY's explicit three-by-four panel exercises exact-cap finalization.
-    e.teacher_limit = if fidelity(p) {if p.tiny {12}else{13120}}else{16384};
-    e.active_seconds = 10800;
+    e.teacher_limit = if fidelity(p)||precision(p) {if p.tiny {12}else{13120}}else{16384};
+    e.active_seconds = if precision(p) {7200}else{10800};
     e.train_steps.retain(|&s|s<=p.config.max_steps);
     e
 }
@@ -79,7 +88,8 @@ pub(in super::super::super) fn endpoint(p: &Plan, step: usize, pending: bool) ->
             .then_some(p.config.max_steps)
             .ok_or_else(|| bad("citation fixture closed"));
     }
-    let points:&[usize]=if fidelity(p) {&[7425,7680,8192,8704,8960,9472,9728,10240,10496]}
+    let points:&[usize]=if precision(p) {&[10497,10752,11264,11776,12032]}
+        else if fidelity(p) {&[7425,7680,8192,8704,8960,9472,9728,10240,10496]}
         else if continuation(p) {&[4416,4480,4608,4736,5120,5632,5888,6400,6912,7424]}
         else{&[4384,4480,4736,5120,5632,5888,6400,6912,7424]};
     points.iter().copied()
@@ -878,7 +888,7 @@ fn base_panels(root: &Path, p: &Plan, step: usize) -> Result<Vec<Panel>> {
         return Err(bad("citation frozen full panel pool"));
     }
     let offset = citation_offset(p,step);
-    let full = !p.tiny && [1536, 3072].contains(&offset);
+    let full = full_evaluation(p,step);
     let n = if p.tiny {
         4
     } else if full {
@@ -898,7 +908,7 @@ fn base_panels(root: &Path, p: &Plan, step: usize) -> Result<Vec<Panel>> {
             dm[512..512 + n].to_vec(),
         ),
     ];
-    if fidelity(p) || offset >= 384 || p.tiny {
+    if fidelity(p) || precision(p) || offset >= 384 || p.tiny {
         out.push((
             format!("renamed{n}"),
             c.validation[1024..1024 + n].to_vec(),
@@ -1059,7 +1069,7 @@ fn dev_pass(scores: &BTreeMap<String, binary::Value>) -> Result<bool> {
 }
 pub(super) fn panels(root: &Path, p: &Plan, step: usize) -> Result<Vec<Panel>> {
     let mut out = base_panels(root, p, step)?;
-    if !p.tiny && [1536, 3072].contains(&citation_offset(p,step)) {
+    if full_evaluation(p,step) {
         let present = out[..3]
             .iter()
             .all(|(name, _, _)| root.join(format!("eval-{step:04}-{name}.r3b")).exists());
@@ -1113,7 +1123,7 @@ fn evaluation_result(root: &Path, p: &Plan, step: usize) -> Result<binary::Value
     let regression = if let Some(g)=&guard {g["stop"].is_string()}else{baseline.full.saturating_sub(screen.full) >= 16
         || baseline.all4.saturating_sub(screen.all4) >= 4
         || screen.errors >= 4};
-    let full = !p.tiny && [1536, 3072].contains(&citation_offset(p,step));
+    let full = full_evaluation(p,step);
     let development = full && dev_pass(&scores)?;
     let joint = |key: &str| -> Result<OrbitScore> {
         binary::from_value(
@@ -1130,16 +1140,7 @@ fn evaluation_result(root: &Path, p: &Plan, step: usize) -> Result<binary::Value
         false
     };
     let eligible = development && fits && !regression;
-    let action = if regression {
-        guard.as_ref().and_then(|g|g["stop"].as_str()).unwrap_or("QUALITY_REGRESSION").to_string()
-    } else if eligible {
-        format!("CANDIDATE_FIXED_AT_{step}")
-    } else if step == p.config.max_steps {
-        format!("FINAL_QUALITY_FAIL_AT_{step}")
-    } else {
-        "CONTINUE_WITHIN_REGISTERED_CAP".into()
-    };
-    let extend = !regression && !eligible && step < p.config.max_steps;
+    let (action,extend)=evaluation_action(p,step,eligible,regression,guard.as_ref());
     let renamed = cases
         .iter()
         .find(|(name, _, _)| name.starts_with("renamed"));
@@ -1165,6 +1166,19 @@ fn evaluation_result(root: &Path, p: &Plan, step: usize) -> Result<binary::Value
         "regression":regression,"action":action,"extend":extend,"stop":(!extend).then_some(action)});
     if let Some(g)=guard {result["guard"]=g;}
     Ok(result)
+}
+fn evaluation_action(p:&Plan,step:usize,eligible:bool,regression:bool,guard:Option<&binary::Value>)->(String,bool) {
+    let action = if regression {
+        guard.as_ref().and_then(|g|g["stop"].as_str()).unwrap_or("QUALITY_REGRESSION").to_string()
+    } else if eligible {
+        format!("CANDIDATE_FIXED_AT_{step}")
+    } else if step == p.config.max_steps {
+        format!("FINAL_QUALITY_FAIL_AT_{step}")
+    } else {
+        "CONTINUE_WITHIN_REGISTERED_CAP".into()
+    };
+    let extend = !regression && !eligible && step < p.config.max_steps;
+    (action,extend)
 }
 fn retention_decision(full:usize,all4:usize,errors:usize,before:usize)->(usize,Option<&'static str>) {
     let streak=if full<60 || all4<12 {before+1}else{0};
@@ -1321,7 +1335,7 @@ fn trace(root: &Path, p: &Plan, end: &Segment) -> Result<binary::Value> {
 }
 fn seal_receipt(study: &Path) -> Result<binary::Value> {
     let selection:binary::Value=read(&study.join("selection.r3b"))?;
-    if selection["contract"]==CONT_CONTRACT || selection["contract"]==FID_CONTRACT {
+    if selection["contract"]==CONT_CONTRACT || selection["contract"]==FID_CONTRACT || selection["contract"]==PREC_CONTRACT {
         let previous=Path::new(selection["previous_study"].as_str().ok_or_else(||bad("continuation seal source"))?);
         let link:binary::Value=read_confirmed(&study.join("confirmation-link.r3b"))?;
         if link["preparation"]!=file_hash(&study.join("preparation.r3b"))? || link["source_study"]!=binary::record!(previous)
@@ -1678,9 +1692,18 @@ pub(in super::super::super) fn seal(study: &Path, private: &Path) -> Result<()> 
 fn comparison(study: &Path, p: &Plan, end: &Segment, d: &binary::Value) -> Result<binary::Value> {
     let endpoint = binary::record!({"policy":digest(p)?,"checkpoint":end.checkpoint_hash,"step":end.step,"decision":d});
     Ok(
-        binary::record!({"contract":if fidelity(p){FID_CONTRACT}else if continuation(p){CONT_CONTRACT}else if is_mean(p){MEAN_CONTRACT}else{CONTRACT},"source":p.source,"preparation":file_hash(&study.join("preparation.r3b"))?,
+        binary::record!({"contract":if precision(p){PREC_CONTRACT}else if fidelity(p){FID_CONTRACT}else if continuation(p){CONT_CONTRACT}else if is_mean(p){MEAN_CONTRACT}else{CONTRACT},"source":p.source,"preparation":file_hash(&study.join("preparation.r3b"))?,
         "endpoints":BTreeMap::from([(own(p).arm.as_str(),endpoint)]),"selected":if d["eligible"]==true {Some(own(p).arm.as_str())}else{None},"goal1_ready":false}),
     )
+}
+fn verify_review_b(study:&Path,comparison:&binary::Value)->Result<()> {
+    let b:binary::Value=read_confirmed(&study.join("review-b.r3b"))?;
+    if b["verdict"]!="PASS" || b["preparation"]!=file_hash(&study.join("preparation.r3b"))?
+        || b["endpoints"]!=comparison["endpoints"]
+        || b["report_hash"]!=file_hash(Path::new(b["report_path"].as_str().ok_or_else(||bad("citation B report"))?))? {
+        return Err(bad("independent citation B required"));
+    }
+    Ok(())
 }
 pub(in super::super::super) fn confirm(study: &Path) -> Result<()> {
     let study = study.canonicalize()?;
@@ -1693,27 +1716,8 @@ pub(in super::super::super) fn confirm(study: &Path) -> Result<()> {
         return Err(bad("NOT_RUN_PREREQUISITE: no value/citation candidate"));
     }
     let comparison = comparison(&study, &p, &end, &d)?;
-    let b: binary::Value = read_confirmed(&study.join("review-b.r3b"))?;
-    if b["verdict"] != "PASS"
-        || b["preparation"] != file_hash(&study.join("preparation.r3b"))?
-        || b["endpoints"] != comparison["endpoints"]
-        || b["report_hash"]
-            != file_hash(Path::new(
-                b["report_path"]
-                    .as_str()
-                    .ok_or_else(|| bad("citation B report"))?,
-            ))?
-    {
-        return Err(bad("independent citation B required"));
-    }
-    let c = verified_corpus(&root.join("corpus.r3cor"), &p.corpus)?;
-    let n=if p.tiny {4}else{16};
-    for (name, es) in [
-        (if is_mean(&p){"mean-review-ANSWER-MEAN-value"}else{"citation-review-value"}, &c.validation[..n]),
-        (if is_mean(&p){"mean-review-ANSWER-MEAN-citation"}else{"citation-review-citation"}, &c.validation[512..512+n]),
-    ] {
-        observed(&study, name, &p, &end.checkpoint_hash, es, true)?;
-    }
+    verify_review_b(&study,&comparison)?;
+    verify_review_observations(&study,&root,&p,end.step,&end.checkpoint_hash)?;
     let seal = seal_receipt(&study)?;
     let candidate = confirmation_candidate(&study,&p,&end,&comparison,&seal)?;
     let candidate_path=study.join("confirmation-candidate.r3b");
@@ -1852,14 +1856,14 @@ fn unused_seal(study:&Path)->Result<binary::Value> {
 }
 fn seal_owner(study:&Path)->Result<PathBuf> {
     let s:binary::Value=read(&study.join("selection.r3b"))?;
-    if s["contract"]==CONT_CONTRACT || s["contract"]==FID_CONTRACT {return seal_owner(Path::new(s["previous_study"].as_str().ok_or_else(||bad("continuation seal owner"))?));}
+    if s["contract"]==CONT_CONTRACT || s["contract"]==FID_CONTRACT || s["contract"]==PREC_CONTRACT {return seal_owner(Path::new(s["previous_study"].as_str().ok_or_else(||bad("continuation seal owner"))?));}
     if s["contract"]==MEAN_CONTRACT {
         Ok(PathBuf::from(s["previous_study"].as_str().ok_or_else(||bad("mean seal owner"))?))
     }else{Ok(study.into())}
 }
 fn continuation_plan(old:&Plan,study:&Path,s:&binary::Value)->Result<Plan> {
-    let fid=s["contract"]==FID_CONTRACT;
-    if !fid && s["contract"]!=CONT_CONTRACT {return Err(bad("unknown citation continuation profile"));}
+    let fid=s["contract"]==FID_CONTRACT;let prec=s["contract"]==PREC_CONTRACT;
+    if !fid && !prec && s["contract"]!=CONT_CONTRACT {return Err(bad("unknown citation continuation profile"));}
     let mut p=old.clone();
     let end:Segment=binary::from_value(s["parent_endpoint"].clone())?;
     let state:TrainingState=binary::from_value(s["parent_training_state"].clone())?;
@@ -1868,41 +1872,50 @@ fn continuation_plan(old:&Plan,study:&Path,s:&binary::Value)->Result<Plan> {
     p.initial=end.checkpoint_hash;
     p.initial_weights=s["parent_weights"].as_str().ok_or_else(||bad("continuation weights"))?.into();
     p.config.budget_start_step=state.step;p.config.budget_start_tokens=state.consumed_tokens;
-    p.config.max_steps=state.step+if p.tiny {2}else if fid {UPDATES}else{3040};p.config.max_tokens=state.consumed_tokens+4_000_000;
-    let o=p.identifiable.as_mut().unwrap();o.study=study.into();o.dataset=if fid {FID_DATA}else{CONT_DATA}.into();
-    if fid && o.rows.len()!=state.step {return Err(bad("fidelity requires exhausted parent tape"));}
-    if p.tiny || fid {o.rows.extend(suffix().into_iter().take(if p.tiny {2}else{UPDATES}));}
+    p.config.max_steps=state.step+if p.tiny {2}else if prec {1536}else if fid {UPDATES}else{3040};
+    p.config.max_tokens=state.consumed_tokens+if prec {2_000_000}else{4_000_000};
+    if prec {p.config.lr=3e-5;}
+    let o=p.identifiable.as_mut().unwrap();o.study=study.into();o.dataset=if prec {PREC_DATA}else if fid {FID_DATA}else{CONT_DATA}.into();
+    if (fid||prec) && o.rows.len()!=state.step {return Err(bad("citation fork requires exhausted parent tape"));}
+    if p.tiny || fid || prec {o.rows.extend(suffix().into_iter().take(if p.tiny {2}else if prec {1536}else{UPDATES}));}
     p.train_order=digest(&o.rows)?;
     let f=p.fork.as_mut().unwrap();f.study=study.into();f.study_hash=file_hash(&study.join("selection.r3b"))?;
     f.parent_policy=digest(old)?;f.parent_state=digest(&state)?;
     f.parent_adam=s["parent_adam"].as_str().ok_or_else(||bad("continuation Adam"))?.into();
     f.origin_step=state.step;f.origin_input=state.consumed_tokens;f.origin_target=state.target_tokens;
-    f.target_limit=260_000;p.evaluation=evaluation(&p);
+    f.target_limit=if prec {130_000}else{260_000};
+    if prec {f.constant_lr=3e-5;}
+    p.evaluation=evaluation(&p);
     Ok(p)
 }
 pub(in super::super::super) fn continuation_prepare(previous:&Path,output:&Path,tiny:bool)->Result<()> {
-    continuation_prepare_profile(previous,output,tiny,None)
+    continuation_prepare_profile(previous,output,tiny,CONT_CONTRACT,None)
 }
 pub(in super::super::super) fn fidelity_prepare(previous:&Path,output:&Path,report:&Path,tiny:bool)->Result<()> {
-    continuation_prepare_profile(previous,output,tiny,Some(report))
+    continuation_prepare_profile(previous,output,tiny,FID_CONTRACT,Some(report))
 }
-fn continuation_parent_profile(old:&Plan,end:&Segment,fid:bool,tiny:bool)->Result<()> {
-    if old.tiny!=tiny || own(old).dataset!=if fid {CONT_DATA}else{MEAN_DATA} || own(old).arm!=MEAN_ARMS[1]
+pub(in super::super::super) fn precision_prepare(previous:&Path,output:&Path,report:&Path,tiny:bool)->Result<()> {
+    continuation_prepare_profile(previous,output,tiny,PREC_CONTRACT,Some(report))
+}
+fn continuation_parent_profile(old:&Plan,end:&Segment,contract:&str,tiny:bool)->Result<()> {
+    let prec=contract==PREC_CONTRACT;let fid=contract==FID_CONTRACT;
+    if ![PREC_CONTRACT,FID_CONTRACT,CONT_CONTRACT].contains(&contract) {return Err(bad("citation parent profile"));}
+    if old.tiny!=tiny || own(old).dataset!=if prec {FID_DATA}else if fid {CONT_DATA}else{MEAN_DATA} || own(old).arm!=MEAN_ARMS[1]
         || end.resume || end.phase.as_deref()!=Some("Finished")
-        || end.step!=if fid {old.config.max_steps}else{old.origin_step()+if tiny {2}else{32}}
-        || (!tiny && (end.step!=if fid {7424}else{4384}
-            || end.stop!=if fid {"FINAL_QUALITY_FAIL_AT_7424"}else{"QUALITY_REGRESSION"})) {
+        || end.step!=if fid||prec {old.config.max_steps}else{old.origin_step()+if tiny {2}else{32}}
+        || (!tiny && (end.step!=if prec {10496}else if fid {7424}else{4384}
+            || end.stop!=if prec {"FINAL_QUALITY_FAIL_AT_10496"}else if fid {"FINAL_QUALITY_FAIL_AT_7424"}else{"QUALITY_REGRESSION"})) {
         return Err(bad("specific complete ANSWER parent required"));
     }
     Ok(())
 }
-fn continuation_prepare_profile(previous:&Path,output:&Path,tiny:bool,parent_report:Option<&Path>)->Result<()> {
-    let fid=parent_report.is_some();let contract=if fid {FID_CONTRACT}else{CONT_CONTRACT};
+fn continuation_prepare_profile(previous:&Path,output:&Path,tiny:bool,contract:&str,parent_report:Option<&Path>)->Result<()> {
+    let fid=contract==FID_CONTRACT;let prec=contract==PREC_CONTRACT;
     if tiny!=cfg!(all(test,feature="test-support")) {return Err(bad("continuation production/TINY profile"));}
     let previous=previous.canonicalize()?;let output=std::path::absolute(output)?;
     let oldroot=previous.join(MEAN_ARMS[1]);let old=historical_plan(&oldroot)?;
     let (end,d)=close(&oldroot,&old)?;
-    continuation_parent_profile(&old,&end,fid,tiny)?;
+    continuation_parent_profile(&old,&end,contract,tiny)?;
     let l=checkpoint::load(&oldroot.join(&end.checkpoint),Device::Cpu,true)?;
     let state=l.manifest.training.as_ref().ok_or_else(||bad("continuation parent Adam absent"))?;
     if state.step!=end.step || state.sampler_state!=end.step as u64 || state.resume_binding.as_ref()!=Some(&old.binding(state,&l.tokenizer)?)
@@ -1910,23 +1923,26 @@ fn continuation_prepare_profile(previous:&Path,output:&Path,tiny:bool,parent_rep
         || old.config.lr!=3e-4 || old.config.first_target_weight!=1. || old.config.microbatch!=8 || old.config.accumulation!=1
         || old.framing()!=neural::Framing::QuestionEvidence {return Err(bad("continuation parent native/objective/clock"));}
     unused_seal(&previous)?;unused_seal(&seal_owner(&previous)?)?;
-    if fid {
+    if fid||prec {
         let mut ancestor=previous.clone();
         loop {
             unused_seal(&ancestor)?;
             let prior:binary::Value=read(&ancestor.join("selection.r3b"))?;
-            if ![CONT_CONTRACT,MEAN_CONTRACT].iter().any(|&c|prior["contract"]==c) {break;}
+            if ![FID_CONTRACT,CONT_CONTRACT,MEAN_CONTRACT].iter().any(|&c|prior["contract"]==c) {break;}
             ancestor=PathBuf::from(prior["previous_study"].as_str().ok_or_else(||bad("fidelity prior seal chain"))?);
         }
     }
     let c=verified_corpus(&oldroot.join("corpus.r3cor"),&old.corpus)?;
-    let rows=suffix();let costs=tape_cost(&rows[if fid {0}else{32}..],&c.train,&l.tokenizer)?;
-    if !tiny && (own(&old).rows[ORIGIN..]!=rows || costs["input"]!=if fid {3661824}else{3623680}
-        || costs["target"]!=if fid {233472}else{231040} || costs["padding"]!=if fid {98304}else{97280}) {return Err(bad("continuation original suffix"));}
-    let evaluation_generations=if fid {3*192+2*1664+2*4608}else{3*128+2*192+2*1664+2*4608};
+    let rows=suffix();let range=if prec {0..1536}else if fid {0..UPDATES}else{32..UPDATES};
+    let costs=tape_cost(&rows[range],&c.train,&l.tokenizer)?;
+    let old_cycles=if prec {[rows.clone(),rows.clone()].concat()}else{rows.clone()};
+    if !tiny && (own(&old).rows[ORIGIN..]!=old_cycles || costs["input"]!=if prec {1830912}else if fid {3661824}else{3623680}
+        || costs["target"]!=if prec {116736}else if fid {233472}else{231040} || costs["padding"]!=if prec {49152}else if fid {98304}else{97280}) {return Err(bad("continuation original suffix"));}
+    let evaluation_generations=if prec {192+2*1664+2*4608}else if fid {3*192+2*1664+2*4608}else{3*128+2*192+2*1664+2*4608};
     let generations=evaluation_generations+32+32+512+640;
-    if generations>if fid {14336}else{16384} || evaluation_generations>if fid {13120}else{16384} {return Err(bad("continuation evaluation cap"));}
-    let mut s=binary::record!({"objective":checkpoint::ANSWER_MEAN_OBJECTIVE,"input_limit":4000000,"target_limit":260000});
+    if generations>if fid||prec {14336}else{16384} || evaluation_generations>if fid||prec {13120}else{16384} {return Err(bad("continuation evaluation cap"));}
+    let mut s=binary::record!({"objective":checkpoint::ANSWER_MEAN_OBJECTIVE,"input_limit":if prec {2000000}else{4000000},"target_limit":if prec {130000}else{260000}});
+    if prec {s["parent_lr_bits"]=binary::record!(old.config.lr.to_bits());s["child_lr_bits"]=binary::record!(3e-5f64.to_bits());}
     s["contract"]=binary::record!(contract);s["source"]=binary::record!(source_digest()?);
     s["binary"]=binary::record!(file_hash(&std::env::current_exe()?)?);
     s["previous_study"]=binary::record!(previous);s["previous_preparation"]=binary::record!(file_hash(&previous.join("preparation.r3b"))?);
@@ -1940,12 +1956,12 @@ fn continuation_prepare_profile(previous:&Path,output:&Path,tiny:bool,parent_rep
     s["parent_quality"]=binary::record!(end.stop);s["historical_resume"]=binary::record!(false);
     s["new_authorization"]=binary::record!(contract);s["costs_remaining"]=costs;
     s["planned_generation_upper"]=binary::record!(generations);s["planned_teacher_upper"]=binary::record!(evaluation_generations);
-    s["new_updates"]=binary::record!(if tiny {2}else if fid {UPDATES}else{3040});
+    s["new_updates"]=binary::record!(if tiny {2}else if prec {1536}else if fid {UPDATES}else{3040});
     if let Some(report)=parent_report {
         let report=report.canonicalize()?;
         s["parent_report"]=binary::record!(report);s["parent_report_hash"]=binary::record!(file_hash(&report)?);
-        s["half_costs"]=tape_cost(&rows[..1536],&c.train,&l.tokenizer)?;
-        if !tiny && (s["half_costs"]["input"]!=1830912 || s["half_costs"]["target"]!=116736 || s["half_costs"]["padding"]!=49152) {return Err(bad("fidelity half-cycle token costs"));}
+        s["half_costs"]=tape_cost(&rows[..if prec {768}else{1536}],&c.train,&l.tokenizer)?;
+        if !tiny && (s["half_costs"]["input"]!=if prec {915456}else{1830912} || s["half_costs"]["target"]!=if prec {58368}else{116736} || s["half_costs"]["padding"]!=if prec {24576}else{49152}) {return Err(bad("citation half-interval token costs"));}
     }
     std::fs::create_dir(&output)?;let root=output.join(MEAN_ARMS[1]);std::fs::create_dir(&root)?;
     write(&output.join("selection.r3b"),&s)?;
@@ -1962,11 +1978,11 @@ fn continuation_prepare_profile(previous:&Path,output:&Path,tiny:bool,parent_rep
     println!("CITATION_CONTINUATION_PREPARED origin={} maximum={} new_updates0 input={} target={} padding={} generations_upper={generations}",p.origin_step(),p.config.max_steps,s["costs_remaining"]["input"],s["costs_remaining"]["target"],s["costs_remaining"]["padding"]);Ok(())
 }
 fn verify_continuation(root:&Path,p:&Plan)->Result<()> {
-    let fid=fidelity(p);let contract=if fid {FID_CONTRACT}else{CONT_CONTRACT};
+    let fid=fidelity(p);let prec=precision(p);let contract=if prec {PREC_CONTRACT}else if fid {FID_CONTRACT}else{CONT_CONTRACT};
     let study=&own(p).study;let s:binary::Value=read(&study.join("selection.r3b"))?;
     let prior=Path::new(s["parent"].as_str().ok_or_else(||bad("continuation parent path"))?);
     let old=historical_plan(prior)?;let end:Segment=binary::from_value(s["parent_endpoint"].clone())?;
-    continuation_parent_profile(&old,&end,fid,p.tiny)?;
+    continuation_parent_profile(&old,&end,contract,p.tiny)?;
     if root!=study.join(MEAN_ARMS[1])
         || s["contract"]!=contract || s["new_authorization"]!=contract || s["historical_resume"]!=false
         || s["parent_quality"]!=end.stop || s["previous_study"]!=binary::record!(own(&old).study)
@@ -1980,11 +1996,14 @@ fn verify_continuation(root:&Path,p:&Plan)->Result<()> {
         if file_hash(&root.join(name))?!=file_hash(&prior.join(name))? {return Err(bad("continuation owned input"));}
     }
     let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
-    if s["costs_remaining"]!=tape_cost(&suffix()[if fid {0}else{32}..],&c.train,&tok)? {return Err(bad("continuation costs changed"));}
-    if fid {
+    let rows=suffix();let range=if prec {0..1536}else if fid {0..UPDATES}else{32..UPDATES};
+    if s["costs_remaining"]!=tape_cost(&rows[range],&c.train,&tok)? {return Err(bad("continuation costs changed"));}
+    if prec && (s["parent_lr_bits"]!=3e-4f64.to_bits() || s["child_lr_bits"]!=3e-5f64.to_bits()) {return Err(bad("precision actual LR policy"));}
+    if fid||prec {
         let report=Path::new(s["parent_report"].as_str().ok_or_else(||bad("fidelity parent report absent"))?);
-        if s["parent_report_hash"]!=file_hash(report)? || s["half_costs"]!=tape_cost(&suffix()[..1536],&c.train,&tok)?
-            || (!p.tiny && own(&old).rows[ORIGIN..]!=suffix()) {return Err(bad("fidelity cycle/report binding"));}
+        let old_cycles=if prec {[rows.clone(),rows.clone()].concat()}else{rows.clone()};
+        if s["parent_report_hash"]!=file_hash(report)? || s["half_costs"]!=tape_cost(&rows[..if prec {768}else{1536}],&c.train,&tok)?
+            || (!p.tiny && own(&old).rows[ORIGIN..]!=old_cycles) {return Err(bad("citation cycle/report binding"));}
     }
     Ok(())
 }
@@ -1993,9 +2012,59 @@ fn continuation_authorize(root:&Path,p:&Plan)->Result<()> {
     let prep:binary::Value=read_confirmed(&study.join("preparation.r3b"))?;
     if prep["selection"]!=file_hash(&study.join("selection.r3b"))? {return Err(bad("continuation reviewed preparation"));}
     seal_receipt(study)?;
-    let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;let n=if p.tiny {4}else{16};
-    for (name,start) in [("continuation-parent-value",0),("continuation-parent-citation",512)] {
-        observed(study,name,p,&p.initial,&c.validation[start..start+n],true)?;
+    for (name,citation) in [("continuation-parent-value",false),("continuation-parent-citation",true)] {
+        let (es,_,_)=parent_reproduction(root,p,citation)?;
+        observed(study,name,p,&p.initial,&es,true)?;
+    }
+    Ok(())
+}
+// Evaluation-only selection: complete four-view orbits, wrong orbits first in
+// frozen metadata order. Expected answers never enter the generation request.
+fn reproduction_indices(p:&Plan,es:&[Episode],ms:&[Meta],rows:&[binary::Value],tok:&ByteBpe)->Result<Vec<usize>> {
+    let n=if p.tiny {4}else{16};
+    if !precision(p) {return Ok((0..n).collect());}
+    if es.len()<n || !es.len().is_multiple_of(4) || ms.len()!=es.len() || rows.len()!=es.len() {return Err(bad("precision reproduction complete panel"));}
+    let mut failed=vec![];let mut correct=vec![];
+    for (orbit,quad) in rows.as_chunks::<4>().0.iter().enumerate() {
+        let mut wrong=false;
+        for (view,row) in quad.iter().enumerate() {
+            let i=orbit*4+view;let e=&es[i];let m=&ms[i];
+            if m.id!=e.id || m.view!=view || m.base!=ms[orbit*4].base || row["id"]!=e.id || row["expected"]!=e.answer {return Err(bad("precision reproduction frozen content"));}
+            verify_generated(row,tok)?;
+            wrong|=row["actual"]!=e.answer || !row["error"].is_null() || row["generation_completed"]!=true || row["finish_reason"]!="stop";
+        }
+        if wrong {failed.push(orbit);}else{correct.push(orbit);}
+    }
+    Ok(failed.into_iter().chain(correct).take(n/4).flat_map(|base|base*4..base*4+4).collect())
+}
+fn parent_reproduction(root:&Path,p:&Plan,citation:bool)->Result<(Vec<Episode>,Vec<binary::Value>,Vec<usize>)> {
+    let s:binary::Value=read(&own(p).study.join("selection.r3b"))?;
+    let prior=Path::new(s["parent"].as_str().ok_or_else(||bad("citation parent reproduction path"))?);
+    let count=if p.tiny {4}else if fidelity(p)||precision(p) {512}else{64};let start=if citation {512}else{0};
+    let raw=binary::read_value_records(&prior.join(format!("eval-{:04}-{}{count}.r3rows",p.origin_step(),if citation {"citation"}else{"value"})))?;
+    let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;let (_,dm,_)=verified_metadata(root,p)?;
+    let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
+    let indices=reproduction_indices(p,&c.validation[start..start+count],&dm[start..start+count],&raw[1..],&tok)?;
+    Ok((indices.iter().map(|&i|c.validation[start+i].clone()).collect(),indices.iter().map(|&i|raw[i+1].clone()).collect(),indices))
+}
+fn endpoint_reproduction(root:&Path,p:&Plan,step:usize,citation:bool)->Result<(Vec<Episode>,Vec<binary::Value>,Vec<usize>)> {
+    let panel=panels(root,p,step)?.into_iter().find(|(n,_,_)|n.starts_with(if citation {"citation"}else{"value"})).ok_or_else(||bad("mean reproduction panel"))?;
+    let raw=binary::read_value_records(&root.join(format!("eval-{step:04}-{}.r3rows",panel.0)))?;
+    let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
+    let indices=reproduction_indices(p,&panel.1,&panel.2,&raw[1..],&tok)?;
+    Ok((indices.iter().map(|&i|panel.1[i].clone()).collect(),indices.iter().map(|&i|raw[i+1].clone()).collect(),indices))
+}
+fn verify_review_observations(study:&Path,root:&Path,p:&Plan,step:usize,checkpoint:&str)->Result<()> {
+    for citation in [false,true] {
+        let kind=if citation {"citation"}else{"value"};
+        let (name,es)=if is_mean(p) {
+            (format!("mean-review-{}-{kind}",own(p).arm),endpoint_reproduction(root,p,step,citation)?.0)
+        }else {
+            let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;
+            let start=if citation {512}else{0};let n=if p.tiny {4}else{16};
+            (format!("citation-review-{kind}"),c.validation[start..start+n].to_vec())
+        };
+        observed(study,&name,p,checkpoint,&es,true)?;
     }
     Ok(())
 }
@@ -2003,13 +2072,10 @@ pub(in super::super::super) fn continuation_parent(study:&Path,citation:bool)->R
     let study=study.canonicalize()?;let root=selected_root(&study);let p=plan_read(&root)?;
     if !continuation(&p) || !history(&root,&p)?.is_empty() {return Err(bad("continuation parent observation before learning"));}
     expansion_review(&p)?;
-    let s:binary::Value=read(&study.join("selection.r3b"))?;let prior=Path::new(s["parent"].as_str().unwrap());
-    let n=if p.tiny {4}else{16};let count=if p.tiny {4}else if fidelity(&p) {512}else{64};let start=if citation {512}else{0};
-    let raw=binary::read_value_records(&prior.join(format!("eval-{:04}-{}{count}.r3rows",p.origin_step(),if citation {"citation"}else{"value"})))?;
-    let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;
+    let (es,raw,indices)=parent_reproduction(&root,&p,citation)?;let n=es.len();
     let name=if citation {"continuation-parent-citation"}else{"continuation-parent-value"};
-    orbit_observe(&study,name,&root.join("initial.r3m"),&c.validation[start..start+n],
-        &binary::record!({"policy":digest(&p)?,"checkpoint":p.initial}),Some(&raw[1..n+1]),observation_control(&p,n,0)?)?;
+    orbit_observe(&study,name,&root.join("initial.r3m"),&es,
+        &binary::record!({"policy":digest(&p)?,"checkpoint":p.initial,"sample_indices":indices}),Some(&raw),observation_control(&p,n,0)?)?;
     println!("CONTINUATION_PARENT {name} matched{n} generation{n} teacher0 optimizer0");Ok(())
 }
 pub(in super::super::super) fn mean_prepare(previous:&Path,output:&Path,tiny:bool)->Result<()> {
@@ -2210,17 +2276,30 @@ pub(in super::super::super) fn mean_review(root:&Path,citation:bool)->Result<()>
         && !(continuation(&p)&&["SEVERE_RETENTION_REGRESSION","PERSISTENT_RETENTION_REGRESSION"].contains(&end.stop.as_str())) {
         return Err(bad("mean reviewer requires complete quality endpoint"));
     }
-    let panel=panels(&root,&p,end.step)?.into_iter().find(|(n,_,_)|n.starts_with(if citation {"citation"}else{"value"})).ok_or_else(||bad("mean reproduction panel"))?;
-    let raw=binary::read_value_records(&root.join(format!("eval-{:04}-{}.r3rows",end.step,panel.0)))?;
-    let n=if p.tiny {4}else{16};let name=format!("mean-review-{}-{}",own(&p).arm,if citation {"citation"}else{"value"});
-    orbit_observe(&own(&p).study,&name,&root.join(&end.checkpoint),&panel.1[..n],
-        &binary::record!({"policy":digest(&p)?,"checkpoint":end.checkpoint_hash}),Some(&raw[1..n+1]),observation_control(&p,n,0)?)?;
+    let (es,old,indices)=endpoint_reproduction(&root,&p,end.step,citation)?;let n=es.len();
+    let name=format!("mean-review-{}-{}",own(&p).arm,if citation {"citation"}else{"value"});
+    orbit_observe(&own(&p).study,&name,&root.join(&end.checkpoint),&es,
+        &binary::record!({"policy":digest(&p)?,"checkpoint":end.checkpoint_hash,"sample_indices":indices}),Some(&old),observation_control(&p,n,0)?)?;
     println!("ANSWER_MEAN_REVIEW arm={} matched{n} generation{n} optimizer0 teacher0 candidate_permission=false",own(&p).arm);Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn generic_resume_rejected(path:&Path)->Result<()> {
+        let l=checkpoint::load(path,Device::Cpu,true)?;
+        assert_eq!(l.manifest.training.as_ref().unwrap().resume_binding.as_ref().unwrap().family,checkpoint::ANSWER_MEAN_FAMILY);
+        for extend_lr in [None,Some(3e-4)] {
+            let output=path.with_extension("blocked-generic-output");
+            let result=crate::training::train(crate::training::Run{checkpoint:path,corpus:None,output:&output,resume:true,
+                numeric_probe:false,config:l.manifest.training.as_ref().unwrap().config.clone(),stop_after:None,measure_rss:false,
+                extend_steps:None,extend_microbatch:None,extend_sample_group_size:None,extend_curriculum_steps:None,
+                extend_first_target_weight:None,extend_lr,extend_warmup:None,source_id:None,replace_corpus:false},
+                std::sync::Arc::new(AtomicBool::new(false)));
+            assert!(result.unwrap_err().to_string().contains("OBJECTIVE_POLICY_UNSUPPORTED"));assert!(!output.exists());
+        }
+        println!("PRECISION_GENERIC_RESUME same/different-LR rejected optimizer0 generation0 teacher0");Ok(())
+    }
     fn random_updates(input:&Path,output:&Path,root:&Path,steps:usize)->Result<()> {
         let p=historical_plan(root)?;let mut l=checkpoint::load(input,Device::Cpu,true)?;
         let mut s=l.manifest.training.clone().ok_or_else(||bad("random native state"))?;
@@ -2291,18 +2370,25 @@ mod tests {
     }
     #[test]
     fn citation_continuation_process()->Result<()> {
-        continuation_process(false)
+        continuation_process(CONT_CONTRACT)
     }
     #[test]
     fn citation_fidelity_process()->Result<()> {
-        continuation_process(true)
+        continuation_process(FID_CONTRACT)
     }
-    fn continuation_process(fid:bool)->Result<()> {
-        let test=if fid {"training::fresh::identifiable::binding::citation::tests::citation_fidelity_process"}
+    #[test]
+    fn citation_precision_process()->Result<()> {
+        continuation_process(PREC_CONTRACT)
+    }
+    fn continuation_process(profile:&str)->Result<()> {
+        let prec=profile==PREC_CONTRACT;let fid=profile!=CONT_CONTRACT;
+        let test=if prec {"training::fresh::identifiable::binding::citation::tests::citation_precision_process"}
+            else if fid {"training::fresh::identifiable::binding::citation::tests::citation_fidelity_process"}
             else{"training::fresh::identifiable::binding::citation::tests::citation_continuation_process"};
         if let Ok(path)=std::env::var("R3_CONT_CHILD") {
             let root=Path::new(&path);let action=std::env::var("R3_CONT_ACTION").unwrap();
             let result=match action.as_str() {
+                "generic-reject"=>generic_resume_rejected(root),
                 "confirmation-io"|"confirmation-io-retry"=>{
                     let p=historical_plan(root)?;let end=history(root,&p)?.last().unwrap().clone();
                     let native=root.join(&end.checkpoint);let l=checkpoint::load(&native,Device::Cpu,false)?;
@@ -2383,7 +2469,7 @@ mod tests {
             let mean=base.join("mean");mean_prepare(&old,&mean,true)?;super::super::tests::fixture_review(&mean)?;
             child(&mean,"mean-parent",None,false,"mean-parent")?;
             for arm in MEAN_ARMS {child(&mean.join(arm),"continuous",None,false,arm)?;}
-            let parent=base.join("continuation-parent");let parent_report=base.join("fixture-parent-report.txt");
+            let mut parent=base.join("continuation-parent");let parent_report=base.join("fixture-parent-report.txt");
             if fid {
                 std::fs::write(&parent_report,b"TINY parent provenance fixture, not independent model acceptance")?;
                 assert!(fidelity_prepare(&mean,&base.join("wrong-parent"),&parent_report,true).is_err());
@@ -2393,10 +2479,21 @@ mod tests {
                 child(&parent,"parent-vc",None,false,"prior-parent-vc")?;
                 child(&selected_root(&parent),"continuous",None,false,"prior-run")?;
             }
+            if prec {
+                assert!(precision_prepare(&parent,&base.join("wrong-precision-parent"),&parent_report,true).is_err());
+                assert!(!base.join("wrong-precision-parent").exists());
+                let next=base.join("fidelity-parent");fidelity_prepare(&parent,&next,&parent_report,true)?;
+                super::super::tests::fixture_review(&next)?;
+                child(&next,"parent-v",None,false,"fidelity-parent-v")?;
+                child(&next,"parent-vc",None,false,"fidelity-parent-vc")?;
+                child(&selected_root(&next),"continuous",None,false,"fidelity-parent-run")?;
+                parent=next;
+            }
             let mut endpoints=vec![];let mut model_outputs=vec![];let mut totals=[0usize;3];
             for mode in if fid {vec!["split","eval-only","teacher-final","continuous"]}else{vec!["split","eval-only","continuous"]} {
                 let study=base.join(mode);
-                if fid {fidelity_prepare(&parent,&study,&parent_report,true)?;}else{continuation_prepare(&mean,&study,true)?;}
+                if prec {precision_prepare(&parent,&study,&parent_report,true)?;}
+                else if fid {fidelity_prepare(&parent,&study,&parent_report,true)?;}else{continuation_prepare(&mean,&study,true)?;}
                 super::super::tests::fixture_review(&study)?;
                 child(&study,"parent-v",None,false,&format!("{mode}-parent-v"))?;child(&study,"parent-vc",None,false,&format!("{mode}-parent-vc"))?;
                 let root=selected_root(&study);
@@ -2414,6 +2511,14 @@ mod tests {
                     if mode=="teacher-final" {let done=history(&root,&p)?.last().unwrap().clone();assert_eq!((done.generations,done.teachers),(0,0));assert_eq!(done.phase.as_deref(),Some("Finished"));}
                 }
                 let (e,d)=close(&root,&p)?;let l=checkpoint::load(&root.join(&e.checkpoint),Device::Cpu,true)?;
+                if prec {
+                    assert_eq!(p.learning_rate(e.step).to_bits(),3e-5f64.to_bits());
+                    assert_eq!(l.manifest.training.as_ref().unwrap().config.lr.to_bits(),3e-5f64.to_bits());
+                    assert_eq!(l.manifest.training.as_ref().unwrap().resume_binding,Some(p.binding(l.manifest.training.as_ref().unwrap(),&l.tokenizer)?));
+                    let mut other=p.clone();other.config.lr=3e-4;
+                    assert_ne!(l.manifest.training.as_ref().unwrap().resume_binding,Some(other.binding(l.manifest.training.as_ref().unwrap(),&l.tokenizer)?));
+                    if mode=="continuous" {child(&root.join(&e.checkpoint),"generic-reject",None,false,"precision-generic-reject")?;}
+                }
                 endpoints.push((l.model.weights_content_id()?,optimizer_hash(&l.optimizer)?));
                 for end in history(&root,&p)? {totals[0]+=read::<binary::Value>(&root.join(&end.checkpoint).parent().unwrap().join("train-control.r3b"))?["optimizer_calls"].as_u64().unwrap() as usize;totals[1]+=end.generations;totals[2]+=end.teachers;}
                 if pending {continue;}
@@ -2500,7 +2605,13 @@ mod tests {
                 let root=selected_root(&parent);let p=historical_plan(&root)?;
                 for end in history(&root,&p)? {totals[0]+=read::<binary::Value>(&root.join(&end.checkpoint).parent().unwrap().join("train-control.r3b"))?["optimizer_calls"].as_u64().unwrap() as usize;totals[1]+=end.generations;totals[2]+=end.teachers;}
             }
-            println!("CITATION_TINY fidelity={fid} optimizer={} generation={} teacher={} FD0 evidence={}",totals[0],totals[1],totals[2],base.display());
+            if prec {
+                // The additional ancestor uses actual2 updates and its own8 parity calls.
+                let root=selected_root(&base.join("continuation-parent"));let p=historical_plan(&root)?;
+                for end in history(&root,&p)? {totals[0]+=read::<binary::Value>(&root.join(&end.checkpoint).parent().unwrap().join("train-control.r3b"))?["optimizer_calls"].as_u64().unwrap() as usize;totals[1]+=end.generations;totals[2]+=end.teachers;}
+                totals[1]+=8;
+            }
+            println!("CITATION_TINY profile={profile} optimizer={} generation={} teacher={} FD0 evidence={}",totals[0],totals[1],totals[2],base.display());
             write(&base.join("usage.r3b"),&binary::record!({"optimizer":totals[0],"generation":totals[1],"teacher":totals[2],"FD":0}))?;
             Ok(())
         }
@@ -2514,6 +2625,29 @@ mod tests {
             "expected":e.answer,"actual":e.answer,"raw_tokens":raw,"finish_reason":"stop","generation_completed":true,
             "generation":{"tokens":tokens,"generated":raw.len(),"finish":"stop"},"error":null,"exact_match":true}),
         )
+    }
+    // Synthetic writer/reader fixture only: no generation, teacher or optimizer.
+    fn precision_panel_fixture(root:&Path,p:&Plan,step:usize,native:&Path,panel:&Panel,wrong:usize)->Result<()> {
+        let (name,es,ms)=panel;let l=checkpoint::load(native,Device::Cpu,false)?;let tok=&l.tokenizer;
+        let key=format!("eval-{step:04}-{name}");let model=l.model.weight_hash()?;
+        let binding=binary::record!({"fixture":"synthetic panel; model calls0","policy":digest(p)?,"dataset":digest(&es)?,"step":step,"planned":es.len(),"model":model});
+        let mut f=std::fs::OpenOptions::new().create_new(true).write(true).open(root.join(format!("{key}.r3rows")))?;
+        append_row(&mut f,&binary::record!({"checkpoint":native,"physical":file_hash(native)?,"binding":binding}))?;
+        let mut t=std::fs::OpenOptions::new().create_new(true).write(true).open(root.join(format!("{key}-teachers.r3rows")))?;append_row(&mut t,&binding)?;
+        let mut rows=vec![];let mut teachers=vec![];
+        for (i,e) in es.iter().enumerate() {
+            let mut output=e.clone();if i<wrong {output.answer.replace_range(..1,if e.answer.starts_with('0') {"1"}else{"0"});}
+            let mut row=gold(&output,tok)?;row["expected"]=binary::record!(e.answer);row["exact_match"]=binary::record!(i>=wrong);
+            row["native_prompt_digest"]=binary::record!(tok.prepare_with_framing(&e.request,p.framing(),l.model.config.context as u32,&l.model.config.id()?)?.token_digest);
+            row["framing"]=binary::record!(p.framing().id());append_row(&mut f,&row)?;rows.push(row);
+            let mut gold=tok.encode(e.answer.as_bytes())?;gold.push(EOS);
+            let teacher=binary::record!({"id":e.id,"ordinal":i,"case":digest(e)?,"teacher":{"training_prompt_matches_generation":true,
+                "target_tokens_including_eos":gold.len(),"mean_nll":1.,"target_token_observation":{"gold":gold,"nll":vec![1.;gold.len()]},"after_value":{"eos_minus_citation_logit":0.}}});
+            append_row(&mut t,&teacher)?;teachers.push(teacher);
+        }
+        drop(f);drop(t);let mut s=score(&rows,es,ms)?;s.step=step;s.panel=name.clone();s.model=model;s.dataset=digest(&es)?;
+        s.raw_hash=file_hash(&root.join(format!("{key}.r3rows")))?;s.teachers_completed=Some(es.len());s.ce=Some(teacher_ce(&teachers)?);
+        publish_confirmed(&root.join(format!("{key}.r3b")),&s)
     }
     fn fixture_reservation(parent: &Path, dir: &Path) -> Result<(PathBuf, PathBuf, PathBuf)> {
         let old = plan_read(parent)?;
@@ -2555,6 +2689,112 @@ mod tests {
             &binary::record!({"event_id_count":128,"event_ids":past}),
         )?;
         Ok((public, private, used))
+    }
+    #[test]
+    fn citation_precision_tape_schedule_and_samples()->Result<()> {
+        let tmp=tempfile::tempdir()?;let study=super::super::tests::orbit_fixture(tmp.path())?;
+        let source=study.join("BOTH");let mut p=plan_read(&source)?;
+        let tok=ByteBpe::load(&source.join("tokenizer.r3b"))?;
+        let (c,tm,dm)=source_pool(&source,&p,&tok)?;
+        let (public,_,used)=fixture_reservation(&source,tmp.path())?;
+        let (c,metadata,_)=make_pool(&c,&tm,&dm,&tok,&read_ids(&public,128)?,&read_ids(&used,128)?)?;
+        let root=tmp.path().join("panels");std::fs::create_dir(&root)?;
+        copy_native(&source.join("tokenizer.r3b"),&root.join("tokenizer.r3b"))?;
+        data::native::write(&root.join("corpus.r3cor"),&c,true)?;
+        write(&root.join("metadata.r3b"),&metadata)?;
+        p.corpus=file_hash(&root.join("corpus.r3cor"))?;p.metadata=file_hash(&root.join("metadata.r3b"))?;
+        p.tiny=false;p.identifiable.as_mut().unwrap().dataset=PREC_DATA.into();
+        p.identifiable.as_mut().unwrap().arm=MEAN_ARMS[1].into();
+        p.fork=Some(Fork {study:study.clone(),study_hash:String::new(),parent_policy:String::new(),parent_state:String::new(),parent_adam:String::new(),
+            origin_step:10496,origin_input:12371968,origin_target:536576,arm:MEAN_ARMS[1].into(),constant_lr:3e-5,target_limit:130000,
+            original_corpus:p.corpus.clone(),tokenizer_training_hash:tok.train_hash.clone(),variants:None,variant_metadata:None,alternate_first:vec![],selector:None,selector_metadata:None,flip_first:vec![]});
+        p.config.lr=3e-5;p.config.budget_start_step=10496;p.config.max_steps=12032;p.evaluation=evaluation(&p);
+        assert_eq!(p.evaluation.train_steps,vec![10752,11264,12032]);
+        assert_eq!((p.evaluation.active_seconds,p.evaluation.generation_limit,p.evaluation.teacher_limit),(7200,14336,13120));
+        for step in 10497..=12032 {assert_eq!(p.learning_rate(step).to_bits(),3e-5f64.to_bits());}
+        for (a,b) in [(10496,10497),(10497,10752),(10752,11264),(11264,11776),(11776,12032)] {assert_eq!(endpoint(&p,a,false)?,b);}
+        assert_eq!(endpoint(&p,12032,true)?,12032);assert!(endpoint(&p,12032,false).is_err());assert!(endpoint(&p,12033,true).is_err());
+        assert!(!p.evaluation_due(11776));assert!(base_panels(&root,&p,11776).is_err());
+        assert_eq!(base_panels(&root,&p,10752)?.iter().map(|v|v.1.len()).collect::<Vec<_>>(),vec![64,64,64]);
+        for step in [11264,12032] {
+            assert_eq!(base_panels(&root,&p,step)?.iter().map(|v|v.1.len()).collect::<Vec<_>>(),vec![512,512,512,128]);
+            assert_eq!(evaluation_action(&p,step,true,false,None),(format!("CANDIDATE_FIXED_AT_{step}"),false));
+            assert_eq!(evaluation_action(&p,step,false,false,None),if step==12032 {(format!("FINAL_QUALITY_FAIL_AT_{step}"),false)}else{("CONTINUE_WITHIN_REGISTERED_CAP".into(),true)});
+        }
+        let rows=suffix();let prefix=vec![[0;8];10496];p.identifiable.as_mut().unwrap().rows=[prefix.clone(),rows[..1536].to_vec()].concat();
+        assert_eq!(p.training_draw(10496),rows[0]);assert_eq!(p.training_draw(12031),rows[1535]);assert_eq!(&own(&p).rows[..10496],prefix.as_slice());
+        let costs=tape_cost(&rows[..1536],&c.train,&tok)?;let half=tape_cost(&rows[..768],&c.train,&tok)?;
+        let counts:Vec<usize>=binary::from_value(costs["counts"].clone())?;
+        for (i,pool) in counts.chunks(POOL).enumerate() {assert!(pool.iter().all(|&n|n==if i==0 {4}else{2}));}
+        for k in ["input","target","padding"] {assert_eq!(costs[k].as_u64(),half[k].as_u64().map(|v|v*2));}
+        for offset in [0,512] {
+            let es=&c.validation[offset..offset+512];let ms=&metadata.1[offset..offset+512];
+            let mut raw=es.iter().map(|e|gold(e,&tok)).collect::<Result<Vec<_>>>()?;
+            for i in [23usize,100,477,479] {let mut e=es[i].clone();e.answer="0".into();if e.answer==es[i].answer {e.answer="1".into();}raw[i]=gold(&e,&tok)?;raw[i]["expected"]=binary::record!(es[i].answer);raw[i]["exact_match"]=binary::record!(false);}
+            assert_eq!(reproduction_indices(&p,es,ms,&raw,&tok)?,[20..24,100..104,476..480,0..4].into_iter().flatten().collect::<Vec<_>>());
+            assert!(reproduction_indices(&p,es,ms,&raw[..511],&tok).is_err());
+            let citation=offset==512;let kind=if citation {"citation"}else{"value"};
+            let mut f=std::fs::OpenOptions::new().create_new(true).write(true).open(root.join(format!("eval-12032-{kind}512.r3rows")))?;
+            append_row(&mut f,&binary::record!({"fixture":"explicit raw panel; model calls0"}))?;
+            for row in &raw {append_row(&mut f,row)?;}drop(f);
+            let (selected,rows,indices)=endpoint_reproduction(&root,&p,12032,citation)?;
+            assert_eq!(indices,[20..24,100..104,476..480,0..4].into_iter().flatten().collect::<Vec<_>>());
+            let name=format!("mean-review-ANSWER-MEAN-{kind}");let checkpoint="synthetic observation binding; model calls0";
+            let binding=binary::record!({"fixture":"explicit B receipt consumer boundary; model calls0","cases":digest(&selected)?,
+                "identity":{"policy":digest(&p)?,"sample_indices":indices},"checkpoint":checkpoint,"source":p.source,"binary":p.binary});
+            let mut f=std::fs::OpenOptions::new().create_new(true).write(true).open(root.join(format!("{name}.r3rows")))?;append_row(&mut f,&binding)?;
+            let control=recovery::RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),std::time::Duration::from_secs(30),0)?;
+            for (i,(e,mut row)) in selected.iter().zip(rows).enumerate() {
+                let attempt=prepare_call(&root,&name,"generation",&binding,e,i)?;
+                row["attempt"]=binary::record!(attempt.file_name().unwrap().to_string_lossy());append_row(&mut f,&row)?;resolve_call(&attempt,Some(&row),&control)?;
+            }drop(f);
+            publish_confirmed(&root.join(format!("{name}-finished.r3b")),&binary::record!({"fixture":"synthetic receipt; actual model calls0",
+                "policy":digest(&p)?,"checkpoint":checkpoint,"binding":binding,"completed":16,"matched":16,"error":null,
+                "raw":file_hash(&root.join(format!("{name}.r3rows")))?,"control":{"generation_calls":16,"teacher_calls":0,"terminal_reason":"COMPLETED"}}))?;
+            assert!(observed(&root,&name,&p,checkpoint,&es[..16],true).is_err());
+            raw[0]["expected"]=binary::record!("wrong");assert!(reproduction_indices(&p,es,ms,&raw,&tok).is_err());
+        }
+        verify_review_observations(&root,&root,&p,12032,"synthetic observation binding; model calls0")?;
+        write(&root.join("preparation.r3b"),&binary::record!({"fixture":"B admission; model calls0"}))?;
+        let report=root.join("review.txt");std::fs::write(&report,b"synthetic B fixture, not independent acceptance")?;
+        let comparison=binary::record!({"endpoints":{"ANSWER-MEAN":{"policy":digest(&p)?,"checkpoint":"synthetic-native","step":12032}}});
+        publish_confirmed(&root.join("review-b.r3b"),&binary::record!({"verdict":"PASS","preparation":file_hash(&root.join("preparation.r3b"))?,
+            "endpoints":comparison["endpoints"],"report_path":report,"report_hash":file_hash(&report)?}))?;
+        verify_review_b(&root,&comparison)?;
+        let mut different=comparison.clone();different["endpoints"]["ANSWER-MEAN"]["checkpoint"]=binary::record!("different model");assert!(verify_review_b(&root,&different).is_err());
+        different=comparison.clone();different["endpoints"]["ANSWER-MEAN"]["policy"]=binary::record!("different policy");assert!(verify_review_b(&root,&different).is_err());
+        std::fs::write(&report,b"changed B report")?;assert!(verify_review_b(&root,&comparison).is_err());
+        for (label,step,failed_fit,failed_dev) in [("early-pass",11264,false,false),("fit-fail",11264,true,false),("final-fail",12032,false,true)] {
+            let dir=tmp.path().join(label);std::fs::create_dir(&dir)?;
+            for name in ["tokenizer.r3b","corpus.r3cor","metadata.r3b"] {copy_native(&root.join(name),&dir.join(name))?;}
+            let mut q=p.clone();q.identifiable.as_mut().unwrap().study=dir.clone();q.fork.as_mut().unwrap().study=dir.clone();
+            // Explicit single-endpoint record spec; the real multi-step schedule
+            // and guard/process chain are checked separately above and in process.
+            q.evaluation.train_steps=vec![step];
+            let mut l=checkpoint::load(&source.join("initial.r3m"),Device::Cpu,false)?;
+            let mut state=TrainingState{resume_binding:None,contrast16:false,parent_checkpoint_hash:None,config:q.config.clone(),
+                step,sampler_state:step as u64,consumed_tokens:0,target_tokens:0,corpus_hash:c.manifest.train.sha256.clone(),
+                validation_hash:c.manifest.validation.sha256.clone(),previous_corpora:vec![l.tokenizer.train_hash.clone()],initial_weight_hash:l.manifest.initial_weight_hash.clone(),train_loss:None,validation_loss:None};
+            state.resume_binding=Some(q.binding(&state,&l.tokenizer)?);l.manifest.training=Some(state);
+            let native=dir.join("fixture.r3m");let adam=Adam::new(&l.model.vars)?;checkpoint::save(&native,&l.model,&l.tokenizer,l.manifest,&adam.moments)?;
+            let base=base_panels(&dir,&q,step)?;
+            let baseline=orbit_score(&base[0].1[..64],&base[0].2[..64],&base[0].1[..64].iter().map(|e|gold(e,&tok)).collect::<Result<Vec<_>>>()?,&tok)?;
+            write(&dir.join("selection.r3b"),&binary::record!({"parent_baseline":{"dev":{"screen":baseline}}}))?;
+            for panel in &base {precision_panel_fixture(&dir,&q,step,&native,panel,if failed_dev&&panel.0=="citation512" {32}else{0})?;}
+            let all=panels(&dir,&q,step)?;assert_eq!(all.len(),if failed_dev {4}else{8});
+            if !failed_dev {
+                assert!(evaluation_result(&dir,&q,step).is_err()); // Missing fit is never accepted.
+                for panel in &all[4..] {precision_panel_fixture(&dir,&q,step,&native,panel,if failed_fit&&panel.0=="old512" {8}else{0})?;}
+            }
+            let result=evaluation_result(&dir,&q,step)?;
+            assert_eq!(result["development"],!failed_dev);assert_eq!(result["fit"],!failed_dev&&!failed_fit);
+            assert_eq!(result["eligible"],!failed_dev&&!failed_fit);
+            assert_eq!(result["action"],if failed_dev {"FINAL_QUALITY_FAIL_AT_12032"}else if failed_fit {"CONTINUE_WITHIN_REGISTERED_CAP"}else{"CANDIDATE_FIXED_AT_11264"});
+            assert_eq!(result["extend"],failed_fit);
+        }
+        p.identifiable.as_mut().unwrap().dataset=FID_DATA.into();p.config.lr=3e-4;
+        assert_eq!(p.learning_rate(10497).to_bits(),3e-4f64.to_bits());
+        println!("CITATION_PRECISION_TAPE schedule/half-cycle/orbit-selection LR bits verified optimizer0 generation0 teacher0");Ok(())
     }
     #[test]
     fn citation_fidelity_tape_and_schedule()->Result<()> {

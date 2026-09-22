@@ -24,6 +24,8 @@ pub enum Command {
     CitationContinuePrepare { #[arg(long)] previous: PathBuf, #[arg(long)] output: PathBuf },
     /// One unchanged citation cycle from the complete ANSWER7424 endpoint.
     CitationFidelityPrepare { #[arg(long)] previous: PathBuf, #[arg(long)] output: PathBuf, #[arg(long)] parent_review: PathBuf },
+    /// Same ANSWER10496 and half cycle, with constant LR3e-5 and inherited Adam.
+    CitationPrecisionPrepare { #[arg(long)] previous: PathBuf, #[arg(long)] output: PathBuf, #[arg(long)] parent_review: PathBuf },
     CitationContinueParent { #[arg(long)] study: PathBuf, #[arg(long)] citation: bool },
     AnswerMeanParent { #[arg(long)] study: PathBuf },
     AnswerMeanReport { #[arg(long)] study: PathBuf },
@@ -1733,6 +1735,7 @@ pub fn execute(command: Command) -> Result<()> {
         Command::AnswerMeanPrepare { previous,output } => identifiable::binding::citation::mean_prepare(&previous,&output,false),
         Command::CitationContinuePrepare { previous,output } => identifiable::binding::citation::continuation_prepare(&previous,&output,false),
         Command::CitationFidelityPrepare { previous,output,parent_review } => identifiable::binding::citation::fidelity_prepare(&previous,&output,&parent_review,false),
+        Command::CitationPrecisionPrepare { previous,output,parent_review } => identifiable::binding::citation::precision_prepare(&previous,&output,&parent_review,false),
         Command::CitationContinueParent { study,citation } => identifiable::binding::citation::continuation_parent(&study,citation),
         Command::AnswerMeanParent { study } => identifiable::binding::citation::mean_parent(&study),
         Command::AnswerMeanReport { study } => identifiable::binding::citation::mean_report(&study),
@@ -2713,7 +2716,7 @@ fn evaluate_panel(
     meta: &[Meta],
     control: &mut recovery::RunControl,
 ) -> Result<PanelResult> {
-    if identifiable::binding::citation::fidelity(p) {
+    if identifiable::binding::citation::fidelity(p) || identifiable::binding::citation::precision(p) {
         control.restrict_rss(12*1024*1024);
         control.check("fidelity_inference_rss")?;
     }
