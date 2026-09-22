@@ -1,6 +1,6 @@
 # 진단 및 구현 상태
 
-## 2026-09-22 인용 fidelity consolidation — 신규3072 완료, 품질 미달·재현 범위 제한
+## 2026-09-22 인용 fidelity consolidation — 신규3072 완료, 품질 미달·오답 추가 재현
 
 동결 source `820100a6a27eebefe0ba723fc03948ea6f2a0abb`에서 실제 신규3072 updates를
 실행했다. 첫7425 저장 뒤 새 process에서 이어갔고9개 segment가 모두 exit0였다.
@@ -32,28 +32,40 @@ step/sampler10496이다. 학습 중 추가 진단 backward0, 새 loss/LR/자료 
 컴파일/명령 진입 전 검산/wall time과 구분한다. B 전 generation3936=부모32+평가3904,
 teacher3904였다. 이후 독립 B는 전수3904 raw/teacher와3072 trace/9 native를
 재검산했고 기존 값과 일치했다. V16/VC16 새 process 명령도 각각 exit0, 원본 raw와
-32/32 일치했다. 두 표본은 모두 정답이므로 실제 최종 오답4개(V2/VC2)의 새 생성은
-NOT_RUN이다. 고정 prefix를 사용한 기존 reviewer 경로의 표본 선택 한계이며, 실제
-오답 재생성까지 통과했다고 하지 않는다. 추가 호출은 실행하지 않았다.
-최종 SMALL generation3968/teacher3904, generated tokens48736,
-parent+학습+B active1755.551760334초다. TINY는 실패 포함62/500/348로 유지됐다.
+32/32 일치했다. 두 표본은 모두 정답이므로 이때 최종 오답4개(V2/VC2)의 새 생성은
+NOT_RUN이었다. 당시 SMALL generation3968/teacher3904, generated tokens48736,
+parent+학습+B active1755.551760334초였다. 고정 prefix의 표본 선택 공백을 보존한다.
+
+이후 사용자가 승인한 추가4회만 별도 새 process에서 실행했다. 호출 전에 원 raw의
+V index23/100, VC index477/479를 고정했고, 같은10496 native의 Rust 정상 greedy로
+token·bytes·문자열·EOS·finish·error가4/4 일치했다. 기존 오답을 그대로 재현했으며
+원본 행을 교체하지 않았다. 실제 generation4/returned4/tokens38,
+active0.862545250초, optimizer/teacher/TINY0, 재시도0, exit0이다.
+현재 SMALL 합계 generation3972/teacher3904, generated tokens48774,
+parent+학습+B active1756.414305584초다. TINY는 실패 포함62/500/348로 유지됐다.
+별도 증거는 `artifacts/citation-fidelity-20260922-review/B4-additional-observation/`,
+실제 명령 로그는 같은 review 경로의 `B4-prepare.stdout` 및 `B4-run.stdout`에 있다.
+추가 finished SHA256은 `38821903a20dd0ba0d7b48d92e1418dd507ea9c9940f2de7d2d8c6660e30dd68`다.
 
 독립 부모 대비 full gain/loss는 V1/2, VC20/2, ID17/0; ALL4 gain/loss는
 V0/1, VC15/1, ID12/0이다. 기존 인용 오답20개를 고쳤으나 이전 정답2개가 새로
 틀린 결과로, 단순히 같은 오류2개가 남았다는 해석과 구분한다.
 10496의 QUERY_BOTH/SWAP_BOTH는 V254/254, VC254/255, ID256/256(각256분모),
 ID_BOTH510/512다. code/독립 A는 PASS, 실행·raw 무결성은 검산 일치,
-재현은 고정 정답 표본32에 한정, 실제 오답 재생성은 미실행이다.
+재현은 기존 정답 표본32와 이번에 별도 승인된 실제 오답4가 모두 일치했다.
 모델 품질·값+인용 범위·S4/S5/S6·Goal1은 미수용이며,
 GOAL1_READY=false / GOAL1_ACCEPTED=false를 유지한다.
 
-[독립 B 보고서](CITATION_FIDELITY_REVIEW_B_2026-09-22.md)의 commit 및 확인한 remote는
-`893d974d61b34d5c88ac2479f334487da4141f22`다. B 전체 판정은 PARTIAL이며,
-RAW_RECOUNT=PASS / PREFIX32_PARITY=PASS /
-WRONG_CASE_FRESH_REPRODUCTION=NOT_RUN_PENDING_AUTHORIZATION을 구분한다.
-기존 B32 호출을 모두 사용했으므로 같은 최종 모델의 오답4개만 별도 추가 재현하는
-인가를 요청했고, 답변을 받지 않은 상태에서 추가 실행하지 않았다. 모델 품질실패는
-그 재현 여부와 별개로 확정된 결과다. 신규 학습은 종료됐고 재개 인가는 없다.
+[독립 B 보고서](CITATION_FIDELITY_REVIEW_B_2026-09-22.md)의 최초 commit 및 확인한 remote는
+`893d974d61b34d5c88ac2479f334487da4141f22`다. 당시 PARTIAL 판정과
+WRONG_CASE_FRESH_REPRODUCTION=NOT_RUN_PENDING_AUTHORIZATION은 과거 이력으로
+보존하며, 후속 addendum이 실제 승인·추가4회 결과를 구분한다. 최초 B32를 오답 포함
+표본으로 소급 변경하지 않는다. 모델 품질실패는 재현의 성공과 별개로 유지한다.
+신규 학습은 종료됐고 재개 인가는 없다.
+추가4의 독립 순수 readback까지 exit0이며 현재 B 판정은 PASS다.
+추가 보고서 commit은 `40e9c9977042e0696b532a92a7c6c8544f87babc`,
+보고서 SHA256은 `31068df393e3e35938501ae1700f61ed866a1bac7de00c7171572e01a182ce38`다.
+제품 source는 계속 `820100a6a27eebefe0ba723fc03948ea6f2a0abb`와 동일하다.
 실제 candidate diff·준비자료·로컬 인계는
 `artifacts/citation-fidelity-20260922-review/candidate.diff`,
 `artifacts/citation-fidelity-20260922-study/`,

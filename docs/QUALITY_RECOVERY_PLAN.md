@@ -14,14 +14,23 @@ fails, so conditional full-fit4608, candidate selection, confirmation and QA640
 are NOT_RUN. Fixed train128 success is not a full fit acceptance.
 Independent B verified all3904 raw/teacher rows,3072 update traces and9 native
 checkpoints. Fresh-process V16/VC16 match32/32, but the existing fixed prefix
-contains only correct outputs. Actual wrong-row regeneration is NOT_RUN;
-do not describe limited prefix parity as complete failure-row reproduction.
-No extra calls were added or closed learning reopened. S4/S5/S6 and Goal1 remain
-unaccepted. The original4352 acceptance and all7424/failure evidence are preserved.
-The [independent B report](CITATION_FIDELITY_REVIEW_B_2026-09-22.md) is PARTIAL
-for that coverage gap; its publication commit is893d974d61b34d5c88ac2479f334487da4141f22.
-A request for four fixed wrong-case generations is pending explicit authorization.
-No answer is neither an approval nor a refusal; no additional call was performed.
+contains only correct outputs. The initial
+[independent B report](CITATION_FIDELITY_REVIEW_B_2026-09-22.md), publication
+893d974d61b34d5c88ac2479f334487da4141f22, was PARTIAL for missing wrong-case
+fresh reproduction. That original coverage limit remains historical evidence.
+
+The user subsequently authorized exactly four additional wrong-case generations.
+The reviewer fixed V23/V100/VC477/VC479 before execution, then reproduced all4
+with the same10496 checkpoint and unchanged native normal greedy path in a new
+process. Raw token/byte/text/EOS/finish/error equality is4/4; actual calls4,
+tokens38, active0.862545250s, optimizer/teacher/TINY0, retries0, exit0.
+These are separate observations; original raw, terminal and quality failure
+are unchanged. The pure readback also exited0; current independent B verification
+is PASS. The report-only addendum commit is40e9c9977042e0696b532a92a7c6c8544f87babc,
+with report SHA25631068df393e3e35938501ae1700f61ed866a1bac7de00c7171572e01a182ce38.
+No further calls or learning are authorized by the completed check.
+S4/S5/S6 and Goal1 remain unaccepted. The original4352 acceptance and
+all7424/failure evidence are preserved.
 The registered design below explains the completed bounded run.
 
 R3-CITATION-FIDELITY-CONSOLIDATION-1.0 is a new explicit fork, preserving the
