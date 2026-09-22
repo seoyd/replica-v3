@@ -28,6 +28,9 @@ struct Cli {
 enum Checks {
     /// Offline source checks and direct regressions; no quality evaluation or learning.
     Quick {
+        /// Only the fidelity parent, repeated tape, schedule and TINY process boundaries.
+        #[arg(long, conflicts_with_all = ["citation_continuation", "answer_mean", "value_citation", "rebind_consolidation", "binding_expansion", "fresh", "fresh_selector", "native_corpus", "bridge_receipts"])]
+        citation_fidelity: bool,
         /// Only continuation guard, record and actual native process boundaries.
         #[arg(long)]
         citation_continuation: bool,
@@ -432,6 +435,7 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
     write_new(&r.output.join("boundaries.r3b"), &boundaries(files)?)?;
     match &cli.command {
         Checks::Quick {
+            citation_fidelity,
             citation_continuation,
             answer_mean,
             value_citation,
@@ -442,6 +446,10 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
             native_corpus,
             bridge_receipts,
         } => {
+            if *citation_fidelity {
+                r.cargo("test", &["--release", "--bin", "replica-train", "citation_fidelity_", "--", "--nocapture", "--test-threads=1"], true)?;
+                return Ok(());
+            }
             if *citation_continuation {
                 r.cargo("test", &["--release", "--bin", "replica-train", "citation_continuation_", "--", "--nocapture", "--test-threads=1"], true)?;
                 return Ok(());

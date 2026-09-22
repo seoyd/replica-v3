@@ -89,6 +89,9 @@ impl RunControl {
         self.generation_limit = generation;
         self.teacher_limit = teacher;
     }
+    pub(super) fn restrict_rss(&mut self, max_rss_kib:u64) {
+        self.max_rss_kib=self.max_rss_kib.min(max_rss_kib);
+    }
     pub(super) fn begin_teacher(&mut self) -> Result<()> {
         self.begin_teacher_rows(1)
     }
@@ -8259,6 +8262,16 @@ fn arm_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn citation_fidelity_inference_budget() {
+        let gib=1024*1024;
+        let mut c=RunControl::new(Arc::new(AtomicBool::new(false)),Duration::from_secs(10),16*gib).unwrap();
+        c.restrict_rss(12*gib);c.restrict_rss(16*gib);
+        assert!(c.check_at(c.start,Ok(12*gib)).is_ok());
+        assert!(c.check_at(c.start,Ok(12*gib+1)).is_err());
+        assert_eq!(c.receipt()["terminal_reason"],"RESOURCE_LIMIT");
+        assert_eq!(c.receipt()["generation_calls"],0);assert_eq!(c.receipt()["teacher_calls"],0);
+    }
     fn state_fixture(root: &Path) -> (PathBuf, PathBuf) {
         let mut l = repair_loaded();
         let ordinary: Vec<_> = (0..400)

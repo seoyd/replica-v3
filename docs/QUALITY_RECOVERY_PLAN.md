@@ -1,5 +1,57 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: citation fidelity consolidation from ANSWER7424
+
+R3-CITATION-FIDELITY-CONSOLIDATION-1.0 is a new explicit fork, preserving the
+accepted scalar4352 and complete failed ANSWER4384/7424 endpoints. The exact
+7424 parent physical hash is
+`8c2e9b0f670be09acbae40efb6e2d4cb4e5a3c01315b0d7e3a51aa467270ec47`.
+Existing continuation A/B acceptance is closed; only this new parent's repeated
+tape, schedule, native binding and seal linkage require direct regression/A.
+No new loss, model, tokenizer, data, storage/SQLite or repair framework is planned.
+
+P0 recounts existing5888/7424 raw and teachers without model calls, separating
+value, selected/other-provided/outside/unparseable ID and descriptive digit errors.
+P1 binds the same native4608 train/1536 dev, metadata, tokenizer, ANSWER_MEAN
+family6/normalizer2, QE, F32/Accelerate/thread1, inherited Adam and constant3e-4.
+The inherited tape prefix stays intact. The original citation suffix3072 is
+appended exactly once: absolute7425 consumes suffix0,10496 consumes3071.
+Batch8 is V4+VC0 2+VC1 2; EOS contributes to each answer's actual target mean.
+Expected new costs: input3661824/target233472/padding98304; exposures V12288,
+VC0/VC1 each6144. Half1536 updates is exactly half, V each4/VC each2.
+Actual target76/batch and objective denominator8 remain separate.
+
+After independent A and parent V16/VC16 parity, P2 saves7425 and restores in a
+new process. Screens7680/8192/9728 use V64/VC64/ID64. Endpoints8960/10496 use
+V512/VC512/ID512 and the existing citation train128. Safe saves8704/9472/10240
+are not quality observations. Only a development-pass endpoint evaluates full
+train4608. The first joint dev+fit pass fixes a candidate; otherwise stop10496.
+Final-step evaluation-only continuation adds no optimizer update. Pure time
+pause is resumable; cancellation, numerical/storage/binding failure or UNKNOWN
+remains blocking. Fixed V64 FULL<=48 or errors>=4 stops; FULL<60 or ALL4<12 warns,
+and two distinct consecutive warnings stop. Immutable guard decisions count once.
+
+Unchanged gates: V old512 full508/QB252/ALL4124, new1024 1016/504/248;
+VC0/VC1 train1536 each1524/756/372 (combined3048/1512/744), errors0.
+All dev512 full488/QB232/ALL4116, EOS512/errors0; both citation dev panels also
+require first-value508/support508/valid outside ID0. Grammar/ID_BOTH/SWAP_BOTH
+are reported separately. Normal greedy raw is never corrected or constrained.
+
+B independently audits the complete endpoint, including a quality failure,
+and reproduces V16/VC16. Only eligible+B permits the existing unused V256/VC256
+citation confirmation, one candidate with the accepted time-segment protocol.
+Each confirmation panel requires full244/QB116/ALL458/errors0; citation also
+first-value254/support254/outside0. Only confirmation PASS permits existing
+QA primary512/transfer128 once, generation640/teacher0. Missing/incompatible
+QA is BLOCKED_LEGACY_QA_INPUT/NOT_COMPARABLE. This accepts only value+citation;
+S4/S5/S6 and Goal1 remain separate. No subsequent training is implied.
+
+New caps: SMALL3072 updates, input4000000/target260000, generation14336,
+teacher13120, diagnostic backward0; TINY64 updates/generation1024/teacher1024,
+finite difference0. Active10800 seconds, command900/cleanup120, training16GiB
+and inference12GiB. Failed/partial work counts; UNKNOWN is never zeroed. Freeze
+source/binary for learning and preserve all historical failures and originals.
+
 ## Closed learning budget: citation continuation from complete ANSWER4384
 
 The c9c1210 source passed independent A and ran all3040 newly authorized updates

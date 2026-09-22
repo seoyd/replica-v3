@@ -1,5 +1,65 @@
 # 진단 및 구현 상태
 
+## 2026-09-22 인용 fidelity consolidation — P0/P1 직접 검증, 독립 A 전
+
+새 연구는 complete ANSWER7424를 보존한 별도 fork다. 기존 독립 A/B와 scalar4352
+수용, ANSWER4384/7424의 품질실패 및 resume=false는 변경하지 않는다.
+시작 HEAD는 `0294a383abc01dec43257972356f6ffd71be9661`; source는 `c9c1210` 이후
+제품 변경이 없었다. Rust1.98.1, locked/offline/Accelerate/thread1을 유지한다.
+사용자 `.DS_Store`는 보존했고 실행 중인 학습 process는 없었다.
+
+독립 Rust P0 reader는 실제 부모 native의136 Adam tensors, step/sampler7424,
+family6/normalizer2/QE/LR3e-4, input8710144/target303104와 과거3040 trace를
+대조했다. physical hash는 `8c2e9b0f670be09acbae40efb6e2d4cb4e5a3c01315b0d7e3a51aa467270ec47`.
+원 seal 및 세 연결 연구에 미사용 confirmation이 보존되어 있다. 기존4352 수용도
+불변이다. 새 generation/teacher/optimizer/diagnostic backward는 모두0이다.
+
+|7424 raw 배타 분류|VC512|ID 변경512|
+|---|---:|---:|
+|목표 ID·값 정답|492|495|
+|목표 ID·값 오답|3|2|
+|다른 제공 기록 ID|0|0|
+|제공 근거 밖 ID·값 정답|17|15|
+|제공 근거 밖 ID·값 오답 / 파싱 불가|0 / 0|0 / 0|
+
+문법·EOS는 각각512/512, runtime/UTF-8/length 오류0이다. VC17건은 Hamming1자리15,
+4자리2; 재배정15건은1자리11,2자리4다. 원본·재배정의 같은 case 양쪽 support
+오류는2개, 합집합30 case/20 orbit이다.32개 독립 실패로 세지 않는다.
+오류 ID의 train 완전 ID 또는 재배정 전 ID 일치는0이다. 관측된 prefix/suffix
+혼합은1/3건, 인접 자리 교환은 재배정2건이며 중첩 가능한 형태이지 원인 증명이 아니다.
+5888→7424 full gain/loss는 VC37/19·ID19/12이고 외부 ID는26→17·14→15다.
+모든 기존 정답이 단조롭게 보존되거나 수렴한다고 주장하지 않는다.
+
+전체512분모의 공유prefix·반복자리 층별 오류와 기존 teacher8자리 NLL도 재집계했다.
+세부 원문/ID는 ignored `artifacts/citation-fidelity-20260922-review/P0-audit.r3b`에
+보존한다(SHA256 `b2871d5f653915f04859b9410bdce9a0de450910333d32cb8daea1e5ac99bb11`).
+`P0-REPORT.md`, `P0-read-01.log`에 실제 명령·reader/binary/hash·출처를 기록했다.
+자료/label/수치의 차단 결함은 발견되지 않았다. 오답은 학습에 추가하지 않았다.
+
+P1은 기존 하네스에 명시적 fidelity profile, 원 citation tape의 정확한1회 추가,
+새 평가 일정과 기존 seal 계보를 연결했다. 신규 SMALL 학습은 아직0이며 독립 A는
+NOT_RUN이다. 과거 수용을 새 candidate의 승인으로 복사하지 않는다.
+
+직접 `quick --citation-fidelity`의 두 번째 실행은2/2 PASS(exit0), 실제 TINY24
+updates/190 generation/128 teacher였다. 첫 실행은1 PASS/1 FAIL(exit1)이며,
+미인가 confirmation이 false 대신 오류로 차단되는 기존 동작에 대한 테스트 기대를
+수정했다. 첫 실패의 실제 TINY14/120/92와 모든 raw를 보존했다. 현재 신규 TINY
+누적은38 updates/310 generation/220 teacher이며 실패 비용도 포함한다.
+테스트 이름은 `citation_fidelity_process`, `citation_fidelity_tape_and_schedule`다.
+새 process 1+1 대 연속2 ANSWER 수치·Adam·sampler와 마지막 step 평가-only 재개를
+확인했다. teacher12 호출이 모두 RETURNED인 시간 종료 뒤 새 process는
+generation0/teacher0/optimizer0으로 완료했다. 기존 run 진입의 호출량 equality
+차단을 EvaluationPending에만 완화하고, RunControl의 추가 호출 차단은 유지했다.
+별도 `citation_fidelity_inference_budget`1/1 PASS(exit0)는 추론 한도를12GiB로만
+좁힐 수 있음을 확인했다(모델 호출0). 전체 quick은 이 세 관련 검사만 선택한다.
+학습16GiB와 추론12GiB는 기존 RunControl에서 적용하며 수식·weights는 변경하지 않았다.
+실제 로그는 위 review 경로의 `quick-01`, `quick-02`, `rss-test-01.log`에 있다.
+추가 독립 A용 TINY24를 포함한 예상 총62는 상한64 안이며, 미실행 비용은 실측에
+합산하지 않는다. 새로운 backward/finite difference와 SMALL 호출은 모두0이다.
+Production release build도 locked/offline/accelerate로 exit0였다. 기존
+`confirmation_collect`의 test-support 전용 mutable control에 대한 unused_mut
+경고1개가 유지됐으며, 무관한 fmt/clippy 전체 검사는 실행하지 않았다.
+
 ## 2026-09-22 인용 continuation — 학습·독립 B 검증 완료, 공동 품질 미달
 
 Code source `c9c121077bbe1aadc546e344ab237d38728e3d3e`의 독립 A가 실제 PASS했다.

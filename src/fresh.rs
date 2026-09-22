@@ -22,6 +22,8 @@ pub enum Command {
     /// Same sealed citation data/tape, TOKEN reference and answer-mean CE fork.
     AnswerMeanPrepare { #[arg(long)] previous: PathBuf, #[arg(long)] output: PathBuf },
     CitationContinuePrepare { #[arg(long)] previous: PathBuf, #[arg(long)] output: PathBuf },
+    /// One unchanged citation cycle from the complete ANSWER7424 endpoint.
+    CitationFidelityPrepare { #[arg(long)] previous: PathBuf, #[arg(long)] output: PathBuf, #[arg(long)] parent_review: PathBuf },
     CitationContinueParent { #[arg(long)] study: PathBuf, #[arg(long)] citation: bool },
     AnswerMeanParent { #[arg(long)] study: PathBuf },
     AnswerMeanReport { #[arg(long)] study: PathBuf },
@@ -1730,6 +1732,7 @@ pub fn execute(command: Command) -> Result<()> {
     match command {
         Command::AnswerMeanPrepare { previous,output } => identifiable::binding::citation::mean_prepare(&previous,&output,false),
         Command::CitationContinuePrepare { previous,output } => identifiable::binding::citation::continuation_prepare(&previous,&output,false),
+        Command::CitationFidelityPrepare { previous,output,parent_review } => identifiable::binding::citation::fidelity_prepare(&previous,&output,&parent_review,false),
         Command::CitationContinueParent { study,citation } => identifiable::binding::citation::continuation_parent(&study,citation),
         Command::AnswerMeanParent { study } => identifiable::binding::citation::mean_parent(&study),
         Command::AnswerMeanReport { study } => identifiable::binding::citation::mean_report(&study),
@@ -2082,9 +2085,15 @@ fn run(root: &Path, uninterrupted_fixture: bool) -> Result<()> {
             previous.iter().map(|s| s.teachers).sum(),
         )
     };
+    let evaluation_pending=previous.last().is_some_and(|s|s.phase.as_deref()==Some("EvaluationPending"));
+    // A complete RETURNED prefix may consume the exact call cap before its
+    // summary/decision is durable. Evaluation-only reentry reserves zero calls;
+    // RunControl still rejects any additional generation or teacher invocation.
     if elapsed >= p.evaluation.active_seconds as f64
-        || generations >= p.evaluation.generation_limit
-        || teachers >= p.evaluation.teacher_limit
+        || generations > p.evaluation.generation_limit
+        || teachers > p.evaluation.teacher_limit
+        || (!evaluation_pending && (generations == p.evaluation.generation_limit
+            || teachers == p.evaluation.teacher_limit))
     {
         return Err(bad("total budget exhausted"));
     }
@@ -2704,6 +2713,10 @@ fn evaluate_panel(
     meta: &[Meta],
     control: &mut recovery::RunControl,
 ) -> Result<PanelResult> {
+    if identifiable::binding::citation::fidelity(p) {
+        control.restrict_rss(12*1024*1024);
+        control.check("fidelity_inference_rss")?;
+    }
     let prefix = format!("eval-{step:04}-{name}");
     let raw = root.join(format!("{prefix}.r3rows"));
     let summary = root.join(format!("{prefix}.r3b"));
