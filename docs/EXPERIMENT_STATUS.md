@@ -1,6 +1,44 @@
 # 진단 및 구현 상태
 
-## 2026-09-22 인용 fidelity consolidation — 독립 A PASS, 학습 준비 완료
+## 2026-09-22 인용 fidelity consolidation — 신규3072 완료, 최종 품질 미달, B 전
+
+동결 source `820100a6a27eebefe0ba723fc03948ea6f2a0abb`에서 실제 신규3072 updates를
+실행했다. 첫7425 저장 뒤 새 process에서 이어갔고9개 segment가 모두 exit0였다.
+최종10496은 `FINAL_QUALITY_FAIL_AT_10496 / Finished / resume=false`다.
+원본7424 및 scalar4352 수용은 보존됐으며 예산을 연장하지 않았다.
+
+|절대step / 이번 신규|V FULL / ALL4|VC FULL / ALL4|ID 변경 FULL / ALL4|VC/ID support · 외부ID|
+|---|---|---|---|---|
+|7424 / 0 (부모)|511/512 ·127/128|492/512 ·113/128|495/512 ·116/128|495/497 ·17/15|
+|7680 /256|64/64 ·16/16|60/64 ·13/16|61/64 ·14/16|고정 표본|
+|8192 /768|64/64 ·16/16|62/64 ·15/16|61/64 ·14/16|고정 표본|
+|8960 /1536|512/512 ·128/128|509/512 ·126/128|512/512 ·128/128|509/512 ·3/0|
+|9728 /2304|64/64 ·16/16|64/64 ·16/16|56/64 ·13/16|고정 표본|
+|10496 /3072|510/512 ·126/128|510/512 ·127/128|512/512 ·128/128|510/512 ·2/0|
+
+8704/9472/10240은 저장만 수행했고 품질 점수를 부여하지 않았다. 모든 예정 패널의
+EOS/생성 오류는 정상이며10496 VC/ID 첫 값은 각각512/512다. 최종 VC의2개 오답은
+값이 맞지만 제공 근거 밖의 사건 ID를 생성한 경우다. 외부ID0 기준에 실패했으므로
+높은 FULL을 후보 자격으로 바꾸지 않았다. 고정 train128은8960/10496 모두128/128,
+ALL4 32/32이나 전체train4608 검증은 아니다. 조건부 fit4608, candidate 고정,
+citation confirmation, QA640은 선행 dev 공동 기준 미달로 NOT_RUN이다.
+같은 조건의 추가 노출에서 인용 FULL은 부모 대비18개, ID변경은17개 늘었지만
+값-only는1개 줄었다. 내부 기전이나 모든 항목의 단조로운 개선을 주장하지 않는다.
+
+실제 신규 input3661824/target233472/padding98304, samples24576이다. V12288,
+VC0/VC1 각각6144 노출로 원 cycle1회를 완료했다. 누적 input12371968/target536576,
+step/sampler10496이다. 학습 중 추가 진단 backward0, 새 loss/LR/자료 변경0이다.
+학습 segment의 active 합계1749.725134418초, 부모 포함 보고 사용량1752.623497667초;
+컴파일/명령 진입 전 검산/wall time과 구분한다. B 전 generation3936=부모32+평가3904,
+teacher3904이다. 아직 독립 B 신규 재현은 NOT_RUN이다.
+
+최종 native: `artifacts/citation-fidelity-20260922-study/ANSWER-MEAN/segment-0008/final`.
+Physical SHA256 `7845eb2e66bf333f07a4fde28d80601f418f212912c7c7b58fc41424646b5ff6`;
+manifest tensor SHA256 `2ae7311273497a45adccfe609e10091ef302421e5fa963146dac9561e38098a4`;
+evaluator identity `df3649f9b64f1cf315af1ec86fcc12bd52cc6e80d68e0c0f6ff899c690641a8e`.
+실행 로그는 `artifacts/citation-fidelity-20260922-review/segment-0000..0008.stdout`
+및 해당stderr, 순수 보고는 `final-report.stdout`에 보존했다.
+아래 P0/P1 기록은 실행 당시 이력으로, 학습 후 현재 상태와 구분한다.
 
 새 연구는 complete ANSWER7424를 보존한 별도 fork다. 기존 독립 A/B와 scalar4352
 수용, ANSWER4384/7424의 품질실패 및 resume=false는 변경하지 않는다.

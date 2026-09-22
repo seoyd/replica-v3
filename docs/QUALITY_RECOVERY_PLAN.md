@@ -1,6 +1,21 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: citation fidelity consolidation from ANSWER7424
+## Closed learning budget: citation fidelity consolidation from ANSWER7424
+
+Source820100a passed independent A, preserved parent parity32/32, and completed
+all3072 new updates in9 segments through10496. The final saved native is
+`7845eb2e66bf333f07a4fde28d80601f418f212912c7c7b58fc41424646b5ff6`,
+Finished / FINAL_QUALITY_FAIL_AT_10496 / resume=false. No learning budget remains.
+At8960 the full panels were V512/512, citation509/512, renamed512/512, but the
+citation panel had3 outside-record IDs. At10496 they are510/510/512, with
+selected citation support510/512 and2/0 outside IDs. All final panels have
+EOS512/errors0; both citation first values are512. The outside-ID0 requirement
+fails, so conditional full-fit4608, candidate selection, confirmation and QA640
+are NOT_RUN. Fixed train128 success is not a full fit acceptance.
+Independent B raw/trace verification and negative-endpoint parity remain next;
+they may not reopen training or promote an ineligible candidate. S4/S5/S6 and
+Goal1 remain unaccepted. The original4352 acceptance and all7424/failure evidence
+are preserved. The registered design below explains the completed bounded run.
 
 R3-CITATION-FIDELITY-CONSOLIDATION-1.0 is a new explicit fork, preserving the
 accepted scalar4352 and complete failed ANSWER4384/7424 endpoints. The exact
