@@ -2691,6 +2691,28 @@ mod tests {
         Ok((public, private, used))
     }
     #[test]
+    fn citation_precision_executed_token_caps()->Result<()> {
+        let tmp=tempfile::tempdir()?;let study=super::super::tests::orbit_fixture(tmp.path())?;
+        let original=plan_read(&study.join("BOTH"))?;
+        for (name,input,target) in [("zero",Some(0),0),("uncommitted",Some(1192),76),("cap",Some(2_000_000),130_000),
+            ("input-over",Some(2_000_001),0),("target-over",Some(0),130_001),("unknown",None,0)] {
+            let dir=tmp.path().join(name);let root=dir.join(MEAN_ARMS[1]);std::fs::create_dir_all(root.join("segment-0000"))?;
+            let mut p=original.clone();let o=p.identifiable.as_mut().unwrap();o.study=dir;o.dataset=PREC_DATA.into();o.arm=MEAN_ARMS[1].into();
+            let segment=Segment{schema:None,start_hash:None,control_hash:None,phase:None,policy:digest(&p)?,
+                checkpoint:"synthetic usage fixture; native/model calls0".into(),checkpoint_hash:String::new(),step:0,input:0,target:0,
+                elapsed:0.,generations:0,teachers:0,resume:false,stop:"explicit unit record fixture".into()};
+            publish_confirmed(&root.join("segment-0000-finished.r3b"),&segment)?;
+            write(&root.join("segment-0000/train-control.r3b"),&binary::record!({"fixture":"known executed work independent of committed0; model calls0",
+                "executed_input_tokens_including_uncommitted":input,"executed_target_tokens_including_uncommitted":target}))?;
+            let a=p.remaining_input();let b=p.remaining_targets(&root);
+            if let Some(input)=input {
+                match 2_000_000u64.checked_sub(input) {Some(n)=>assert_eq!(a?,Some(n)),None=>assert!(a.is_err())}
+                match 130_000u64.checked_sub(target) {Some(n)=>assert_eq!(b?,Some(n)),None=>assert!(b.is_err())}
+            }else{assert!(a.is_err());assert!(b.is_err());}
+        }
+        println!("PRECISION_EXECUTED_CAPS zero/uncommitted/equal/over/UNKNOWN actual remaining route optimizer0 generation0 teacher0");Ok(())
+    }
+    #[test]
     fn citation_precision_tape_schedule_and_samples()->Result<()> {
         let tmp=tempfile::tempdir()?;let study=super::super::tests::orbit_fixture(tmp.path())?;
         let source=study.join("BOTH");let mut p=plan_read(&source)?;

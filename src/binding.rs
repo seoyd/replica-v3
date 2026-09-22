@@ -974,7 +974,9 @@ pub(in super::super) fn usage(p: &Plan) -> Result<(f64, usize, usize)> {
 }
 pub(in super::super) fn remaining(p: &Plan, target: bool) -> Result<u64> {
     let w = work(p)?;
-    let (cap, n) = if citation::is_mean(p) {
+    let (cap, n) = if citation::precision(p) {
+        if target {(130_000u64,w.4)} else {(2_000_000u64,w.3)}
+    } else if citation::is_mean(p) {
         if target {(260_000u64,w.4)} else {(4_000_000u64,w.3)}
     } else if citation::is(p) {
         if target {(800_000u64,w.4)} else {(6_300_000u64,w.3)}

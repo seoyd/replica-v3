@@ -49,7 +49,27 @@ release executable은 `4344eeb36f793342706fd88cf72f452bca175bd8606c03acb5905c362
 경고가 있고 release는 기존 cfg별 unused_mut1개가 있다. 전역 fmt는 기존 compact
 source 형식 차이로 exit1이며 PASS로 집계하지 않았다. 이번 diff의 신규 Clippy
 진단은 수정했고 무관한 전역 정리는 하지 않았다. 소비한 원본17개 hash가 일치한다.
-독립 A와 실제 SMALL 학습·품질·confirmation은 아직 완료 판정하지 않았다.
+학습 전 마지막 사용량 검토에서 precision의 실제 실행 비용 검사에 이전
+input4000000/target260000 상한이 남아 있음을 발견했다. precision만
+input2000000/target130000으로 연결했다. 실제 Plan remaining 경로의 새 회귀는
+수정 전1 FAIL(exit101,4000000 반환), 수정 후1 PASS(exit0,2.82초)다.
+committed0과 독립적인 known uncommitted 비용, 정확한 상한, 초과, UNKNOWN을
+검사하며 optimizer/generation/teacher0이다. 원 준비자료는 변경하지 않고
+학습 전 superseded로 보존하며 최종 source/binary에 새 준비를 결속한다.
+독립 A의368254 격리 quick3/3은 exit0,481.46초로 완료됐다. 직접+독립 TINY
+합계58 updates/420 generation/280 teacher, FD0·UNKNOWN0이며 cap 수정의
+독립0-call 재검증과 최종 준비 binding을 마쳐야 A를 최종 수용한다.
+수정 후 release build는 exit0(23.51초), 실제 재준비도 exit0이다. 최종 실행 경로는
+`artifacts/citation-precision-20260922-study-final/`이며, 이전 준비 경로에서는
+SMALL을 실행하지 않았다. 최종 preparation은
+`798ab26a728c374a93271c5a51be3a236acffb1cdf596e39d29a938205a50120`,
+policy `08254fdc34e17692910f2d04f30b8ca276cd847573fc293b64697da96ccddf0c`,
+source digest `121483eb645720cfa8369693ae25fe05bf54782773fc9a3e508dd793fdb244c3`,
+실행 파일 `0020e08670d6e66de5b4c2759fac21f012f2bd610c98474580af32fee525132f`다.
+initial/corpus/tokenizer/metadata와 tape digest는 이전 준비와 동일하고,
+소비한 원본17개 hash는 모두 일치한다. 새 무학습 cap test binary는
+`83682e4cc53831263998992870a3d0d15a1f69f0baf0fd1c65d53dddffe2ee0c`다.
+실제 SMALL 학습·품질·confirmation은 아직 완료 판정하지 않았다.
 scalar4352 수용은 유지하며 값+인용·S4/S5/S6·Goal1은 별도 미수용이다.
 
 ## 2026-09-22 인용 fidelity consolidation — 신규3072 완료, 품질 미달·오답 추가 재현
