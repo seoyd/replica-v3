@@ -12,10 +12,17 @@ selected citation support510/512 and2/0 outside IDs. All final panels have
 EOS512/errors0; both citation first values are512. The outside-ID0 requirement
 fails, so conditional full-fit4608, candidate selection, confirmation and QA640
 are NOT_RUN. Fixed train128 success is not a full fit acceptance.
-Independent B raw/trace verification and negative-endpoint parity remain next;
-they may not reopen training or promote an ineligible candidate. S4/S5/S6 and
-Goal1 remain unaccepted. The original4352 acceptance and all7424/failure evidence
-are preserved. The registered design below explains the completed bounded run.
+Independent B verified all3904 raw/teacher rows,3072 update traces and9 native
+checkpoints. Fresh-process V16/VC16 match32/32, but the existing fixed prefix
+contains only correct outputs. Actual wrong-row regeneration is NOT_RUN;
+do not describe limited prefix parity as complete failure-row reproduction.
+No extra calls were added or closed learning reopened. S4/S5/S6 and Goal1 remain
+unaccepted. The original4352 acceptance and all7424/failure evidence are preserved.
+The [independent B report](CITATION_FIDELITY_REVIEW_B_2026-09-22.md) is PARTIAL
+for that coverage gap; its publication commit is893d974d61b34d5c88ac2479f334487da4141f22.
+A request for four fixed wrong-case generations is pending explicit authorization.
+No answer is neither an approval nor a refusal; no additional call was performed.
+The registered design below explains the completed bounded run.
 
 R3-CITATION-FIDELITY-CONSOLIDATION-1.0 is a new explicit fork, preserving the
 accepted scalar4352 and complete failed ANSWER4384/7424 endpoints. The exact

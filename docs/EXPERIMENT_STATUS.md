@@ -1,6 +1,6 @@
 # 진단 및 구현 상태
 
-## 2026-09-22 인용 fidelity consolidation — 신규3072 완료, 최종 품질 미달, B 전
+## 2026-09-22 인용 fidelity consolidation — 신규3072 완료, 품질 미달·재현 범위 제한
 
 동결 source `820100a6a27eebefe0ba723fc03948ea6f2a0abb`에서 실제 신규3072 updates를
 실행했다. 첫7425 저장 뒤 새 process에서 이어갔고9개 segment가 모두 exit0였다.
@@ -30,7 +30,36 @@ VC0/VC1 각각6144 노출로 원 cycle1회를 완료했다. 누적 input12371968
 step/sampler10496이다. 학습 중 추가 진단 backward0, 새 loss/LR/자료 변경0이다.
 학습 segment의 active 합계1749.725134418초, 부모 포함 보고 사용량1752.623497667초;
 컴파일/명령 진입 전 검산/wall time과 구분한다. B 전 generation3936=부모32+평가3904,
-teacher3904이다. 아직 독립 B 신규 재현은 NOT_RUN이다.
+teacher3904였다. 이후 독립 B는 전수3904 raw/teacher와3072 trace/9 native를
+재검산했고 기존 값과 일치했다. V16/VC16 새 process 명령도 각각 exit0, 원본 raw와
+32/32 일치했다. 두 표본은 모두 정답이므로 실제 최종 오답4개(V2/VC2)의 새 생성은
+NOT_RUN이다. 고정 prefix를 사용한 기존 reviewer 경로의 표본 선택 한계이며, 실제
+오답 재생성까지 통과했다고 하지 않는다. 추가 호출은 실행하지 않았다.
+최종 SMALL generation3968/teacher3904, generated tokens48736,
+parent+학습+B active1755.551760334초다. TINY는 실패 포함62/500/348로 유지됐다.
+
+독립 부모 대비 full gain/loss는 V1/2, VC20/2, ID17/0; ALL4 gain/loss는
+V0/1, VC15/1, ID12/0이다. 기존 인용 오답20개를 고쳤으나 이전 정답2개가 새로
+틀린 결과로, 단순히 같은 오류2개가 남았다는 해석과 구분한다.
+10496의 QUERY_BOTH/SWAP_BOTH는 V254/254, VC254/255, ID256/256(각256분모),
+ID_BOTH510/512다. code/독립 A는 PASS, 실행·raw 무결성은 검산 일치,
+재현은 고정 정답 표본32에 한정, 실제 오답 재생성은 미실행이다.
+모델 품질·값+인용 범위·S4/S5/S6·Goal1은 미수용이며,
+GOAL1_READY=false / GOAL1_ACCEPTED=false를 유지한다.
+
+[독립 B 보고서](CITATION_FIDELITY_REVIEW_B_2026-09-22.md)의 commit 및 확인한 remote는
+`893d974d61b34d5c88ac2479f334487da4141f22`다. B 전체 판정은 PARTIAL이며,
+RAW_RECOUNT=PASS / PREFIX32_PARITY=PASS /
+WRONG_CASE_FRESH_REPRODUCTION=NOT_RUN_PENDING_AUTHORIZATION을 구분한다.
+기존 B32 호출을 모두 사용했으므로 같은 최종 모델의 오답4개만 별도 추가 재현하는
+인가를 요청했고, 답변을 받지 않은 상태에서 추가 실행하지 않았다. 모델 품질실패는
+그 재현 여부와 별개로 확정된 결과다. 신규 학습은 종료됐고 재개 인가는 없다.
+실제 candidate diff·준비자료·로컬 인계는
+`artifacts/citation-fidelity-20260922-review/candidate.diff`,
+`artifacts/citation-fidelity-20260922-study/`,
+`artifacts/citation-fidelity-20260922-review/HANDOFF.md`에 있다.
+원 모델·corpus·raw·seal·임시 지시문은 게시하지 않았다. 기존 SQLite 및 범용
+Candle/tokenizers/Accelerate 의존은 유지하며 외부 학습 모델이나 API는 사용하지 않았다.
 
 최종 native: `artifacts/citation-fidelity-20260922-study/ANSWER-MEAN/segment-0008/final`.
 Physical SHA256 `7845eb2e66bf333f07a4fde28d80601f418f212912c7c7b58fc41424646b5ff6`;
