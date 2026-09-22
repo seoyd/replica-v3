@@ -1,5 +1,55 @@
 # 진단 및 구현 상태
 
+## 2026-09-22 인용 precision — 11264 dev·fit 통과, 768회에서 후보 고정
+
+동결 source `3290fec66db372c5ab427bf2e632bf573824ce3d`, 실행 파일
+`0020e08670d6e66de5b4c2759fac21f012f2bd610c98474580af32fee525132f`에서
+독립 [A 수용](CITATION_PRECISION_REVIEW_A_2026-09-22.md) 뒤 실제 학습했다.
+A report-only commit은 `21879ab17bb1155461ebbdae31cd6c7269036764`이며 정상
+push와 remote 일치를 확인했다. 부모 V16/VC16은 오답 orbit을 포함해32/32
+token/문자열/EOS/error parity가 일치했다. 원본10496와 scalar4352는 보존했다.
+
+|step / 신규 updates|V FULL / ALL4|VC FULL / ALL4|ID변경 FULL / ALL4|정확 support · 외부 ID|
+|---|---|---|---|---|
+|10752 /256|64/64 ·16/16|64/64 ·16/16|64/64 ·16/16|예정 표본|
+|11264 /768|512/512 ·128/128|512/512 ·128/128|512/512 ·128/128|512/512 ·0/0|
+
+11264의 세 dev는 각각 QB256/SB256/EOS512/errors0이며 인용 두 패널의
+첫 값도512다. 같은 checkpoint의 train128은128/128이다. dev 통과 후 실행한
+전수 fit는 old512=512/QB256/ALL4128, new1024=1024/QB512/ALL4256,
+VC0·VC1 각각1536/QB768/ALL4384다. 전수4608의 strict FULL과 EOS가 모두
+정상이며 오류0이다. 판정은 `CANDIDATE_FIXED_AT_11264 / Finished /
+resume=false / eligible=true / fit=true / extend=false`다. 남은768 updates와
+11776/12032 학습·평가는 실행하지 않는다. 개발자료 성공을 독립 확인으로
+바꾸지 않으며, 낮은 LR의 독립 인과효과도 주장하지 않는다.
+
+실제 신규768 updates, input915456/target58368/padding24576, samples6144;
+V3072/VC0·VC1 각각1536 노출이다. 누적 step/sampler11264,
+input13287424/target594944이며 실제 LR3e-5를 사용했다. 첫10497을 저장한 뒤
+새 process에서 이어갔다. 상대 root 명령1개는 등록된 절대 경로와 달라
+segment 생성 전 거부됐다(exit1, 모델 호출0); 원 로그를 보존하고 절대 root로
+실행했다. 이후 실제4개 segment 명령은 모두 exit0이다.
+
+segment0002는900초 순수 TIME_BUDGET에 EvaluationPending으로 종료했다.
+VC0 생성1275행을 보존하고 같은11264 native의 segment0003에서 평가만
+재개했다. 재개 optimizer/input/target은 실제0이며 기존 RETURNED를 재생성하지
+않았다. 마지막 native `ANSWER-MEAN/segment-0003/final` physical SHA256은
+`c47e34c7ac4f88dd08b5e719bf4d0364f139ac5002bf4572fe55b37dac823925`,
+model identity `ea1d7fa166f4178e08d894613ff75a9ba3e87c93cfd85814361a7b83ea2bc173`,
+decision `7f09b2683a7941fd282e61fe6a63e99cac34fcb9b5df7d7b8458d80a09563626`다.
+
+B 전 실제 generation6496=부모32+평가6464, teacher6464, 진단 backward0이다.
+training/evaluation segment active 합계1412.590066334초, 부모 observation
+3.116021333초다. 컴파일/입력 검산을 포함한 wall time과 구분한다. 관측한
+최대 training RSS는3858640KiB이며 독립 사용량 재검산이 후속 B에 포함된다.
+관련 로그·원자료는 `artifacts/citation-precision-20260922-review/`와
+`artifacts/citation-precision-20260922-study-final/`에 보존하며 소비한 원본17개
+hash는 그대로다. 예비 준비 경로는 무학습 상태로 보존한다.
+
+현 판정: CODE=PASS, A=PASS, TRAINING_EXECUTED=768, DEV_JOINT=PASS,
+FIT=PASS, CANDIDATE_FIXED=true. 독립 B·citation confirmation·QA640은 후속
+검증 전이며 값+인용 범위·S4/S5/S6·GOAL1_READY/ACCEPTED는 아직 미수용이다.
+
 ## 2026-09-22 인용 precision — ANSWER10496 부모와 새 LR 정책 준비
 
 R3-CITATION-PRECISION-1.0은 기존10496 품질실패를 보존한 별도 연구다.
