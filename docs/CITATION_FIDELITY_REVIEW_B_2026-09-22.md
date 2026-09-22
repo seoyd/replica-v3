@@ -154,3 +154,52 @@ Local permitted evidence root is `artifacts/citation-fidelity-20260922-review/`.
 Build logs are `read_B_fidelity-build-01.log` and `read_B_parity-build-01.log`; pure execution logs are `B-recount-01.log/.stderr` and `B-parity-usage-01.log/.stderr`. Actual native logs are `B-native-value16.stdout/.stderr` and `B-native-citation16.stdout/.stderr`. Exit0 was observed for both reader builds, both reader runs and both native commands. The review published no additional model approval or learning permission.
 
 **The run is closed as a preserved negative quality result. B is PARTIAL solely for the unexecuted wrong-case fresh reproduction; the reported raw recount and fixed-prefix parity are actual PASS results.** Existing A remains closed, and this report neither automatically extends learning nor treats storage/execution correctness as model or Goal1 acceptance.
+
+## Addendum — four wrong-case observations after explicit user authorization
+
+**Current independent B verification: PASS. Model quality: FAIL.** After the original report was published, the user explicitly authorized four additional wrong-case reproductions. All four have now executed and match the original incorrect outputs exactly. This addendum closes the reproduction gap. It does not change the model, the failed quality endpoint, candidate eligibility or the original report's historical PARTIAL judgment.
+
+The original report above is preserved verbatim from commit `893d974d61b34d5c88ac2479f334487da4141f22`, original file SHA-256 `36b3c41d61f897a14b0b7b9eff83130e67db92c4095479ed923a6d8861db2a3d`. The original B32 observation, usage and raw artifacts were not edited. The additional four calls are separately authorized observations, not an unrecorded expansion of the original B32 allocation.
+
+The reviewer prepared a small Rust entry in an isolated archive of source `820100a6a27eebefe0ba723fc03948ea6f2a0abb`. Only a reviewer module declaration was added to the scratch copy; existing product/training/evaluator implementations were unchanged. It invokes the frozen `RunControl::command(false)` and `observe_generation(..., automatic_teacher=false)`, which in turn invokes the existing native `generate_observed`. The generator receives only the unchanged framed request tokens, max-token/timeout/cancellation settings and scope. Expected answers are used in post-generation scoring/comparison, never supplied to logits or the native generator. No resolver, forced EOS, restricted vocabulary, ID repair, teacher calculation or optimizer path was used.
+
+Compilation used installed Rust and existing locked cached dependency artifacts, with no dependency installation or network access. The helper was compiled without test-support. A pure `prepare` command first selected the two existing wrong rows from each final panel by comparing their stored output with the frozen episode answer. It fixed panel/index/episode/request/raw/model hashes in a new create-new preparation record before any model load or call. The prepared zero-based panel indices were V23, V100, VC477 and VC479. Full episode IDs remain in the local preparation. These are all final V/VC wrong rows; none was replaced by a passing sample.
+
+Execution then used one separate process, one compute thread, the same final10496 physical checkpoint `7845eb2e66bf333f07a4fde28d80601f418f212912c7c7b58fc41424646b5ff6`, QE framing, context2048, max_new32, normal greedy, strict UTF-8 and real EOS. Existing RunControl enforced generation limit4, teacher limit0, command900s, RSS12GiB and cancellation. A durable started record and per-call prepared record preceded each invocation; returned rows were written and synced with matching resolved receipts. A second run would fail create-new admission; no second run or retry was attempted.
+
+```text
+artifacts/citation-fidelity-20260922-review/review_four prepare
+VECLIB_MAXIMUM_THREADS=1 OMP_NUM_THREADS=1 RAYON_NUM_THREADS=1 artifacts/citation-fidelity-20260922-review/review_four run
+artifacts/citation-fidelity-20260922-review/read_B4
+```
+
+The helper build, pure prepare, native run, pure-reader build and pure readback all exited0. The readback used zero model calls and checked all four prepared/resolved links, all returned rows, raw/final hashes, exact comparison fields, no pending files, and unchanged original checkpoint/terminal/policy/corpus/tokenizer/reference raw hashes.
+
+| Additional observation | Original panel index | Generated tokens including EOS | Match to original wrong output |
+| --- | ---: | ---: | --- |
+| V wrong case1 | 23 | 2 | PASS |
+| V wrong case2 | 100 | 2 | PASS |
+| VC wrong case1 | 477 | 17 | PASS |
+| VC wrong case2 | 479 | 17 | PASS |
+| Total | 4 actual calls, no retry | 38 | 4/4 |
+
+For each row, native prompt digest, raw tokens, raw bytes, actual text, EOS, finish reason, error/class and generation-completed state match the original final raw. Every row remains `exact_match=false`; the two VC rows reproduce the original outside-record IDs. RunControl reports attempted4/completed4/generation4/teacher0, terminal COMPLETED, no observed stop conditions and0 deadline overrun. Recorded active time is0.862545250s. No SMALL optimizer, TINY, backward or teacher work was performed.
+
+The current study total is therefore **3072 updates / 3972 generations / 3904 teachers**, generated tokens48,774, canonical active1756.414305584s. This adds exactly4 generations/38 tokens/0.862545250s to the historical table above. No previous usage receipt was rewritten. The measured time is control time, not a claim about complete build/CLI throughput.
+
+All new detailed artifacts are local under `artifacts/citation-fidelity-20260922-review/B4-additional-observation/`. The original B evidence hashes and A report hash above remain unchanged, and product source/tests/Cargo still have no diff against the reviewed source.
+
+| Additional local evidence | SHA-256 |
+| --- | --- |
+| Reviewer native helper executable | `1ff1630db146d4ef60cde76abd7cb44865cbf680599cccafe8a531e22b84ba25` |
+| Reviewer entry source, B4-source/src/review_four.rs | `539cb522586c5f0e92edefa8fef3f395bd4768f8a399c65922d78180c41f44f8` |
+| preparation.r3b | `9aab9fcf0ad9e8afe3b4e0cec2641ba0818075175bc46bace73fd8e5848766b6` |
+| started.r3b | `346a57eccb2c16cb7f8275b955a9b805dc52904d0f756d01cc5ad9f9f2038bd4` |
+| raw.r3rows | `3f15a26523d69fea4d11986f88a0512a97555ddc5108688becc42da172179615` |
+| finished.r3b | `38821903a20dd0ba0d7b48d92e1418dd507ea9c9940f2de7d2d8c6660e30dd68` |
+| readback.r3b | `06dc20e92d481d633ec2c94dcfe5bc3eb8e99ff39db266eaa5508fedb98227eb` |
+| Pure reader source, read_B4.rs | `90720a169ca101e9ce4671ea924e5526eddad83ecfd4774be3bc40df9ae8fe49` |
+
+Command/build logs are `B4-build-01.log`, `B4-prepare.stdout/.stderr`, `B4-run.stdout/.stderr`, `B4-readback-build.log` and `B4-readback.stdout/.stderr` in the review root. The complete run has four durable RETURNED records, known usage and no UNKNOWN observation.
+
+**Independent endpoint execution/recount/reproduction verification is now closed as PASS.** Citation quality still fails outside-ID0: final V510/512, VC510/512 with outside IDs2, renamed512/512. No additional model selection or learning was performed. Full train4608, citation confirmation and QA640 remain NOT_RUN; the confirmation seal remains unopened. S4/S5/S6 and Goal1 remain unaccepted.
