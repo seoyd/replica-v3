@@ -1,6 +1,6 @@
 # 진단 및 구현 상태
 
-## 2026-09-22 인용 fidelity consolidation — P0/P1 직접 검증, 독립 A 전
+## 2026-09-22 인용 fidelity consolidation — 독립 A PASS, 학습 준비 완료
 
 새 연구는 complete ANSWER7424를 보존한 별도 fork다. 기존 독립 A/B와 scalar4352
 수용, ANSWER4384/7424의 품질실패 및 resume=false는 변경하지 않는다.
@@ -37,8 +37,9 @@ family6/normalizer2/QE/LR3e-4, input8710144/target303104와 과거3040 trace를
 자료/label/수치의 차단 결함은 발견되지 않았다. 오답은 학습에 추가하지 않았다.
 
 P1은 기존 하네스에 명시적 fidelity profile, 원 citation tape의 정확한1회 추가,
-새 평가 일정과 기존 seal 계보를 연결했다. 신규 SMALL 학습은 아직0이며 독립 A는
-NOT_RUN이다. 과거 수용을 새 candidate의 승인으로 복사하지 않는다.
+새 평가 일정과 기존 seal 계보를 연결했다. Source는
+`820100a6a27eebefe0ba723fc03948ea6f2a0abb`이고 정상 push/remote 일치를 확인했다.
+신규 SMALL 학습은 아직0이며 과거 수용을 새 candidate의 승인으로 복사하지 않았다.
 
 직접 `quick --citation-fidelity`의 두 번째 실행은2/2 PASS(exit0), 실제 TINY24
 updates/190 generation/128 teacher였다. 첫 실행은1 PASS/1 FAIL(exit1)이며,
@@ -59,6 +60,21 @@ generation0/teacher0/optimizer0으로 완료했다. 기존 run 진입의 호출�
 Production release build도 locked/offline/accelerate로 exit0였다. 기존
 `confirmation_collect`의 test-support 전용 mutable control에 대한 unused_mut
 경고1개가 유지됐으며, 무관한 fmt/clippy 전체 검사는 실행하지 않았다.
+
+이후 [독립 A](CITATION_FIDELITY_REVIEW_A_2026-09-22.md)가 같은 source의3/3 실제
+회귀와 native/자료/원tape 전수검산을 PASS했다. 보고서-only commit 및 확인한 remote는
+`305609fe4d570c7268bddd6fd29a5a98597e50e8`이다. TINY 추가24/190/128, 실패 포함
+실제 총62 updates/500 generation/348 teacher로64/1024/1024 한도 안이다.
+확인한 원본16,704파일은 검산 전후 불변이다. 서로 정의가 다른 source hash를
+같다고 비교한 검토 reader의 첫 assertion 실패도 보존했으며 모델 호출은0이었다.
+새 `review-a.r3b`는 source/preparation/실제 보고서 hash에 결속되어 있다.
+학습 실행물은 `artifacts/citation-fidelity-20260922-executable`, SHA256
+`b0f974de8ffe5ff9aa0be81978c57b8b21dc07ac96182ea55b4aacbaf93f108c`다.
+준비물 `artifacts/citation-fidelity-20260922-study/preparation.r3b` SHA256은
+`0d90de3e17d3a94e6bb8878277d8aaa0bbaa3a4b3be70ead74c39443ee926a8b`다.
+학습 source와 binary를 동결했다. 실제 부모 V16/VC16은 각각 exit0, raw token·문자열·
+EOS/실패 상태32/32가 원본과 일치했다(신규 generation32, teacher/optimizer0).
+이후 등록된 한 연구만 진행한다.
 
 ## 2026-09-22 인용 continuation — 학습·독립 B 검증 완료, 공동 품질 미달
 
