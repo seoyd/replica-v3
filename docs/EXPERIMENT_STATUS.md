@@ -1,6 +1,49 @@
 # 진단 및 구현 상태
 
-## 2026-09-24 QA 문자열 값 연구 — 직접 회귀·독립 A PASS
+## 2026-09-24 QA 문자열 값 연구 — +128 보존 guard 종료, 재개 불가
+
+`c1f82a719dcd72ecca2e7b8024384562423f37c2`와 동결 실행물로 실제
+SMALL128 updates를 실행했고 절대14464에서 `SEVERE_RETENTION_REGRESSION`
+/ `resume=false`로 닫혔다. 최종 fit·QA640·confirmation·S4는 NOT_RUN이다.
+코드/준비 A PASS와 이번 모델 품질 미달을 구분한다. 추가3072회까지의
+잔여 예산은 재개 권한이 아니며 새 실험/LR/자료 탐색은 실행하지 않았다.
+
+|동일14464 checkpoint의 고정64 패널|FULL|QB / SB|ALL4|값 / support|외부ID / parse|EOS / 오류|
+|---|---:|---|---:|---|---|---|
+|숫자 값|64|32 /32|16|기존 scalar 채점|해당 없음|64 /0|
+|숫자 인용|62|30 /30|14|63 /63|1 /0|64 /0|
+|QA system·current 질문 S1Q1|24|9 /10|3|64 /24|39 /1|64 /0|
+|새 word|0|0 /0|0|12 /0|60 /4|64 /0|
+|새 word ID-renamed|0|0 /0|0|12 /0|64 /0|64 /0|
+
+신규 SMALL 실제 합계는 optimizer128, generation720(부모400+평가320),
+teacher320, 진단 backward0이다. 실제 문항 노출1024(복습512+word512),
+훈련 input186,752/target14,976/padding19,072, control active159.388163415초.
+독립 검산한 실제 노출은 V128/VC0 64/VC1 64/bridge256/word512이고,
+generation이 반환한 token은11,655다. 부모의 같은 고정64 표본 대비
+FULL/ALL4는 V64/16→64/16, VC64/16→62/14, S1Q1 64/16→24/3이다.
+S1Q1 FULL40개 하락이 즉시 중단 기준16개를 넘었다. 값64/64와
+support24/64의 차이는 이번 출력에서 관측한 사실이며 기전의 원인 증명은 아니다.
+첫 update14337 저장 뒤 새 process127회로 이어갔으며 sampled RSS peak
+965,488KiB였다. 마지막 native는
+`artifacts/qa-word-value-20260924-study-final/ANSWER-MEAN/segment-0001/final`,
+최종 물리 SHA256은 `152c18bc1656e2fbbb7889fd3bbae826b15d33abb5d012fc4ab6985b3302d6f5`다.
+trainer 로그의 manifest weights hash `15e2606f…b86256`와 물리 file hash를 구분한다.
+원 부모·Adam·실패는 보존했다. 읽기 전용 `word-report`도 exit0으로
+원 raw/decision을 대조했다. 로그는 evidence의 `train-absolute-0000.log`,
+`train-absolute-0001.log`, `final-report.log`다.
+
+첫 상대경로 CLI는 등록 절대 root와 달라 `plan_read`에서 사전 거부됐다.
+segment/entry 생성·모델 호출은0이고 `train-segment-0000.log`를 보존한다.
+정확한 등록 절대경로 실행과 구분하며 source나 정책을 바꾸지 않았다.
+독립 B의 무호출 RAW/GUARD/USAGE 검산은 exit0/PASS다. parent400·평가320
+raw, teacher320, 평가 prepared/resolved640을 확인했다. 예정 끝점의
+정상 품질 FAIL과 다르므로 정규 B fresh 재현과 QA640은 NOT_RUN이며,
+전체 dev/fit는 NOT_REACHED다. 이를 정규 B 전체 수용으로 올리지 않는다.
+상세 독립 근거는 [B 종료 검산 보고서](QA_WORD_VALUE_REVIEW_B_2026-09-24.md)에
+남겼다. 실행/자료/중단 무결성은 확인됐지만 새 단어 품질·기존 공동 gate·
+S4/S5/S6·Goal1은 미수용이다. 요구사항 대조에서 인가된 조건부 후속 단계는
+guard로 차단됐고, 미실행을 PASS로 표기하지 않았다.
 
 `R3-QA-WORD-VALUE-1.0`: CLEANUP_EXECUTION=CANCELLED_BY_USER;
 APPLIED=false, rollback0. 감사 도구·계획·독립 A/B 및 무호출 종료 수리를

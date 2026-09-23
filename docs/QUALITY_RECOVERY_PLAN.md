@@ -1,6 +1,14 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active scope: four-word QA value selection
+## Closed scope: four-word QA value selection
+
+The registered run stopped at additional128 / absolute14464 with
+`SEVERE_RETENTION_REGRESSION`, `resume=false`. Source/preparation A passed;
+word FULL0/64 and renamed FULL0/64 did not pass. The S1Q1 retention panel
+fell to24/64. Remaining optimizer allowance is not permission to resume.
+Fit, fresh B reproduction, QA640 and all acceptance stages remain NOT_RUN
+after this guard stop. Raw and checkpoints are preserved; independent B is a
+read-only stop/integrity audit. The original registered design below is retained.
 
 `R3-QA-WORD-VALUE-1.0` uses the normally completed bridge14336 weights,
 ANSWER objective/family6, Adam moments and clock, tokenizer, QE, batch8 and
