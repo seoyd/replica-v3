@@ -1,5 +1,40 @@
 # 진단 및 구현 상태
 
+## 2026-09-24 QA 문자열 값 연구 — 직접 회귀 PASS, 독립 A 대기
+
+`R3-QA-WORD-VALUE-1.0`: CLEANUP_EXECUTION=CANCELLED_BY_USER;
+APPLIED=false, rollback0. 감사 도구·계획·독립 A/B 및 무호출 종료 수리를
+그대로 보존한다. 추가 inventory나 정리 실행은 하지 않는다.
+정상완결 bridge14336을 부모로 네 한국어 값 선택·인용 profile을 준비한다.
+`src/word_value.rs`를 기존 citation/fresh 경로에 연결했다. 별도 native
+pool7680과 dev3456, 원 부모 tape의 반행 복습, 문자열별 독립 채점,
+예산·guard·조건부 fit·B 이후 QA 진단을 구현했다. 숫자 채점의 의미와
+제품 greedy 생성은 유지한다. teacher의 새 family token 관측 누락은
+실제 TINY에서 재현 후 해당 조건만 연결했다.
+
+실행한 관련 release 회귀는4/4 PASS: `word_data_tape_boundaries`,
+`word_reader_score_gate`, `word_raw_endpoint_gates`, `word_native_process`.
+실제 review4/word4의 batch8 대4+4 ANSWER gradient·mask·EOS는 동등했다
+(합성 backward3, 모델 호출0). typed writer/reader/scorer/decision에서
+조기 PASS·중간 미달 계속·조기 fit FAIL 종료·최종 dev FAIL의 fit once와
+B→QA 권한을 확인했다. 마지막 process 시험은 TINY optimizer6/
+generation120/teacher120, 연속2·새process1+1·평가-only2+0의
+weights/Adam/clock/raw가 일치했다. 0-test를 PASS로 세지 않았다.
+
+앞선 process01의 teacher 관측 누락 실패도 보존한다: optimizer2,
+generation36, teacher36, 마지막 durable step16, INTEGRITY_FAIL/resume=false.
+새 process02로 수리 후 검증했으며 이전 종료는 수정하지 않았다.
+구현자 TINY 누계는8/156/156, 신규 SMALL optimizer/generation/teacher는0.
+직접 증거는 `artifacts/qa-word-value-20260924-evidence/`, process 원자료는
+`artifacts/qa-word-value-20260924-tiny-process-01/`과 `-02/`, typed 경계
+fixture는 `artifacts/qa-word-value-20260924-typed-gates-01/`에 보존한다.
+
+실제 부모 corpus/tokenizer로 계산한 준비 비용은 input4,534,272 /
+target359,424, 최대 전체길이205이다. 이는3072회 계획 비용이며 아직
+실제 SMALL 소비량이 아니다. 기존 명시적 lineage37파일에서 확보한
+노출/예약 ID4771개와 새 ID의 중복을 막았다. 독립 A 이전에는 학습이나
+부모 새 관측을 시작하지 않는다. 모델 품질·S4/S5/S6·Goal1은 새로 수용하지 않았다.
+
 ## 2026-09-24 무호출 종료 수리·아티팩트 dry-run — 독립 A/B PASS
 
 최종 code candidate는 `e2e354a7f24babb61d13ac2f1266c1cfd12d7b0e`이며

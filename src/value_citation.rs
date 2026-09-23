@@ -1,6 +1,8 @@
 //! One bounded value/citation continuation. All execution and storage stay in
 //! the existing binding/fresh harness; these transformations are training-only.
 use super::*;
+#[path = "word_value.rs"]
+pub(in super::super::super) mod word;
 
 const DATA: &str = "value-citation-bridge-v1";
 const CONTRACT: &str = "R3-VALUE-CITATION-BRIDGE-1.0";
@@ -34,19 +36,20 @@ pub(in super::super::super) fn fidelity(p:&Plan)->bool {p.identifiable.as_ref().
 fn continuation(p:&Plan)->bool {precision(p) || fidelity(p) || p.identifiable.as_ref().is_some_and(|o|o.dataset==CONT_DATA)}
 fn citation_offset(p:&Plan,step:usize)->usize {step-p.origin_step()+if continuation(p)&&!fidelity(p)&&!precision(p)&&!p.tiny {32}else{0}}
 fn full_evaluation(p:&Plan,step:usize)->bool {
+    if word::is(p) {return !p.tiny&&[1536,3072].contains(&(step-p.origin_step()));}
     if instruction_bridge(p) {return !p.tiny&&[768,1536].contains(&(step-p.origin_step()));}
     if retained_qa(p) { return !p.tiny && [2048,4096].contains(&(step-p.origin_step())); }
     !p.tiny && if precision(p) {[768,1536].contains(&citation_offset(p,step))}
         else {[1536,3072].contains(&citation_offset(p,step))}
 }
 pub(in super::super::super) fn is_mean(p: &Plan) -> bool {
-    instruction_bridge(p) || retained_qa(p) || continuation(p) || p.identifiable.as_ref().is_some_and(|o|o.dataset == MEAN_DATA)
+    word::is(p) || instruction_bridge(p) || retained_qa(p) || continuation(p) || p.identifiable.as_ref().is_some_and(|o|o.dataset == MEAN_DATA)
 }
 pub(in super::super::super) fn answer_mean(p: &Plan) -> bool {
     is_mean(p) && own(p).arm == MEAN_ARMS[1]
 }
 pub(super) fn arms(p: &Plan) -> &'static [&'static str] {
-    if instruction_bridge(p) || retained_qa(p) || continuation(p) { &[MEAN_ARMS[1]] } else if is_mean(p) { &MEAN_ARMS } else { &[ARM] }
+    if word::is(p) || instruction_bridge(p) || retained_qa(p) || continuation(p) { &[MEAN_ARMS[1]] } else if is_mean(p) { &MEAN_ARMS } else { &[ARM] }
 }
 fn selected_root(study: &Path) -> PathBuf {
     study.join(if study.join(MEAN_ARMS[1]).is_dir() { MEAN_ARMS[1] } else { ARM })
@@ -70,6 +73,11 @@ pub(in super::super::super) fn is(p: &Plan) -> bool {
     is_mean(p) || p.identifiable.as_ref().is_some_and(|v| v.dataset == DATA)
 }
 pub(super) fn evaluation(p: &Plan) -> EvaluationPolicy {
+    if word::is(p) {
+        let mut e=super::evaluation(p.tiny);e.screen_steps.clear();
+        e.train_steps=if p.tiny{vec![p.origin_step()+2]}else{[128,512,1536,3072].map(|n|p.origin_step()+n).to_vec()};
+        e.generation_limit=if p.tiny{512}else{11264};e.teacher_limit=if p.tiny{512}else{10240};e.active_seconds=10800;return e;
+    }
     if instruction_bridge(p) {
         let mut e=super::evaluation(p.tiny);e.screen_steps.clear();
         e.train_steps=if p.tiny{vec![p.origin_step()+2]}else{[256,768,1536].map(|n|p.origin_step()+n).to_vec()};
@@ -117,6 +125,9 @@ pub(in super::super::super) fn endpoint(p: &Plan, step: usize, pending: bool) ->
     if retained_qa(p) {
         return [1,128,512,1024,1536,2048,2560,3072,3584,4096].into_iter()
             .map(|n|p.origin_step()+n).find(|&n|n>step).ok_or_else(||bad("retained QA budget closed"));
+    }
+    if word::is(p) {
+        return [1,128,512,1024,1536,2048,2560,3072].into_iter().map(|n|p.origin_step()+n).find(|&n|n>step).ok_or_else(||bad("word update budget closed"));
     }
     if instruction_bridge(p) {return [1,256,768,1280,1536].into_iter().map(|n|p.origin_step()+n).find(|&n|n>step).ok_or_else(||bad("bridge budget closed"));}
     let points:&[usize]=if precision(p) {&[10497,10752,11264,11776,12032]}
@@ -643,6 +654,7 @@ fn prepare_inner(
     Ok(())
 }
 pub(super) fn verify_plan(root: &Path, p: &Plan) -> Result<()> {
+    if word::is(p) {return word::verify(root,p);}
     if instruction_bridge(p) {return bridge_verify_plan(root,p);}
     if retained_qa(p) {return qa_verify_plan(root,p);}
     if continuation(p) {return verify_continuation(root,p);}
@@ -917,6 +929,7 @@ fn pass(s: &OrbitScore, total: usize, full: usize, qb: usize, all4: usize) -> bo
 }
 type Panel = (String, Vec<Episode>, Vec<Meta>);
 fn base_panels(root: &Path, p: &Plan, step: usize) -> Result<Vec<Panel>> {
+    if word::is(p) {return word::base_panels(root,p,step);}
     if instruction_bridge(p) {return bridge_panels(root,p,step);}
     if retained_qa(p) {return qa_base_panels(root,p,step);}
     if !p.evaluation_due(step) {
@@ -990,6 +1003,7 @@ fn fit_panels(root: &Path, p: &Plan) -> Result<Vec<Panel>> {
     .collect())
 }
 fn read_score(root: &Path, p: &Plan, step: usize, panel: &Panel) -> Result<binary::Value> {
+    if word::is(p)&&panel.0.starts_with("word") {return word::read_score(root,p,step,panel);}
     if retained_qa(p) && panel.0.starts_with("qa-") {return qa_score(root,p,step,panel);}
     let (name, es, ms) = panel;
     let tok = ByteBpe::load(&root.join("tokenizer.r3b"))?;
@@ -999,7 +1013,7 @@ fn read_score(root: &Path, p: &Plan, step: usize, panel: &Panel) -> Result<binar
     let mut out = if is_v {
         binary::record!({"joint":orbit_score(es,ms,&raw[1..],&tok)?})
     } else {
-        binary::to_value(score_citation_profile(es, ms, &raw[1..], &tok,instruction_bridge(p))?)?
+        binary::to_value(score_citation_profile(es, ms, &raw[1..], &tok,instruction_bridge(p)||word::is(p))?)?
     };
     if is_mean(p) {
         let mut first=0;let mut extra=0;let mut length=0;let mut parsed=0;let mut runtime=0;
@@ -1018,7 +1032,7 @@ fn read_score(root: &Path, p: &Plan, step: usize, panel: &Panel) -> Result<binar
         if !is_v {
             out["parsed_single_id"]=binary::record!(parsed);out["citation_parse_failures"]=binary::record!(es.len()-parsed);
             out["valid_outside_id"]=binary::record!(valid_outside_ids(es,&raw[1..]));
-            if instruction_bridge(p){out["parse_failure_rows"]=binary::record!(raw[1..].iter().filter(|r|r["actual"].as_str().is_none_or(|s|citations(s).is_err())).count());}
+            if instruction_bridge(p)||word::is(p){out["parse_failure_rows"]=binary::record!(raw[1..].iter().filter(|r|r["actual"].as_str().is_none_or(|s|citations(s).is_err())).count());}
         }
         out["teacher_objective"]=binary::record!("gold-prefix token CE diagnostic; not answer-mean training objective");
     }
@@ -1114,6 +1128,7 @@ fn dev_pass(scores: &BTreeMap<String, binary::Value>) -> Result<bool> {
     Ok(pass(&joint, 512, 488, 232, 116) && citation("citation512")? && citation("renamed512")?)
 }
 pub(super) fn panels(root: &Path, p: &Plan, step: usize) -> Result<Vec<Panel>> {
+    if word::is(p) {return word::panels(root,p,step);}
     let mut out = base_panels(root, p, step)?;
     if full_evaluation(p,step)||(bridge_completion(p)&&p.tiny&&step==p.config.max_steps) {
         let present = out.iter().take(if retained_qa(p)||instruction_bridge(p) {out.len()}else{3})
@@ -1137,6 +1152,7 @@ pub(super) fn panels(root: &Path, p: &Plan, step: usize) -> Result<Vec<Panel>> {
     Ok(out)
 }
 fn evaluation_result(root: &Path, p: &Plan, step: usize) -> Result<binary::Value> {
+    if word::is(p) {return word::decision(root,p,step);}
     if instruction_bridge(p) {return bridge_decision(root,p,step);}
     if retained_qa(p) {return qa_decision(root,p,step);}
     let cases = panels(root, p, step)?;
@@ -1275,7 +1291,7 @@ pub(super) fn evaluate(
     // Recompute development from its complete raw before scheduling fit panels.
     for (name, es, ms) in panels(root, p, step)?.into_iter().filter(|(n, _, _)| {
         ["old512", "new1024", "VC0train1536", "VC1train1536", "bridge-fit1536"].contains(&n.as_str())
-            || (p.tiny&&bridge_completion(p)&&n=="bridge-fit4")
+            || (p.tiny&&bridge_completion(p)&&n=="bridge-fit4") || (word::is(p)&&n.starts_with("word-fit"))
     }) {
         control.check("citation_conditional_fit")?;
         evaluate_panel(p, root, path, step, &name, &es, &ms, control)?;
@@ -1300,7 +1316,7 @@ fn trace(root: &Path, p: &Plan, end: &Segment) -> Result<binary::Value> {
     let mut input = 0u64;
     let mut target = 0u64;
     let mut counts = vec![0usize; c.train.len()];
-    let mut task = vec![[0usize; 3];if retained_qa(p) {5}else if instruction_bridge(p){4}else{3}];
+    let mut task = vec![[0usize; 3];if retained_qa(p)||word::is(p) {5}else if instruction_bridge(p){4}else{3}];
     let mut files = BTreeMap::new();
     let mut mean_steps = Vec::new();
     for index in 0..128 {
@@ -1389,6 +1405,11 @@ fn trace(root: &Path, p: &Plan, end: &Segment) -> Result<binary::Value> {
     let mut result=binary::record!({"files":files,"updates":cursor-p.origin_step(),"step":cursor,"input":input,"target":target,
         "counts":counts,"tasks_V_VC0_VC1_samples_input_target":task,"unique_V_VC0_VC1":counts.chunks(POOL).map(|c|c.iter().filter(|&&n|n>0).count()).collect::<Vec<_>>()});
     if is_mean(p) {result["reduction_steps"]=binary::record!(mean_steps);}
+    if word::is(p) {
+        if let binary::Value::Object(m)=&mut result {m.remove("tasks_V_VC0_VC1_samples_input_target");m.remove("unique_V_VC0_VC1");}
+        result["tasks_V_VC0_VC1_bridge_word_samples_input_target"]=binary::record!(task);
+        result["unique_V_VC0_VC1_bridge_word"]=binary::record!(counts.chunks(POOL).map(|c|c.iter().filter(|&&n|n>0).count()).collect::<Vec<_>>());
+    }
     if retained_qa(p) {
         let mut unique=vec![0usize;5];for (i,&n) in counts.iter().enumerate(){unique[qa_task(p,i)]+=usize::from(n>0);}
         if let binary::Value::Object(m)=&mut result {m.remove("tasks_V_VC0_VC1_samples_input_target");m.remove("unique_V_VC0_VC1");}
@@ -1472,6 +1493,7 @@ fn observed(
     Ok(rows[1..].to_vec())
 }
 pub(super) fn authorize(root: &Path, p: &Plan) -> Result<()> {
+    if word::is(p) {return word::authorize(root,p);}
     if instruction_bridge(p) {return bridge_authorize(root,p);}
     if retained_qa(p) {return qa_authorize(root,p);}
     if continuation(p) {return continuation_authorize(root,p);}
@@ -1762,6 +1784,7 @@ pub(in super::super::super) fn seal(study: &Path, private: &Path) -> Result<()> 
 }
 fn comparison(study: &Path, p: &Plan, end: &Segment, d: &binary::Value) -> Result<binary::Value> {
     let endpoint = binary::record!({"policy":digest(p)?,"checkpoint":end.checkpoint_hash,"step":end.step,"decision":d});
+    if word::is(p) {return Ok(binary::record!({"contract":word::CONTRACT,"source":p.source,"preparation":file_hash(&study.join("preparation.r3b"))?,"endpoints":BTreeMap::from([(own(p).arm.as_str(),endpoint)]),"selected":if d["eligible"]==true{Some(own(p).arm.as_str())}else{None},"goal1_ready":false}));}
     Ok(
         binary::record!({"contract":if bridge_completion(p){BRIDGE_COMPLETION_CONTRACT}else if instruction_bridge(p){BRIDGE_CONTRACT}else if retained_qa(p){QA_CONTRACT}else if precision(p){PREC_CONTRACT}else if fidelity(p){FID_CONTRACT}else if continuation(p){CONT_CONTRACT}else if is_mean(p){MEAN_CONTRACT}else{CONTRACT},"source":p.source,"preparation":file_hash(&study.join("preparation.r3b"))?,
         "endpoints":BTreeMap::from([(own(p).arm.as_str(),endpoint)]),"selected":if d["eligible"]==true {Some(own(p).arm.as_str())}else{None},"goal1_ready":false}),
@@ -2921,7 +2944,7 @@ mod tests {
             Ok(())
         }
     }
-    fn gold(e: &Episode, tok: &ByteBpe) -> Result<binary::Value> {
+    pub(super) fn gold(e: &Episode, tok: &ByteBpe) -> Result<binary::Value> {
         let tokens = tok.encode(e.answer.as_bytes())?;
         let mut raw = tokens.clone();
         raw.push(EOS);
@@ -2932,7 +2955,7 @@ mod tests {
         )
     }
     // Synthetic writer/reader fixture only: no generation, teacher or optimizer.
-    fn precision_panel_fixture(root:&Path,p:&Plan,step:usize,native:&Path,panel:&Panel,wrong:usize)->Result<()> {
+    pub(super) fn precision_panel_fixture(root:&Path,p:&Plan,step:usize,native:&Path,panel:&Panel,wrong:usize)->Result<()> {
         precision_panel_fixture_with_suffix(root,p,step,native,panel,wrong,None)
     }
     fn precision_panel_fixture_with_suffix(root:&Path,p:&Plan,step:usize,native:&Path,panel:&Panel,wrong:usize,suffix:Option<&str>)->Result<()> {

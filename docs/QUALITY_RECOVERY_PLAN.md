@@ -1,5 +1,52 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active scope: four-word QA value selection
+
+`R3-QA-WORD-VALUE-1.0` uses the normally completed bridge14336 weights,
+ANSWER objective/family6, Adam moments and clock, tokenizer, QE, batch8 and
+constant LR3e-5. Previous failures/resume=false and accepted11264/4352 remain
+immutable. CLEANUP_EXECUTION=CANCELLED_BY_USER; APPLIED=false. No inventory,
+deletion, movement, compression, hardlink substitution, cargo clean or rollback.
+Previously accepted no-call finalization and audit evidence remain preserved.
+
+The training-only extension selects and cites four existing QA values (왼쪽,
+오른쪽, 직진, 대기). It retains two current records, 장치0–9, 구역0, equal
+timestamps, eight-digit positive IDs, QA system and the existing S1Q1 question.
+For each of six word pairs, rank45 key pairs by domain/seed20260924:32 train,
+8 dev,5 unused. Train192 groups ×2 ID versions ×2 assignments ×2 questions
+produces1536 rows; dev48 groups ×4 produces192, with an ID-only renamed192.
+Unused groups and previous seals are not opened. The original bridge6144 train
+and six512 dev episodes remain unchanged in the appended native corpus.
+
+One registered fork permits3072 optimizer updates,11264 generations and10240
+teacher samples, input8M/target1M tokens, active10800s, segments900s, inference
+12GiB/training16GiB. TINY direct regressions have separate caps64/512/512.
+Each batch consumes four reviews from successive halves of the actual1536-step
+parent tape and two new complete query pairs from different groups. New1536
+rows receive one exposure every384 updates, at most eight cycles. New answers
+use an unrestricted whole UTF-8 string scorer; historical digit metrics and
+normal greedy decoding remain unchanged. Full input≤256, generation≤32;
+EOS belongs to ANSWER CE, prompt/padding do not.
+
+Direct data/scorer/gradient/native-process checks and independent A precede
+parent16 parity plus new384 generation-only observations. If both new gates
+already pass, no training is needed. Otherwise save/restart after update1;
+evaluate five64 panels at128/512, six512 old panels plus two192 new panels and
+actually exposed train128 at1536/3072. Fit1536 runs at most once: at1536 only
+when both development gates pass, otherwise at3072. Failed early fit closes
+the study. Fixed parent64 retention drops≥16 or≥4 non-EOS/error rows stop;
+drop>4 FULL or>2 ALL4 at two consecutive scheduled evaluations also stops.
+Cancel, UNKNOWN, storage/integrity errors remain blocking.
+
+Each word dev requires FULL183/192, QB/SB88/96, ALL4 44/48, value/support190,
+EOS192 and zero outside-ID/parse/generation errors. Fit requires1524/1536,
+QB/SB756 and ALL4 372 with zero errors. Old six-panel gates remain FULL488,
+QB/SB232, ALL4 116; citation value/support508 and zero errors. Independent B
+recounts all raw and reproduces at most64 cases. Only normal complete endpoints
+with B integrity PASS may run original QA640 once (original128-token limits),
+even when quality fails. No confirmation, S4 seal, S5/S6 or Goal1 acceptance
+is granted by this development study. No automatic data/LR/loss/seed extension.
+
 ## Closed scope: artifact hygiene and no-call finalization
 
 R3-ARTIFACT-HYGIENE-AND-FINALIZATION-1.0 permits zero new SMALL/TINY

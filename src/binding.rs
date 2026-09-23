@@ -951,6 +951,7 @@ fn work(p: &Plan) -> Result<(f64, usize, usize, u64, u64)> {
             "qa-review-old_qa", "qa-review-balanced",
             "qa-factor-value", "qa-factor-citation", "qa-factor-S1Q0", "qa-factor-S0Q1", "qa-factor-S1Q1",
             "bridge-review-normal", "bridge-review-errors", "bridge-qa-primary", "bridge-qa-transfer", "bridge-parent-parity",
+            "word-parent-parity", "word-parent-dev", "word-parent-renamed", "word-review",
         ] {
             let study = &own(p).study;
             if study.join(format!("{name}-started.r3b")).exists() {
@@ -981,7 +982,9 @@ pub(in super::super) fn usage(p: &Plan) -> Result<(f64, usize, usize)> {
 }
 pub(in super::super) fn remaining(p: &Plan, target: bool) -> Result<u64> {
     let w = work(p)?;
-    let (cap, n) = if citation::instruction_bridge(p) {
+    let (cap, n) = if citation::word::is(p) {
+        if target {(1_000_000u64,w.4)}else{(8_000_000u64,w.3)}
+    } else if citation::instruction_bridge(p) {
         if target {(300_000u64,w.4)}else{(4_000_000u64,w.3)}
     } else if citation::retained_qa(p) {
         if target {(2_400_000u64,w.4)} else {(18_000_000u64,w.3)}
@@ -1053,7 +1056,7 @@ fn observation_control(
         std::time::Duration::from_secs_f64(
             (p.evaluation.active_seconds as f64 - elapsed).min(p.evaluation.segment_seconds as f64),
         ),
-        (if citation::instruction_bridge(p)||citation::retained_qa(p)||citation::fidelity(p)||citation::precision(p) {12}else{16}) * 1024 * 1024,
+        (if citation::word::is(p)||citation::instruction_bridge(p)||citation::retained_qa(p)||citation::fidelity(p)||citation::precision(p) {12}else{16}) * 1024 * 1024,
     )?;
     control.set_call_limits(generations, teachers);
     Ok(control)

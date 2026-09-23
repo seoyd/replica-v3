@@ -41,6 +41,11 @@ pub enum Command {
         #[arg(long)] continue_from: Option<PathBuf>, #[arg(long)] output: PathBuf
     },
     QaBridgeReport { #[arg(long)] study: PathBuf },
+    WordPrepare { #[arg(long)] previous: PathBuf, #[arg(long)] output: PathBuf },
+    WordParent { #[arg(long)] study: PathBuf, #[arg(long,value_parser=["parity","dev","renamed"])] panel: String },
+    WordReport { #[arg(long)] study: PathBuf },
+    WordReview { #[arg(long)] study: PathBuf },
+    WordQa { #[arg(long)] study: PathBuf, #[arg(long)] transfer: bool },
     QaBridgeReview { #[arg(long)] study: PathBuf, #[arg(long)] errors: bool, #[arg(long,conflicts_with="errors")] parent: bool },
     QaBridgeQa { #[arg(long)] study: PathBuf, #[arg(long)] transfer: bool, #[arg(long)] diagnostic: bool },
     RetainedQaReview { #[arg(long)] root: PathBuf, #[arg(long,value_parser=["old_qa","balanced"])] panel: String },
@@ -1732,6 +1737,7 @@ fn source_digest() -> Result<String> {
         include_bytes!("identifiable.rs").as_slice(),
         include_bytes!("binding.rs").as_slice(),
         include_bytes!("value_citation.rs").as_slice(),
+        include_bytes!("word_value.rs").as_slice(),
         include_bytes!("training.rs").as_slice(),
         include_bytes!("data.rs").as_slice(),
         include_bytes!("native_corpus.rs").as_slice(),
@@ -1769,6 +1775,11 @@ pub fn execute(command: Command) -> Result<()> {
             None=>identifiable::binding::citation::bridge_prepare(probe.as_deref().ok_or_else(||bad("bridge probe required"))?,old_qa.as_deref().ok_or_else(||bad("bridge original QA required"))?,&output),
         },
         Command::QaBridgeReport {study} => identifiable::binding::citation::bridge_report(&study),
+        Command::WordPrepare {previous,output} => identifiable::binding::citation::word::prepare(&previous,&output,false),
+        Command::WordParent {study,panel} => identifiable::binding::citation::word::parent_observe(&study,&panel),
+        Command::WordReport {study} => identifiable::binding::citation::word::report(&study),
+        Command::WordReview {study} => identifiable::binding::citation::word::review(&study),
+        Command::WordQa {study,transfer} => identifiable::binding::citation::word::qa(&study,transfer),
         Command::QaBridgeReview {study,errors,parent} => if parent{identifiable::binding::citation::bridge_parent_parity(&study)}else{identifiable::binding::citation::bridge_review(&study,errors)},
         Command::QaBridgeQa {study,transfer,diagnostic} => if diagnostic{identifiable::binding::citation::bridge_diagnostic_qa(&study,transfer)}else{identifiable::binding::citation::bridge_qa(&study,transfer)},
         Command::RetainedQaReview {root,panel} => identifiable::binding::citation::qa_review(&root,&panel),
@@ -2752,7 +2763,7 @@ fn evaluate_panel(
     meta: &[Meta],
     control: &mut recovery::RunControl,
 ) -> Result<PanelResult> {
-    if identifiable::binding::citation::instruction_bridge(p) || identifiable::binding::citation::retained_qa(p) || identifiable::binding::citation::fidelity(p) || identifiable::binding::citation::precision(p) {
+    if identifiable::binding::citation::word::is(p) || identifiable::binding::citation::instruction_bridge(p) || identifiable::binding::citation::retained_qa(p) || identifiable::binding::citation::fidelity(p) || identifiable::binding::citation::precision(p) {
         control.restrict_rss(12*1024*1024);
         control.check("fidelity_inference_rss")?;
     }
