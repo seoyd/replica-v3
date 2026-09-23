@@ -25,6 +25,12 @@ weights/Adam/clock/raw가 일치했다. 0-test를 PASS로 세지 않았다.
 generation36, teacher36, 마지막 durable step16, INTEGRITY_FAIL/resume=false.
 새 process02로 수리 후 검증했으며 이전 종료는 수정하지 않았다.
 구현자 TINY 누계는8/156/156, 신규 SMALL optimizer/generation/teacher는0.
+독립 검토자의 같은 동결 binary process도1/1 PASS(exit0,94.87초),
+추가 TINY6/120/120으로 전체 누계는14/276/276이다. 이 process 증거의
+source는 `915e2f04f3294cccc73f0d12f058589e6408a462`다.
+추가 `word_scope_never_confirmation`1/1 PASS(exit0,29.99초)는 SMALL/TINY,
+품질 PASS/FAIL 모두에서 confirmation을 열기 전에 거부함을 검증했다.
+이 추가 실행의 모델 호출은0이며, 최종 source는 이 권한 차단만 추가한다.
 직접 증거는 `artifacts/qa-word-value-20260924-evidence/`, process 원자료는
 `artifacts/qa-word-value-20260924-tiny-process-01/`과 `-02/`, typed 경계
 fixture는 `artifacts/qa-word-value-20260924-typed-gates-01/`에 보존한다.

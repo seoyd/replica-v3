@@ -447,6 +447,17 @@ mod tests {
     use super::*;
     fn parent()->Result<PathBuf>{Ok(PathBuf::from(std::env::var("R3_WORD_PARENT").map_err(|_|bad("explicit preserved parent path required"))?))}
     #[test]
+    #[ignore = "reads only the registered plan/terminal; zero model calls"]
+    fn word_scope_never_confirmation()->Result<()> {
+        let root=parent()?;let mut p:Plan=read(&root.join("plan.r3b"))?;
+        let end=history(&root,&p)?.last().cloned().ok_or_else(||bad("word scope fixture endpoint"))?;
+        p.identifiable.as_mut().unwrap().dataset=DATA.into();
+        for tiny in [false,true] {p.tiny=tiny;for eligible in [false,true] {
+            assert!(!confirmation_admitted(&root,&p,&end,&binary::record!({"eligible":eligible}))?);
+        }}
+        println!("WORD_CONFIRMATION denied for SMALL/TINY, positive/negative quality, before opening a seal; model_calls0");Ok(())
+    }
+    #[test]
     #[ignore = "explicit preserved corpus/tokenizer, no model calls"]
     fn word_data_tape_boundaries()->Result<()> {
         let root=parent()?;let p:Plan=read(&root.join("plan.r3b"))?;let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;

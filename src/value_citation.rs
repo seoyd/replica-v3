@@ -1893,7 +1893,7 @@ pub(in super::super::super) fn confirm(study: &Path) -> Result<()> {
     Ok(())
 }
 fn confirmation_admitted(study:&Path,p:&Plan,end:&Segment,d:&binary::Value)->Result<bool> {
-    if retained_qa(p)||instruction_bridge(p) {return Ok(false);} // The inherited citation confirmation is already consumed.
+    if word::is(p)||retained_qa(p)||instruction_bridge(p) {return Ok(false);} // These profiles have no citation confirmation authority.
     #[cfg(all(test,feature="test-support"))]
     if p.tiny {
         let expected=binary::record!({"scope":"TINY confirmation protocol only; no quality acceptance","policy":digest(p)?,"checkpoint":end.checkpoint_hash,"count":8});
