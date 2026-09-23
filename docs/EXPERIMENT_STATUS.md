@@ -1,5 +1,120 @@
 # 진단 및 구현 상태
 
+## 2026-09-23 인용 precision 종료 — 제한 범위 수용, 기존 QA는 미달
+
+실제 source는 `3290fec66db372c5ab427bf2e632bf573824ce3d`이며 이후 제품
+source/tests/Cargo 변경은 없다. [독립 A](CITATION_PRECISION_REVIEW_A_2026-09-22.md)와
+[독립 B](CITATION_PRECISION_REVIEW_B_2026-09-23.md)가 통과했다. B는 학습768회,
+generation/teacher6464행, native/Adam/정책/시간분할 재개를 검산하고 고정 후보
+V16/VC16의 새 process 출력을32/32 재현했다. B 보고서 게시 commit은
+`bcb52231aa70d4229603ab20da8c9d59602b94cc`이며 실제 remote 일치를 확인했다.
+
+같은11264 후보로 기존 미사용 citation confirmation을 한 번 실행했다(exit0).
+V와 VC는 각각 FULL256/256, QB128/128, SB128/128, ALL464/64, EOS256,
+오류0이다. VC는 첫 값256, 정확 support256, 다른 제공 ID0, 외부 ID0이다.
+generation512/teacher0/optimizer0, raw token4864, control active30.997563초다.
+완료 재진입도 exit0이며 기존 결과 검증만 수행했고 새 모델 호출0이다.
+결과 hash는 `b32cd847592930410267f51e5c4d3184b508091efae0e69f88a7035f44997b74`,
+raw hash는 `2f97a74a980724a224bf1c394afda6600e12c273511767caaf0d41eb54bbfb2c`다.
+
+**두 current 기록·한 자리 key/value·고정 문법·8자리 사건 ID**의 값+인용
+범위만 수용한다. 기존 scalar4352 수용은 별도로 보존한다. 같은 모델이 넓은
+한국어 QA·정정·시점·근거 한계를 처리한다는 수용이 아니며 제품 기본 모델로
+자동 승격하지 않았다. 동시 고LR 대조가 없으므로 개선을 LR만의 효과라고
+확정하지 않는다.
+
+### 기존 QA640: 실행 완료, 품질 미달
+
+원래 native primary512와 transfer128을 한 번씩 평가했다. 원 입력의 한도는
+context2048/max_tokens128/timeout120000ms이며 정답16개는 EOS 포함32토큰을
+넘는다. 사용자가 QA640에 한해 원래128토큰 사용을 명시 승인했다. 질문·근거·
+정답·tokenizer·framing은 변경하지 않았다. 실제 prepare token IDs가 QE와
+동일함을 확인했으며, 인용 연구의32토큰 제한은 변경하지 않았다.
+두 명령은 exit0, STOP=[], generation512+128/teacher0/optimizer0이다.
+기존 R3ER reader와 strict decoder/scorer를 재사용한 격리 Rust 검산은 모델·
+checkpoint·source·corpus·ordered case/prompt/제공 ID·EOS·raw를 대조했다.
+원본 final 두 파일이나 완료 오답을 다시 만들지 않았다.
+
+|과제(metadata bucket)|primary FULL /64|transfer FULL /16|primary / transfer 비정상 종료|정확 인용 support|
+|---|---:|---:|---:|---|
+|원문 복사 A|0|0|1 /2|0/64 ·0/16|
+|필드 B|0|0|5 /4|0/64 ·0/16|
+|대상 선택 C|0|0|25 /7|0/64 ·0/16|
+|맥락 선택 D|0|0|35 /8|0/64 ·0/16|
+|시점 선택 E|0|0|30 /4|0/64 ·0/16|
+|정정·복원 F|0|0|36 /8|0/64 ·0/16|
+|근거 없음·모호함 G|0|0|11 /0|인용 없는 정답; FULL0|
+|시간순서와 인과 구분 H|0|0|24 /0|인용 없는 정답; FULL0|
+
+합계 primary0/512·transfer0/128이다. EOS345+95=440, 길이 종료167+33=200,
+runtime/strict UTF-8 오류0이다. 위 비정상 종료는 모두 길이 종료이며 정상적인
+오답도 전체 분모에 남겼다. 인용 문자열 없음은498+128=626, 파싱 실패13,
+비어 있지 않은 정상 파싱1개는 근거 밖 ID다. A–F의 정확 support는0/480이다.
+G/H에서 인용 집합이 비었다는 사실을 근거 한계 답변 정답으로 세지 않았다.
+일부 원문/필드 질문에 한 자리 숫자를 출력하는 사례가 raw에 남아 있다.
+새 범위로 전이되지 않았다는 관측이며, 동일 부모의 QA 대조가 없으므로
+이번 LR가 일반 QA를 악화시켰다는 인과 주장은 하지 않는다.
+
+QA 생성 raw token40888, row generation_ms 합계92.306초다. transfer command
+wall19.78초를 별도 측정했다. primary 전체 command wall과 QA 합산 control
+active는 기존 평가 출력에 저장되지 않아 UNKNOWN이며0으로 채우지 않는다.
+모델 호출 수는640으로 확정됐다. 양쪽 command900초 제한의 보수적 합산과
+기존 receipt active1449.704161042초를 합쳐도 총7200초 예산 이내다.
+추가 모델 호출·teacher·학습·S4 final200은 수행하지 않았다.
+
+### 최종 사용량·판정·재현 경로
+
+|필수 판정|실제 결과|
+|---|---|
+|RESULT / CODE_CHANGED_SCOPE|PASS: 한정 precision 정책·LR·예산·native 재개·평가 연결 완료|
+|INDEPENDENT_A / INDEPENDENT_B|PASS / PASS|
+|TRAINING_EXECUTED / LAST_DURABLE_STEP|신규768, 누적11264; 조기 고정, 남은768 미사용|
+|PARENT10496_PRESERVED / BASELINE4352_PRESERVED|true / true; 소비 원본17개 최종 hash 모두 일치|
+|ACTUAL_LR_BITS|4539475662290099561 (3e-5), trace768회 전부 동일|
+|NEW_USAGE SMALL|optimizer768, input915456, target58368, padding24576, samples6144|
+|NEW_USAGE 관측|generation7680/14336, teacher6464/13120, diagnostic backward0, raw token124568|
+|NEW_USAGE TINY 직접+독립|optimizer58/64, generation420/1200, teacher280/1024, FD0|
+|DEV_JOINT_PASS / FIT_VERIFIED / CANDIDATE_FIXED|true / true(4608/4608) / true(11264)|
+|CONFIRMATION_STATUS / VALUE_CITATION_SCOPE_ACCEPTED|PASS512/512 / true(위 제한 범위)|
+|QA_GAP_STATUS|EXECUTED_THIS_RUN:0/640, 미달 보존; 새 QA 학습0|
+|S4 / S5 / S6 / GOAL1_READY / GOAL1_ACCEPTED|NOT_ACCEPTED / NOT_ACCEPTED / NOT_ACCEPTED / false / false|
+
+generation7680은 부모32+학습 평가6464+B32+confirmation512+QA640이다.
+학습 노출은 V3072/VC01536/VC11536이며 최대 training RSS3858640KiB다.
+학습 중 마지막 native와 종료 사유는 아래11264 항목과 동일하다.
+
+허용된 로컬 원자료·읽기 전용 검토 경로:
+
+- 준비/정책/기존 raw/confirmation: `artifacts/citation-precision-20260922-study-final/`.
+  preparation `798ab26a728c374a93271c5a51be3a236acffb1cdf596e39d29a938205a50120`.
+- 고정 native: 위 경로의 `ANSWER-MEAN/segment-0003/final`;
+  physical `c47e34c7ac4f88dd08b5e719bf4d0364f139ac5002bf4572fe55b37dac823925`.
+- candidate diff/명령/실패/테스트/독립 증거:
+  `artifacts/citation-precision-20260922-review/`, 특히 `final-candidate.diff`,
+  `HANDOFF.md`, `confirmation-01.log`, `qa-primary.log`, `qa-transfer.log`,
+  `qa-recount.log`, `qa-components-02.log`, `P4-preservation.log`.
+- QA native 결과: 위 경로의 `qa640/primary512.r3er`, `transfer128.r3er`,
+  `qa-recount.r3b`. 두 raw hash는 각각
+  `50b89e649f3f8febdd4ac479c5d4b297f30a5a14079a0001766e4fba96268fdf`,
+  `b7bd3193970ecfef91a594f3ea67b6c228128c7ae96cfd2622ccd4db4785e5ab`.
+- 기존 QA 입력: `artifacts/fresh-joint-20260919/corpus.r3cor`와 `transfer.r3cor`.
+  입력 hash108171c2ffad62afc9b0f09a52070871a4d3287017676208e9f43a88631fe04f /
+  e7878e78e19b55a42565e64af1107548651596303efe132e8b728cba32460c29.
+
+원자료·native·seal·scratch는 게시하지 않는다. scratch 재집계 빌드의 import
+누락(exit101)과 header를 행으로 센 보조 reader 실패(exit101)는 보존했다.
+수정 후 각각 exit0이며 이 reader들은 모델 호출0이다. QA 재검산 바이너리
+hash는 `c6a34bde5280fd4969c4328f781c7644af4f3ccc592f53389b07123183c44404`다.
+
+프로젝트 한정 개발 skill과 AGENTS 자동 적용 지시는 별도
+`1e386c8218d60ab4054a1a7a72c0a634db889acb`로 게시했다. 명시된 전체 읽기,
+필수 수치/process/독립 검토, 품질 gate·예산·중단 조건을 절약 대상으로 삼지
+않는다. skill metadata 자동 검사기는 PyYAML 부재로 실행 실패했고 설치하지
+않았다. 수동 schema/path/권한 충돌 점검과 diff 검사를 완료했다.
+신규 제품 모듈은 없으며 신규 tracked 파일은 해당 skill과 독립 A/B 보고서다.
+기존 SQLite와 범용 Candle/Accelerate 의존은 유지하고, 외부 모델·teacher·API는
+사용하지 않았다. 전체 요구와 최종 결과를 대조했으며 후속 자동 실험은 없다.
+
 ## 2026-09-22 인용 precision — 11264 dev·fit 통과, 768회에서 후보 고정
 
 동결 source `3290fec66db372c5ab427bf2e632bf573824ce3d`, 실행 파일

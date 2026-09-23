@@ -1,12 +1,18 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: citation precision from complete ANSWER10496
+## Closed: citation precision from complete ANSWER10496
 
 Learning is closed at11264 after768 new updates. All three dev512 panels and
 the same-checkpoint full fit4608 pass; the candidate is fixed with extend=false.
-The remaining768 updates are unused. Independent B and the original unused
-citation confirmation are the next prerequisites; no further learning is allowed.
-This development result does not yet accept value/citation scope or Goal1.
+The remaining768 updates are unused. Independent B passed, and the original
+unused citation confirmation passed V256/256 and VC256/256, with support256,
+outside ID0 and errors0. Accept only two current records, one-digit key/value,
+fixed grammar and eight-digit event IDs on the fixed11264 checkpoint.
+The original QA512+128 observation then completed once, with teacher/optimizer0.
+The user explicitly authorized its original128-token limits; these do not change
+the citation32-token policy. QA scored0/640, with EOS440 and length200; the broad
+QA gap remains. No further learning is authorized by this closed study.
+S4/S5/S6 and Goal1 remain unaccepted; no product model pointer is changed.
 
 R3-CITATION-PRECISION-1.0 preserves the accepted scalar4352 and all closed
 fidelity A/B evidence. The specific failed10496 parent physical SHA256 is
