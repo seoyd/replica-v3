@@ -1,5 +1,12 @@
 # Replica v3 working map
 
+## Project workflow skill
+
+For every development, review, experiment, or continuation task in this repository,
+apply [replica-lean-development](.agents/skills/replica-lean-development/SKILL.md).
+Read it once per context and reuse it while unchanged. This is repository-only;
+explicit user requirements, evidence gates and budgets take precedence.
+
 ## Scope and authority
 
 Continue the existing repository; preserve user changes and original artifacts.
