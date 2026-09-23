@@ -1,6 +1,16 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: QA integrity and bounded instruction bridge
+## Closed learning budget: QA integrity and bounded instruction bridge
+
+A1 and A2 independently accepted the scorer repair and bridge preparation.
+Frozen source `8522d026512cfb7b6e4b6c32142c5d68b77c9f2f` executed exactly1536
+new updates from11264 to12800 with the registered tape/Adam/LR. Final retention
+V/VC/ID each scored512/512; the three bridge panels scored511/511/508 but each
+retained one valid outside ID. The endpoint is BRIDGE_DEVELOPMENT_FAIL/resume=false.
+Conditional fit and oldQA640 are NOT_RUN because development failed. No further
+optimizer calls or automatic extension are authorized. Independent B verifies
+the closed evidence separately; narrow improvement is not bridge quality PASS
+or Goal1 acceptance. The registration below remains the unchanged basis for this run.
 
 R3-QA-INTEGRITY-AND-BRIDGE-1.0 supersedes the retained-QA metric acceptance,
 following the independently reproduced malformed/outside-ID undercount. Keep

@@ -1,5 +1,52 @@
 # 진단 및 구현 상태
 
+## 2026-09-23 지시문 bridge 1536회 종료 — 외부 ID 잔존, 후보 거부
+
+독립 [A1](QA_INTEGRITY_REVIEW_A1_2026-09-23.md)과
+[A2](QA_INTEGRITY_REVIEW_A2_2026-09-23.md)가 각각 수리·자료 준비를 수용했다.
+실제 학습 source는 `8522d026512cfb7b6e4b6c32142c5d68b77c9f2f`,
+A2 보고서-only HEAD는 `aec3d813d45dd32c11e95e48e38b5cf149eefb92`다.
+동결 source/binary로 보호11264의 weights·Adam에서 정확히1536 updates를
+실행했다. LR3e-5, ANSWER CE, QE, tokenizer, 기존 TR++는 유지했다.
+새 입력2,064,384·target162,816·sample12,288은 준비 전수 계산과 일치한다.
+V/VC0/VC1/bridge 노출은3072/1536/1536/6144다. 마지막 실제 step은12800이다.
+
+step11265의 +1 저장 후 새 process로11520/12032/12544/12800까지 진행했고
+각 명령 exit0으로 닫혔다. +256의 여섯64 패널 FULL은64/64/64/64/64/63이었다.
++768/12032에서는 기존 세512 패널이 모두512였지만 bridge FULL511/511/506,
+외부 ID1/1/2로 후보를 거부했다. 보존 중단 조건은 없어서 등록된 마지막 구간만
+실행했다. 최종12800 결과는 다음과 같다. 모든 패널 EOS512·생성 오류0이다.
+
+|패널|FULL /512|QUERY_BOTH /256|SWAP_BOTH /256|ALL4 /128|값 / 정확 support|유효 외부 ID / parse 실패|
+|---|---:|---:|---:|---:|---|---|
+|값|512|256|256|128|512 /해당 없음|해당 없음|
+|기존 인용|512|256|256|128|512 /512|0 /0|
+|ID 재명명|512|256|256|128|512 /512|0 /0|
+|QA system /기존 문구|511|255|255|127|512 /511|1 /0|
+|short system /current 문구|511|255|255|127|512 /511|1 /0|
+|QA system /current 문구|508|252|252|124|510 /510|1 /0|
+
+높은 FULL로 외부 ID 조건을 대신하지 않는다. 최종 terminal은
+`BRIDGE_DEVELOPMENT_FAIL`, `resume=false`이고 후보 자격은 없다.
+개발 gate 미달이므로 조건부 bridge train fit1536과 old QA640는 NOT_RUN이다.
+이 결과는 system/문구 변형에 대한 좁은 개선 관측이며 전체 QA 회복을 뜻하지 않는다.
+기존11264 수용과 이전 실패15360의 원자료·판정은 보존한다. 사용한 confirmation과
+S4 봉인은 열지 않았다. S4/S5/S6·Goal1은 NOT_ACCEPTED다.
+
+최종 native는
+`artifacts/qa-integrity-bridge-20260923-study-final/ANSWER-MEAN/segment-0004/final`,
+physical SHA256 `80970cee2ca6dbeb258bc7f202e612f6e178c9185c590acc23c99b6941a98d73`다.
+명령과 원시 증거는 `artifacts/qa-integrity-bridge-20260923-implementation/`의
+`train-segment-0000.log`부터 `train-segment-0004.log`, 실제 연구 root의
+native panel/teacher/decision/segment 파일에 남아 있다.
+학습 종료 시 SMALL optimizer1536/generation6608/teacher6528이며 generation에는
+부모 관측80을 포함한다. TINY는 실패분과 독립 A2를 포함해 optimizer14/
+generation168/teacher168이다. 기존 pure report 명령은 exit0으로 모든 예정
+panel/decision/trace/종료 비교를 재검증했다. 등록된 active 사용량은
+2068.345996375초이고 학습 로그의 최대 sampled RSS는6,880,704KiB다.
+teacher는 같은 자체 모델의 무학습 gold-prefix 진단이며 외부 모델이 아니다.
+독립 B 재채점·제한 재현은 별도 기록한다.
+
 ## 2026-09-23 작은 지시문 bridge 준비와 직접 검증 — A2 대기
 
 I2의 정상 반환된 입력별 결손에 따라 기존11264에서 별도 연구를 준비한다.
