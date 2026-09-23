@@ -1,5 +1,45 @@
 # 진단 및 구현 상태
 
+## 2026-09-24 지시문 bridge 후속 정책 — 직접 검증 완료, 독립 A 대기
+
+R3-INSTRUCTION-BRIDGE-COMPLETION-1.0은 기존12800 실패를 보존한 새
+parent-bound 연구다. 원 native/corpus/metadata의 실제 SHA256은 이전 B와
+일치한다. 기존 A1 재확인과 A2/B를 재실행하거나 원 실패를 재개하지 않는다.
+현재 구현은 같은1536-update suffix와 byte-identical 자료, 누적 Adam/clock을
+사용하며 최종 dev 미달에도 fit를 한 번 측정한다. 독립 B가 확인한 정상 완결
+endpoint의 oldQA640 권한은 후보 자격과 분리하고, 기존 segmented collector로
+시간 재개와 RETURNED 보존을 처리한다. 원 candidate-only QA 권한은 유지한다.
+
+`bridge_completion_raw_gate`는1 PASS(153.07초): 실제 writer/reader/scorer/
+decision에서 중간dev 미달 계속, 최종dev 미달 fit, fit누락/실패, 혼합 외부ID+
+malformed 및 같은step의 다른모델 거부를 확인했다. 생성/teacher/optimizer0.
+`bridge_completion_native_process`는1 PASS(87.08초): TINY 연속2, 새process1+1,
+마지막 fit의 평가-only2+0에서 weights/Adam/clock과 raw가 일치했다. 부모 parity24,
+review24, 진단QA4를 실제 실행했으며 QA 시간 종료 전 반환2행을 재사용했다.
+완료 재진입은 추가호출0; UNKNOWN/손상/취소 및 candidate/confirmation 재진입은
+차단했다. 성공 회귀 사용량은 TINY optimizer6/generation136/teacher84다.
+
+앞선 실패도 보존한다. raw fixture는 다른step을 잘못 사용한1회 실패 후 수정했다.
+process01은 policy hash 표현 불일치로0/24/0, process02는 TINY fit 실행 목록
+누락으로2/48/24, process03은 시험의 signal handler 중복으로6/108/84,
+process04는 0기반 fault ordinal의 반환행 수를 잘못 기대해6/134/84를 사용했다.
+이들을 합한 구현자 TINY 총량은 optimizer20/generation450/teacher276이다.
+최종 시험은 각각 새 process를 쓰며 축소 fit도 실제 평가 경로를 통과한다.
+신규 SMALL 학습/생성/teacher는 아직0이며 독립 A 수용 전 학습하지 않는다.
+합성 raw와 TINY는 SMALL 품질 증거가 아니며 Goal1은 미수용이다.
+구체적인 source/diff/build/test/준비 기록은 로컬
+`artifacts/instruction-bridge-completion-20260924-implementation/`에 보존한다.
+실제 준비 root는 `artifacts/instruction-bridge-completion-20260924-study-final/`다.
+부모 step/sampler12800과 Adam136, ANSWER family6/normalizer2 및
+기존 원본1536-row suffix를 native/종료 기록과 대조했다. 새 예상 input2,064,384와
+target162,816은 원cycle과 같다. Preparation SHA256은
+`755c60e07729eb4f3712ce1574ab05a2396024e07e2b2ae40a7d4fe483d151a5`,
+source digest는 `dab51655d7ad6a5bd4c9f9ffcd0906efa80f9f4971dc93719bd234909021e434`다.
+보존한 production binary는 `executable-bridge`이며 SHA256은
+`ffffb7f2f2dab68f04a73d579f65fe8d55b9177c00244705d7bd12788c472713`다.
+Release build는 exit0이며 cfg(test-support)에 따른 unused 경고4개를 남겼다.
+실제 준비 명령은 exit0/optimizer0/generation0/teacher0으로 끝났다.
+
 ## 2026-09-23 지시문 bridge 1536회 종료 — 외부 ID 잔존, 후보 거부
 
 독립 [A1](QA_INTEGRITY_REVIEW_A1_2026-09-23.md)과

@@ -1,5 +1,46 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: instruction bridge completion and diagnostic QA
+
+R3-INSTRUCTION-BRIDGE-COMPLETION-1.0 registers a new fork of the preserved
+bridge12800 endpoint. Its original BRIDGE_DEVELOPMENT_FAIL/resume=false and
+accepted11264 remain immutable. Preserve weights, 136 Adam tensors, cumulative
+clock, tokenizer, QE, ANSWER CE/family6/normalizer2, first-target1, batch8 and
+constant LR3e-5. Copy corpus6144/metadata/transfer byte-for-byte and append the
+exact consumed1536-update bridge suffix once. Expected new sample/input/target/
+padding counts are12288/2064384/162816/233472. No new data or parameter search.
+
+Preparation and independent A precede32 metadata-only parent parity generations
+and learning. Check six64 panels at13056 and six512 panels at13568/14336.
+At13568, development passage triggers the single1536-row train fit: passage
+fixes the candidate; fit failure closes normally. Otherwise continue only to14336,
+where fit runs once even on development failure. Preserve the existing strict
+development/fit thresholds and severe/consecutive retention guards described
+below. Final normal failure is FINAL_BRIDGE_QUALITY_FAIL_AT_14336. Store/reload
+at12801, scheduled evaluations and14080; no optimizer calls during evaluation-only
+time resumption. Partial/RETURNED evaluation and fit rows are reused unchanged.
+
+After independent B verifies a normal complete13568/14336 endpoint, diagnostic
+oldQA640 is authorized even when bridge quality failed. This requires all six
+full panels and fit, excludes cancellation/UNKNOWN/corruption/storage/guard stops,
+and grants no candidate, confirmation, S4 or training authority. Reuse the exact
+original512+128 inputs,128 output tokens/context2048/timeout120000; retain every
+returned row and resume only clean time-limited segments. B audits only the newly
+added QA results afterward. The used citation confirmation remains closed.
+
+Reuse `fresh qa-bridge-prepare --continue-from OLD_STUDY --output NEW_STUDY`,
+`qa-bridge-review --parent`, `fresh run`, `qa-bridge-report`, and
+`qa-bridge-qa --diagnostic` (plus `--transfer`). The original candidate-only QA
+command retains its eligibility requirement. Diagnostic collection shares the
+existing segmented confirmation collector, with separate bindings and artifacts.
+
+New limits:1536 SMALL optimizer/9216 generation/8192 teacher/diagnostic backward0;
+input4M/target300K, active7200s, command900s, inference/training12/16GiB.
+TINY limits64 optimizer/1024 generation/1024 teacher. No automatic extension.
+Independent A covers policy/tape/native resume and diagnostic permission/failure
+boundaries. B reproduces32 normal plus at most32 failed-pair rows. Code, bridge
+quality, general QA and S4/S5/S6/Goal1 are separate verdicts.
+
 ## Closed learning budget: QA integrity and bounded instruction bridge
 
 A1 and A2 independently accepted the scorer repair and bridge preparation.

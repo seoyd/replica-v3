@@ -950,12 +950,12 @@ fn work(p: &Plan) -> Result<(f64, usize, usize, u64, u64)> {
             "qa-parent-value", "qa-parent-citation", "qa-parent-balanced", "qa-parent-transfer",
             "qa-review-old_qa", "qa-review-balanced",
             "qa-factor-value", "qa-factor-citation", "qa-factor-S1Q0", "qa-factor-S0Q1", "qa-factor-S1Q1",
-            "bridge-review-normal", "bridge-review-errors", "bridge-qa-primary", "bridge-qa-transfer",
+            "bridge-review-normal", "bridge-review-errors", "bridge-qa-primary", "bridge-qa-transfer", "bridge-parent-parity",
         ] {
             let study = &own(p).study;
             if study.join(format!("{name}-started.r3b")).exists() {
-                if name == "confirmation" && read::<binary::Value>(&study.join("confirmation-started.r3b"))?["segments"] == 1 {
-                    let (elapsed, calls, _) = confirmation_usage(study)?;
+                if ["confirmation","bridge-qa-primary","bridge-qa-transfer"].contains(&name) && read::<binary::Value>(&study.join(format!("{name}-started.r3b")))?["segments"] == 1 {
+                    let (elapsed, calls, _) = segmented_usage(study,name)?;
                     out.0 += elapsed; out.1 += calls;
                     continue;
                 }
@@ -1796,27 +1796,32 @@ fn orbit_observe(root:&Path,name:&str,path:&Path,es:&[Episode],identity:&binary:
     Ok(rows)
 }
 
-// Confirmation alone permits time segments. Every command has a durable start
+// Confirmation and explicitly admitted QA diagnostics permit time segments.
+// Existing confirmation names and canonical bytes remain unchanged.
+// Every command has a durable start
 // and final, in addition to the existing per-call prepared/resolved protocol.
 // A lost command final is UNKNOWN, even when the raw prefix looks complete.
 fn confirmation_usage(root: &Path) -> Result<(f64, usize, usize)> {
+    segmented_usage(root,"confirmation")
+}
+fn segmented_usage(root: &Path,name:&str) -> Result<(f64, usize, usize)> {
     let mut elapsed = 0.; let mut calls = 0; let mut next = 0;
     let mut recorded=BTreeMap::<String,String>::new();
-    let binding: binary::Value = read_confirmed(&root.join("confirmation-started.r3b"))?;
+    let binding: binary::Value = read_confirmed(&root.join(format!("{name}-started.r3b")))?;
     for i in 0..128 {
-        let start = root.join(format!("confirmation-segment-{i:03}-started.r3b"));
+        let start = root.join(format!("{name}-segment-{i:03}-started.r3b"));
         if !start.exists() {
             for entry in std::fs::read_dir(root)? {
-                let name = entry?.file_name().to_string_lossy().into_owned();
-                if let Some(index) = name.strip_prefix("confirmation-segment-").and_then(|s|s.get(..3)).and_then(|s|s.parse::<usize>().ok()) {
+                let filename = entry?.file_name().to_string_lossy().into_owned();
+                if let Some(index) = filename.strip_prefix(&format!("{name}-segment-")).and_then(|s|s.get(..3)).and_then(|s|s.parse::<usize>().ok()) {
                     if index >= i { return Err(bad("confirmation segment gap")); }
                 }
             }
-            if recorded!=confirmation_call_files(root)? {return Err(bad("confirmation unaccounted call records; usage UNKNOWN"));}
+            if recorded!=segmented_call_files(root,name)? {return Err(bad("confirmation unaccounted call records; usage UNKNOWN"));}
             return Ok((elapsed, calls, next));
         }
         let s: binary::Value = read_confirmed(&start)?;
-        let end: binary::Value = read_confirmed(&root.join(format!("confirmation-segment-{i:03}-finished.r3b")))
+        let end: binary::Value = read_confirmed(&root.join(format!("{name}-segment-{i:03}-finished.r3b")))
             .map_err(|_|bad("confirmation command usage UNKNOWN"))?;
         if s["binding"] != digest(&binding)? || s["index"] != i || end["start"] != file_hash(&start)? {
             return Err(bad("confirmation segment identity"));
@@ -1830,7 +1835,7 @@ fn confirmation_usage(root: &Path) -> Result<(f64, usize, usize)> {
         if s["returned_before"]!=calls || end["returned_before"]!=s["returned_before"] || c["teacher_calls"] != 0 || end["returned_before"].as_u64().and_then(|b|b.checked_add(n as u64)) != end["returned_after"].as_u64() {
             return Err(bad("confirmation returned/call accounting"));
         }
-        let raw=root.join("confirmation.r3rows");
+        let raw=root.join(format!("{name}.r3rows"));
         let records=if raw.exists(){binary::read_value_records(&raw)?}else{vec![]};
         let after=calls+n;
         let prefix=if records.is_empty() && after==0 {&[][..]}else{records.get(..after+1).ok_or_else(||bad("confirmation segment prefix missing"))?};
@@ -1845,15 +1850,21 @@ fn confirmation_usage(root: &Path) -> Result<(f64, usize, usize)> {
     Err(bad("confirmation segment limit"))
 }
 fn confirmation_call_files(root:&Path)->Result<BTreeMap<String,String>> {
+    segmented_call_files(root,"confirmation")
+}
+fn segmented_call_files(root:&Path,name:&str)->Result<BTreeMap<String,String>> {
     let mut files=BTreeMap::new();
     for entry in std::fs::read_dir(root)? {
-        let entry=entry?;let name=entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with("confirmation-generation-") {files.insert(name,file_hash(&entry.path())?);}
+        let entry=entry?;let filename=entry.file_name().to_string_lossy().into_owned();
+        if filename.starts_with(&format!("{name}-generation-")) {files.insert(filename,file_hash(&entry.path())?);}
     }
     Ok(files)
 }
 fn confirmation_prefix(root: &Path, binding: &binary::Value, es: &[Episode], tok: &ByteBpe) -> Result<Vec<binary::Value>> {
-    let raw = root.join("confirmation.r3rows");
+    segmented_prefix(root,"confirmation",binding,es,tok)
+}
+fn segmented_prefix(root: &Path,name:&str, binding: &binary::Value, es: &[Episode], tok: &ByteBpe) -> Result<Vec<binary::Value>> {
+    let raw = root.join(format!("{name}.r3rows"));
     let rows = if raw.exists() {
         let mut rows = binary::read_value_records(&raw)?;
         if rows.first() != Some(binding) || rows.len()>es.len()+1 { return Err(bad("confirmation raw header/count")); }
@@ -1861,7 +1872,7 @@ fn confirmation_prefix(root: &Path, binding: &binary::Value, es: &[Episode], tok
     } else { vec![] };
     for (i,e) in es.iter().enumerate() {
         let row = rows.get(i);
-        call_attempt(root,"confirmation","generation",binding,e,i,row)?;
+        call_attempt(root,name,"generation",binding,e,i,row)?;
         if let Some(row)=row {
             if row["id"]!=e.id || row["question"]!=e.request.input || row["expected"]!=e.answer
                 || row["generated_evidence"]!=binary::to_value(&e.request.evidence)? {
@@ -1872,15 +1883,15 @@ fn confirmation_prefix(root: &Path, binding: &binary::Value, es: &[Episode], tok
     }
     // Reject unknown/extra ordinals rather than ignoring files beyond the panel.
     for entry in std::fs::read_dir(root)? {
-        let name=entry?.file_name().to_string_lossy().into_owned();
-        if let Some(s)=name.strip_prefix("confirmation-generation-") {
+        let filename=entry?.file_name().to_string_lossy().into_owned();
+        if let Some(s)=filename.strip_prefix(&format!("{name}-generation-")) {
             let parts=s.split('-').collect::<Vec<_>>();
             if parts.len()!=3 || !["prepared.r3b","resolved.r3b"].contains(&parts[2]) {return Err(bad("confirmation unexpected or pending call file"));}
             let i=parts.first().and_then(|n|n.parse::<usize>().ok()).ok_or_else(||bad("confirmation call filename"))?;
             let a=parts.get(1).and_then(|n|n.parse::<usize>().ok()).ok_or_else(||bad("confirmation attempt filename"))?;
             if i>=es.len() {return Err(bad("confirmation extra ordinal"));}
-            let prepared=root.join(format!("confirmation-generation-{i:04}-{a:03}-prepared.r3b"));
-            if !prepared.exists() || (a>0 && !root.join(format!("confirmation-generation-{i:04}-{:03}-prepared.r3b",a-1)).exists()) {
+            let prepared=root.join(format!("{name}-generation-{i:04}-{a:03}-prepared.r3b"));
+            if !prepared.exists() || (a>0 && !root.join(format!("{name}-generation-{i:04}-{:03}-prepared.r3b",a-1)).exists()) {
                 return Err(bad("confirmation attempt gap"));
             }
             if let Some(row)=rows.get(i) {
@@ -1888,7 +1899,7 @@ fn confirmation_prefix(root: &Path, binding: &binary::Value, es: &[Episode], tok
                 if prepared.file_name().unwrap().to_string_lossy().as_ref()>last {return Err(bad("confirmation attempt after RETURNED"));}
             }
             if parts.last()==Some(&"resolved.r3b") {
-                let r:binary::Value=read_confirmed(&root.join(&name))?;
+                let r:binary::Value=read_confirmed(&root.join(&filename))?;
                 let conditions=&r["control"]["observed_conditions"];
                 if *conditions!=binary::record!([]) && *conditions!=binary::record!(["TIME_BUDGET"]) {
                     return Err(bad("confirmation call has a sticky non-time failure"));
@@ -1902,29 +1913,34 @@ fn confirmation_prefix(root: &Path, binding: &binary::Value, es: &[Episode], tok
     Ok(rows)
 }
 fn confirmation_collect(root:&Path,path:&Path,es:&[Episode],tok:&ByteBpe,identity:&binary::Value,
+    control:recovery::RunControl) -> Result<Vec<binary::Value>> {
+    segmented_collect(root,"confirmation",path,es,tok,identity,control)
+}
+fn segmented_collect(root:&Path,name:&str,path:&Path,es:&[Episode],tok:&ByteBpe,identity:&binary::Value,
     mut control:recovery::RunControl) -> Result<Vec<binary::Value>> {
+    if !["confirmation","bridge-qa-primary","bridge-qa-transfer"].contains(&name){return Err(bad("unregistered segmented observation"));}
     let binding=binary::record!({"segments":1,"identity":identity,"checkpoint":file_hash(path)?,"cases":digest(&es)?,"source":source_digest()?,
         "binary":file_hash(&std::env::current_exe()?)?,"decoding":"normal-greedy-strict-utf8-eos"});
-    let started=root.join("confirmation-started.r3b");
+    let started=root.join(format!("{name}-started.r3b"));
     if started.exists() { if read_confirmed::<binary::Value>(&started)?!=binding {return Err(bad("confirmation binding changed"));} }
     else {publish_confirmed(&started,&binding)?;}
-    let (prior_elapsed,prior_calls,index)=confirmation_usage(root)?;
-    let mut rows=confirmation_prefix(root,&binding,es,tok)?;
+    let (prior_elapsed,prior_calls,index)=segmented_usage(root,name)?;
+    let mut rows=segmented_prefix(root,name,&binding,es,tok)?;
     if prior_calls!=rows.len() {return Err(bad("confirmation calls/raw disagreement"));}
-    let final_path=root.join("confirmation-finished.r3b");
+    let final_path=root.join(format!("{name}-finished.r3b"));
     if final_path.exists() {
         let r:binary::Value=read_confirmed(&final_path)?;
-        if rows.len()!=es.len() || r["binding"]!=binding || r["raw"]!=file_hash(&root.join("confirmation.r3rows"))?
+        if rows.len()!=es.len() || r["binding"]!=binding || r["raw"]!=file_hash(&root.join(format!("{name}.r3rows")))?
             || r["control"]["generation_calls"]!=prior_calls || r["control"]["elapsed_seconds"]!=prior_elapsed {
             return Err(bad("confirmation final binding"));
         }
         return Ok(rows);
     }
     let before=rows.len();
-    let start=root.join(format!("confirmation-segment-{index:03}-started.r3b"));
+    let start=root.join(format!("{name}-segment-{index:03}-started.r3b"));
     publish_confirmed(&start,&binary::record!({"binding":digest(&binding)?,"index":index,"returned_before":before,
         "reserved_generation_upper":es.len()-before,"unfinalized_usage":"UNKNOWN; automatic retry prohibited"}))?;
-    let raw=root.join("confirmation.r3rows");
+    let raw=root.join(format!("{name}.r3rows"));
     let result=(||->Result<()> {
         let exists=raw.exists();
         let mut f=std::fs::OpenOptions::new().write(true).append(exists).create_new(!exists).open(&raw)?;
@@ -1933,9 +1949,9 @@ fn confirmation_collect(root:&Path,path:&Path,es:&[Episode],tok:&ByteBpe,identit
             let l=checkpoint::load(path,Device::Cpu,false)?;
             for (i,e) in es.iter().enumerate().skip(before) {
                 control.check("confirmation_next_generation")?;
-                let attempt=prepare_call(root,"confirmation","generation",&binding,e,i)?;
+                let attempt=prepare_call(root,name,"generation",&binding,e,i)?;
                 #[cfg(feature="test-support")]
-                call_fixture(&l,&mut control,"confirmation","generation",i);
+                call_fixture(&l,&mut control,name,"generation",i);
                 let mut row=match recovery::observe_generation(&l,e,&e.request,&mut control,false) {
                     recovery::ObservedCall::NotInvoked(_)=>{resolve_call(&attempt,None,&control)?;control.stop_result()?;return Err(bad("confirmation unexplained no-call"));},
                     recovery::ObservedCall::Returned(row)=>row,
@@ -1955,14 +1971,14 @@ fn confirmation_collect(root:&Path,path:&Path,es:&[Episode],tok:&ByteBpe,identit
     })();
     if let Err(e)=&result {control.classify_error(e);}
     let result=result.and(control.seal_terminal());
-    publish_confirmed(&root.join(format!("confirmation-segment-{index:03}-finished.r3b")),&binary::record!({
+    publish_confirmed(&root.join(format!("{name}-segment-{index:03}-finished.r3b")),&binary::record!({
         "start":file_hash(&start)?,"returned_before":before,"returned_after":rows.len(),"control":control.receipt(),
         "raw":if raw.exists(){Some(file_hash(&raw)?)}else{None},"prefix":digest(&if raw.exists(){binary::read_value_records(&raw)?}else{vec![]})?,
-        "call_records":confirmation_call_files(root)?,
+        "call_records":segmented_call_files(root,name)?,
         "generated_tokens":rows[before..].iter().map(|r|r["raw_tokens"].as_array().map(Vec::len).ok_or_else(||bad("confirmation raw tokens missing"))).collect::<Result<Vec<_>>>()?.iter().sum::<usize>(),
         "error":result.as_ref().err().map(ToString::to_string)}))?;
     result?;
-    let (elapsed,calls,_)=confirmation_usage(root)?;
+    let (elapsed,calls,_)=segmented_usage(root,name)?;
     publish_confirmed(&final_path,&binary::record!({"policy":identity["policy"],"checkpoint":binding["checkpoint"],"binding":binding,
         "completed":rows.len(),"matched":0,"control":{"terminal_reason":"COMPLETED","observed_conditions":[],"generation_calls":calls,
         "teacher_calls":0,"elapsed_seconds":elapsed},"generated_tokens":rows.iter().map(|r|r["raw_tokens"].as_array().map(Vec::len).unwrap_or(0)).sum::<usize>(),
