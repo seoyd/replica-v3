@@ -1,6 +1,6 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active scope: artifact hygiene and no-call finalization
+## Closed scope: artifact hygiene and no-call finalization
 
 R3-ARTIFACT-HYGIENE-AND-FINALIZATION-1.0 permits zero new SMALL/TINY
 optimizer, generation, teacher or diagnostic backward calls. Previous bridge
@@ -15,7 +15,8 @@ Interrupted management publication is fail-closed; complete final/score reentry
 only verifies immutable results. Limits are cooperative, not tensor/fsync preemption.
 
 The narrow four-row RETURNED process regression and independent A passed without
-model calls. Artifacts are separately inventoried once with no-follow metadata;
+model calls. Independent B verified the corrected dry-run plan; original deletion
+is not authorized. Artifacts were inventoried once with no-follow metadata;
 known references and selected exact hashes inform an explicit dry-run plan.
 Keep originals, native/Adam/raw/policies/receipts, exact binaries and dependencies,
 unique readers/patches/logs, unknown trees and root target. No original deletion,

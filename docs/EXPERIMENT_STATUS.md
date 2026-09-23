@@ -1,6 +1,6 @@
 # 진단 및 구현 상태
 
-## 2026-09-24 무호출 종료 수리 — 독립 A PASS, 용량 감사 진행
+## 2026-09-24 무호출 종료 수리·아티팩트 dry-run — 독립 A/B PASS
 
 `R3-ARTIFACT-HYGIENE-AND-FINALIZATION-1.0`의 H1/H2를 실제 구현했다.
 QA caller가 완전한 RETURNED journal을 검증한 뒤 신규 모델 예산과 분리해
@@ -19,7 +19,89 @@ active 누계는 유지한다. 부분 호출은 원래 예산/source 조건을 �
 
 보호11264 수용, bridge14336 품질 FAIL, 기존 QA0/640은 그대로다.
 이를 이번 실행의 새 품질 측정으로 세지 않는다. S4/S5/S6/Goal1은 미수용.
-용량 감사와 독립 B는 별도이며 실제 삭제/이동/치환은0이다.
+수리 source는 `1fb463dbdca34e3119124f3d9918310840c5494e`이며 정상 push 후
+remote 전체 SHA 일치를 확인했다. production-feature trainer build도 exit0.
+기존 feature 전용 unused-mut3/dead-code1 경고는 그대로이며 전체 포맷/정리는
+하지 않았다. 새로운 모델 실행은 없다.
+
+### 실제 용량과 보호/후보
+
+원 `artifacts/` metadata를 no-follow/same-device로 한 번 목록화했다.
+원본 본문 전수 hash나 seal/DB 내용을 읽지 않았다. 이후 분류·독립 검산은
+그 inventory를 재사용한다. root target와 Cargo cache는 감사/정리 대상 밖이다.
+
+|항목|실측|
+|---|---:|
+|전체 entry / regular / directory|895,166 / 860,719 / 34,447|
+|논리 regular bytes|184,316,744,031|
+|inode 고유 논리 bytes|183,211,608,097|
+|inode 고유 할당량 추정(stat blocks)|185,742,196,736|
+|HOT_PROTECTED bytes|8,617,790,378|
+|COLD_EVIDENCE bytes|84,687,522,825|
+|UNKNOWN_OR_ACTIVE 보호 bytes|80,405,120,633|
+|보호/보류 합계 bytes|173,710,433,836|
+|후보 파일수 / 고유 논리 bytes|18,141 / 10,606,310,195|
+|후보 할당량 추정|10,643,812,352|
+|선정한 두 native의 byte 중복 상한|114,181,184|
+|실제 삭제/이동/치환 / 회수|0 / 0 bytes|
+
+후보는 종료된 precision/answer-mean/query-signal 검토의 세 debug/incremental
+아래 정확히 명시한 비실행·nlink1 compiler 객체/cache뿐이다. 전체 target를
+삭제 목록에 넣지 않았다. 실행 binary·rlib·dylib·reader·patch·source·로그는
+모두 보존한다. 정리 전 toolchain/recipe/keeper/참조/writer/파일 identity와
+whole-file hash를 다시 확인해야 하며, 현재 계획은 삭제 권한을 부여하지 않는다.
+미지원/불명확 subtree는 보존한다. 다른 80GB의 unknown을 안전 후보로 추정하지 않는다.
+
+최신 segment0004/0005 final은 각각114,181,184 bytes이며 전체 SHA256이
+`15015900a3c91a6b8ed87e9c2ecb8f7faf124849e5dcf8f40203cddf267e30d9`로 같다.
+이는 weight-only hash가 아니다. 두 경로 모두 KEEP이고 중복 상한을 정리
+후보 bytes에 더하지 않았다. APFS clone/snapshot/open-file 영향과 실제 물리
+회수량은 UNKNOWN이며, 원본 보존 상태에서 회수됐다고 보고하지 않는다.
+
+최초 분류의12800/4352 owner 이름 오류는 독립 검토에서 확인 후 실제
+`qa-integrity-bridge-20260923-study-final`/`rebind-consolidation-20260921-study`로
+수정했다. 원 계획도 보존했으며 두 경로는 처음부터 KEEP였다. 교정 계획은
+기존 inventory/검증 hash와 현재 metadata를 결속해 재사용하므로 후보 본문
+10.6GB를 재hash하지 않았다. 현재 계획 SHA256:
+`429ff481d8f9538bc97bda286f33d8e70b605ab686619ad7a4d12342f14ae531`.
+
+관리 도구 실행: inventory34.4518175초, 최초 analyze46.302728667초,
+교정 analyze23.74657625초. 도구가 기록한 원 input hash bytes는 각각
+0/10,834,985,800/416,995이며 분석 metadata read는89,096,739/91,850,789이다.
+이는 해당 reader의 논리 I/O 계수이며 OS 물리 I/O나 독립 검토/빌드 전체의
+계측값이 아니다. 출력 shard bytes 합계93,278,533, 마감 중간 `du` 표본의
+신규 evidence 보존량 약143MiB; 지속적인 peak/RSS는 NOT_MEASURED다.
+volume available은 시작98,041,344KiB, 마감 표본94,930,748KiB였다.
+root Cargo 산출물/동시 OS 사용량을 삭제/회수량으로 해석하지 않는다.
+
+도구의 직접 `inventory_bytes_links_shards_and_identity` 최종 시험은1/1 PASS:
+raw path bytes의 R3BIN roundtrip, no-follow link, hardlink 중복 제외, sharding,
+변경 identity 거부와 no-clobber를 검사했다. 첫 exact 필터0-test는 미합산하고,
+APFS가 invalid-UTF8 실제 파일명 생성을 거부한 fixture 실패도 보존했다.
+최종 시험은 해당 bytes 계약을 codec에서 검증하며 지원되지 않는 파일명
+생성을 성공했다고 주장하지 않는다.
+
+기존 cold probe는 모델 export/반복 load를 포함해 이번의 최대2개/512MiB
+범위에 맞는 독립 archive CLI가 아니다. ARCHIVE_PROBE=NOT_RUN;
+새 archive engine을 만들지 않았다. PURGE_AUTHORITY=NOT_AUTHORIZED,
+APPLIED=false. 독립 계획 검토는 [B 보고서](ARTIFACT_HYGIENE_PLAN_REVIEW_B_2026-09-24.md)에 구분한다.
+독립 B의 전체 metadata 검산은36.139초/exit0, 교정본의 좁은 후속 검산은
+3.721초/exit0이었다. 후보18,141개의 identity/고유 bytes·보호 교집합0,
+변경된120개 classification shard, 교정 HOT entries26,322/9,641 및 현재
+reference20개와 후보의 충돌0을 확인했다. 후보 본문 전수 hash는 반복하지
+않았으며 최종 PLAN_REVIEW=PASS는 삭제나 모델 품질의 수용이 아니다.
+
+인가된 로컬 증거 경로:
+
+- `artifacts/artifact-hygiene-20260924-audit/artifact-inventory.r3b`
+  (`4d33d5ac4ff3d034bb57ded8f7d9953fc32fe5220cdc450d433dc9c2579ff5f3`)
+- `artifacts/artifact-hygiene-20260924-plan-final/cleanup-plan.r3b`와
+  `cleanup-plan.md`, exact candidate/classification shards
+- `artifacts/artifact-hygiene-20260924-evidence/`: 실제 실행물, source identity, diff
+- `artifacts/artifact-hygiene-20260924-independent-b/`: 독립 reader/검산 증거
+
+모델·corpus·DB·raw·대형 manifest는 Git에 게시하지 않는다. 계획의 실제 적용은
+별도 명시적 digest/범위 승인 뒤의 작업이며 이번 수리/감사의 미완료 학습이 아니다.
 
 ## 2026-09-24 지시문 bridge 후속 학습·QA640 종료 — 품질 미달
 

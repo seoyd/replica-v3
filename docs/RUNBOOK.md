@@ -1,5 +1,39 @@
 # Replica v3 B0 runbook
 
+## Read-only artifact accounting and completed QA finalization
+
+Completed RETURNED QA can finish through `fresh qa-bridge-qa --diagnostic`
+with the registered study (and `--transfer` for the transfer journal). The new
+finalizer preserves the historical producer and validates cases, native hash,
+resolutions, segment usage and strict scores. It cannot regenerate wrong rows,
+override pending/UNKNOWN/cancel/mixed errors, or grant new training/candidate
+authority. At zero remaining calls it uses separate bounded management time;
+with remaining calls the original executable and model budget still apply.
+
+For an explicitly authorized artifact audit, use new output directories:
+
+```sh
+cargo build --release --locked --offline --features accelerate --example artifact_audit
+target/release/examples/artifact_audit inventory artifacts NEW_INVENTORY
+target/release/examples/artifact_audit analyze NEW_INVENTORY NEW_PLAN
+```
+
+The inventory walks metadata once, without following links or other mounts.
+The repository-specific analysis nominates only exact compiler intermediates in
+the three inspected closed review targets; other target trees are not implicitly
+safe. It preserves all executable/dependency files and source/reader/patch/log
+evidence. The tool has no apply/delete command. Logical and stat-allocated bytes
+are distinct from APFS physical reclaim. Any later deletion needs explicit
+approval of `cleanup-plan.r3b`'s digest and listed files, followed by fresh
+no-follow identity/hash/reference/keeper and writer checks; unknowns stay intact.
+
+Reviewers should copy only needed source and fixtures, reuse compatible Cargo
+targets sequentially, and preserve actual binaries plus command/environment/logs
+before another build replaces them. Separate disposable intermediates at creation.
+Replacing a snapshot with Git requires the exact tree, local diff and untracked
+inputs; model/raw evidence cannot be reconstructed from a source commit. Never
+alter historical reports/receipts or checkpoint cadence to save disk space.
+
 ## Fixed-model new value combinations
 
 The production-feature `training::fresh::tests::paired_seen_train_diagnostic`

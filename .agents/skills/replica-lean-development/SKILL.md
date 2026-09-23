@@ -74,3 +74,18 @@ grant execution permission, or define model quality gates.
   intermediate result. Do not add speculative improvements after completion.
 - If missing information could change correctness, preservation, interpretation or
   release eligibility, obtain it. Do not save tokens by guessing.
+
+## Artifact hygiene in this repository
+
+- Copy only required source/fixtures for a review; read original evidence in place.
+  Reuse a managed Cargo target sequentially after checking toolchain, target,
+  features and profile. Verify exact source/binary identity before using results.
+- Preserve the actual executable, dynamic dependencies, unique readers/patches,
+  commands, environment, logs and raw locations. Keep compiler intermediates
+  separate and nominate only proven disposable files after the task closes.
+- Inventory once and reuse metadata. A target/scratch name is not deletion proof.
+  Default to a path/hash-bound dry-run plan; deletion needs explicit approval of
+  that plan and fresh identity/reference/writer checks. Preserve unknown files.
+- A Git commit replaces a source snapshot only when its exact tree, local diff
+  and untracked inputs are preserved. It does not restore model/raw evidence.
+  Never rewrite an immutable report or receipt to describe cleanup.
