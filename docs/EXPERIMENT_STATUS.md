@@ -1,5 +1,109 @@
 # 진단 및 구현 상태
 
+## 2026-09-24 지시문 bridge 후속 학습·QA640 종료 — 품질 미달
+
+독립 [A](INSTRUCTION_BRIDGE_COMPLETION_REVIEW_A_2026-09-24.md) 수용 후
+source `c502e66872ad6abdf463990c5992061d3ec3a19c`와 보존한 production binary로
+실제1536 optimizer updates를 실행했다. A report-only commit/확인된 remote는
+`e63a09e7aaa0de1e44b11d922f84163e0fd6fd1e`다. 부모12800 출력 parity32/32가
+일치했고 LR3e-5/ANSWER CE/QE/tokenizer/Adam을 유지했다. 실제 input2,064,384,
+target162,816, sample12,288은 준비 전수 계산과 일치한다. V/VC0/VC1/bridge
+노출은3072/1536/1536/6144이며 padding은233,472다.
+
+절대12801/13056/13568/14080/14336을 저장했다. 13056의 여섯64 패널은 모두
+64/64였다. 13568과14336의 개발 FULL은 동일하게512/512/512/511/511/508이다.
+값·기존 인용·ID 재명명은 유지됐지만 세 bridge 패널 각각의 외부 ID1은 남았다.
+모든 개발 패널 EOS512·오류0·parse0이며 최종 결과는 다음과 같다.
+
+|패널|FULL|QUERY_BOTH|SWAP_BOTH|ALL4|값 / 정확 support|외부 ID / parse / 생성 오류|
+|---|---:|---:|---:|---:|---|---|
+|값512|512|256|256|128|해당 없음|0 /0 /0|
+|기존 인용512|512|256|256|128|512 /512|0 /0 /0|
+|ID 재명명512|512|256|256|128|512 /512|0 /0 /0|
+|QA system /기존 문구512|511|255|255|127|512 /511|1 /0 /0|
+|short system /current 문구512|511|255|255|127|512 /511|1 /0 /0|
+|QA system /current 문구512|508|252|252|124|510 /510|1 /0 /0|
+|bridge train fit1536|1535|767|767|383|1535 /1535|0 /1 /1|
+
+fit는 최종14336에서 한 번 측정했다. fit 도중 명령900초 한도로 반환된
+TIME_BUDGET 실패1행을 보존했다. 다음 process는 optimizer0/generation181/
+teacher182로 평가만 완료했고 실패행을 재생성하지 않았다. fit EOS는1535/1536다.
+따라서 fit도 strict 오류0 기준에는 미달한다. 이 시간 종료를 모델의 숫자 선택
+실패와 합쳐 해석하지 않는다. 앞선13568 명령도 평가와 판정을 저장한 뒤
+TIME_BUDGET으로 끝났으며 새 process에서 완료 평가를 재생성하지 않고 이어졌다.
+
+최종 상태는 `FINAL_BRIDGE_QUALITY_FAIL_AT_14336`, `resume=false`,
+`extend=false`, guard regression=false다. 마지막 native는
+`artifacts/instruction-bridge-completion-20260924-study-final/ANSWER-MEAN/segment-0005/final`,
+physical SHA256 `15015900a3c91a6b8ed87e9c2ecb8f7faf124849e5dcf8f40203cddf267e30d9`,
+evaluator model hash `b4afc6efd0cbd4e306128d75f23b7be4dcd356cc4a23de99bbeff311c3f4fc3b`다.
+학습·평가 종료 시 SMALL optimizer1536/generation8096/teacher8064,
+등록 active2370.67745725초이며 generation에는 부모 parity32를 포함한다.
+실패와 독립 A를 포함한 TINY 총량은26/586/360이다.
+
+순수 `qa-bridge-report`는 exit0으로 trace·raw·종료를 대조했다. 독립
+[B](INSTRUCTION_BRIDGE_COMPLETION_REVIEW_B_2026-09-24.md)는 실행·결과 무결성
+PASS, bridge 개발·fit 품질 FAIL을 확인했다. raw8064/teacher8064/trace1536,
+6 native/136 Adam/clock과16128 prepared/resolved 연결이 일치한다. 정상32와
+완결 오답 pair12를 새 process에서 재현해44/44 일치했다. fit TIME 실패는
+partial token7·RETURNED로 보존됐고 재생성하지 않았다. 두 마지막 checkpoint는
+whole-file SHA256까지 동일하다. 보호25+소비120 파일의 hash도 유지됐다.
+B report-only commit/확인된 remote는
+`f8bb36e990e80ae27098a3d1bff1d44872d8515f`이며 초기 보고서와 receipt는 불변이다.
+
+B 수용 후 같은14336 모델로 진단 전용 oldQA640을 실행했다. 원래 system/질문/
+근거/정답과 context2048/max_new_tokens128/timeout120000을 유지했다. Primary와
+transfer 명령은 각각 exit0으로 완결됐고 새 generation640, optimizer/teacher0이다.
+
+|old QA|FULL|EOS|길이 종료|runtime /UTF-8 오류|유효 외부 ID /parse 실패|
+|---|---:|---:|---:|---|---|
+|primary512|0/512|225|287|0 /0|1 /17|
+|transfer128|0/128|75|53|0 /0|0 /2|
+|합계640|0/640|300|340|0 /0|1 /19|
+
+A–H 각 범주는 primary0/64, transfer0/16이다. 정확한 nonempty support는
+0/480이다. H를 제외해도0/560이며 고정 H 답변 출력도 H/비H 모두0이다.
+G의 모호/근거없음/대상없음은 합계 각각0/24,0/32,0/24다. 기존 네 view의
+값 변경·순서·문구 pair 공동정답과 ALL4는 모든 범주0이다. Primary16 bases,
+transfer4 bases per bucket이라는 원 분모를 유지하며 이를 새 complementary
+QA pair 점수로 바꾸지 않는다. 독립 B의
+[새640행 검산](INSTRUCTION_BRIDGE_COMPLETION_QA_ADDENDUM_2026-09-24.md)은 exit0/PASS다.
+원문·순서·prompt,1280 prepared/RETURNED, 두 segment/final과 수정 scorer의
+집계가 모두 일치한다. 이전 B 전수 검산이나 모델 재현은 반복하지 않았다.
+QA addendum report-only commit/확인된 remote는
+`b6eea2d4eec8a11de99472560ad1440c03d75ebb`다.
+독립 reader의 첫 실행은 reviewer의 provided-ID 순서 비교 가정으로 exit101;
+원문 순서는 별도로 유지하고 ID 집합을 비교한 최종 reader가 통과했다. 원640행은
+변경하지 않았고 이 검산의 신규 generation/teacher/optimizer는0이다.
+
+같은 입력의 보호11264 기존 raw는0/640, EOS440, 길이 종료200이었다. 이번
+14336은 FULL 개선 없이 EOS가300으로 줄었다. 부모12800의 QA640은 미관측이므로
+이 차이를 이번1536회만의 단일 인과 효과로 해석하지 않는다. 작은 값·인용·
+문구 bridge의 높은 정답률은 일반 QA 능력의 회복을 입증하지 못했다.
+진단을 후보 승격·학습 재개·confirmation·S4 권한으로 사용하지 않았다.
+보호11264 수용과 원래12800 실패는 보존하며 추가 학습은 없다.
+
+최종 SMALL 호출은 optimizer1536/상한1536, generation8780/상한9216,
+teacher8064/상한8192, diagnostic backward0이다. 미사용 generation436,
+teacher128은 추가 실행 인가가 아니다. 사용한 confirmation은 재사용하지 않았고
+CONFIRMATION_NEW=NOT_RUN, S4_SEAL=NOT_OPENED,
+S4/S5/S6=NOT_ACCEPTED, GOAL1_READY=false, GOAL1_ACCEPTED=false다.
+QA의 생성 token은57,514, 등록 active157.248370499초다. 전체 생성 token은
+179,324, 등록 active는2532.134917416초/상한7200초다. 이 active는 기록된 모델
+작업 사용량이며 빌드·검토 대기·보고서 작성까지 포함한 전체 wall time이 아니다.
+코드 변경 경계·독립 A·독립 B·QA 무결성은 PASS, 제한 학습은 실행 완료,
+bridge 개발/fit·일반 QA 품질은 FAIL로 구분한다.
+
+실행 명령·build/test·모든 segment 로그·candidate.diff는
+`artifacts/instruction-bridge-completion-20260924-implementation/`, 준비/정책/원시
+panel/teacher/decision/checkpoint는
+`artifacts/instruction-bridge-completion-20260924-study-final/`에 보존한다.
+코드 diff는 `a09273df7613af61184afb0164a19c54b190bb30..c502e66872ad6abdf463990c5992061d3ec3a19c`다.
+진단 raw `bridge-qa-primary.r3rows`의 SHA256은
+`55eb005ffff9f69fa94e27ff1d55cfd982d1f8144743c08c6a617e57871cf867`,
+`bridge-qa-transfer.r3rows`는
+`9b997776870a17a2d243251e03aade274fdfa7d494e7c1471978c7f68fc3bc8a`다.
+
 ## 2026-09-24 지시문 bridge 후속 정책 — 직접 검증 완료, 독립 A 대기
 
 R3-INSTRUCTION-BRIDGE-COMPLETION-1.0은 기존12800 실패를 보존한 새

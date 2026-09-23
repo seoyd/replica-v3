@@ -1,6 +1,18 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: instruction bridge completion and diagnostic QA
+## Closed execution: instruction bridge completion and diagnostic QA
+
+The registered study executed1536 updates to14336. Independent A and B passed
+their code/preparation and execution/integrity scopes. Development failed with
+one outside-ID row in each bridge panel; fit recorded1535/1536 with one preserved
+native TIME_BUDGET return. An evaluation-only process completed the remainder
+with zero optimizer updates. The final endpoint is non-resumable and ineligible.
+The separately authorized original QA640 diagnostic completed at0/640, EOS300,
+length340 and runtime/UTF-8 errors0. Independent verification of the new640 rows
+passed; the addendum is tracked in the status document. No additional learning,
+model selection, confirmation or S4
+is authorized by this closed plan. The registered policy below is retained as
+the execution specification, not a new grant of unused call or training budget.
 
 R3-INSTRUCTION-BRIDGE-COMPLETION-1.0 registers a new fork of the preserved
 bridge12800 endpoint. Its original BRIDGE_DEVELOPMENT_FAIL/resume=false and
