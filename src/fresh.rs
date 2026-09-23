@@ -26,6 +26,11 @@ pub enum Command {
     CitationFidelityPrepare { #[arg(long)] previous: PathBuf, #[arg(long)] output: PathBuf, #[arg(long)] parent_review: PathBuf },
     /// Same ANSWER10496 and half cycle, with constant LR3e-5 and inherited Adam.
     CitationPrecisionPrepare { #[arg(long)] previous: PathBuf, #[arg(long)] output: PathBuf, #[arg(long)] parent_review: PathBuf },
+    /// Preserve accepted value/citation while learning the existing balanced QA pool.
+    RetainedQaPrepare { #[arg(long)] previous: PathBuf, #[arg(long)] balanced: PathBuf, #[arg(long)] old_qa: PathBuf, #[arg(long)] output: PathBuf, #[arg(long)] parent_review: PathBuf },
+    RetainedQaParent { #[arg(long)] study: PathBuf, #[arg(long,value_parser=["value","citation","balanced","transfer"])] panel: String },
+    RetainedQaReport { #[arg(long)] study: PathBuf },
+    RetainedQaReview { #[arg(long)] root: PathBuf, #[arg(long,value_parser=["old_qa","balanced"])] panel: String },
     CitationContinueParent { #[arg(long)] study: PathBuf, #[arg(long)] citation: bool },
     AnswerMeanParent { #[arg(long)] study: PathBuf },
     AnswerMeanReport { #[arg(long)] study: PathBuf },
@@ -1415,6 +1420,9 @@ impl Plan {
         Ok(Some(labels))
     }
     pub(super) fn sample_bucket(&self, index: usize) -> usize {
+        if identifiable::binding::citation::retained_qa(self) {
+            return if index<4608 {index/1536}else{3+((index-4608)%8192)/1024};
+        }
         let n = self.order.iter().map(Vec::len).sum::<usize>();
         self.order.iter().position(|ids| ids.contains(&(index%n)))
             .expect("validated training sample bucket")
@@ -1736,6 +1744,10 @@ pub fn execute(command: Command) -> Result<()> {
         Command::CitationContinuePrepare { previous,output } => identifiable::binding::citation::continuation_prepare(&previous,&output,false),
         Command::CitationFidelityPrepare { previous,output,parent_review } => identifiable::binding::citation::fidelity_prepare(&previous,&output,&parent_review,false),
         Command::CitationPrecisionPrepare { previous,output,parent_review } => identifiable::binding::citation::precision_prepare(&previous,&output,&parent_review,false),
+        Command::RetainedQaPrepare {previous,balanced,old_qa,output,parent_review} => identifiable::binding::citation::qa_prepare(&previous,&balanced,&old_qa,&output,&parent_review,false),
+        Command::RetainedQaParent {study,panel} => identifiable::binding::citation::qa_parent(&study,&panel),
+        Command::RetainedQaReport {study} => identifiable::binding::citation::qa_report(&study),
+        Command::RetainedQaReview {root,panel} => identifiable::binding::citation::qa_review(&root,&panel),
         Command::CitationContinueParent { study,citation } => identifiable::binding::citation::continuation_parent(&study,citation),
         Command::AnswerMeanParent { study } => identifiable::binding::citation::mean_parent(&study),
         Command::AnswerMeanReport { study } => identifiable::binding::citation::mean_report(&study),
@@ -2716,7 +2728,7 @@ fn evaluate_panel(
     meta: &[Meta],
     control: &mut recovery::RunControl,
 ) -> Result<PanelResult> {
-    if identifiable::binding::citation::fidelity(p) || identifiable::binding::citation::precision(p) {
+    if identifiable::binding::citation::retained_qa(p) || identifiable::binding::citation::fidelity(p) || identifiable::binding::citation::precision(p) {
         control.restrict_rss(12*1024*1024);
         control.check("fidelity_inference_rss")?;
     }

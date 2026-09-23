@@ -17,22 +17,28 @@ const FID_DATA: &str = "citation-fidelity-v1";
 const FID_CONTRACT: &str = "R3-CITATION-FIDELITY-CONSOLIDATION-1.0";
 const PREC_DATA: &str = "citation-precision-v1";
 const PREC_CONTRACT: &str = "R3-CITATION-PRECISION-1.0";
+const QA_DATA: &str = "retained-qa-transfer-v1";
+const QA_CONTRACT: &str = "R3-RETAINED-QA-TRANSFER-1.0";
+const QA_POOL: usize = 8192;
+fn qa_task(p:&Plan,index:usize)->usize {if retained_qa(p)&&index>=3*POOL {3+(index-3*POOL)/QA_POOL}else{index/POOL}}
+pub(in super::super::super) fn retained_qa(p:&Plan)->bool {p.identifiable.as_ref().is_some_and(|o|o.dataset==QA_DATA)}
 pub(in super::super::super) fn precision(p:&Plan)->bool {p.identifiable.as_ref().is_some_and(|o|o.dataset==PREC_DATA)}
 pub(in super::super::super) fn fidelity(p:&Plan)->bool {p.identifiable.as_ref().is_some_and(|o|o.dataset==FID_DATA)}
 fn continuation(p:&Plan)->bool {precision(p) || fidelity(p) || p.identifiable.as_ref().is_some_and(|o|o.dataset==CONT_DATA)}
 fn citation_offset(p:&Plan,step:usize)->usize {step-p.origin_step()+if continuation(p)&&!fidelity(p)&&!precision(p)&&!p.tiny {32}else{0}}
 fn full_evaluation(p:&Plan,step:usize)->bool {
+    if retained_qa(p) { return !p.tiny && [2048,4096].contains(&(step-p.origin_step())); }
     !p.tiny && if precision(p) {[768,1536].contains(&citation_offset(p,step))}
         else {[1536,3072].contains(&citation_offset(p,step))}
 }
 pub(in super::super::super) fn is_mean(p: &Plan) -> bool {
-    continuation(p) || p.identifiable.as_ref().is_some_and(|o|o.dataset == MEAN_DATA)
+    retained_qa(p) || continuation(p) || p.identifiable.as_ref().is_some_and(|o|o.dataset == MEAN_DATA)
 }
 pub(in super::super::super) fn answer_mean(p: &Plan) -> bool {
     is_mean(p) && own(p).arm == MEAN_ARMS[1]
 }
 pub(super) fn arms(p: &Plan) -> &'static [&'static str] {
-    if continuation(p) { &[MEAN_ARMS[1]] } else if is_mean(p) { &MEAN_ARMS } else { &[ARM] }
+    if retained_qa(p) || continuation(p) { &[MEAN_ARMS[1]] } else if is_mean(p) { &MEAN_ARMS } else { &[ARM] }
 }
 fn selected_root(study: &Path) -> PathBuf {
     study.join(if study.join(MEAN_ARMS[1]).is_dir() { MEAN_ARMS[1] } else { ARM })
@@ -56,6 +62,13 @@ pub(in super::super::super) fn is(p: &Plan) -> bool {
     is_mean(p) || p.identifiable.as_ref().is_some_and(|v| v.dataset == DATA)
 }
 pub(super) fn evaluation(p: &Plan) -> EvaluationPolicy {
+    if retained_qa(p) {
+        let mut e=super::evaluation(p.tiny);
+        e.screen_steps.clear();
+        e.train_steps=if p.tiny {vec![p.origin_step()+2]}else{[128,512,1024,2048,3072,4096].map(|n|p.origin_step()+n).to_vec()};
+        e.generation_limit=24576;e.teacher_limit=18432;e.active_seconds=14400;
+        return e;
+    }
     let mut e = super::evaluation(p.tiny);
     e.screen_steps.clear();
     e.train_steps = if p.tiny {
@@ -87,6 +100,10 @@ pub(in super::super::super) fn endpoint(p: &Plan, step: usize, pending: bool) ->
         return (step < p.config.max_steps)
             .then_some(p.config.max_steps)
             .ok_or_else(|| bad("citation fixture closed"));
+    }
+    if retained_qa(p) {
+        return [1,128,512,1024,1536,2048,2560,3072,3584,4096].into_iter()
+            .map(|n|p.origin_step()+n).find(|&n|n>step).ok_or_else(||bad("retained QA budget closed"));
     }
     let points:&[usize]=if precision(p) {&[10497,10752,11264,11776,12032]}
         else if fidelity(p) {&[7425,7680,8192,8704,8960,9472,9728,10240,10496]}
@@ -612,6 +629,7 @@ fn prepare_inner(
     Ok(())
 }
 pub(super) fn verify_plan(root: &Path, p: &Plan) -> Result<()> {
+    if retained_qa(p) {return qa_verify_plan(root,p);}
     if continuation(p) {return verify_continuation(root,p);}
     if is_mean(p) { return verify_mean_plan(root,p); }
     let o = own(p);
@@ -875,6 +893,7 @@ fn pass(s: &OrbitScore, total: usize, full: usize, qb: usize, all4: usize) -> bo
 }
 type Panel = (String, Vec<Episode>, Vec<Meta>);
 fn base_panels(root: &Path, p: &Plan, step: usize) -> Result<Vec<Panel>> {
+    if retained_qa(p) {return qa_base_panels(root,p,step);}
     if !p.evaluation_due(step) {
         return Err(bad("citation unregistered evaluation"));
     }
@@ -946,6 +965,7 @@ fn fit_panels(root: &Path, p: &Plan) -> Result<Vec<Panel>> {
     .collect())
 }
 fn read_score(root: &Path, p: &Plan, step: usize, panel: &Panel) -> Result<binary::Value> {
+    if retained_qa(p) && panel.0.starts_with("qa-") {return qa_score(root,p,step,panel);}
     let (name, es, ms) = panel;
     let tok = ByteBpe::load(&root.join("tokenizer.r3b"))?;
     let summary = audit_panel(root, p, step, name, es, ms, &tok)?;
@@ -1070,15 +1090,13 @@ fn dev_pass(scores: &BTreeMap<String, binary::Value>) -> Result<bool> {
 pub(super) fn panels(root: &Path, p: &Plan, step: usize) -> Result<Vec<Panel>> {
     let mut out = base_panels(root, p, step)?;
     if full_evaluation(p,step) {
-        let present = out[..3]
-            .iter()
+        let present = out.iter().take(if retained_qa(p) {out.len()}else{3})
             .all(|(name, _, _)| root.join(format!("eval-{step:04}-{name}.r3b")).exists());
         if present {
-            let scores = out[..3]
-                .iter()
+            let scores = out.iter().take(if retained_qa(p) {out.len()}else{3})
                 .map(|panel| Ok((panel.0.clone(), read_score(root, p, step, panel)?)))
                 .collect::<Result<BTreeMap<_, _>>>()?;
-            if dev_pass(&scores)? {
+            if dev_pass(&scores)? && (!retained_qa(p) || qa_dev_pass(&scores)?) {
                 out.extend(fit_panels(root, p)?);
             }
         }
@@ -1086,6 +1104,7 @@ pub(super) fn panels(root: &Path, p: &Plan, step: usize) -> Result<Vec<Panel>> {
     Ok(out)
 }
 fn evaluation_result(root: &Path, p: &Plan, step: usize) -> Result<binary::Value> {
+    if retained_qa(p) {return qa_decision(root,p,step);}
     let cases = panels(root, p, step)?;
     let scores = cases
         .iter()
@@ -1246,7 +1265,7 @@ fn trace(root: &Path, p: &Plan, end: &Segment) -> Result<binary::Value> {
     let mut input = 0u64;
     let mut target = 0u64;
     let mut counts = vec![0usize; c.train.len()];
-    let mut task = [[0usize; 3]; 3];
+    let mut task = vec![[0usize; 3];if retained_qa(p) {5}else{3}];
     let mut files = BTreeMap::new();
     let mut mean_steps = Vec::new();
     for index in 0..128 {
@@ -1271,9 +1290,10 @@ fn trace(root: &Path, p: &Plan, end: &Segment) -> Result<binary::Value> {
                     ni += a;
                     nt += b;
                     counts[i] += 1;
-                    task[i / POOL][0] += 1;
-                    task[i / POOL][1] += a;
-                    task[i / POOL][2] += b;
+                    let group=qa_task(p,i);
+                    task[group][0] += 1;
+                    task[group][1] += a;
+                    task[group][2] += b;
                 }
                 cursor += 1;
                 if r["step"] != cursor
@@ -1290,13 +1310,13 @@ fn trace(root: &Path, p: &Plan, end: &Segment) -> Result<binary::Value> {
                 }
                 if is_mean(p) {
                     let stats=r["tasks"].as_array().ok_or_else(||bad("mean trace examples"))?;
-                    let mut token=0.;let mut answer=0.;let mut actual_targets=0;let mut contributions=[0.;3];
+                    let mut token=0.;let mut answer=0.;let mut actual_targets=0;let mut contributions=vec![0.;task.len()];
                     for (s,&i) in stats.iter().zip(&draw) {
                         let ce=s["ce"].as_f64().ok_or_else(||bad("mean sample CE"))?;
                         let n=s["target"].as_u64().ok_or_else(||bad("mean sample targets"))? as usize;
                         if s["index"]!=i || n!=samples[i].tokens.len()-samples[i].response_start || n==0 || !ce.is_finite() {return Err(bad("mean sample trace binding"));}
                         token+=ce*n as f64;answer+=ce;actual_targets+=n;
-                        contributions[i/POOL]+=ce*if answer_mean(p){1.}else{n as f64};
+                        contributions[qa_task(p,i)]+=ce*if answer_mean(p){1.}else{n as f64};
                     }
                     token/=actual_targets as f64;answer/=stats.len() as f64;
                     let objective=if answer_mean(p){answer}else{token};
@@ -1308,9 +1328,11 @@ fn trace(root: &Path, p: &Plan, end: &Segment) -> Result<binary::Value> {
                     }
                     let denominator=if answer_mean(p){stats.len()}else{nt};
                     for c in &mut contributions {*c/=denominator as f64;}
-                    mean_steps.push(binary::record!({"step":cursor,"token_ce":token,"answer_mean_ce":answer,"effective_training_objective":objective,
+                    let mut reduction=binary::record!({"step":cursor,"token_ce":token,"answer_mean_ce":answer,"effective_training_objective":objective,
                         "objective_denominator":denominator,"target_tokens":nt,"examples":stats.len(),"V_VC0_VC1_scalar_contribution":contributions,
-                        "grad_norm":r["grad_norm"],"clip":r["clip"],"delta_norm":r["delta_norm"],"scope":"scalar contributions, not task gradient norms"}));
+                        "grad_norm":r["grad_norm"],"clip":r["clip"],"delta_norm":r["delta_norm"],"scope":"scalar contributions, not task gradient norms"});
+                    if retained_qa(p) {if let binary::Value::Object(m)=&mut reduction {m.remove("V_VC0_VC1_scalar_contribution");} reduction["V_VC0_VC1_Q0_Q1_scalar_contribution"]=binary::record!(contributions);}
+                    mean_steps.push(reduction);
                 }
                 input += ni as u64;
                 target += nt as u64;
@@ -1331,6 +1353,12 @@ fn trace(root: &Path, p: &Plan, end: &Segment) -> Result<binary::Value> {
     let mut result=binary::record!({"files":files,"updates":cursor-p.origin_step(),"step":cursor,"input":input,"target":target,
         "counts":counts,"tasks_V_VC0_VC1_samples_input_target":task,"unique_V_VC0_VC1":counts.chunks(POOL).map(|c|c.iter().filter(|&&n|n>0).count()).collect::<Vec<_>>()});
     if is_mean(p) {result["reduction_steps"]=binary::record!(mean_steps);}
+    if retained_qa(p) {
+        let mut unique=vec![0usize;5];for (i,&n) in counts.iter().enumerate(){unique[qa_task(p,i)]+=usize::from(n>0);}
+        if let binary::Value::Object(m)=&mut result {m.remove("tasks_V_VC0_VC1_samples_input_target");m.remove("unique_V_VC0_VC1");}
+        result["tasks_V_VC0_VC1_Q0_Q1_samples_input_target"]=binary::record!(task);
+        result["unique_V_VC0_VC1_Q0_Q1"]=binary::record!(unique);
+    }
     Ok(result)
 }
 fn seal_receipt(study: &Path) -> Result<binary::Value> {
@@ -1403,6 +1431,7 @@ fn observed(
     Ok(rows[1..].to_vec())
 }
 pub(super) fn authorize(root: &Path, p: &Plan) -> Result<()> {
+    if retained_qa(p) {return qa_authorize(root,p);}
     if continuation(p) {return continuation_authorize(root,p);}
     if is_mean(p) { return mean_authorize(root,p); }
     let study = &own(p).study;
@@ -1692,7 +1721,7 @@ pub(in super::super::super) fn seal(study: &Path, private: &Path) -> Result<()> 
 fn comparison(study: &Path, p: &Plan, end: &Segment, d: &binary::Value) -> Result<binary::Value> {
     let endpoint = binary::record!({"policy":digest(p)?,"checkpoint":end.checkpoint_hash,"step":end.step,"decision":d});
     Ok(
-        binary::record!({"contract":if precision(p){PREC_CONTRACT}else if fidelity(p){FID_CONTRACT}else if continuation(p){CONT_CONTRACT}else if is_mean(p){MEAN_CONTRACT}else{CONTRACT},"source":p.source,"preparation":file_hash(&study.join("preparation.r3b"))?,
+        binary::record!({"contract":if retained_qa(p){QA_CONTRACT}else if precision(p){PREC_CONTRACT}else if fidelity(p){FID_CONTRACT}else if continuation(p){CONT_CONTRACT}else if is_mean(p){MEAN_CONTRACT}else{CONTRACT},"source":p.source,"preparation":file_hash(&study.join("preparation.r3b"))?,
         "endpoints":BTreeMap::from([(own(p).arm.as_str(),endpoint)]),"selected":if d["eligible"]==true {Some(own(p).arm.as_str())}else{None},"goal1_ready":false}),
     )
 }
@@ -1799,6 +1828,7 @@ pub(in super::super::super) fn confirm(study: &Path) -> Result<()> {
     Ok(())
 }
 fn confirmation_admitted(study:&Path,p:&Plan,end:&Segment,d:&binary::Value)->Result<bool> {
+    if retained_qa(p) {return Ok(false);} // The inherited citation confirmation is already consumed.
     #[cfg(all(test,feature="test-support"))]
     if p.tiny {
         let expected=binary::record!({"scope":"TINY confirmation protocol only; no quality acceptance","policy":digest(p)?,"checkpoint":end.checkpoint_hash,"count":8});
@@ -2242,6 +2272,7 @@ pub(in super::super::super) fn mean_parent(study:&Path)->Result<()> {
 pub(in super::super::super) fn mean_report(study:&Path)->Result<()> {
     let study=study.canonicalize()?;
     let selected=historical_plan(&selected_root(&study))?;
+    if retained_qa(&selected){return qa_report(&study);}
     for &arm in arms(&selected) {
         let root=study.join(arm);let p=historical_plan(&root)?;
         let h=history(&root,&p)?;
@@ -2273,7 +2304,8 @@ pub(in super::super::super) fn mean_review(root:&Path,citation:bool)->Result<()>
     if !is_mean(&p) {return Err(bad("mean reviewer scope"));}
     let (end,_)=close(&root,&p)?;
     if !["QUALITY_REGRESSION".to_string(),format!("FINAL_QUALITY_FAIL_AT_{}",end.step),format!("CANDIDATE_FIXED_AT_{}",end.step)].contains(&end.stop)
-        && !(continuation(&p)&&["SEVERE_RETENTION_REGRESSION","PERSISTENT_RETENTION_REGRESSION"].contains(&end.stop.as_str())) {
+        && !((continuation(&p)||retained_qa(&p))&&["SEVERE_RETENTION_REGRESSION","PERSISTENT_RETENTION_REGRESSION"].contains(&end.stop.as_str()))
+        && !(retained_qa(&p)&&end.stop=="STUDY_COMPLETE_QUALITY_FAIL") {
         return Err(bad("mean reviewer requires complete quality endpoint"));
     }
     let (es,old,indices)=endpoint_reproduction(&root,&p,end.step,citation)?;let n=es.len();
@@ -2299,6 +2331,164 @@ mod tests {
             assert!(result.unwrap_err().to_string().contains("OBJECTIVE_POLICY_UNSUPPORTED"));assert!(!output.exists());
         }
         println!("PRECISION_GENERIC_RESUME same/different-LR rejected optimizer0 generation0 teacher0");Ok(())
+    }
+    fn qa_fixture_sources(base:&Path)->Result<(PathBuf,PathBuf)> {
+        let balanced=base.join("balanced");let old=base.join("old-qa");
+        std::fs::create_dir(&balanced)?;std::fs::create_dir(&old)?;
+        let (tr,tm)=super::super::super::generate_balanced(512,0,20260921)?;
+        let (dv,dm)=super::super::super::generate_balanced(32,1,20260921)?;
+        let (tx,xm)=super::super::super::generate_balanced(8,2,20260921)?;
+        data::native::write(&balanced.join("corpus.r3cor"),&super::super::super::new_corpus(tr.clone(),dv,20260921)?,true)?;
+        data::native::write(&balanced.join("transfer.r3cor"),&super::super::super::new_corpus(tr,tx,20260921)?,true)?;
+        write(&balanced.join("metadata.r3b"),&(tm,dm,xm))?;
+        let (tr,tm)=super::super::super::super::generate(2,0,20260919)?;
+        let (dv,dm)=super::super::super::super::generate(16,1,20260920)?;
+        let (tx,xm)=super::super::super::super::generate(4,2,20260921)?;
+        data::native::write(&old.join("corpus.r3cor"),&super::super::super::super::corpus(tr.clone(),dv,20260919)?,true)?;
+        data::native::write(&old.join("transfer.r3cor"),&super::super::super::super::corpus(tr,tx,20260919)?,true)?;
+        write(&old.join("metadata.r3b"),&(tm,dm,xm))?;Ok((balanced,old))
+    }
+    #[test]
+    fn retained_qa_tape_input_objective()->Result<()> {
+        let t=tempfile::tempdir()?;let study=super::super::tests::orbit_fixture(t.path())?;
+        let root=study.join("BOTH");let mut p=plan_read(&root)?;let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
+        let(c,tm,dm)=source_pool(&root,&p,&tok)?;let(public,_,used)=fixture_reservation(&root,t.path())?;
+        let(r,(mut rm,_,_),_)=make_pool(&c,&tm,&dm,&tok,&read_ids(&public,128)?,&read_ids(&used,128)?)?;
+        let(balanced,old)=qa_fixture_sources(t.path())?;let(q,_,qm,_,_,_,_,_,_)=qa_sources(&balanced,&old)?;
+        let(v,vm)=qa_variant(&q.train,&qm)?;
+        for ((a,b),(ma,mb)) in q.train.iter().zip(&v).zip(qm.iter().zip(&vm)) {
+            let mut b=b.clone();b.id=a.id.clone();b.request.request_id=a.request.request_id.clone();b.request.input=a.request.input.clone();
+            assert_eq!(digest(a)?,digest(&b)?);assert_eq!(ma.base,mb.base);assert_eq!(ma.view,mb.view);assert_eq!(mb.source_id.as_deref(),Some(a.id.as_str()));
+        }
+        let mut es=r.train;es.extend(q.train);es.extend(v);rm.extend(qm);rm.extend(vm);
+        let rows=qa_tape(&rm)?;let cost=qa_token_cost(&es,&rows,&tok)?;
+        let count:Vec<usize>=binary::from_value(cost["counts"].clone())?;
+        assert_eq!(rows.len(),4096);assert!(count[4608..].iter().all(|&n|n==1));
+        assert_eq!(count[..1536].iter().sum::<usize>(),8192);assert_eq!(count[1536..3072].iter().sum::<usize>(),4096);assert_eq!(count[3072..4608].iter().sum::<usize>(),4096);
+        for(step,row)in rows.iter().enumerate(){for j in 4..8 {assert_eq!(row[j]-step/2048*8192,rows[step%2048][j]);}for pair in row.chunks_exact(2){assert_eq!(pair[1],pair[0]+1);assert_eq!(rm[pair[0]].base,rm[pair[1]].base);}}
+        let mut duplicated=es.clone();duplicated.push(es[0].clone());assert!(data::validate_episodes(&duplicated).is_err());
+        let ss=samples(&es,&tok,512)?;let ids=rows[0];let b=batch(&ss,&ids,&Device::Cpu)?;
+        assert!(ids.iter().map(|&i|ss[i].tokens.len()-ss[i].response_start).collect::<BTreeSet<_>>().len()>1);
+        let vocab=tok.vocab_size();let width=b.input.dim(1)?;
+        let z=candle_core::Var::from_vec((0..8*width*vocab).map(|i|((i%19)as f32-9.)/13.).collect::<Vec<_>>(),(8,width,vocab),&Device::Cpu)?;
+        let (_,loss,n,den)=crate::training::response_objective(z.as_tensor(),&b,1.,true)?;
+        assert_eq!(den,8);assert_eq!(n,ids.iter().map(|&i|ss[i].tokens.len()-ss[i].response_start).sum::<usize>());
+        let grad=loss.backward()?.get(&z).unwrap().flatten_all()?.to_vec1::<f32>()?;let mut accumulated=vec![0f32;grad.len()];let mut value=0.;
+        for offset in [0,4]{let mb=batch(&ss,&ids[offset..offset+4],&Device::Cpu)?;let w=mb.input.dim(1)?;let local=z.narrow(0,offset,4)?.narrow(1,0,w)?;
+            let(_,l,_,d)=crate::training::response_objective(&local,&mb,1.,true)?;assert_eq!(d,4);value+=f64::from(l.to_scalar::<f32>()?)/2.;
+            let g=(l*0.5)?.backward()?.get(&z).unwrap().flatten_all()?.to_vec1::<f32>()?;for(a,b)in accumulated.iter_mut().zip(g){*a+=b;}}
+        assert!((value-f64::from(loss.to_scalar::<f32>()?)).abs()<2e-5);assert!(grad.iter().zip(&accumulated).all(|(a,b)|(a-b).abs()<2e-6));
+        let masks=b.mask.to_vec2::<f32>()?;for row in 0..8 {let s=&ss[ids[row]];assert_eq!(s.tokens.last(),Some(&EOS));assert_eq!(masks[row][s.tokens.len()-2],1.);for pos in 0..width{if masks[row][pos]==0.{assert!(grad[(row*width+pos)*vocab..(row*width+pos+1)*vocab].iter().all(|x|*x==0.));}}}
+        assert!(es[..4608].iter().all(|e|e.request.limits.max_tokens==32));assert!(es[4608..].iter().all(|e|e.request.limits.max_tokens==128));
+        p.tiny=false;p.identifiable.as_mut().unwrap().dataset=QA_DATA.into();p.identifiable.as_mut().unwrap().arm=MEAN_ARMS[1].into();
+        p.fork=Some(Fork{study,study_hash:String::new(),arm:MEAN_ARMS[1].into(),parent_policy:String::new(),parent_state:String::new(),parent_adam:String::new(),origin_step:11264,origin_input:0,origin_target:0,original_corpus:p.corpus.clone(),tokenizer_training_hash:tok.train_hash.clone(),variants:None,variant_metadata:None,alternate_first:vec![],selector:None,selector_metadata:None,flip_first:vec![],constant_lr:3e-5,target_limit:2400000});
+        p.config.max_steps=15360;p.evaluation=evaluation(&p);assert_eq!(p.evaluation.train_steps,vec![11392,11776,12288,13312,14336,15360]);
+        assert_eq!(endpoint(&p,11264,false)?,11265);assert_eq!(endpoint(&p,15360,true)?,15360);assert!(endpoint(&p,15360,false).is_err());
+        println!("RETAINED_QA_TAPE rows20992 samples32768 cost_input={} target={} mixed_gradient_8_vs_4plus4=PASS prompt_padding_zero/EOS_included optimizer0 generation0 teacher0 FD0",cost["input"],cost["target"]);Ok(())
+    }
+    #[test]
+    fn retained_qa_native_process()->Result<()> {
+        const TEST:&str="training::fresh::identifiable::binding::citation::tests::retained_qa_native_process";
+        if let Ok(path)=std::env::var("R3_QA_CHILD") {let root=Path::new(&path);return match std::env::var("R3_QA_ACTION").as_deref(){
+            Ok("old-v")=>parent_observe(root,false),Ok("old-vc")=>parent_observe(root,true),Ok("mean-parent")=>mean_parent(root),
+            Ok("prior-v")=>continuation_parent(root,false),Ok("prior-vc")=>continuation_parent(root,true),
+            Ok("qa-value")=>qa_parent(root,"value"),Ok("qa-citation")=>qa_parent(root,"citation"),Ok("qa-balanced")=>qa_parent(root,"balanced"),Ok("qa-transfer")=>qa_parent(root,"transfer"),
+            Ok("review-old")=>qa_review(root,"old_qa"),Ok("review-balanced")=>qa_review(root,"balanced"),
+            Ok("review-v")=>mean_review(root,false),Ok("review-vc")=>mean_review(root,true),Ok("one")=>run(root,false),_=>run(root,true)};}
+        if !cfg!(feature="test-support"){return Err(bad("explicit retained QA TINY fixture"));}
+        let tmp=tempfile::tempdir()?;let base=std::env::var_os("R3_QA_TEST_ROOT").map(PathBuf::from).unwrap_or_else(||tmp.path().join("evidence"));std::fs::create_dir(&base)?;let base=base.canonicalize()?;
+        let child=|root:&Path,action:&str,fault:Option<&str>,label:&str|->Result<()> {let mut cmd=std::process::Command::new(std::env::current_exe()?);
+            cmd.args(["--exact",TEST,"--nocapture"]).env("R3_QA_CHILD",root).env("R3_QA_ACTION",action).env("VECLIB_MAXIMUM_THREADS","1").env("OMP_NUM_THREADS","1");if let Some(f)=fault{cmd.env("R3_FRESH_CALL_STOP",f);}
+            let out=cmd.output()?;std::fs::write(base.join(format!("{label}.stdout")),&out.stdout)?;std::fs::write(base.join(format!("{label}.stderr")),&out.stderr)?;
+            assert!(out.status.success(),"{label}: {} {}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));Ok(())};
+        // Real bounded TINY ancestry once. No historical SMALL experiments or confirmations run.
+        let reused=std::env::var_os("R3_QA_PREVIOUS_FIXTURE").map(PathBuf::from);
+        let mut roots=vec![];let mut observations=0;
+        let report=base.join("fixture-parent-report.txt");std::fs::write(&report,b"Explicit TINY ancestry, not independent SMALL quality acceptance")?;
+        let prior=if let Some(previous)=&reused {
+            let prior=previous.join("precision");let p=historical_plan(&selected_root(&prior))?;
+            if !p.tiny || !precision(&p){return Err(bad("reuse requires explicit TINY precision fixture"));}prior
+        }else{
+        let parents=super::super::tests::orbit_fixture(&base)?;
+        for arm in ["FIXED","BOTH"]{let r=parents.join(arm);child(&r,"run",None,arm)?;roots.push(r);}
+        let parent=parents.join("BOTH");let(public,private,used)=fixture_reservation(&parent,&base)?;
+        let old=base.join("reference");prepare_inner(&parent,&old,&public,&used,true)?;seal(&old,&private)?;super::super::tests::fixture_review(&old)?;
+        for a in ["old-v","old-vc"]{child(&old,a,None,a)?;}observations+=8;child(&old.join(ARM),"run",None,"reference-run")?;roots.push(old.join(ARM));
+        let mean=base.join("mean");mean_prepare(&old,&mean,true)?;super::super::tests::fixture_review(&mean)?;child(&mean,"mean-parent",None,"mean-parent")?;observations+=4;
+        for arm in MEAN_ARMS {let r=mean.join(arm);child(&r,"run",None,arm)?;roots.push(r);}
+        let mut prior=mean;
+        for stage in ["continuation","fidelity","precision"] {let next=base.join(stage);match stage{"continuation"=>continuation_prepare(&prior,&next,true)?,"fidelity"=>fidelity_prepare(&prior,&next,&report,true)?,_=>precision_prepare(&prior,&next,&report,true)?};
+            super::super::tests::fixture_review(&next)?;for a in ["prior-v","prior-vc"]{child(&next,a,None,&format!("{stage}-{a}"))?;}observations+=8;
+            child(&selected_root(&next),"run",None,&format!("{stage}-run"))?;roots.push(selected_root(&next));prior=next;}
+        prior};
+        let(balanced,old_qa)=if let Some(previous)=&reused{(previous.join("balanced"),previous.join("old-qa"))}else{qa_fixture_sources(&base)?};let mut ends=vec![];let mut outputs=vec![];
+        let modes=if reused.is_some(){vec!["eval-only"]}else{vec!["continuous","split","eval-only"]};
+        for mode in &modes {let mode=*mode;let study=base.join(mode);qa_prepare(&prior,&balanced,&old_qa,&study,&report,true)?;super::super::tests::fixture_review(&study)?;
+            for a in ["qa-value","qa-citation","qa-balanced","qa-transfer"]{child(&study,a,None,&format!("{mode}-{a}"))?;}observations+=40;
+            let root=selected_root(&study);let p=plan_read(&root)?;let step=p.config.max_steps;
+            let mut wrong=p.clone();wrong.config.seq_len=256;assert!(qa_verify_plan(&root,&wrong).is_err());wrong=p.clone();wrong.config.lr=3e-4;assert!(qa_verify_plan(&root,&wrong).is_err());
+            let fault=format!("eval-{step:04}-qa-balanced-primary/generation/1/fresh_panel_row_durable");
+            child(&root,if mode=="split"{"one"}else{"run"},(mode=="eval-only").then_some(fault.as_str()),&format!("{mode}-0"))?;
+            let prefix=if mode=="eval-only" {let h=history(&root,&p)?;assert_eq!(h.last().unwrap().phase.as_deref(),Some("EvaluationPending"));assert_eq!(h.last().unwrap().step,step);Some(binary::read_value_records(&root.join(format!("eval-{step:04}-qa-balanced-primary.r3rows")))?)}else{None};
+            if mode!="continuous"{child(&root,"run",None,&format!("{mode}-1"))?;}
+            if let Some(prefix)=prefix{let after=binary::read_value_records(&root.join(format!("eval-{step:04}-qa-balanced-primary.r3rows")))?;assert_eq!(&after[..prefix.len()],prefix);assert_eq!(read::<binary::Value>(&root.join("segment-0001/train-control.r3b"))?["optimizer_calls"],0);}
+            let(end,d)=close(&root,&p)?;assert_eq!(d["eligible"],false);assert_eq!(d["extend"],false);assert_eq!(end.stop,"STUDY_COMPLETE_QUALITY_FAIL");assert!(!end.resume);
+            let l=checkpoint::load(&root.join(&end.checkpoint),Device::Cpu,true)?;let st=l.manifest.training.as_ref().unwrap();ends.push((l.model.weights_content_id()?,optimizer_hash(&l.optimizer)?,st.step,st.sampler_state,st.consumed_tokens,st.target_tokens));
+            let mut output=vec![];for(name,_,_)in panels(&root,&p,step)?{for r in binary::read_value_records(&root.join(format!("eval-{step:04}-{name}.r3rows")))?.into_iter().skip(1){output.push(binary::record!({"tokens":r["raw_tokens"],"actual":r["actual"],"finish":r["finish_reason"],"error":r["error"]}));}}outputs.push(output);
+            assert!(!gate(&root,&p)?);assert!(run(&root,false).is_err());assert!(confirm(&study).is_err());roots.push(root);
+        }
+        if let Some(previous)=&reused {
+            let root=selected_root(&previous.join("continuous"));let p=historical_plan(&root)?;let end=history(&root,&p)?.last().cloned().ok_or_else(||bad("fixture reference endpoint"))?;
+            let l=checkpoint::load(&root.join(&end.checkpoint),Device::Cpu,true)?;let s=l.manifest.training.as_ref().unwrap();
+            ends.push((l.model.weights_content_id()?,optimizer_hash(&l.optimizer)?,s.step,s.sampler_state,s.consumed_tokens,s.target_tokens));
+            let mut output=vec![];for(name,_,_)in panels(&root,&p,end.step)?{for r in binary::read_value_records(&root.join(format!("eval-{:04}-{name}.r3rows",end.step)))?.into_iter().skip(1){output.push(binary::record!({"tokens":r["raw_tokens"],"actual":r["actual"],"finish":r["finish_reason"],"error":r["error"]}));}}outputs.push(output);
+        }
+        assert!(ends.len()>=2&&ends.windows(2).all(|v|v[0]==v[1]));assert!(outputs.len()>=2&&outputs.windows(2).all(|v|v[0]==v[1]));
+        for a in ["review-v","review-vc","review-old","review-balanced"]{child(&selected_root(&base.join(modes[0])),a,None,a)?;}observations+=40;
+        let mut actual=[0usize,observations,0];for root in roots{let p=historical_plan(&root)?;for end in history(&root,&p)?{actual[0]+=read::<binary::Value>(&root.join(&end.checkpoint).parent().unwrap().join("train-control.r3b"))?["optimizer_calls"].as_u64().unwrap()as usize;actual[1]+=end.generations;actual[2]+=end.teachers;}}
+        assert!(actual[0]<=96&&actual[1]<=768&&actual[2]<=768);
+        println!("RETAINED_QA_PROCESS optimizer={} generation={} teacher={} continuous2/newprocess1+1/evaluation_only2+0 SAME native/Adam/clock/raw; EOS TINY tensor fixture, no quality claim; evidence={}",actual[0],actual[1],actual[2],base.display());Ok(())
+    }
+    #[test]
+    fn retained_qa_full_raw_gate()->Result<()> {
+        let tmp=tempfile::tempdir()?;let study=super::super::tests::orbit_fixture(tmp.path())?;let source=study.join("BOTH");
+        let p=plan_read(&source)?;let tok=ByteBpe::load(&source.join("tokenizer.r3b"))?;
+        let(c,tm,dm)=source_pool(&source,&p,&tok)?;let(public,_,used)=fixture_reservation(&source,tmp.path())?;
+        let(r,(mut tm,dm,_),_)=make_pool(&c,&tm,&dm,&tok,&read_ids(&public,128)?,&read_ids(&used,128)?)?;
+        let(balanced,old)=qa_fixture_sources(tmp.path())?;let(q,_,qm,_,_,_,_,_,_)=qa_sources(&balanced,&old)?;let(v,vm)=qa_variant(&q.train,&qm)?;
+        let mut train=r.train;train.extend(q.train);train.extend(v);tm.extend(qm);tm.extend(vm);
+        let mut manifest=r.manifest;manifest.train=data::native::split("train",&train);
+        let corpus=data::native::from_episodes(manifest,train,r.validation)?;let rows=qa_tape(&tm)?;
+        let mut sources=BTreeMap::new();for(label,path)in[("balanced",&balanced),("old_qa",&old)]{for name in ["corpus.r3cor","transfer.r3cor","metadata.r3b"]{sources.insert(format!("{label}/{name}"),file_hash(&path.join(name))?);}}
+        for(label,step,bad_qa,bad_fit)in[("positive",13312,false,false),("failed-fit",15360,false,true),("failed-QA-bucket",15360,true,false)]{
+            let root=tmp.path().join(label);std::fs::create_dir(&root)?;
+            data::native::write(&root.join("corpus.r3cor"),&corpus,true)?;write(&root.join("metadata.r3b"),&(tm.clone(),dm.clone(),dm.clone()))?;
+            copy_native(&source.join("tokenizer.r3b"),&root.join("tokenizer.r3b"))?;
+            write(&root.join("selection.r3b"),&binary::record!({"fixture":"explicit complete writer/reader QA gate; model calls0","balanced":balanced,"old_qa":old,"sources":sources}))?;
+            let mut p=p.clone();p.tiny=false;p.corpus=file_hash(&root.join("corpus.r3cor"))?;p.metadata=file_hash(&root.join("metadata.r3b"))?;
+            let o=p.identifiable.as_mut().unwrap();o.study=root.clone();o.dataset=QA_DATA.into();o.arm=MEAN_ARMS[1].into();o.rows=[vec![[0;8];11264],rows.clone()].concat();p.train_order=digest(&o.rows)?;
+            p.fork=Some(Fork{study:root.clone(),study_hash:String::new(),arm:MEAN_ARMS[1].into(),parent_policy:String::new(),parent_state:String::new(),parent_adam:String::new(),origin_step:11264,origin_input:0,origin_target:0,original_corpus:p.corpus.clone(),tokenizer_training_hash:tok.train_hash.clone(),variants:None,variant_metadata:None,alternate_first:vec![],selector:None,selector_metadata:None,flip_first:vec![],constant_lr:3e-5,target_limit:2400000});
+            p.config.max_steps=15360;p.config.budget_start_step=11264;p.config.max_tokens=18_000_000;p.config.warmup=0;p.config.seq_len=512;p.config.lr=3e-5;p.evaluation=evaluation(&p);p.evaluation.train_steps=vec![step];
+            let mut l=checkpoint::load(&source.join("initial.r3m"),Device::Cpu,false)?;
+            let mut st=TrainingState{resume_binding:None,contrast16:false,parent_checkpoint_hash:None,config:p.config.clone(),step,sampler_state:step as u64,consumed_tokens:0,target_tokens:0,corpus_hash:corpus.manifest.train.sha256.clone(),validation_hash:corpus.manifest.validation.sha256.clone(),previous_corpora:vec![tok.train_hash.clone()],initial_weight_hash:l.manifest.initial_weight_hash.clone(),train_loss:None,validation_loss:None};
+            st.resume_binding=Some(p.binding(&st,&tok)?);l.manifest.training=Some(st);let adam=Adam::new(&l.model.vars)?;let native=root.join("explicit-record-fixture.r3m");checkpoint::save(&native,&l.model,&tok,l.manifest,&adam.moments)?;
+            let base=qa_base_panels(&root,&p,step)?;assert_eq!(base.iter().map(|v|v.1.len()).collect::<Vec<_>>(),vec![512,512,512,512,128,512,128,128]);
+            for panel in &base[..7]{precision_panel_fixture(&root,&p,step,&native,panel,if bad_qa&&panel.0=="qa-balanced-primary"{8}else{0})?;}
+            assert!(qa_decision(&root,&p,step).is_err()); // Mandatory QA train panel cannot silently disappear.
+            precision_panel_fixture(&root,&p,step,&native,&base[7],0)?;
+            let all=panels(&root,&p,step)?;assert_eq!(all.len(),if bad_qa{8}else{12});
+            if !bad_qa {assert!(qa_decision(&root,&p,step).is_err());for panel in &all[8..]{precision_panel_fixture(&root,&p,step,&native,panel,if bad_fit&&panel.0=="old512"{8}else{0})?;}}
+            let d=qa_decision(&root,&p,step)?;assert_eq!(d["eligible"],!bad_qa&&!bad_fit);assert_eq!(d["extend"],false);
+            assert_eq!(d["action"],if bad_qa||bad_fit{"STUDY_COMPLETE_QUALITY_FAIL".into()}else{format!("CANDIDATE_FIXED_AT_{step}")});
+            let q=&d["panels"]["qa-balanced-primary"];assert_eq!(q["ALL4"],"NOT_DEFINED");assert_eq!(q["H_fixed_planned_emitted_strict"],binary::record!([64,64,64]));
+            let g=q["G_resolution_planned_unresolved_resolved_both"].as_object().unwrap();assert_eq!(g.len(),3);assert_eq!(g.values().map(|v|v[0].as_u64().unwrap()).sum::<u64>(),32);
+            let old=&d["panels"]["qa-old_qa-primary"];for b in 0..8{assert_eq!(old["ALL4"][b],binary::record!([16,16]));assert_eq!(old["old_view_pairs"][b][1],16);assert_eq!(old["old_view_pairs"][b][6],16);}
+            if !bad_qa {let scores:BTreeMap<String,binary::Value>=binary::from_value(d["panels"].clone())?;assert!(qa_dev_pass(&scores)?);
+                for(field,value)in[("errors",1),("EOS",511),("outside_id",1),("full",486)]{let mut wrong=scores.clone();wrong.get_mut("qa-balanced-primary").unwrap()[field]=binary::record!(value);assert!(!qa_dev_pass(&wrong)?);}
+                let mut wrong=scores;wrong.get_mut("qa-balanced-primary").unwrap()["QUERY_BOTH_planned_correct"][2][1]=binary::record!(28);assert!(!qa_dev_pass(&wrong)?);
+            }
+        }
+        println!("RETAINED_QA_FULL typed writer->reader->decision all2944+conditional4608; missing/failed fit, bucket/pair/EOS/outside gates, G/H and old4view checked; synthetic records optimizer0 generation0 teacher0");Ok(())
     }
     fn random_updates(input:&Path,output:&Path,root:&Path,steps:usize)->Result<()> {
         let p=historical_plan(root)?;let mut l=checkpoint::load(input,Device::Cpu,true)?;
@@ -2636,7 +2826,7 @@ mod tests {
         let mut t=std::fs::OpenOptions::new().create_new(true).write(true).open(root.join(format!("{key}-teachers.r3rows")))?;append_row(&mut t,&binding)?;
         let mut rows=vec![];let mut teachers=vec![];
         for (i,e) in es.iter().enumerate() {
-            let mut output=e.clone();if i<wrong {output.answer.replace_range(..1,if e.answer.starts_with('0') {"1"}else{"0"});}
+            let mut output=e.clone();if i<wrong {let end=output.answer.chars().next().ok_or_else(||bad("fixture empty answer"))?.len_utf8();output.answer.replace_range(..end,if e.answer.starts_with('0') {"1"}else{"0"});}
             let mut row=gold(&output,tok)?;row["expected"]=binary::record!(e.answer);row["exact_match"]=binary::record!(i>=wrong);
             row["native_prompt_digest"]=binary::record!(tok.prepare_with_framing(&e.request,p.framing(),l.model.config.context as u32,&l.model.config.id()?)?.token_digest);
             row["framing"]=binary::record!(p.framing().id());append_row(&mut f,&row)?;rows.push(row);
@@ -3364,4 +3554,350 @@ fn verified_confirmation(
         return Err(bad("citation confirmation raw/result disagreement"));
     }
     Ok(expected)
+}
+
+// One retained-capability curriculum. These helpers only prepare/verify native
+// training inputs; product inference never imports a resolver or a bucket.
+fn qa_variant(es:&[Episode],ms:&[Meta])->Result<(Vec<Episode>,Vec<Meta>)> {
+    super::super::validate_balanced(es,ms)?;
+    let mut out=es.to_vec();let mut meta=ms.to_vec();
+    for ((e,m),original) in out.iter_mut().zip(&mut meta).zip(es) {
+        let (entity,context,intent)=question_intent(&original.request.input)?;
+        let choice=u64::from_str_radix(&digest(&(&m.base,intent,"retained-qa-phrase-v1"))?[..16],16).map_err(|_|bad("phrase digest"))? as usize%2;
+        e.request.input=format!("{entity} {context} {}",phrases(intent)[choice]);
+        e.id=format!("{}-train-phrase",original.id);e.request.request_id=e.id.clone();
+        m.id=e.id.clone();m.source_id=Some(original.id.clone());m.template=format!("Q1/{intent:?}/{choice}");
+        if question_intent(&e.request.input)?.2!=intent || resolve(&e.request)?!=original.answer
+            || e.request.system!=original.request.system || e.request.evidence!=original.request.evidence
+            || e.request.limits!=original.request.limits || e.answer!=original.answer {return Err(bad("QA phrase changed intent/evidence/target"));}
+    }
+    super::super::validate_balanced(&out,&meta)?;Ok((out,meta))
+}
+fn qa_tape(ms:&[Meta])->Result<Vec<[usize;8]>> {
+    if ms.len()!=3*POOL+2*QA_POOL {return Err(bad("retained QA metadata pool"));}
+    let mut r=vec![];
+    for group in 0..3 {let mut ids=(0..POOL/2).map(|i|group*POOL+i*2).collect::<Vec<_>>();shuffle(&mut ids,&mut stream(29,&format!("retained/r/{group}")));r.push(ids);}
+    let mut q=vec![];
+    for b in 0..8 {
+        let mut ids=(0..QA_POOL).step_by(2).filter(|&i|ms[3*POOL+i].bucket==b).collect::<Vec<_>>();
+        if ids.len()!=512 || ids.iter().any(|&i|ms[3*POOL+i].view!=0 || ms[3*POOL+i+1].view!=1 || ms[3*POOL+i].base!=ms[3*POOL+i+1].base) {return Err(bad("QA complete base pairs"));}
+        shuffle(&mut ids,&mut stream(29,&format!("retained/q/{b}")));q.push(ids);
+    }
+    Ok((0..4096).map(|step| {
+        let v=r[0][step%(POOL/2)];let group=1+step%2;let c=r[group][(step/2)%(POOL/2)];
+        let b=2*(step%4);let i=(step%2048)/4;let offset=3*POOL+(step/2048)*QA_POOL;
+        let a=offset+q[b][i];let z=offset+q[b+1][i];[v,v+1,c,c+1,a,a+1,z,z+1]
+    }).collect())
+}
+fn qa_token_cost(es:&[Episode],rows:&[[usize;8]],tok:&ByteBpe)->Result<binary::Value> {
+    data::validate_episodes(es)?;
+    let ss=samples(es,tok,512)?;let mut input=0u64;let mut target=0u64;let mut padding=0u64;let mut counts=vec![0usize;es.len()];
+    for (e,s) in es.iter().zip(&ss) {
+        if ![32,128].contains(&e.request.limits.max_tokens) || e.request.limits.timeout_ms!=120000 {return Err(bad("retained QA original generation limits"));}
+        let prompt=tok.prepare_with_framing(&e.request,neural::Framing::QuestionEvidence,2048,"retained-qa-input-check")?;
+        if !prompt.excluded.is_empty() || s.tokens.len()>512 || s.tokens[..s.response_start]!=prompt.token_ids {return Err(bad("QA full evidence/train-generation prompt or length"));}
+    }
+    for row in rows {
+        let mut lengths=vec![];
+        for &i in row {let s=ss.get(i).ok_or_else(||bad("QA tape index"))?;input+=(s.tokens.len()-1)as u64;target+=(s.tokens.len()-s.response_start)as u64;lengths.push(s.tokens.len()-1);counts[i]+=1;}
+        padding+=(lengths.iter().max().unwrap()*8-lengths.iter().sum::<usize>())as u64;
+    }
+    if input>18_000_000 || target>2_400_000 {return Err(bad("QA planned token budget"));}
+    Ok(binary::record!({"input":input,"target":target,"padding":padding,"samples":rows.len()*8,"counts":counts,"maximum_sequence":ss.iter().map(|s|s.tokens.len()).max(),"excluded":0,"prompt_parity":true}))
+}
+fn qa_sources(balanced:&Path,old_qa:&Path)->Result<(data::native::Corpus,data::native::Corpus,Vec<Meta>,Vec<Meta>,Vec<Meta>,data::native::Corpus,data::native::Corpus,Vec<Meta>,Vec<Meta>)> {
+    let q=data::native::read(&balanced.join("corpus.r3cor"))?;let x=data::native::read(&balanced.join("transfer.r3cor"))?;
+    let (tm,dm,xm):(Vec<Meta>,Vec<Meta>,Vec<Meta>)=read(&balanced.join("metadata.r3b"))?;
+    if q.manifest.generator!="joint-binding-balanced-v1" || q.manifest.seed!=20260921 || q.train.len()!=QA_POOL || q.validation.len()!=512 || x.validation.len()!=128 || digest(&q.train)?!=digest(&x.train)? {return Err(bad("accepted balanced source manifest"));}
+    super::super::validate_splits(&[(&q.train,&tm),(&q.validation,&dm),(&x.validation,&xm)])?;
+    let old=data::native::read(&old_qa.join("corpus.r3cor"))?;let ox=data::native::read(&old_qa.join("transfer.r3cor"))?;
+    let (_,om,oxm):(Vec<Meta>,Vec<Meta>,Vec<Meta>)=read(&old_qa.join("metadata.r3b"))?;
+    if old.validation.len()!=512 || ox.validation.len()!=128 || om.len()!=512 || oxm.len()!=128 {return Err(bad("original QA panel counts"));}
+    if [&q.train,&q.validation,&x.validation,&old.validation,&ox.validation].into_iter().flatten()
+        .any(|e|e.request.limits.max_tokens!=128 || e.request.limits.timeout_ms!=120000) {return Err(bad("QA original 128-token contract"));}
+    Ok((q,x,tm,dm,xm,old,ox,om,oxm))
+}
+fn qa_pool(parent:&Path,balanced:&Path,old_qa:&Path,tok:&ByteBpe)->Result<(data::native::Corpus,Vec<Meta>,Vec<Meta>,binary::Value)> {
+    let old=historical_plan(parent)?;let r=verified_corpus(&parent.join("corpus.r3cor"),&old.corpus)?;let (mut rm,rd,_)=verified_metadata(parent,&old)?;
+    if r.train.len()!=4608 || r.validation.len()!=1536 {return Err(bad("retention source pool"));}
+    if r.train.iter().chain(&r.validation).any(|e|e.request.limits.max_tokens!=32 || e.request.limits.timeout_ms!=120000) {return Err(bad("retention original 32-token contract"));}
+    let(q,x,qm,dm,xm,oq,ox,om,oxm)=qa_sources(balanced,old_qa)?;
+    let (variant,mut vm)=qa_variant(&q.train,&qm)?;let mut train=r.train;train.extend(q.train.clone());train.extend(variant);
+    rm.extend(qm.iter().cloned().map(|mut m| {m.source_id=Some(m.id.clone());m.template=format!("Q0/{}",m.template);m}));rm.append(&mut vm);
+    data::validate_episodes(&train)?;
+    let mut train_inputs=BTreeSet::new();let mut train_families=BTreeSet::new();let mut train_scenes=BTreeSet::new();
+    for e in &train {
+        let p=tok.prepare_with_framing(&e.request,neural::Framing::QuestionEvidence,2048,"split-audit")?;
+        train_inputs.insert(digest(&p.token_ids)?);train_families.insert(e.family.clone());
+        if !e.request.evidence.items.is_empty(){train_scenes.insert(digest(&e.request.evidence)?);}
+    }
+    for es in [&r.validation,&q.validation,&x.validation,&oq.validation,&ox.validation] {
+        qa_token_cost(es,&[],tok)?;
+        for e in es {
+            let p=tok.prepare_with_framing(&e.request,neural::Framing::QuestionEvidence,2048,"split-audit")?;
+            if train_inputs.contains(&digest(&p.token_ids)?) || train_families.contains(&e.family)
+                || (!e.request.evidence.items.is_empty() && train_scenes.contains(&digest(&e.request.evidence)?)) {return Err(bad("retained QA heldout leakage"));}
+        }
+    }
+    for (es,ms) in [(&q.validation,&dm),(&x.validation,&xm),(&oq.validation,&om),(&ox.validation,&oxm)] {if es.iter().zip(ms).any(|(e,m)|e.id!=m.id || m.bucket>=8){return Err(bad("QA evaluation metadata identity"));}}
+    let rows=qa_tape(&rm)?;let costs=qa_token_cost(&train,&rows,tok)?;
+    let manifest=data::CorpusManifest{version:1,scope:"project-owned retained value/citation and educational balanced QA".into(),permission:"synthetic project-owned".into(),generator:QA_DATA.into(),seed:20260921,split_rule:"preserved source splits; Q1 train-only intent-equivalent wording; retention and two QA panels disjoint".into(),train:data::native::split("train",&train),validation:data::native::split("validation",&r.validation)};
+    Ok((data::native::from_episodes(manifest,train,r.validation)?,rm,rd,costs))
+}
+fn qa_plan(old:&Plan,study:&Path,s:&binary::Value,metadata:&[Meta])->Result<Plan> {
+    let mut p=old.clone();let state:TrainingState=binary::from_value(s["parent_training_state"].clone())?;
+    let get=|k:&str|s[k].as_str().map(str::to_owned).ok_or_else(||bad("retained QA policy field"));
+    p.source=get("source")?;p.binary=get("binary")?;p.initial=get("parent_physical")?;p.initial_weights=get("parent_weights")?;
+    p.corpus=get("corpus")?;p.transfer=get("transfer")?;p.metadata=get("metadata")?;
+    p.config.seq_len=512;p.config.lr=3e-5;p.config.warmup=0;p.config.max_steps=state.step+if p.tiny {2}else{4096};
+    p.config.budget_start_step=state.step;p.config.budget_start_tokens=state.consumed_tokens;p.config.max_tokens=state.consumed_tokens+18_000_000;
+    let o=p.identifiable.as_mut().ok_or_else(||bad("retained QA parent profile"))?;
+    o.study=study.into();o.dataset=QA_DATA.into();o.rows.truncate(state.step);
+    if o.rows.len()!=state.step {return Err(bad("retained QA consumed parent tape"));}
+    o.rows.extend(qa_tape(metadata)?.into_iter().take(if p.tiny {2}else{4096}));p.train_order=digest(&o.rows)?;
+    p.order=vec![(0..3*POOL+2*QA_POOL).collect()];
+    let f=p.fork.as_mut().ok_or_else(||bad("retained QA fork"))?;
+    f.study=study.into();f.study_hash=file_hash(&study.join("selection.r3b"))?;f.parent_policy=digest(old)?;
+    f.parent_state=digest(&state)?;f.parent_adam=get("parent_adam")?;f.origin_step=state.step;f.origin_input=state.consumed_tokens;f.origin_target=state.target_tokens;
+    f.original_corpus=p.corpus.clone();f.constant_lr=3e-5;f.target_limit=2_400_000;
+    p.evaluation=evaluation(&p);Ok(p)
+}
+pub(in super::super::super) fn qa_prepare(previous:&Path,balanced:&Path,old_qa:&Path,output:&Path,parent_review:&Path,tiny:bool)->Result<()> {
+    if tiny!=cfg!(all(test,feature="test-support")) {return Err(bad("retained QA production/TINY separation"));}
+    let previous=previous.canonicalize()?;let balanced=balanced.canonicalize()?;let old_qa=old_qa.canonicalize()?;let output=std::path::absolute(output)?;
+    let parent=previous.join(MEAN_ARMS[1]);let old=historical_plan(&parent)?;let(end,decision)=close(&parent,&old)?;
+    let l=checkpoint::load(&parent.join(&end.checkpoint),Device::Cpu,true)?;let state=l.manifest.training.as_ref().ok_or_else(||bad("retained QA parent Adam"))?;
+    if !precision(&old) || old.tiny!=tiny || (!tiny && decision["eligible"]!=true) || end.resume || end.phase.as_deref()!=Some("Finished")
+        || (!tiny && (state.step!=11264 || end.stop!="CANDIDATE_FIXED_AT_11264"))
+        || state.sampler_state!=state.step as u64 || state.resume_binding!=Some(old.binding(state,&l.tokenizer)?)
+        || old.config.lr!=3e-5 || !answer_mean(&old) || old.config.microbatch!=8 || old.config.accumulation!=1
+        || old.framing()!=neural::Framing::QuestionEvidence {return Err(bad("accepted ANSWER11264 parent required"));}
+    let accepted=if tiny {binary::record!({"fixture":true})}else{verified_confirmation(&previous,&old,&end,&decision)?};
+    if !tiny && accepted["value_citation_baseline_verified"]!=true {return Err(bad("accepted parent citation scope required"));}
+    let(c,tm,dm,costs)=qa_pool(&parent,&balanced,&old_qa,&l.tokenizer)?;
+    let mut sources=BTreeMap::new();for (label,path) in [("balanced",&balanced),("old_qa",&old_qa)] {for name in ["corpus.r3cor","transfer.r3cor","metadata.r3b"] {sources.insert(format!("{label}/{name}"),file_hash(&path.join(name))?);}}
+    let mut s=binary::record!({"contract":QA_CONTRACT,"source":source_digest()?,"binary":file_hash(&std::env::current_exe()?)?,"parent":parent,
+        "parent_endpoint":end,"parent_physical":end.checkpoint_hash,"parent_policy":file_hash(&parent.join("plan.r3b"))?,"parent_terminal":file_hash(&terminal_path(&parent,&end)?)?,
+        "parent_training_state":state,"parent_adam":optimizer_hash(&l.optimizer)?,"parent_weights":l.model.weight_hash()?,"parent_acceptance":accepted,
+        "parent_review":parent_review.canonicalize()?,"parent_review_hash":file_hash(parent_review)?,"balanced":balanced,"old_qa":old_qa,"sources":sources,"planned_costs":costs,
+        "historical_resume":false,"new_authorization":QA_CONTRACT,"origin":state.step,"max_steps":state.step+4096,"physical_rows":20992,"Q0_exposures":8192,"Q1_exposures":8192,
+        "objective":checkpoint::ANSWER_MEAN_OBJECTIVE,"actual_lr_bits":3e-5f64.to_bits(),"retention_limits":32,"QA_limits":128,"training_length":512,"model_context":2048});
+    std::fs::create_dir(&output)?;let root=output.join(MEAN_ARMS[1]);std::fs::create_dir(&root)?;
+    data::native::write(&root.join("corpus.r3cor"),&c,true)?;copy_native(&root.join("corpus.r3cor"),&root.join("transfer.r3cor"))?;
+    write(&root.join("metadata.r3b"),&(tm.clone(),dm.clone(),dm))?;
+    copy_native(&parent.join(&end.checkpoint),&root.join("initial.r3m"))?;copy_native(&parent.join("tokenizer.r3b"),&root.join("tokenizer.r3b"))?;
+    for name in ["corpus","transfer","metadata"] {s[name]=binary::record!(file_hash(&root.join(format!("{name}.{}",if name=="metadata" {"r3b"}else{"r3cor"})))?);}
+    write(&output.join("selection.r3b"),&s)?;let p=qa_plan(&old,&output,&s,&tm)?;write(&root.join("plan.r3b"),&p)?;qa_verify_plan(&root,&p)?;
+    if !p.parent_entry(&root.join("initial.r3m"),&l)? {return Err(bad("retained QA parent entry"));}
+    publish_confirmed(&output.join("preparation.r3b"),&binary::record!({"contract":QA_CONTRACT,"source":p.source,"binary":p.binary,"selection":file_hash(&output.join("selection.r3b"))?,
+        "arms":{(MEAN_ARMS[1]):{"policy":file_hash(&root.join("plan.r3b"))?,"initial":p.initial,"corpus":p.corpus,"tape":p.train_order}},"optimizer":0,"generation":0,"teacher":0}))?;
+    println!("RETAINED_QA_PREPARED rows20992 updates0 generations0 teacher0 costs_input={} target={} padding={} A_PENDING",costs["input"],costs["target"],costs["padding"]);Ok(())
+}
+fn qa_verify_plan(root:&Path,p:&Plan)->Result<()> {
+    let study=&own(p).study;let s:binary::Value=read(&study.join("selection.r3b"))?;
+    let path=|k:&str|s[k].as_str().map(Path::new).ok_or_else(||bad("retained QA bound path"));
+    let parent=path("parent")?;let old=historical_plan(parent)?;let end:Segment=binary::from_value(s["parent_endpoint"].clone())?;
+    let (tm,_,_)=verified_metadata(root,p)?;
+    if s["contract"]!=QA_CONTRACT || root!=study.join(MEAN_ARMS[1]) || *p!=qa_plan(&old,study,&s,&tm)?
+        || s["parent_terminal"]!=file_hash(&terminal_path(parent,&end)?)? || digest(&read_confirmed::<Segment>(&terminal_path(parent,&end)?)?)?!=digest(&end)?
+        || s["parent_policy"]!=file_hash(&parent.join("plan.r3b"))? || s["parent_review_hash"]!=file_hash(path("parent_review")?)?
+        || p.initial!=file_hash(&parent.join(&end.checkpoint))? || p.initial!=file_hash(&root.join("initial.r3m"))? {return Err(bad("retained QA immutable lineage/policy"));}
+    for label in ["balanced","old_qa"] {for name in ["corpus.r3cor","transfer.r3cor","metadata.r3b"] {
+        if s["sources"][&format!("{label}/{name}")]!=file_hash(&path(label)?.join(name))? {return Err(bad("retained QA frozen source changed"));}
+    }}
+    let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;
+    if tok.id()!=p.tokenizer || c.train.len()!=20992 || p.config.seq_len!=512 || p.config.lr!=3e-5 || p.framing()!=neural::Framing::QuestionEvidence {return Err(bad("retained QA input configuration"));}
+    Ok(())
+}
+fn qa_bound_panel(p:&Plan,label:&str,transfer:bool)->Result<(Vec<Episode>,Vec<Meta>)> {
+    let s:binary::Value=read(&own(p).study.join("selection.r3b"))?;
+    let dir=Path::new(s[label].as_str().ok_or_else(||bad("QA source path"))?);
+    let name=if transfer {"transfer.r3cor"}else{"corpus.r3cor"};
+    let expected=s["sources"][&format!("{label}/{name}")].as_str().ok_or_else(||bad("QA source digest"))?;
+    let c=verified_corpus(&dir.join(name),expected)?;
+    let bytes=std::fs::read(dir.join("metadata.r3b"))?;
+    if s["sources"][&format!("{label}/metadata.r3b")]!=neural::hash(&bytes){return Err(bad("QA metadata changed"));}
+    let(_,dm,xm):(Vec<Meta>,Vec<Meta>,Vec<Meta>)=binary::from_slice(&bytes)?;
+    Ok((c.validation,if transfer {xm}else{dm}))
+}
+fn qa_base_panels(root:&Path,p:&Plan,step:usize)->Result<Vec<Panel>> {
+    if !p.evaluation_due(step){return Err(bad("retained QA unregistered evaluation"));}
+    let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;let(tm,dm,_)=verified_metadata(root,p)?;
+    let full=full_evaluation(p,step);let n=if p.tiny {4}else if full {512}else{64};
+    let mut out=[("value",0),("citation",512),("renamed",1024)].into_iter().map(|(name,start)|(format!("{name}{n}"),c.validation[start..start+n].to_vec(),dm[start..start+n].to_vec())).collect::<Vec<_>>();
+    for label in ["old_qa","balanced"] {
+        let(es,ms)=qa_bound_panel(p,label,false)?;
+        let(es,ms)=if full {(es,ms)}else{subset(&es,&ms,if p.tiny {2}else{8})};
+        out.push((format!("qa-{label}-primary"),es,ms));
+        if full {let(es,ms)=qa_bound_panel(p,label,true)?;out.push((format!("qa-{label}-transfer"),es,ms));}
+    }
+    if full {
+        let offset=3*POOL+if step-p.origin_step()>2048 {QA_POOL}else{0};
+        let(es,ms)=subset(&c.train[offset..offset+QA_POOL],&tm[offset..offset+QA_POOL],16);
+        let seen=own(p).rows[p.origin_step()..step].iter().flatten().copied().collect::<BTreeSet<_>>();
+        if ms.iter().any(|m|tm.iter().position(|x|x.id==m.id).is_none_or(|i|!seen.contains(&i))){return Err(bad("QA train diagnostic contains unexposed variant"));}
+        out.push(("qa-train128".into(),es,ms));
+    }
+    Ok(out)
+}
+fn qa_score(root:&Path,p:&Plan,step:usize,panel:&Panel)->Result<binary::Value> {
+    let(name,es,ms)=panel;let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
+    let summary=audit_panel(root,p,step,name,es,ms,&tok)?;
+    let raw=binary::read_value_records(&root.join(format!("eval-{step:04}-{name}.r3rows")))?;
+    let mut groups=vec![[0usize;8];8];let mut exact=vec![];let(mut eos,mut errors,mut length,mut runtime,mut utf8,mut outside)=(0,0,0,0,0,0);let mut g_types=BTreeMap::<String,[usize;2]>::new();
+    for ((e,m),r) in es.iter().zip(ms).zip(&raw[1..]) {
+        let good=recovery::strict_answer_match(r["actual"].as_str(),&e.answer,r["finish_reason"]=="stop",!r["error"].is_null())&&r["generation_completed"]==true;
+        exact.push(good);let stop=r["finish_reason"]=="stop";let err=!r["error"].is_null();
+        eos+=usize::from(stop);errors+=usize::from(!stop||err);length+=usize::from(r["finish_reason"]=="length");
+        utf8+=usize::from(r["error_class"]=="strict_utf8");runtime+=usize::from(err&&r["error_class"]!="strict_utf8");
+        let expected=citations(&e.answer)?;let ids=r["actual"].as_str().and_then(|s|citations(s).ok());
+        let external=ids.as_ref().is_some_and(|ids|ids.iter().any(|id|!e.request.evidence.items.iter().any(|v|v.event_id==*id)));outside+=usize::from(external);
+        let g=&mut groups[m.bucket];g[0]+=1;g[1]+=usize::from(good);g[2]+=usize::from(!stop||err);
+        g[3]+=usize::from(!expected.is_empty() && ids.as_ref()==Some(&expected));g[4]+=usize::from(external);
+        g[5]+=usize::from(ids.as_ref().is_some_and(|ids|!ids.is_empty()&&!external&&*ids!=expected));g[6]+=usize::from(ids.is_none());g[7]+=usize::from(ids.as_ref().is_some_and(Vec::is_empty));
+        if m.bucket==6 {let key=e.answer.clone();let row=g_types.entry(key).or_default();row[0]+=1;row[1]+=usize::from(good);}
+    }
+    let mut pairs=vec![[0usize;2];8];let mut resolutions=BTreeMap::<String,[usize;4]>::new();
+    let mut old_relations=vec![[0usize;10];8];let mut old_all4=vec![[0usize;2];8];
+    if name.contains("balanced") || name=="qa-train128" {
+        for(i,mm)in ms.chunks_exact(2).enumerate(){if mm[0].base!=mm[1].base || mm[0].view!=0 || mm[1].view!=1 || mm[0].bucket!=mm[1].bucket {return Err(bad("QA complementary panel order"));}let g=&mut pairs[mm[0].bucket];g[0]+=1;g[1]+=usize::from(exact[2*i]&&exact[2*i+1]);
+            if mm[0].bucket==6 {let r=resolutions.entry(es[2*i].answer.clone()).or_default();r[0]+=1;r[1]+=usize::from(exact[2*i]);r[2]+=usize::from(exact[2*i+1]);r[3]+=usize::from(exact[2*i]&&exact[2*i+1]);}
+        }
+    }else{
+        let mut bases=BTreeMap::<&str,Vec<usize>>::new();for(i,m)in ms.iter().enumerate(){bases.entry(&m.base).or_default().push(i);}
+        for ix in bases.values(){if (!p.tiny&&ix.len()!=4)||![2,4].contains(&ix.len())||ix.iter().enumerate().any(|(j,&i)|ms[i].view!=j||ms[i].bucket!=ms[ix[0]].bucket){return Err(bad("old QA four-view identity"));}
+            let at=ix[0];let g=&mut old_relations[ms[at].bucket];g[0]+=1;
+            for j in 1..ix.len(){g[2*j-1]+=1;g[2*j]+=usize::from(exact[at]&&exact[ix[j]]);}
+            g[7]+=usize::from(es[at].answer!=es[ix[1]].answer);
+            if ix.len()==4 {g[8]+=usize::from(es[at].request.evidence!=es[ix[2]].request.evidence);g[9]+=usize::from(es[at].request.input!=es[ix[3]].request.input);
+                let a=&mut old_all4[ms[at].bucket];a[0]+=1;a[1]+=usize::from(ix.iter().all(|&i|exact[i]));}
+        }
+    }
+    let fixed=es.iter().zip(ms).filter(|(_,m)|m.bucket==7).map(|(e,_)|e.answer.as_str()).collect::<BTreeSet<_>>();
+    let mut h=[0usize;3];let mut non_h=[0usize;2];
+    for ((r,m),good) in raw[1..].iter().zip(ms).zip(&exact) {let emission=r["actual"].as_str().is_some_and(|s|fixed.contains(s));if m.bucket==7 {h[0]+=1;h[1]+=usize::from(emission);h[2]+=usize::from(*good);}else{non_h[0]+=1;non_h[1]+=usize::from(emission);}}
+    let mut out=binary::record!({"model":summary.model,"raw":summary.raw_hash,"cases":digest(es)?,"total":es.len(),"full":exact.iter().filter(|x|**x).count(),"exact":exact,
+        "EOS":eos,"errors":errors,"length":length,"runtime_errors":runtime,"UTF8_errors":utf8,"outside_id":outside,"buckets":groups,"QUERY_BOTH_planned_correct":pairs,"G_subtypes_planned_correct":g_types,
+        "G_resolution_planned_unresolved_resolved_both":resolutions,"H_fixed_planned_emitted_strict":h,"non_H_fixed_planned_emitted":non_h,
+        "bucket_fields":["planned","full","errors","exact_nonempty_support","outside_id","wrong_provided_id","parse_failure","empty_citation"],"ALL4":"NOT_DEFINED","scope":"old four views or balanced complementary two views; strict complete answer"});
+    if name.contains("old_qa") {out["QUERY_BOTH_planned_correct"]=binary::record!("NOT_DEFINED");out["ALL4"]=binary::record!(old_all4);
+        out["old_view_pairs"]=binary::record!(old_relations);out["old_view_pair_fields"]=binary::record!(["bases","value01_planned","value01_both","order02_planned","order02_both","wording03_planned","wording03_both","changed_gold01","changed_evidence02","changed_query03"]);}
+    Ok(out)
+}
+fn qa_dev_pass(scores:&BTreeMap<String,binary::Value>)->Result<bool> {
+    for label in ["old_qa","balanced"] {for split in ["primary","transfer"] {
+        let key=format!("qa-{label}-{split}");let s=scores.get(&key).ok_or_else(||bad("missing full QA panel"))?;
+        let (total,min)=if split=="primary"{(512,487)}else{(128,116)};
+        if s["total"]!=total || s["full"].as_u64().is_none_or(|n|n<min) || s["EOS"]!=total || s["errors"]!=0 || s["outside_id"]!=0 {return Ok(false);}
+        if split=="primary" {
+            for b in 0..8 {if s["buckets"][b][0]!=64 || s["buckets"][b][1].as_u64().is_none_or(|n|n<58){return Ok(false);}}
+            if label=="balanced" {for b in 2..6 {if s["QUERY_BOTH_planned_correct"][b][0]!=32 || s["QUERY_BOTH_planned_correct"][b][1].as_u64().is_none_or(|n|n<29){return Ok(false);}}}
+        }
+    }}Ok(true)
+}
+fn qa_guard(root:&Path,p:&Plan,step:usize,panels:&[Panel])->Result<binary::Value> {
+    let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;let mut before=[0usize;3];let mut previous=None;
+    for at in p.evaluation.train_steps.iter().copied().filter(|&n|n<=step) {
+        let cases=if at==step {panels.to_vec()}else{qa_base_panels(root,p,at)?};let mut screens=vec![];let mut hashes=vec![];let mut after=[0usize;3];let mut stop=None;
+        for (i,panel) in cases[..3].iter().enumerate() {
+            let path=root.join(format!("eval-{at:04}-{}.r3rows",panel.0));let raw=binary::read_value_records(&path)?;let n=if p.tiny{4}else{64};
+            let score=if i==0 {orbit_score(&panel.1[..n],&panel.2[..n],&raw[1..n+1],&tok)?}else{score_citation(&panel.1[..n],&panel.2[..n],&raw[1..n+1],&tok)?.joint};
+            let(a,s)=if p.tiny{(0,None)}else{retention_decision(score.full,score.all4,score.errors,before[i])};after[i]=a;if s.is_some(){stop=s;}
+            screens.push(score);hashes.push(file_hash(&path)?);
+        }
+        let g=binary::record!({"before":before,"after":after,"screens":screens,"raw":hashes,"previous":previous,"stop":stop,"origin_counts_as_warning":false});
+        if at==step{return Ok(g);}
+        let path=root.join(format!("citation-decision-{at:04}.r3b"));let d:binary::Value=read_confirmed(&path)?;
+        if d["policy"]!=digest(p)? || d["step"]!=at || d["guard"]!=g || stop.is_some(){return Err(bad("retained QA guard chain mismatch or prior stop"));}
+        before=after;previous=Some(file_hash(&path)?);
+    }Err(bad("retained QA guard unregistered step"))
+}
+fn qa_decision(root:&Path,p:&Plan,step:usize)->Result<binary::Value> {
+    let cases=panels(root,p,step)?;let scores=cases.iter().map(|panel|Ok((panel.0.clone(),read_score(root,p,step,panel)?))).collect::<Result<BTreeMap<_,_>>>()?;
+    let models=scores.values().map(|s|s["model"].as_str().ok_or_else(||bad("QA model identity"))).collect::<Result<BTreeSet<_>>>()?;
+    if models.len()!=1{return Err(bad("mixed QA endpoint models"));}
+    let guard=qa_guard(root,p,step,&cases)?;let regression=guard["stop"].is_string();
+    let dev=full_evaluation(p,step)&&dev_pass(&scores)?&&qa_dev_pass(&scores)?;
+    let mut fits=dev;
+    if dev {for(name,total,full,qb,all4)in[("old512",512,508,252,124),("new1024",1024,1016,504,248),("VC0train1536",1536,1524,756,372),("VC1train1536",1536,1524,756,372)] {
+        let s:OrbitScore=binary::from_value(scores.get(name).ok_or_else(||bad("QA conditional fit missing"))?["joint"].clone())?;fits&=pass(&s,total,full,qb,all4);
+    }}
+    let eligible=dev&&fits&&!regression;let(action,extend)=if regression{(guard["stop"].as_str().unwrap().to_owned(),false)}else if eligible{(format!("CANDIDATE_FIXED_AT_{step}"),false)}else if step==p.config.max_steps{("STUDY_COMPLETE_QUALITY_FAIL".into(),false)}else{("CONTINUE_WITHIN_REGISTERED_CAP".into(),true)};
+    Ok(binary::record!({"policy":digest(p)?,"step":step,"model":models.into_iter().next(),"panels":scores,"guard":guard,"development":dev,"fit":fits,"eligible":eligible,"action":action,"extend":extend,"stop":(!extend).then_some(action)}))
+}
+fn qa_parent_cases(root:&Path,p:&Plan,name:&str)->Result<(Vec<Episode>,Option<Vec<binary::Value>>)> {
+    if name=="balanced" || name=="transfer" {
+        let (es,ms)=qa_bound_panel(p,"balanced",name=="transfer")?;
+        return Ok((if p.tiny{subset(&es,&ms,2).0}else{es},None));
+    }
+    if !["value","citation"].contains(&name){return Err(bad("retained QA parent panel"));}
+    let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;let start=if name=="value"{0}else{512};let n=if p.tiny{4}else{16};
+    let s:binary::Value=read(&own(p).study.join("selection.r3b"))?;let parent=Path::new(s["parent"].as_str().ok_or_else(||bad("QA parent path"))?);
+    let raw=binary::read_value_records(&parent.join(format!("eval-{:04}-{name}{}.r3rows",p.origin_step(),if p.tiny{4}else{512})))?;
+    Ok((c.validation[start..start+n].to_vec(),Some(raw[1..n+1].to_vec())))
+}
+fn qa_authorize(root:&Path,p:&Plan)->Result<()> {
+    qa_verify_plan(root,p)?;
+    for panel in ["value","citation","balanced","transfer"] {
+        let(es,expected)=qa_parent_cases(root,p,panel)?;
+        observed(&own(p).study,&format!("qa-parent-{panel}"),p,&p.initial,&es,expected.is_some())?;
+    }
+    if !p.tiny {
+        let r:binary::Value=read_confirmed(&own(p).study.join("review-a.r3b"))?;
+        let path=Path::new(r["s4_seal_path"].as_str().ok_or_else(||bad("S4 independent seal missing"))?);
+        if r["s4_seal_hash"]!=file_hash(path)? {return Err(bad("S4 independent seal changed"));}
+        let seal:binary::Value=read(path)?;
+        if seal["count"]!=200 || seal["status"]!="SEALED" || seal["opened_for_model"]!=false {return Err(bad("S4 must be prepared before learning"));}
+        for (location,hash) in [("fixture_path","fixture_sha256"),("controls_path","controls_sha256")] {
+            let file=Path::new(seal[location].as_str().ok_or_else(||bad("S4 canonical file missing"))?);
+            if seal[hash]!=file_hash(file)? {return Err(bad("S4 sealed file changed"));}
+        }
+    }
+    Ok(())
+}
+pub(in super::super::super) fn qa_parent(study:&Path,name:&str)->Result<()> {
+    let study=study.canonicalize()?;let root=study.join(MEAN_ARMS[1]);let p=plan_read(&root)?;
+    if !retained_qa(&p){return Err(bad("QA observation profile"));}expansion_review(&p)?;
+    let(es,expected)=qa_parent_cases(&root,&p,name)?;let count=es.len();
+    orbit_observe(&study,&format!("qa-parent-{name}"),&root.join("initial.r3m"),&es,
+        &binary::record!({"policy":digest(&p)?,"checkpoint":p.initial}),expected.as_deref(),observation_control(&p,count,0)?)?;
+    let rows=observed(&study,&format!("qa-parent-{name}"),&p,&p.initial,&es,expected.is_some())?;
+    let exact=es.iter().zip(&rows).filter(|(e,r)|recovery::strict_answer_match(r["actual"].as_str(),&e.answer,r["finish_reason"]=="stop",!r["error"].is_null())).count();
+    println!("QA_PARENT panel={name} full={exact}/{count} generation={count} teacher0 optimizer0");Ok(())
+}
+pub(in super::super::super) fn qa_report(study:&Path)->Result<()> {
+    let study=study.canonicalize()?;let root=study.join(MEAN_ARMS[1]);let p=historical_plan(&root)?;
+    if !retained_qa(&p){return Err(bad("retained QA report scope"));}
+    let h=history(&root,&p)?;let Some(end)=h.last() else {println!("QA_STUDY NOT_RUN");return Ok(());};
+    for step in p.evaluation.train_steps.iter().copied().filter(|&s|s<=end.step) {
+        if step==end.step && end.phase.as_deref()==Some("EvaluationPending"){continue;}
+        let d=qa_decision(&root,&p,step)?;
+        if read_confirmed::<binary::Value>(&root.join(format!("citation-decision-{step:04}.r3b")))?!=d {return Err(bad("QA report/raw decision mismatch"));}
+        for panel in qa_base_panels(&root,&p,step)? {let s=&d["panels"][&panel.0];println!("QA_PANEL step={step} panel={} score={}",panel.0,if panel.0.starts_with("qa-"){binary::record!({"full":s["full"],"total":s["total"],"EOS":s["EOS"],"length":s["length"],"errors":s["errors"],"runtime":s["runtime_errors"],"UTF8":s["UTF8_errors"],"outside":s["outside_id"],"buckets":s["buckets"],"QUERY_BOTH":s["QUERY_BOTH_planned_correct"],"ALL4":s["ALL4"],"old_view_pairs":s["old_view_pairs"],"G_resolution":s["G_resolution_planned_unresolved_resolved_both"],"H_fixed":s["H_fixed_planned_emitted_strict"],"non_H_fixed":s["non_H_fixed_planned_emitted"]})}else{binary::record!({"full":s["joint"]["full"],"total":s["joint"]["total"],"QB":s["joint"]["query_both"],"ALL4":s["joint"]["all4"],"support":s["citation_support_correct"],"outside":s["valid_outside_id"]})});}
+    }
+    let t=trace(&root,&p,end)?;
+    println!("QA_TRACE updates={} input={} target={} exposure={} unique={} usage={:?} durable={} step={} resume={} stop={} S4=NOT_ACCEPTED S5=NOT_ACCEPTED S6=NOT_ACCEPTED Goal1=false",t["updates"],t["input"],t["target"],t["tasks_V_VC0_VC1_Q0_Q1_samples_input_target"],t["unique_V_VC0_VC1_Q0_Q1"],work(&p)?,end.checkpoint_hash,end.step,end.resume,end.stop);
+    if !end.resume&&end.phase.as_deref()==Some("Finished"){let(e,d)=close(&root,&p)?;println!("QA_COMPARISON {}",comparison(&study,&p,&e,&d)?);}
+    Ok(())
+}
+pub(in super::super::super) fn qa_review(root:&Path,label:&str)->Result<()> {
+    if !["old_qa","balanced"].contains(&label){return Err(bad("QA reviewer panel"));}
+    let root=root.canonicalize()?;let p=historical_plan(&root)?;
+    if !retained_qa(&p){return Err(bad("QA reviewer profile"));}
+    let(end,_)=close(&root,&p)?;
+    if !["STUDY_COMPLETE_QUALITY_FAIL","SEVERE_RETENTION_REGRESSION","PERSISTENT_RETENTION_REGRESSION"].contains(&end.stop.as_str())
+        && end.stop!=format!("CANDIDATE_FIXED_AT_{}",end.step) {return Err(bad("QA reviewer requires complete quality endpoint"));}
+    let panel=qa_base_panels(&root,&p,end.step)?.into_iter().find(|v|v.0==format!("qa-{label}-primary")).ok_or_else(||bad("QA review raw missing"))?;
+    let scored=qa_score(&root,&p,end.step,&panel)?;
+    let raw=binary::read_value_records(&root.join(format!("eval-{:04}-{}.r3rows",end.step,panel.0)))?;
+    // Exactly two frozen rows per bucket, wrong rows first; evaluation-only.
+    let mut indices=vec![];for bucket in 0..8 {
+        let mut candidates=panel.2.iter().enumerate().filter(|(_,m)|m.bucket==bucket).map(|(i,_)|i).collect::<Vec<_>>();
+        candidates.sort_by_key(|&i|(scored["exact"][i]==true,i));
+        if candidates.len()<2{return Err(bad("QA review bucket incomplete"));}indices.extend_from_slice(&candidates[..2]);
+    }
+    let es=indices.iter().map(|&i|panel.1[i].clone()).collect::<Vec<_>>();let expected=indices.iter().map(|&i|raw[i+1].clone()).collect::<Vec<_>>();
+    orbit_observe(&own(&p).study,&format!("qa-review-{label}"),&root.join(&end.checkpoint),&es,
+        &binary::record!({"policy":digest(&p)?,"checkpoint":end.checkpoint_hash,"sample_indices":indices}),Some(&expected),observation_control(&p,16,0)?)?;
+    println!("QA_REVIEW panel={label} generation16 teacher0 optimizer0 matched16 candidate_permission=false");Ok(())
 }

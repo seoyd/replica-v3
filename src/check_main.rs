@@ -28,6 +28,9 @@ struct Cli {
 enum Checks {
     /// Offline source checks and direct regressions; no quality evaluation or learning.
     Quick {
+        /// Retained-QA mixed tape/objective and cache rejection; native process has its own counted receipt.
+        #[arg(long, conflicts_with_all = ["citation_precision", "citation_fidelity", "citation_continuation", "answer_mean", "value_citation", "rebind_consolidation", "binding_expansion", "fresh", "fresh_selector", "native_corpus", "bridge_receipts"])]
+        retained_qa: bool,
         /// Only precision LR, inherited Adam, tape, sample and native-process checks.
         #[arg(long, conflicts_with_all = ["citation_fidelity", "citation_continuation", "answer_mean", "value_citation", "rebind_consolidation", "binding_expansion", "fresh", "fresh_selector", "native_corpus", "bridge_receipts"])]
         citation_precision: bool,
@@ -438,6 +441,7 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
     write_new(&r.output.join("boundaries.r3b"), &boundaries(files)?)?;
     match &cli.command {
         Checks::Quick {
+            retained_qa,
             citation_precision,
             citation_fidelity,
             citation_continuation,
@@ -450,6 +454,12 @@ fn execute(cli: &Cli, r: &mut Runner, files: &[PathBuf]) -> Result<()> {
             native_corpus,
             bridge_receipts,
         } => {
+            if *retained_qa {
+                for filter in ["retained_qa_tape_input_objective", "retained_qa_full_raw_gate", "token_cache_actual_native_framing_separates_same_tokenizer"] {
+                    r.cargo("test", &["--release", "--bin", "replica-train", filter, "--", "--nocapture", "--test-threads=1"], true)?;
+                }
+                return Ok(());
+            }
             if *citation_precision {
                 r.cargo("test", &["--release", "--bin", "replica-train", "citation_precision_", "--", "--nocapture", "--test-threads=1"], true)?;
                 return Ok(());

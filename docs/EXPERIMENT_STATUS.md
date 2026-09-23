@@ -1,5 +1,65 @@
 # 진단 및 구현 상태
 
+## 2026-09-23 retained QA 준비 — SMALL 학습 전
+
+R3-RETAINED-QA-TRANSFER-1.0은 수용된11264에서 별도 공동학습을 준비한다.
+기준 제품 source는 `3290fec66db372c5ab427bf2e632bf573824ce3d`다. 기존
+인용 confirmation과 old QA640 부모 생성은 반복하지 않았다. 원 parent의
+physical `c47e34c7ac4f88dd08b5e719bf4d0364f139ac5002bf4572fe55b37dac823925`,
+weights `ea1d7fa166f4178e08d894613ff75a9ba3e87c93cfd85814361a7b83ea2bc173`,
+Adam136 tensor·누적 clock11264·ANSWER/QE·LR3e-5와 닫힌 종료는 보존한다.
+
+기존 balanced native train8192/dev512/transfer128과 metadata·원 독립 A를
+교차 확인했다. corpus physical은
+`9fb4840f4c9dfefb8638a2a997de32cb6d7f73888d9556f8d63781c6b58c1942`다.
+과거 LOCAL5 model을 사용한 것이 아니라 그때 수용된 자료만 재사용한다.
+복습4608+Q0/Q1각8192의20992행을 기존 Plan/trainer/evaluator에 연결했다.
+사전 무학습 prepare는 exit0,4096회 tape의 계획 입력6,006,578·target454,700·
+padding1,574,558이다. 이는 아직 실행한 학습 사용량이 아니다.
+
+독립 S4 준비는 기존 renderer의 한 후보·seed를 보존했다. 사건 ID 중복45를
+발견했고 같은 자리수 ID 교체는1자리 미사용 공간0으로 실패했다. 이후
+원 renderer1..9999의 미사용 ID를 정답과 무관한 고정 hash 순서로 배정해
+421개 ID를 분리했다. 자리수 변화68개를 공개하며, 역변환 비ID 동등성을
+검사했다. 범주0/2/3의 가장 이른 시각 지름길도 발견해 같은 후보의 기존
+시각쌍만 고정 순열로 바꾸었다. 시간 의미가 필요한 범주1/4는 바이트
+불변이다. 단일 근거의 불가피한100%와 다중 근거 통계를 분리했다.
+원 실패와 부적격 중간 봉인은 모두 보존했다. 최종200+value-pair200의
+정답·분리 검사 및 미개봉 봉인은 통과했으며 모델/teacher/optimizer0이다.
+최종 seal physical은
+`573a155ff785d2a6e057427884ddbeb16bb390ab9e9a9d3800901d48829671ca`다.
+봉인 준비 PASS는 제품 A나 S4 품질 PASS가 아니다.
+
+직접 TINY process는 연속2/새 process1+1/마지막 평가-only2+0의 weights·
+Adam·clock·raw 일치를 확인했다(exit0). 기존 작은 부모 fixture 생성분까지
+optimizer22/generation400/teacher236이다. 실제 Transformer EOS tensor
+fixture이며 모델 품질 근거가 아니다. 전체2944+조건부4608 패널의 실제
+typed writer/reader/decision 시험은 명시한 합성 raw로만 수행했다(모델0).
+정상 positive, 필수 패널 누락, fit 실패, 범주/공동정답/EOS/외부ID gate를
+검증했다. 독립 검토가 지적한 G 해소/H 고정문장 및 old QA4view 분해도
+추가했다. 이 두 종류의 증거를 실제 SMALL 품질로 합산하지 않는다.
+
+고정 source quick03은 관련3 tests PASS/exit0이다. 최종 source에서 기존
+TINY 부모 fixture를 재사용한 추가 process 시험도 exit0이다. 새2 updates,
+generation124/teacher44로 평가-only 재개·보존된 연속 endpoint 일치와
+정상 품질실패의 V/VC/두 QA reviewer 재현을 확인했다. 누적 TINY 사용량은
+optimizer24/generation524/teacher280이며 SMALL은0이다. 앞선 debug 준비 검사는
+속도 때문에 중단했으며 PASS로 세지 않는다. quick01은 새 fixture의 budget
+origin 설정 누락으로 실패했고, quick02의3 tests는 통과했으나 검사 도중
+source 변경 감지가 실패했다. 실패 로그를 보존하고 source 고정 quick03으로
+대체 검증했다. 실제 SMALL 학습·부모 신규 관측·독립 A 최종 수용은 아직
+NOT_RUN/PENDING이며 S4/S5/S6/Goal1 수용을 변경하지 않았다.
+
+최종 준비 root는 `artifacts/retained-qa-20260923-study-final`이며 prepare
+exit0, 모델 호출0이다. preparation physical은
+`6d06c25f4abcb1f7aff5b0b4b79ecf138d741244127ee722f753a36b57d265a2`,
+mixed corpus는 `64c0fa67ab256081095c20717b521a00843f70149cb8315be96671dffba3117d`다.
+동결 실행 파일 `artifacts/retained-qa-20260923-executable`의 SHA256은
+`a833ff1919fb166d7a493e60c1f4c34f9697a7e82ed34ba80853e72222c357d7`다.
+관련 quick receipt는 `artifacts/retained-qa-20260923-quick-03`, 실제
+process 로그는 `artifacts/retained-qa-20260923-review/test-process-02.log`다.
+대용량 자료·모델·raw·임시 지시문은 게시하지 않는다.
+
 ## 2026-09-23 인용 precision 종료 — 제한 범위 수용, 기존 QA는 미달
 
 실제 source는 `3290fec66db372c5ab427bf2e632bf573824ce3d`이며 이후 제품

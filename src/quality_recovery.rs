@@ -1116,7 +1116,7 @@ fn components(actual: Option<&str>, expected: &str, provided: &[i64]) -> Value {
     record!({"entity":e.map(|e|a.is_some_and(|a|a.0==e.0)),"context":e.map(|e|a.is_some_and(|a|a.1==e.1)),"value":e.map(|e|a.is_some_and(|a|a.2==e.2)),
         "citation_exact":ids.as_ref().is_some_and(|a|Some(a)==expected_ids.as_ref()),"citation_in_provided":ids.as_ref().map(|a|a.iter().all(|id|provided.contains(id))),"citation_nonempty":ids.as_ref().is_some_and(|a|!a.is_empty())})
 }
-fn strict_answer_match(actual: Option<&str>, expected: &str, eos: bool, error: bool) -> bool {
+pub(super) fn strict_answer_match(actual: Option<&str>, expected: &str, eos: bool, error: bool) -> bool {
     actual.is_some_and(|text| !text.is_empty() && text == expected) && eos && !error
 }
 pub(super) fn evaluate_one(

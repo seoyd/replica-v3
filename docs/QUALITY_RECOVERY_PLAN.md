@@ -1,5 +1,73 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: retained value/citation capability and balanced QA transfer
+
+R3-RETAINED-QA-TRANSFER-1.0 starts a separate ANSWER11264-bound research run.
+The accepted parent, consumed citation confirmation, old QA640 observation and
+all failed studies remain immutable. Product source baseline is
+`3290fec66db372c5ab427bf2e632bf573824ce3d`. No reinitialization, external model,
+teacher/API, tokenizer/core/storage change or new loss is authorized.
+
+Reuse parent V1536/VC0 1536/VC1 1536 plus accepted balanced QA8192. Q0 preserves
+its original requests; Q1 changes only the task clause to an existing train-only
+phrase of the same intent. The physical pool is20992. Batch8 has V2 and VC2
+(VC0/VC1 alternate), then two complete complementary QA pairs. Bucket pairs
+cycle AB/CD/EF/GH, with one fixed512-base permutation per bucket. First2048
+updates expose every Q0 once; next2048 expose every Q1 once in the same order.
+R exposure is16384 (V8192, VC0/VC1 each4096), with disclosed nonuniform case
+counts; QA exposure is16384. Count target tokens separately from the ANSWER
+objective's eight-example denominator; this does not imply equal gradient norms.
+
+Preserve weights, Adam moments and cumulative clock, ANSWER family6/normalizer2,
+QE, first-target1 and constant LR3e-5. Train length512 retains full evidence;
+model context remains2048. Retention requests keep generation32, QA128, timeout
+120000ms. Verify actual training/generation prompt IDs and excluded0. No expected
+answer or training resolver enters inference.
+
+Before SMALL: directly test mixed data/tape/CE/masks/8-versus4+4, native TINY2
+versus fresh-process1+1, final evaluation-only resumption and quality-failure
+reviewer access. Use the existing quick runner's retained-QA filter and separately
+counted process receipt. Independent A binds frozen source, preparation and an
+independently prepared, unopened S4 seal. The new study verifies actual sealed
+files. Initial observations are parent V16+VC16 parity and balanced512+128 once;
+reuse the previous old QA640 raw without regeneration.
+
+Save after new1 and at intervals no larger than512. At new128/512/1024/3072,
+evaluate V64/VC64/ID64, old QA64 and balanced QA64 (320). At2048/4096 evaluate
+retention3x512, old512+128, balanced512+128 and exposed QAtrain128 (2944).
+Only joint development passage permits full same-checkpoint retention fit4608.
+Each retention screen independently stops at FULL<=48 or errors>=4; FULL<60
+or ALL4<12 warns, with two distinct consecutive warnings stopping that panel.
+Initial low QA is a new-task gap, not regression of accepted retention ability.
+Cancel, nonfinite, I/O, binding and UNKNOWN remain blocking. Pure time stops use
+the existing cursor; completed rows are never regenerated. Final-step resume
+performs evaluation with optimizer0.
+
+Common development gate: retention V512 FULL488/QB232/ALL4116/errors0; VC/ID
+add first-value508/support508/outside0. Both distinct QA primary512 panels need
+FULL487 and each bucket58/64; each transfer128 needs116, normal EOS/errors0/
+outside0. Balanced C/D/E/F each need QUERY_BOTH29/32. G/H require actual correct
+content, never an empty-citation shortcut. Retention fit old512 needs508/QB252/
+ALL4124, new1024 needs1016/QB504/ALL4248, each VC1536 needs1524/QB756/ALL4372,
+all errors0. QAtrain128 is diagnostic only. First eligible2048 endpoint fixes
+the candidate; otherwise stop at4096, with quality failure and resume=false if
+the gate still fails. No automatic seed/LR/data search or extension.
+
+Independent B audits raw/teacher/trace/native and at most64 fresh reproductions.
+Only the fixed eligible candidate proceeds to sealed S4:190/200, each category
+36/40, accepted-invalid-citation0. Random/no-evidence/value-swap controls each
+use a fixed balanced40 separately from main200, with retrieval-only comparison.
+Only S4 passage permits existing app/worker/isolated Store S5 memory/correction/
+restart smoke, at most20 generations. S6 is NOT_ACCEPTED until separately proved;
+neither narrow acceptance nor QA training makes Goal1 accepted.
+
+New SMALL limits:4096 optimizer, input18M, target2.4M, generation24576,
+self-teacher18432, diagnostic backward0, active14400s, command900s+cleanup120s,
+training/inference RSS16/12GiB. TINY shared limit96 optimizer/768 generation/
+768 teacher, finite-difference8. Include known failed costs; UNKNOWN is not zero.
+One owned heavy process, no background learning. Preserve raw and scoped commits;
+publish only source, tests and anonymous status, then verify actual remote SHA.
+
 ## Closed: citation precision from complete ANSWER10496
 
 Learning is closed at11264 after768 new updates. All three dev512 panels and
