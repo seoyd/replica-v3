@@ -1,6 +1,15 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: retained value/citation capability and balanced QA transfer
+## Closed: retained value/citation capability and balanced QA transfer
+
+Execution closed at15360 after4096 new optimizer updates under frozen source
+`3a5f54ed91dffd8a5782e148c56a56dddf2244c8`. The final terminal is
+PERSISTENT_RETENTION_REGRESSION/resume=false and the full learning budget is
+consumed. V/VC/renamed dev FULL is512/505/496 out of512. Old QA is27/512 and24/128;
+balanced QA is13/512 and3/128, with A–F all0. No candidate qualified. Conditional
+retention fit, sealed S4 and S5 were not run. Existing11264 acceptance is unchanged;
+S6 and Goal1 remain unaccepted. No further learning is authorized by this plan.
+The following records the executed policy and unchanged gates.
 
 R3-RETAINED-QA-TRANSFER-1.0 starts a separate ANSWER11264-bound research run.
 The accepted parent, consumed citation confirmation, old QA640 observation and

@@ -1,6 +1,89 @@
 # 진단 및 구현 상태
 
-## 2026-09-23 retained QA 준비 — SMALL 학습 전
+## 2026-09-23 retained QA 종료 — 4096회 실행, 공동 품질 미달
+
+R3-RETAINED-QA-TRANSFER-1.0의 동결 source는
+`3a5f54ed91dffd8a5782e148c56a56dddf2244c8`이다. [독립 A](RETAINED_QA_REVIEW_A_2026-09-23.md)는
+실제 process·자료·tape·부모/Adam·S4 봉인을 검증해 PASS로 닫혔다. A 보고서
+전용 commit `242a87845c8f7d2d9b11e9952e84a3fb45d1cd50`의 원격 일치를 확인했다.
+학습 중 제품 source/tests/Cargo와 동결 실행 파일은 변경하지 않았다.
+
+부모의 새 value16/citation16은 raw/token/EOS parity32/32, balanced QA는
+0/512·0/128이었다. 새 generation672, teacher/optimizer0이다. 기존 old QA640와
+사용한 citation confirmation은 재생성하지 않았다. 첫 run 명령은 상대 root를
+전달해 기존 절대경로 결속 검사에서 사전 거부됐다(exit1). segment 시작·모델
+호출·optimizer는0이었고 원 로그를 보존했다. 정책·validator를 바꾸지 않고
+등록된 절대 root로 실행했으며 이후10개 학습 segment는 모두 exit0이다.
+
+신규 optimizer4096회, 누적 step15360으로 종료했다. 실제 입력6,006,578,
+target454,700·padding1,574,558은 준비 단계의 전체 tape 계산과 일치한다. Q0/Q1각8192회,
+V8192회·VC0/VC1각4096회, 총32768 sample 노출이다. ANSWER CE·LR3e-5·
+fresh reset 없는 Adam136·동일 tokenizer/QE/TR++를 유지했다. +1 저장과
+각 최대512회 segment를 새 프로세스로 이어 실행했다.
+
+|신규 updates / 누적 step|V / VC / ID 재명명 FULL|old QA primary / transfer|balanced QA primary / transfer|QA train 표본|
+|---|---|---|---|---|
+|128 /11392|64/64 ·63/64 ·63/64|0/64 ·미측정|0/64 ·미측정|미측정|
+|512 /11776|64/64 ·64/64 ·61/64|0/64 ·미측정|1/64 ·미측정|미측정|
+|1024 /12288|64/64 ·64/64 ·60/64|6/64 ·미측정|4/64 ·미측정|미측정|
+|2048 /13312|512/512 ·508/512 ·500/512|64/512 ·11/128|71/512 ·19/128|Q0 19/128|
+|3072 /14336|64/64 ·64/64 ·58/64|4/64 ·미측정|10/64 ·미측정|미측정|
+|4096 /15360|512/512 ·505/512 ·496/512|27/512 ·24/128|13/512 ·3/128|Q1 21/128|
+
+최종 각 QA의 A–F는 모두0이다. old primary의 G/H는27/0, transfer는8/16,
+balanced primary는11/2, transfer는3/0이다. 고정 답변을 포함한 G/H 정답 증가를
+기록·값 선택 전이의 성공으로 합산하지 않는다. 2048과4096의 Q-train은 서로
+다른 실제 노출 변형 Q0/Q1이므로 동일 자료 개선량으로 비교하지 않는다.
+최종 개발 패널은 모두 EOS·runtime/UTF-8 오류0이고, Q1 train 표본에는
+길이 종료1개가 포함됐다. 품질 gate와 source 실행 무결성은 별도 판정이다.
+
+최종 V/VC/ID의 ALL4는128/123/119, VC/ID의 정확 support는505/496,
+근거 밖 ID는7/16이다. old primary/transfer의 근거 밖 ID는428/92,
+balanced는463/114이며, Q1 train 표본은98이다. 정상 EOS나 낮은 teacher CE가
+실제 값·support 정확성을 보장하지 않는다는 관측이다. 미측정 원인을 단정하지
+않으며, 이번 결과에 새 loss/LR/자료 탐색을 덧붙이지 않았다.
+
+독립 B 전까지 SMALL 사용량은 optimizer4096/generation7840/teacher7168,
+diagnostic backward0이다. 기록된 control active는4063.9933412089995초이며
+prepare·순수 검산·전체 작업 wall time과 구별한다. 학습 로그의 최대 표본 RSS는
+5,209,712KiB다. TINY 사용량은 구현자+독립 A 합계26/648/324,
+finite-difference0이며 SMALL과 합산하지 않는다. 모델 계산을 하지 않은
+typed full-panel fixture는 품질 생성으로 세지 않는다.
+
+최종 종료는 `PERSISTENT_RETENTION_REGRESSION`, `resume=false`다. ID 재명명
+고정64의 연속 경고가 적용됐으며 전체4096회 예산도 소진했다. 적격 후보는
+없다. 공동 개발 gate 미달로 retention fit4608·봉인 S4·S5는 실행하지 않았다.
+S4 봉인은 미개봉으로 보존하며 S6/Goal1은 미수용이다. 기존 scalar4352와
+값·인용11264 수용, 원 checkpoint/Adam/실패/사용자 자료는 변경하지 않았다.
+
+최종 native는 `artifacts/retained-qa-20260923-study-final/ANSWER-MEAN/segment-0009/final`,
+실제 file SHA256은 `6b95de2c4ead5203d7acdbda7a76544b3307a0bb2d1787de8f2a3be787f08b3d`,
+평가 model identity는 `79c5f1ddd527b8943d6e5868506fcd566c618f6ab763bbaa3ea99786701ef88d`다.
+실행 명령·출력은 `artifacts/retained-qa-20260923-review/run-0000-absolute.log`
+및 `run-0001.log`~`run-0009.log`, 순수 재채점은 같은 디렉터리의
+`report-final.log`에 보존한다. source diff는 기준
+`3290fec66db372c5ab427bf2e632bf573824ce3d`부터 위 동결 source까지다. 제품/학습
+소스5파일의 실제 diff는 `artifacts/retained-qa-20260923-review/candidate-source.diff`,
+SHA256 `05c2ee0f6552206cd2598f326b2a5c13a6b506dbf147c3b4866c8ed9c7703ca9`다.
+[독립 B](RETAINED_QA_REVIEW_B_2026-09-23.md)는 전수 raw/teacher 각7168행·trace4096개·10개 native/Adam을 검산해
+PASS로 확인했다. 새 프로세스 V16/VC16/old QA16/balanced QA16의64개 출력도
+raw token/EOS/bytes/오류까지 일치했다. V/VC는 정답 표본, 두 QA는 각각
+오답16개 재현이며 표본 점수를 전체 품질 추정으로 사용하지 않는다.
+추가 generation64·raw token801·control active6.381510666초,
+teacher/optimizer0이다. 최종 총사용량은 optimizer4096/generation7904/
+teacher7168, 생성 token147080, 기록된 active4070.374851875초다. A 보호20파일과 이번 study
+원본30243파일은 B 전후 hash 불변이다. B의 `old-qa` CLI 오기는 parser가
+exit2로 무호출 거부했으며, 허용된 `old_qa` 인자로 실행했다. 최초 helper
+컴파일 오류도 모델 호출0으로 보존했다. B_INTEGRITY=PASS와
+MODEL_JOINT_QUALITY=FAIL을 구분한다.
+
+B 보고서-only commit은 `6f0d46f29ff38252db64b752609702bba56b7a96`이며
+게시 후 실제 원격 SHA 일치를 확인했다. reviewed source는 위 `3a5f54ed…`와
+구별한다. 준비·회귀·원자료 무결성·실행은 검증됐지만 QA 공동 품질과
+S4/S5/S6·Goal1은 미수용이다. 최종 요구사항 대조에서 추가 학습이나 미달
+gate를 건너뛴 후속 실행은 남은 인가 작업으로 취급하지 않았다.
+
+## 2026-09-23 retained QA 준비 시점 기록 — 아래 NOT_RUN은 학습 전 상태
 
 R3-RETAINED-QA-TRANSFER-1.0은 수용된11264에서 별도 공동학습을 준비한다.
 기준 제품 source는 `3290fec66db372c5ab427bf2e632bf573824ce3d`다. 기존
