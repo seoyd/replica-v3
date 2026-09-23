@@ -1,5 +1,51 @@
 # 진단 및 구현 상태
 
+## 2026-09-23 QA 인용 집계 수리 및 역사 재채점
+
+R3-QA-INTEGRITY-AND-BRIDGE-1.0의 I1이다. 기준 source
+`3a5f54ed91dffd8a5782e148c56a56dddf2244c8` 이후의
+[독립 후속 검토](RETAINED_QA_REVIEW_FOLLOWUP_2026-09-23.md)가 이전 A/B의
+metric 수용을 A FAIL/B metric FAIL로 정정했다. 과거 학습4096회와 저장·parity
+증거는 별도이며, 원본 보고서·raw·terminal·수용11264는 변경하지 않는다.
+
+제품 strict parser는 유지했다. QA scorer v2는 모든 `[event:` 시작을 검사해
+개별 유효 양수 i64를 수집하며, 다른 인용의 문법 오류 때문에 근거 밖 ID를
+누락하지 않는다. 행 단위 outside와 parse failure를 각각 bucket/panel에
+집계하고 두 값 모두0이어야 새 QA candidate를 허용한다. 누락된 actual을
+정상 빈 인용으로 바꾸지 않으며 정상 G/H 무인용은 내용까지 strict 채점한다.
+
+EXECUTED_THIS_RUN: 문법 경계1/1 PASS와 typed writer→reader→audit→qa_score→
+qa_decision 통합1/1 PASS(204.76초). FULL511/512·EOS512에서도 outside1+
+malformed1은 eligible=false이며, outside0인 malformed-only도 거부했다.
+정상 positive/G/H, 누락·실패 fit, bucket/pair 오류 회귀도 유지했다.
+최초 통합 실행은 `test-support` 누락으로 사전 거부(exit101)됐고 로그를
+보존한 뒤 올바른 기능으로 실행했다. 모두 optimizer/generation/teacher0이다.
+수정 전 RED는 독립 reviewer가 남긴 baseline+테스트 전용2 hunk의 source/
+binary/log 결속을 재확인해 재사용했다. 새 실행으로 중복 표기하지 않는다.
+
+별도 `retained-qa-recount` 명령은 원본 native·raw·teacher·정책·저장 요약을
+검증하고 수정 범위 외 점수가 원본과 같음을 확인한 뒤 native 파생 보고서를
+발행했다(exit0). raw7168행 중 QA3328행을 재채점했으며 outside 누락4행을
+정정했다. 원래 FULL/EOS와 최종15360 품질미달·resume=false는 보존된다.
+역사 후보 승격은 NOT_AUTHORIZED다. 학습·생성·teacher 신규 호출은 모두0이다.
+
+구현 증거: `artifacts/qa-integrity-bridge-20260923-implementation/`의
+`candidate-source.diff`, `grammar-test.log`, `full-gate-test-02.log`,
+`recount.log`, `historical-recount.r3b`.
+재채점 binary SHA256은
+`a1970d4abeef9a0b8552cb2867ba5b728253e202c83939bf3bf94da6eb3026da`,
+파생 보고서 SHA256은
+`a3a60bedabea8aaca7300c2ded28ceb2b9daffd1467d93c2d45539e70f22f0af`다.
+독립 A1도 실제 문법1/1·통합1/1(204.99초) PASS다. 제품 helper를 호출하지
+않는 별도 byte scanner가7168 FULL/EOS·QA3328의 행/버킷/패널을 대조했다.
+외부 ID는11392 balanced64의14→16,12288 old64의31→32,
+13312 old512의281→282로 정정되며 parse 실패는 전체 QA에서20행이다.
+최종15360의 지표·실패 terminal은 불변이다. 독립 파생 결과는
+`artifacts/qa-integrity-bridge-20260923-review/A1-independent-recount.r3b`,
+SHA256 `6f6bfea806803aaf6a3030daa8a55f328e72363c732fcfbbe9601b73a08a9ea6`다.
+SCORER_AND_GATE_REPAIR=PASS, HISTORICAL_METRIC_RECOUNT=PASS다.
+이후 2×2 관측·조건부 bridge 학습은 NOT_RUN, S4/S5/S6·Goal1은 NOT_ACCEPTED다.
+
 ## 2026-09-23 retained QA 종료 — 4096회 실행, 공동 품질 미달
 
 R3-RETAINED-QA-TRANSFER-1.0의 동결 source는

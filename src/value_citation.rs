@@ -20,6 +20,7 @@ const PREC_CONTRACT: &str = "R3-CITATION-PRECISION-1.0";
 const QA_DATA: &str = "retained-qa-transfer-v1";
 const QA_CONTRACT: &str = "R3-RETAINED-QA-TRANSFER-1.0";
 const QA_POOL: usize = 8192;
+const QA_SCORER: &str = "strict-qa-independent-citation-ids-v2";
 fn qa_task(p:&Plan,index:usize)->usize {if retained_qa(p)&&index>=3*POOL {3+(index-3*POOL)/QA_POOL}else{index/POOL}}
 pub(in super::super::super) fn retained_qa(p:&Plan)->bool {p.identifiable.as_ref().is_some_and(|o|o.dataset==QA_DATA)}
 pub(in super::super::super) fn precision(p:&Plan)->bool {p.identifiable.as_ref().is_some_and(|o|o.dataset==PREC_DATA)}
@@ -715,14 +716,20 @@ struct CitationScore {
 fn value(text: &str) -> Option<u8> {
     text.as_bytes().first().copied().filter(u8::is_ascii_digit)
 }
+// Diagnostic extraction only. The product's whole-response parser stays strict.
+// Inspect every start, including one nested after an unclosed/malformed prefix.
+fn individually_valid_ids(text: &str) -> BTreeSet<i64> {
+    text.match_indices("[event:").filter_map(|(start,_)| {
+        let rest=&text[start+7..];
+        rest.split_once(']').and_then(|(id,_)|id.parse::<i64>().ok()).filter(|id|*id>0)
+    }).collect()
+}
+fn has_outside_id(e: &Episode, text: Option<&str>) -> bool {
+    text.is_some_and(|text|individually_valid_ids(text).iter().any(|id|
+        !e.request.evidence.items.iter().any(|event|event.event_id==*id)))
+}
 fn valid_outside_ids(es: &[Episode], rows: &[binary::Value]) -> usize {
-    es.iter().zip(rows).filter(|(e,r)| {
-        let text=r["actual"].as_str().unwrap_or("");
-        text.match_indices("[event:").any(|(start,_)| {
-            text[start..].find(']').is_some_and(|end|citations(&text[start..=start+end]).is_ok_and(|ids|
-                ids.iter().any(|id|!e.request.evidence.items.iter().any(|event|event.event_id==*id))))
-        })
-    }).count()
+    es.iter().zip(rows).filter(|(e,r)|has_outside_id(e,r["actual"].as_str())).count()
 }
 fn score_citation(
     es: &[Episode],
@@ -2460,7 +2467,8 @@ mod tests {
         let mut manifest=r.manifest;manifest.train=data::native::split("train",&train);
         let corpus=data::native::from_episodes(manifest,train,r.validation)?;let rows=qa_tape(&tm)?;
         let mut sources=BTreeMap::new();for(label,path)in[("balanced",&balanced),("old_qa",&old)]{for name in ["corpus.r3cor","transfer.r3cor","metadata.r3b"]{sources.insert(format!("{label}/{name}"),file_hash(&path.join(name))?);}}
-        for(label,step,bad_qa,bad_fit)in[("positive",13312,false,false),("failed-fit",15360,false,true),("failed-QA-bucket",15360,true,false)]{
+        for(label,step,bad_qa,bad_fit,malformed)in[("positive",13312,false,false,None),("failed-fit",15360,false,true,None),("failed-QA-bucket",15360,true,false,None),
+            ("malformed-outside",15360,false,false,Some(" [event:9223372036854775807] [event:]")),("malformed-only",15360,false,false,Some(" [event:]"))]{
             let root=tmp.path().join(label);std::fs::create_dir(&root)?;
             data::native::write(&root.join("corpus.r3cor"),&corpus,true)?;write(&root.join("metadata.r3b"),&(tm.clone(),dm.clone(),dm.clone()))?;
             copy_native(&source.join("tokenizer.r3b"),&root.join("tokenizer.r3b"))?;
@@ -2473,18 +2481,21 @@ mod tests {
             let mut st=TrainingState{resume_binding:None,contrast16:false,parent_checkpoint_hash:None,config:p.config.clone(),step,sampler_state:step as u64,consumed_tokens:0,target_tokens:0,corpus_hash:corpus.manifest.train.sha256.clone(),validation_hash:corpus.manifest.validation.sha256.clone(),previous_corpora:vec![tok.train_hash.clone()],initial_weight_hash:l.manifest.initial_weight_hash.clone(),train_loss:None,validation_loss:None};
             st.resume_binding=Some(p.binding(&st,&tok)?);l.manifest.training=Some(st);let adam=Adam::new(&l.model.vars)?;let native=root.join("explicit-record-fixture.r3m");checkpoint::save(&native,&l.model,&tok,l.manifest,&adam.moments)?;
             let base=qa_base_panels(&root,&p,step)?;assert_eq!(base.iter().map(|v|v.1.len()).collect::<Vec<_>>(),vec![512,512,512,512,128,512,128,128]);
-            for panel in &base[..7]{precision_panel_fixture(&root,&p,step,&native,panel,if bad_qa&&panel.0=="qa-balanced-primary"{8}else{0})?;}
+            for panel in &base[..7]{precision_panel_fixture_with_suffix(&root,&p,step,&native,panel,if bad_qa&&panel.0=="qa-balanced-primary"{8}else{0},malformed.filter(|_|panel.0=="qa-balanced-primary"))?;}
             assert!(qa_decision(&root,&p,step).is_err()); // Mandatory QA train panel cannot silently disappear.
             precision_panel_fixture(&root,&p,step,&native,&base[7],0)?;
-            let all=panels(&root,&p,step)?;assert_eq!(all.len(),if bad_qa{8}else{12});
-            if !bad_qa {assert!(qa_decision(&root,&p,step).is_err());for panel in &all[8..]{precision_panel_fixture(&root,&p,step,&native,panel,if bad_fit&&panel.0=="old512"{8}else{0})?;}}
-            let d=qa_decision(&root,&p,step)?;assert_eq!(d["eligible"],!bad_qa&&!bad_fit);assert_eq!(d["extend"],false);
-            assert_eq!(d["action"],if bad_qa||bad_fit{"STUDY_COMPLETE_QUALITY_FAIL".into()}else{format!("CANDIDATE_FIXED_AT_{step}")});
+            let all=panels(&root,&p,step)?;assert_eq!(all.len(),if bad_qa||malformed.is_some(){8}else{12});
+            if !bad_qa&&malformed.is_none() {assert!(qa_decision(&root,&p,step).is_err());for panel in &all[8..]{precision_panel_fixture(&root,&p,step,&native,panel,if bad_fit&&panel.0=="old512"{8}else{0})?;}}
+            let d=qa_decision(&root,&p,step)?;assert_eq!(d["eligible"],!bad_qa&&!bad_fit&&malformed.is_none());assert_eq!(d["extend"],false);
+            assert_eq!(d["action"],if bad_qa||bad_fit||malformed.is_some(){"STUDY_COMPLETE_QUALITY_FAIL".into()}else{format!("CANDIDATE_FIXED_AT_{step}")});
             let q=&d["panels"]["qa-balanced-primary"];assert_eq!(q["ALL4"],"NOT_DEFINED");assert_eq!(q["H_fixed_planned_emitted_strict"],binary::record!([64,64,64]));
+            if malformed.is_some(){assert_eq!(q["full"],511);assert_eq!(q["EOS"],512);assert_eq!(q["parse_failure_rows"],1);assert_eq!(q["buckets"][0][6],1);
+                assert_eq!(q["outside_id"],usize::from(label=="malformed-outside"));assert_eq!(q["buckets"][0][4],q["outside_id"]);assert_eq!(q["buckets"][0][3],63);
+                println!("QA_MALFORMED_GATE {label} full={} EOS={} outside={} parse={} eligible={}",q["full"],q["EOS"],q["outside_id"],q["parse_failure_rows"],d["eligible"]);}
             let g=q["G_resolution_planned_unresolved_resolved_both"].as_object().unwrap();assert_eq!(g.len(),3);assert_eq!(g.values().map(|v|v[0].as_u64().unwrap()).sum::<u64>(),32);
             let old=&d["panels"]["qa-old_qa-primary"];for b in 0..8{assert_eq!(old["ALL4"][b],binary::record!([16,16]));assert_eq!(old["old_view_pairs"][b][1],16);assert_eq!(old["old_view_pairs"][b][6],16);}
-            if !bad_qa {let scores:BTreeMap<String,binary::Value>=binary::from_value(d["panels"].clone())?;assert!(qa_dev_pass(&scores)?);
-                for(field,value)in[("errors",1),("EOS",511),("outside_id",1),("full",486)]{let mut wrong=scores.clone();wrong.get_mut("qa-balanced-primary").unwrap()[field]=binary::record!(value);assert!(!qa_dev_pass(&wrong)?);}
+            if !bad_qa&&malformed.is_none() {let scores:BTreeMap<String,binary::Value>=binary::from_value(d["panels"].clone())?;assert!(qa_dev_pass(&scores)?);
+                for(field,value)in[("errors",1),("EOS",511),("outside_id",1),("parse_failure_rows",1),("full",486)]{let mut wrong=scores.clone();wrong.get_mut("qa-balanced-primary").unwrap()[field]=binary::record!(value);assert!(!qa_dev_pass(&wrong)?);}
                 let mut wrong=scores;wrong.get_mut("qa-balanced-primary").unwrap()["QUERY_BOTH_planned_correct"][2][1]=binary::record!(28);assert!(!qa_dev_pass(&wrong)?);
             }
         }
@@ -2818,6 +2829,9 @@ mod tests {
     }
     // Synthetic writer/reader fixture only: no generation, teacher or optimizer.
     fn precision_panel_fixture(root:&Path,p:&Plan,step:usize,native:&Path,panel:&Panel,wrong:usize)->Result<()> {
+        precision_panel_fixture_with_suffix(root,p,step,native,panel,wrong,None)
+    }
+    fn precision_panel_fixture_with_suffix(root:&Path,p:&Plan,step:usize,native:&Path,panel:&Panel,wrong:usize,suffix:Option<&str>)->Result<()> {
         let (name,es,ms)=panel;let l=checkpoint::load(native,Device::Cpu,false)?;let tok=&l.tokenizer;
         let key=format!("eval-{step:04}-{name}");let model=l.model.weight_hash()?;
         let binding=binary::record!({"fixture":"synthetic panel; model calls0","policy":digest(p)?,"dataset":digest(&es)?,"step":step,"planned":es.len(),"model":model});
@@ -2827,7 +2841,8 @@ mod tests {
         let mut rows=vec![];let mut teachers=vec![];
         for (i,e) in es.iter().enumerate() {
             let mut output=e.clone();if i<wrong {let end=output.answer.chars().next().ok_or_else(||bad("fixture empty answer"))?.len_utf8();output.answer.replace_range(..end,if e.answer.starts_with('0') {"1"}else{"0"});}
-            let mut row=gold(&output,tok)?;row["expected"]=binary::record!(e.answer);row["exact_match"]=binary::record!(i>=wrong);
+            if i==0 {if let Some(suffix)=suffix {output.answer.push_str(suffix);assert!(tok.encode(output.answer.as_bytes())?.len()+1<=e.request.limits.max_tokens as usize);}}
+            let mut row=gold(&output,tok)?;row["expected"]=binary::record!(e.answer);row["exact_match"]=binary::record!(output.answer==e.answer);
             row["native_prompt_digest"]=binary::record!(tok.prepare_with_framing(&e.request,p.framing(),l.model.config.context as u32,&l.model.config.id()?)?.token_digest);
             row["framing"]=binary::record!(p.framing().id());append_row(&mut f,&row)?;rows.push(row);
             let mut gold=tok.encode(e.answer.as_bytes())?;gold.push(EOS);
@@ -3158,6 +3173,29 @@ mod tests {
         assert_eq!(valid_outside_ids(std::slice::from_ref(e),&[row(&format!("{} [event:{outside}]",e.answer))]),1);
         assert_eq!(valid_outside_ids(std::slice::from_ref(e),&[row(&format!("[event:{outside}] [event:"))]),1);
         println!("ANSWER_CITATION_PARSE malformed/provided/single-and-multiple-valid-outside model_calls0");Ok(())
+    }
+    #[test]
+    fn retained_qa_citation_grammar_boundaries() -> Result<()> {
+        let (es,_)=generate("C",0,&[])?;let e=&es[0];
+        let provided=e.request.evidence.items[0].event_id;
+        let outside=i64::MAX;
+        assert!(!e.request.evidence.items.iter().any(|e|e.event_id==outside));
+        for text in [format!("[event:{outside}] [event:]"),format!("[event:] [event:{outside}]"),
+            format!("한글 [event:미완료 [event:{outside}]"),format!("[event:[event:{outside}]"),
+            format!("[event:{outside}] [event:{outside}] [event:{}] [event:]",outside-1)] {
+            assert!(citations(&text).is_err());assert!(has_outside_id(e,Some(&text)));
+            assert_eq!(valid_outside_ids(std::slice::from_ref(e),&[binary::record!({"actual":text})]),1);
+        }
+        for text in [format!("[event:{provided}] [event:]"),"[event:]".into(),"[event:0] [event:-1] [event:9223372036854775808]".into()] {
+            assert!(citations(&text).is_err());assert!(!has_outside_id(e,Some(&text)));
+        }
+        for text in ["근거가 없습니다.".into(),format!("한글 [event:{provided}] [event:+{provided}] [event:{outside}]"),format!("[event:000{provided}]")] {
+            assert_eq!(individually_valid_ids(&text),citations(&text)?.into_iter().collect());
+        }
+        assert!(!has_outside_id(e,None));
+        assert_eq!(citations("근거가 없습니다.")?,Vec::<i64>::new());
+        assert!(None::<&str>.and_then(|s|citations(s).ok()).is_none());
+        println!("QA_CITATION_GRAMMAR strict/individual outside-row boundary, nested/unclosed/overflow/UTF8/empty; model_calls0");Ok(())
     }
     #[test]
     fn answer_mean_native_process_resume() -> Result<()> {
@@ -3751,7 +3789,7 @@ fn qa_score(root:&Path,p:&Plan,step:usize,panel:&Panel)->Result<binary::Value> {
         eos+=usize::from(stop);errors+=usize::from(!stop||err);length+=usize::from(r["finish_reason"]=="length");
         utf8+=usize::from(r["error_class"]=="strict_utf8");runtime+=usize::from(err&&r["error_class"]!="strict_utf8");
         let expected=citations(&e.answer)?;let ids=r["actual"].as_str().and_then(|s|citations(s).ok());
-        let external=ids.as_ref().is_some_and(|ids|ids.iter().any(|id|!e.request.evidence.items.iter().any(|v|v.event_id==*id)));outside+=usize::from(external);
+        let external=has_outside_id(e,r["actual"].as_str());outside+=usize::from(external);
         let g=&mut groups[m.bucket];g[0]+=1;g[1]+=usize::from(good);g[2]+=usize::from(!stop||err);
         g[3]+=usize::from(!expected.is_empty() && ids.as_ref()==Some(&expected));g[4]+=usize::from(external);
         g[5]+=usize::from(ids.as_ref().is_some_and(|ids|!ids.is_empty()&&!external&&*ids!=expected));g[6]+=usize::from(ids.is_none());g[7]+=usize::from(ids.as_ref().is_some_and(Vec::is_empty));
@@ -3776,7 +3814,8 @@ fn qa_score(root:&Path,p:&Plan,step:usize,panel:&Panel)->Result<binary::Value> {
     let fixed=es.iter().zip(ms).filter(|(_,m)|m.bucket==7).map(|(e,_)|e.answer.as_str()).collect::<BTreeSet<_>>();
     let mut h=[0usize;3];let mut non_h=[0usize;2];
     for ((r,m),good) in raw[1..].iter().zip(ms).zip(&exact) {let emission=r["actual"].as_str().is_some_and(|s|fixed.contains(s));if m.bucket==7 {h[0]+=1;h[1]+=usize::from(emission);h[2]+=usize::from(*good);}else{non_h[0]+=1;non_h[1]+=usize::from(emission);}}
-    let mut out=binary::record!({"model":summary.model,"raw":summary.raw_hash,"cases":digest(es)?,"total":es.len(),"full":exact.iter().filter(|x|**x).count(),"exact":exact,
+    let parse_failures=groups.iter().map(|g|g[6]).sum::<usize>();
+    let mut out=binary::record!({"scorer":QA_SCORER,"parse_failure_rows":parse_failures,"model":summary.model,"raw":summary.raw_hash,"cases":digest(es)?,"total":es.len(),"full":exact.iter().filter(|x|**x).count(),"exact":exact,
         "EOS":eos,"errors":errors,"length":length,"runtime_errors":runtime,"UTF8_errors":utf8,"outside_id":outside,"buckets":groups,"QUERY_BOTH_planned_correct":pairs,"G_subtypes_planned_correct":g_types,
         "G_resolution_planned_unresolved_resolved_both":resolutions,"H_fixed_planned_emitted_strict":h,"non_H_fixed_planned_emitted":non_h,
         "bucket_fields":["planned","full","errors","exact_nonempty_support","outside_id","wrong_provided_id","parse_failure","empty_citation"],"ALL4":"NOT_DEFINED","scope":"old four views or balanced complementary two views; strict complete answer"});
@@ -3784,11 +3823,65 @@ fn qa_score(root:&Path,p:&Plan,step:usize,panel:&Panel)->Result<binary::Value> {
         out["old_view_pairs"]=binary::record!(old_relations);out["old_view_pair_fields"]=binary::record!(["bases","value01_planned","value01_both","order02_planned","order02_both","wording03_planned","wording03_both","changed_gold01","changed_evidence02","changed_query03"]);}
     Ok(out)
 }
+// Historical metrics are immutable. This command validates their raw/native
+// bindings, checks every unchanged field, then publishes a separate correction.
+pub(in super::super::super) fn qa_recount(study:&Path,output:&Path)->Result<()> {
+    if output.exists(){return Err(bad("recount output already exists"));}
+    let study=study.canonicalize()?;let root=study.join(MEAN_ARMS[1]);let p=historical_plan(&root)?;
+    if !retained_qa(&p){return Err(bad("historical QA recount profile"));}
+    let ends=history(&root,&p)?;let end=ends.last().ok_or_else(||bad("no historical endpoint"))?;
+    if end.phase.as_deref()!=Some("Finished"){return Err(bad("historical endpoint incomplete"));}
+    let mut protected=BTreeMap::<PathBuf,String>::new();
+    for name in ["plan.r3b","corpus.r3cor","metadata.r3b","tokenizer.r3b"] {
+        let path=root.join(name);protected.insert(path.clone(),file_hash(&path)?);
+    }
+    let selection=own(&p).study.join("selection.r3b");protected.insert(selection.clone(),file_hash(&selection)?);
+    let mut results=vec![];let(mut generated,mut qa_rows,mut corrected_rows)=(0,0,0);
+    for step in p.evaluation.train_steps.iter().copied().filter(|&s|s<=end.step) {
+        let path=root.join(format!("citation-decision-{step:04}.r3b"));
+        protected.insert(path.clone(),file_hash(&path)?);
+        let old:binary::Value=read_confirmed(&path)?;
+        if old["policy"]!=digest(&p)? || old["step"]!=step {return Err(bad("historical decision binding"));}
+        for panel in qa_base_panels(&root,&p,step)? {
+            let (name,es,ms)=&panel;
+            let rawpath=root.join(format!("eval-{step:04}-{name}.r3rows"));
+            for suffix in [".r3rows","-teachers.r3rows",".r3b"] {
+                let path=root.join(format!("eval-{step:04}-{name}{suffix}"));protected.insert(path.clone(),file_hash(&path)?);
+            }
+            let raw=binary::read_value_records(&rawpath)?;
+            let native=PathBuf::from(raw[0]["checkpoint"].as_str().ok_or_else(||bad("historical native path"))?);
+            protected.insert(native.clone(),file_hash(&native)?);
+            let new=read_score(&root,&p,step,&panel)?;let mut legacy=new.clone();let mut rows=vec![];
+            if name.starts_with("qa-") {
+                qa_rows+=es.len();let mut counted=0;let mut buckets=vec![0usize;8];
+                for(i,((e,m),r))in es.iter().zip(ms).zip(&raw[1..]).enumerate() {
+                    let text=r["actual"].as_str();let strict=text.and_then(|s|citations(s).ok());
+                    let ids=text.map(individually_valid_ids).unwrap_or_default();
+                    let external=has_outside_id(e,text);let prior=strict.as_ref().is_some_and(|ids|ids.iter().any(|id|!e.request.evidence.items.iter().any(|v|v.event_id==*id)));
+                    counted+=usize::from(prior);buckets[m.bucket]+=usize::from(prior);corrected_rows+=usize::from(external!=prior);
+                    rows.push(binary::record!({"ordinal":i,"id":e.id,"bucket":m.bucket,"strict_ids":strict,"individually_valid_ids":ids,
+                        "outside_row":external,"previous_outside_row":prior,"parse_failure":strict.is_none(),"empty_citation":strict.as_ref().is_some_and(Vec::is_empty)}));
+                }
+                let map=legacy.as_object_mut().ok_or_else(||bad("historical score object"))?;map.remove("scorer");map.remove("parse_failure_rows");
+                legacy["outside_id"]=binary::record!(counted);for(b,n)in buckets.into_iter().enumerate(){legacy["buckets"][b][4]=binary::record!(n);}
+            }
+            if old["panels"][name]!=legacy{return Err(bad("historical score differs beyond the explicit citation correction"));}
+            generated+=es.len();
+            results.push(binary::record!({"step":step,"panel":name,"decision":protected[&path],"raw":protected[&rawpath],"physical":protected[&native],"previous":old["panels"][name],"corrected":new,"citation_rows":rows}));
+        }
+    }
+    for(path,hash)in &protected{if file_hash(path)?!=*hash{return Err(bad("historical input changed during recount"));}}
+    let report=binary::record!({"mode":"READ_ONLY_HISTORICAL_REANALYSIS","scorer":QA_SCORER,"source":source_digest()?,"binary":file_hash(&std::env::current_exe()?)?,
+        "original_source":p.source,"original_binary":p.binary,"policy":digest(&p)?,"protected":protected,"panels":results,"generated_rows":generated,"qa_rows":qa_rows,
+        "corrected_outside_rows":corrected_rows,"new_optimizer":0,"new_generation":0,"new_teacher":0,"historical_candidate_promotion":"NOT_AUTHORIZED","last_step":end.step,"original_stop":end.stop});
+    publish_confirmed(output,&report)?;
+    println!("QA_RECOUNT raw={generated} QA={qa_rows} corrected_outside_rows={corrected_rows} new_model_calls0 output={}",output.display());Ok(())
+}
 fn qa_dev_pass(scores:&BTreeMap<String,binary::Value>)->Result<bool> {
     for label in ["old_qa","balanced"] {for split in ["primary","transfer"] {
         let key=format!("qa-{label}-{split}");let s=scores.get(&key).ok_or_else(||bad("missing full QA panel"))?;
         let (total,min)=if split=="primary"{(512,487)}else{(128,116)};
-        if s["total"]!=total || s["full"].as_u64().is_none_or(|n|n<min) || s["EOS"]!=total || s["errors"]!=0 || s["outside_id"]!=0 {return Ok(false);}
+        if s["scorer"]!=QA_SCORER || s["parse_failure_rows"]!=0 || s["total"]!=total || s["full"].as_u64().is_none_or(|n|n<min) || s["EOS"]!=total || s["errors"]!=0 || s["outside_id"]!=0 {return Ok(false);}
         if split=="primary" {
             for b in 0..8 {if s["buckets"][b][0]!=64 || s["buckets"][b][1].as_u64().is_none_or(|n|n<58){return Ok(false);}}
             if label=="balanced" {for b in 2..6 {if s["QUERY_BOTH_planned_correct"][b][0]!=32 || s["QUERY_BOTH_planned_correct"][b][1].as_u64().is_none_or(|n|n<29){return Ok(false);}}}

@@ -1,5 +1,53 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: QA integrity and bounded instruction bridge
+
+R3-QA-INTEGRITY-AND-BRIDGE-1.0 supersedes the retained-QA metric acceptance,
+following the independently reproduced malformed/outside-ID undercount. Keep
+the accepted11264 model and all15360 raw, failures and closed decisions immutable.
+First repair diagnostic ID extraction and the actual QA candidate gate: strict
+whole-response parsing remains unchanged; every individually valid positive i64
+reference is counted against provided evidence, even beside malformed references.
+Outside rows and parse-failure rows must both be zero for a new QA candidate.
+Publish a versioned read-only recount of7168 raw rows, including3328 QA rows;
+do not rewrite old summaries or grant retrospective candidate eligibility.
+Independent A1 must verify the full writer/reader/audit/scorer/gate regression,
+positive G/H cases and the four historical missed outside rows.
+
+After A1, observe the same first four citation-dev bases (16 rows) on11264 under
+short/QA system and original/current-alias wording. Reuse VC16 parent parity as
+S0Q0: V16+VC16 parity and three variants16 each consume80 generations, no teacher
+or optimizer. Keep evidence, answers, IDs, order, clocks and generation32 fixed.
+If every variant reaches FULL15/16, QB/SB7/8 and ALL4 3/4 with no outside, parse or
+generation error, close NO_TRAINING_JUSTIFIED_BY_THIS_PROBE. Otherwise prepare
+all three variants, not only failures, for independent A2 before learning.
+
+The conditional bridge preserves ANSWER11264, Adam/clock, QE, tokenizer, TR++,
+ANSWER CE/first-target1, constant LR3e-5 and train512. Select64 train bases by
+metadata hash only, all four views and both ID versions:512 source rows produce
+1536 bridge rows. Retain4608 original rows. Batch8 is V2/VC2/bridge4, always query
+pairs. At1536 updates V receives3072 exposures, each VC version1536 and bridge6144.
+No confirmation or sealed S4 examples enter these data. Audit full tape, target
+tokens, no dropped evidence, native/cache binding and fresh-process resume.
+
+At +1 save/reload; +256 evaluates six64-row panels; +768/+1536 evaluates retention
+V/VC/ID and three bridge variants, each512. Save intervals are at most512 updates.
+V dev requires FULL488/QB232/SB232/ALL4116/errors0. Each citation panel also needs
+value/support508, outside0 and parse0. If development passes, bridge train1536 fit
+runs once: FULL1524/QB756/ALL4372, no outside/parse/generation errors. Fit failure
+closes BRIDGE_FIT_NOT_MET; a passing +768 endpoint stops learning immediately.
+Retention64 warns below FULL60 or ALL412; two consecutive scheduled warnings for
+the same panel stop. FULL<=48 or errors>=4 stop immediately. Preserve normal
+time-only evaluation resumption and all cancellation/storage/UNKNOWN blockers.
+
+Limits:1536 SMALL optimizer,9216 generations,8192 teacher forwards, diagnostic
+backward0, input4M/target300K, active7200s, command900s, inference/training12/16GiB.
+TINY limits64 optimizer/1024 generation/1024 teacher. No budget extension/search.
+Independent B audits trace/native/raw and at most64 fixed normal/wrong replays.
+Only bridge development+fit+B passage permits one oldQA640 check under its original
+128-token contract. This is development transfer, not independent confirmation;
+S4 remains sealed and S4/S5/S6/Goal1 remain NOT_ACCEPTED in this scope.
+
 ## Closed: retained value/citation capability and balanced QA transfer
 
 Execution closed at15360 after4096 new optimizer updates under frozen source

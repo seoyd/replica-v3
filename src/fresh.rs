@@ -30,6 +30,8 @@ pub enum Command {
     RetainedQaPrepare { #[arg(long)] previous: PathBuf, #[arg(long)] balanced: PathBuf, #[arg(long)] old_qa: PathBuf, #[arg(long)] output: PathBuf, #[arg(long)] parent_review: PathBuf },
     RetainedQaParent { #[arg(long)] study: PathBuf, #[arg(long,value_parser=["value","citation","balanced","transfer"])] panel: String },
     RetainedQaReport { #[arg(long)] study: PathBuf },
+    /// Versioned read-only correction of historical QA metrics; never rewrites receipts.
+    RetainedQaRecount { #[arg(long)] study: PathBuf, #[arg(long)] output: PathBuf },
     RetainedQaReview { #[arg(long)] root: PathBuf, #[arg(long,value_parser=["old_qa","balanced"])] panel: String },
     CitationContinueParent { #[arg(long)] study: PathBuf, #[arg(long)] citation: bool },
     AnswerMeanParent { #[arg(long)] study: PathBuf },
@@ -1747,6 +1749,7 @@ pub fn execute(command: Command) -> Result<()> {
         Command::RetainedQaPrepare {previous,balanced,old_qa,output,parent_review} => identifiable::binding::citation::qa_prepare(&previous,&balanced,&old_qa,&output,&parent_review,false),
         Command::RetainedQaParent {study,panel} => identifiable::binding::citation::qa_parent(&study,&panel),
         Command::RetainedQaReport {study} => identifiable::binding::citation::qa_report(&study),
+        Command::RetainedQaRecount {study,output} => identifiable::binding::citation::qa_recount(&study,&output),
         Command::RetainedQaReview {root,panel} => identifiable::binding::citation::qa_review(&root,&panel),
         Command::CitationContinueParent { study,citation } => identifiable::binding::citation::continuation_parent(&study,citation),
         Command::AnswerMeanParent { study } => identifiable::binding::citation::mean_parent(&study),
