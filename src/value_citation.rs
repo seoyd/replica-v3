@@ -21,6 +21,7 @@ const QA_DATA: &str = "retained-qa-transfer-v1";
 const QA_CONTRACT: &str = "R3-RETAINED-QA-TRANSFER-1.0";
 const QA_POOL: usize = 8192;
 const QA_SCORER: &str = "strict-qa-independent-citation-ids-v2";
+const BRIDGE_CONTRACT: &str = "R3-QA-INTEGRITY-AND-BRIDGE-1.0";
 fn qa_task(p:&Plan,index:usize)->usize {if retained_qa(p)&&index>=3*POOL {3+(index-3*POOL)/QA_POOL}else{index/POOL}}
 pub(in super::super::super) fn retained_qa(p:&Plan)->bool {p.identifiable.as_ref().is_some_and(|o|o.dataset==QA_DATA)}
 pub(in super::super::super) fn precision(p:&Plan)->bool {p.identifiable.as_ref().is_some_and(|o|o.dataset==PREC_DATA)}
@@ -737,6 +738,9 @@ fn score_citation(
     rows: &[binary::Value],
     tok: &ByteBpe,
 ) -> Result<CitationScore> {
+    score_citation_profile(es,ms,rows,tok,false)
+}
+fn score_citation_profile(es:&[Episode],ms:&[Meta],rows:&[binary::Value],tok:&ByteBpe,bridge:bool)->Result<CitationScore> {
     if es.len() % 4 != 0 || es.len() != rows.len() || ms.len() != es.len() {
         return Err(bad("citation complete panel"));
     }
@@ -767,8 +771,8 @@ fn score_citation(
     };
     for ((e, m), r) in es.iter().zip(ms).zip(rows) {
         verify_generated(r, tok)?;
-        if resolve_request(&e.request)? != e.answer
-            || !e.request.input.ends_with(CITATION_QUERY)
+        if (if bridge {bridge_resolve(&e.request)}else{resolve_request(&e.request)})? != e.answer
+            || (!bridge && !e.request.input.ends_with(CITATION_QUERY))
             || m.id != e.id
             || m.base != e.family
         {
@@ -3198,6 +3202,24 @@ mod tests {
         println!("QA_CITATION_GRAMMAR strict/individual outside-row boundary, nested/unclosed/overflow/UTF8/empty; model_calls0");Ok(())
     }
     #[test]
+    fn qa_bridge_two_factor_request_invariants()->Result<()> {
+        let(es,_)=generate("C",0,&[])?;
+        for name in ["S0Q0","S1Q0","S0Q1","S1Q1"] {
+            let changed=bridge_variant(&es[..16],SYSTEM,name)?;
+            for(e,old)in changed.iter().zip(&es) {
+                assert_eq!(e.id,old.id);assert_eq!(e.family,old.family);assert_eq!(e.answer,old.answer);
+                assert_eq!(e.request.request_id,old.request.request_id);assert_eq!(e.request.evidence,old.request.evidence);assert_eq!(e.request.limits,old.request.limits);
+                assert_eq!(bridge_resolve(&e.request)?,old.answer);
+                let mut q=e.request.clone();q.system=old.request.system.clone();q.input=old.request.input.clone();assert_eq!(digest(&q)?,digest(&old.request)?);
+                if name.ends_with("Q1"){assert!(resolve_request(&e.request).is_err());} // Other profiles remain strict.
+            }
+        }
+        let mut wrong=es[0].request.clone();wrong.input=wrong.input.replace(CITATION_QUERY,phrases(Intent::Previous)[0]);assert!(bridge_resolve(&wrong).is_err());
+        wrong.input=wrong.input.replace(phrases(Intent::Previous)[0],phrases(Intent::Current)[1]);assert!(bridge_resolve(&wrong).is_err());
+        assert!(bridge_variant(&es[..16],SYSTEM,"unregistered").is_err());
+        println!("QA_FACTOR_REQUESTS 4x16 same record/ID/value/time/order/gold; only registered system/task changes; model_calls0");Ok(())
+    }
+    #[test]
     fn answer_mean_native_process_resume() -> Result<()> {
         const CHILD:&str="R3_MEAN_CHILD";
         // Random native numeric continuation supplements the full fresh/evaluation
@@ -3610,6 +3632,139 @@ fn qa_variant(es:&[Episode],ms:&[Meta])->Result<(Vec<Episode>,Vec<Meta>)> {
             || e.request.limits!=original.request.limits || e.answer!=original.answer {return Err(bad("QA phrase changed intent/evidence/target"));}
     }
     super::super::validate_balanced(&out,&meta)?;Ok((out,meta))
+}
+// Only the bounded bridge accepts this existing train alias. This resolver is
+// a training/evaluation label check, never part of product generation.
+fn bridge_resolve(request:&ModelRequest)->Result<String> {
+    let(entity,context,intent)=question_intent(&request.input)?;
+    let clause=request.input.splitn(3,' ').nth(2).ok_or_else(||bad("bridge task clause"))?;
+    if intent!=Intent::Current || ![CITATION_QUERY,phrases(Intent::Current)[0]].contains(&clause) {
+        return Err(bad("bridge only permits the two registered current/citation clauses"));
+    }
+    let mut q=request.clone();q.input=format!("{entity} {context} {CITATION_QUERY}");resolve_request(&q)
+}
+fn bridge_variant(es:&[Episode],long_system:&str,variant:&str)->Result<Vec<Episode>> {
+    if !["S0Q0","S1Q0","S0Q1","S1Q1"].contains(&variant){return Err(bad("unknown bridge factor"));}
+    es.iter().map(|original| {
+        if original.request.system!=SHORT_SYSTEM || !original.request.input.ends_with(CITATION_QUERY)
+            || resolve_request(&original.request)?!=original.answer || original.request.limits.max_tokens!=32 {return Err(bad("bridge original request"));}
+        let mut e=original.clone();
+        if variant.starts_with("S1"){e.request.system=long_system.into();}
+        if variant.ends_with("Q1") {
+            let(entity,context,_)=question_intent(&e.request.input)?;
+            e.request.input=format!("{entity} {context} {}",phrases(Intent::Current)[0]);
+        }
+        if bridge_resolve(&e.request)?!=e.answer{return Err(bad("bridge changed selection/answer"));}Ok(e)
+    }).collect()
+}
+fn bridge_probe_cases(study:&Path,name:&str)->Result<(Panel,Option<Vec<binary::Value>>)> {
+    let prep:binary::Value=read_confirmed(&study.join("probe-preparation.r3b"))?;
+    let parent=Path::new(prep["parent"].as_str().ok_or_else(||bad("probe parent path"))?);
+    let old=historical_plan(parent)?;
+    if prep["parent_policy"]!=file_hash(&parent.join("plan.r3b"))? {return Err(bad("probe parent policy changed"));}
+    let c=verified_corpus(&parent.join("corpus.r3cor"),&old.corpus)?;let(_,dm,_)=verified_metadata(parent,&old)?;
+    let start=if name=="value"{0}else{512};let base=&c.validation[start..start+16];let ms=dm[start..start+16].to_vec();
+    if ms.chunks_exact(4).any(|g|g.iter().enumerate().any(|(i,m)|m.base!=g[0].base||m.view!=i)) {return Err(bad("probe first four metadata groups"));}
+    let es=if ["value","citation"].contains(&name){base.to_vec()}else{bridge_variant(base,prep["long_system"].as_str().ok_or_else(||bad("probe long system"))?,name)?};
+    let previous=if ["value","citation"].contains(&name) {
+        let raw=parent.join(format!("eval-11264-{name}512.r3rows"));
+        if prep["parent_raw"][name]!=file_hash(&raw)? {return Err(bad("probe parent raw changed"));}
+        Some(binary::read_value_records(&raw)?[1..17].to_vec())
+    }else{None};
+    Ok(((name.into(),es,ms),previous))
+}
+fn bridge_probe_plan(study:&Path)->Result<Plan> {
+    let prep:binary::Value=read_confirmed(&study.join("probe-preparation.r3b"))?;
+    let p:Plan=read(&study.join("probe-policy.r3b"))?;
+    let parent=Path::new(prep["parent"].as_str().ok_or_else(||bad("probe parent"))?);
+    let native=Path::new(prep["checkpoint"].as_str().ok_or_else(||bad("probe checkpoint"))?);
+    let review=Path::new(prep["review_a1"].as_str().ok_or_else(||bad("probe A1"))?);
+    let r:binary::Value=read_confirmed(review)?;
+    if prep["contract"]!=BRIDGE_CONTRACT || prep["policy"]!=digest(&p)? || own(&p).study!=study
+        || !precision(&p) || p.framing()!=neural::Framing::QuestionEvidence || p.evaluation.generation_limit!=80
+        || p.evaluation.teacher_limit!=0 || p.evaluation.active_seconds!=7200 || p.evaluation.segment_seconds!=900
+        || prep["parent_policy"]!=file_hash(&parent.join("plan.r3b"))? || p.initial!=file_hash(native)?
+        || prep["acceptance"]!=file_hash(&parent.parent().ok_or_else(||bad("probe parent study"))?.join("confirmation-result.r3b"))?
+        || prep["balanced_corpus"]!=file_hash(&Path::new(prep["balanced_source"].as_str().ok_or_else(||bad("probe balanced source"))?).join("corpus.r3cor"))?
+        || prep["long_system"]!=SYSTEM || prep["short_system"]!=SHORT_SYSTEM
+        || prep["review_a1_hash"]!=file_hash(review)? || r["stage"]!="A1" || r["verdict"]!="PASS"
+        || r["report_hash"]!=file_hash(Path::new(r["report_path"].as_str().ok_or_else(||bad("A1 report"))?))? {
+        return Err(bad("probe preparation/parent/A1 binding"));
+    }
+    for name in ["value","citation","S1Q0","S0Q1","S1Q1"] {
+        let(panel,_)=bridge_probe_cases(study,name)?;
+        if prep["cases"][name]!=digest(&panel)? {return Err(bad("probe fixed cases changed"));}
+    }
+    Ok(p)
+}
+pub(in super::super::super) fn bridge_probe_prepare(previous:&Path,balanced:&Path,output:&Path,review_a1:&Path)->Result<()> {
+    let previous=previous.canonicalize()?;let output=std::path::absolute(output)?;
+    let parent=previous.join(MEAN_ARMS[1]);let old=historical_plan(&parent)?;
+    let end=history(&parent,&old)?.last().cloned().ok_or_else(||bad("probe parent endpoint"))?;
+    let native=parent.join(&end.checkpoint);let l=checkpoint::load(&native,Device::Cpu,true)?;
+    let state=l.manifest.training.as_ref().ok_or_else(||bad("probe Adam absent"))?;
+    let accepted:binary::Value=read_confirmed(&previous.join("confirmation-result.r3b"))?;
+    let r:binary::Value=read_confirmed(review_a1)?;
+    if !precision(&old)||old.tiny||end.step!=11264||end.resume||end.stop!="CANDIDATE_FIXED_AT_11264"||end.phase.as_deref()!=Some("Finished")
+        || state.step!=end.step || state.sampler_state!=end.step as u64 || state.resume_binding!=Some(old.binding(state,&l.tokenizer)?)
+        || !answer_mean(&old)||old.config.lr!=3e-5||old.framing()!=neural::Framing::QuestionEvidence
+        || accepted["checkpoint"]!=end.checkpoint_hash||accepted["value_citation_baseline_verified"]!=true
+        || r["stage"]!="A1"||r["verdict"]!="PASS" {return Err(bad("probe requires protected accepted11264 and A1"));}
+    let q=data::native::read(&balanced.join("corpus.r3cor"))?;
+    let long=q.train.first().ok_or_else(||bad("QA system source missing"))?.request.system.clone();
+    if long!=SYSTEM||q.train.iter().any(|e|e.request.system!=long) {return Err(bad("actual balanced QA system"));}
+    let mut p=old.clone();p.source=source_digest()?;p.binary=file_hash(&std::env::current_exe()?)?;p.initial=end.checkpoint_hash.clone();
+    p.initial_weights=l.model.weight_hash()?;p.identifiable.as_mut().unwrap().study=output.clone();
+    p.evaluation.generation_limit=80;p.evaluation.teacher_limit=0;p.evaluation.active_seconds=7200;p.evaluation.segment_seconds=900;
+    let mut prep=binary::record!({"contract":BRIDGE_CONTRACT,"read_only":true,"parent":parent,"checkpoint":native,"parent_policy":file_hash(&parent.join("plan.r3b"))?,
+        "parent_terminal":file_hash(&terminal_path(&parent,&end)?)?,"physical":file_hash(&native)?,"weights":l.model.weights_content_id()?,"adam":optimizer_hash(&l.optimizer)?,
+        "state":state,"tokenizer":l.tokenizer.id(),"acceptance":file_hash(&previous.join("confirmation-result.r3b"))?,"long_system":long,"short_system":SHORT_SYSTEM,
+        "balanced_source":balanced.canonicalize()?,"balanced_corpus":file_hash(&balanced.join("corpus.r3cor"))?,"review_a1":review_a1.canonicalize()?,"review_a1_hash":file_hash(review_a1)?,
+        "policy":digest(&p)?,"source":p.source,"binary":p.binary,"parent_raw":{},"cases":{},"token_lengths":{},"selection":"first4 citation dev metadata groups x4 views; no confirmation; no performance filtering","new_updates":0});
+    let c=verified_corpus(&parent.join("corpus.r3cor"),&old.corpus)?;let(_,dm,_)=verified_metadata(&parent,&old)?;
+    for name in ["value","citation","S1Q0","S0Q1","S1Q1"] {
+        let start=if name=="value"{0}else{512};let es=if ["value","citation"].contains(&name){c.validation[start..start+16].to_vec()}else{bridge_variant(&c.validation[start..start+16],&long,name)?};
+        qa_token_cost(&es,&[],&l.tokenizer)?;
+        let lengths=es.iter().map(|e|Ok(l.tokenizer.prepare_with_framing(&e.request,p.framing(),2048,&l.model.config.id()?)?.token_ids.len())).collect::<Result<Vec<_>>>()?;
+        prep["cases"][name]=binary::record!(digest(&(name,&es,&dm[start..start+16]))?);prep["token_lengths"][name]=binary::record!(lengths);
+        if ["value","citation"].contains(&name){prep["parent_raw"][name]=binary::record!(file_hash(&parent.join(format!("eval-11264-{name}512.r3rows")))?);}
+    }
+    std::fs::create_dir(&output)?;write(&output.join("probe-policy.r3b"),&p)?;publish_confirmed(&output.join("probe-preparation.r3b"),&prep)?;
+    bridge_probe_plan(&output)?;
+    println!("QA_FACTOR_PREPARED parent11264 bases4 generation_cap80 optimizer0 teacher0 no_confirmation_rows");Ok(())
+}
+pub(in super::super::super) fn bridge_probe(study:&Path,name:&str)->Result<()> {
+    let study=study.canonicalize()?;let p=bridge_probe_plan(&study)?;
+    if p.source!=source_digest()? || p.binary!=file_hash(&std::env::current_exe()?)?{return Err(bad("probe source/binary freeze"));}
+    let prep:binary::Value=read_confirmed(&study.join("probe-preparation.r3b"))?;
+    let (panel,previous)=bridge_probe_cases(&study,name)?;let key=format!("qa-factor-{name}");
+    orbit_observe(&study,&key,Path::new(prep["checkpoint"].as_str().unwrap()),&panel.1,&binary::record!({"policy":digest(&p)?,"checkpoint":p.initial}),previous.as_deref(),observation_control(&p,16,0)?)?;
+    observed(&study,&key,&p,&p.initial,&panel.1,previous.is_some())?;
+    println!("QA_FACTOR_OBSERVED {name} generations16 teacher0 optimizer0 parity={}",previous.is_some());Ok(())
+}
+pub(in super::super::super) fn bridge_probe_report(study:&Path)->Result<()> {
+    let study=study.canonicalize()?;let p=bridge_probe_plan(&study)?;
+    let prep:binary::Value=read_confirmed(&study.join("probe-preparation.r3b"))?;
+    let tok=ByteBpe::load(&Path::new(prep["parent"].as_str().unwrap()).join("tokenizer.r3b"))?;
+    let mut out=BTreeMap::new();let mut needs_training=false;let mut output_tokens=0usize;
+    for name in ["value","citation","S1Q0","S0Q1","S1Q1"] {
+        let (panel,previous)=bridge_probe_cases(&study,name)?;let rows=observed(&study,&format!("qa-factor-{name}"),&p,&p.initial,&panel.1,previous.is_some())?;
+        output_tokens+=rows.iter().map(|r|r["raw_tokens"].as_array().map_or(0,Vec::len)).sum::<usize>();
+        if name=="value" {orbit_score(&panel.1,&panel.2,&rows,&tok)?;continue;}
+        let s=score_citation_profile(&panel.1,&panel.2,&rows,&tok,true)?;
+        let outside=valid_outside_ids(&panel.1,&rows);let parse=rows.iter().filter(|r|r["actual"].as_str().is_none_or(|s|citations(s).is_err())).count();
+        let pass=pass(&s.joint,16,15,7,3)&&outside==0&&parse==0;
+        if name!="citation"{needs_training|=!pass;}
+        let entry=binary::record!({"score":s,"valid_outside_rows":outside,"parse_failure_rows":parse,"gate":pass,"raw":file_hash(&study.join(format!("qa-factor-{name}.r3rows")))?});
+        println!("QA_FACTOR {name} FULL={}/16 QB={}/8 SB={}/8 ALL4={}/4 value={} support={} outside={outside} parse={parse} errors={}",s.joint.full,s.joint.query_both,s.joint.swap_both,s.joint.all4,s.value_correct,s.citation_support_correct,s.joint.errors);
+        out.insert(if name=="citation"{"S0Q0"}else{name},entry);
+    }
+    let usage=work(&p)?;if usage.1!=80||usage.2!=0{return Err(bad("factor aggregate usage"));}
+    let result=binary::record!({"contract":BRIDGE_CONTRACT,"preparation":file_hash(&study.join("probe-preparation.r3b"))?,"factors":out,"needs_training":needs_training,
+        "status":if needs_training{"BRIDGE_PREPARATION_REQUIRED"}else{"NO_TRAINING_JUSTIFIED_BY_THIS_PROBE"},"scope":"four dependent bases; prompt positions/length change; not a general QA gate",
+        "usage":usage,"output_tokens":output_tokens,"optimizer":0,"S4":"NOT_OPENED","GOAL1_ACCEPTED":false});
+    let path=study.join("probe-result.r3b");if path.exists(){if read_confirmed::<binary::Value>(&path)?!=result{return Err(bad("factor result disagreement"));}}else{publish_confirmed(&path,&result)?;}
+    println!("QA_FACTOR_COMPLETE generation80 teacher0 optimizer0 output_tokens={output_tokens} needs_training={needs_training}");Ok(())
 }
 fn qa_tape(ms:&[Meta])->Result<Vec<[usize;8]>> {
     if ms.len()!=3*POOL+2*QA_POOL {return Err(bad("retained QA metadata pool"));}

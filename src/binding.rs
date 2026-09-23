@@ -949,6 +949,7 @@ fn work(p: &Plan) -> Result<(f64, usize, usize, u64, u64)> {
             "continuation-parent-value", "continuation-parent-citation",
             "qa-parent-value", "qa-parent-citation", "qa-parent-balanced", "qa-parent-transfer",
             "qa-review-old_qa", "qa-review-balanced",
+            "qa-factor-value", "qa-factor-citation", "qa-factor-S1Q0", "qa-factor-S0Q1", "qa-factor-S1Q1",
         ] {
             let study = &own(p).study;
             if study.join(format!("{name}-started.r3b")).exists() {

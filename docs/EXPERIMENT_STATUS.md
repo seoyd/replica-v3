@@ -1,5 +1,42 @@
 # 진단 및 구현 상태
 
+## 2026-09-23 보호11264 입력 2×2 관측 — bridge 준비 필요
+
+독립 A1 수리 source `281b8591145bb3dfc674eb52163cc5a7b459b200`와
+보고서-only `20b857f2ce54204edaf71996ea8d1947c9a9b393`를 정상 push하고
+각 remote 전체 SHA 일치를 확인했다. 이후 별도 동결 executable로 첫4개
+citation dev 결합군×4 view를 관측했다. 기존 confirmation 행은 읽지 않았다.
+값16·인용16 parity는 raw token/bytes/EOS/오류32/32 일치한다.
+
+|system / task clause|FULL|QUERY_BOTH / SWAP_BOTH|ALL4|값 / support|외부 ID / parse 실패|EOS / length|
+|---|---|---|---|---|---|---|
+|short / 기존|16/16|8/8 ·8/8|4/4|16 /16|0 /0|16 /0|
+|QA / 기존|15/16|7/8 ·7/8|3/4|16 /15|1 /0|16 /0|
+|short / current 동의문구|0/16|0/8 ·0/8|0/4|8 /0|0 /0|4 /12|
+|QA / current 동의문구|0/16|0/8 ·0/8|0/4|9 /0|0 /0|5 /11|
+
+질문 대상·근거2개·값·ID·시각·순서·정답·max_tokens32는 불변이다. 인용
+네 조건의 실제 prompt 길이는 각각137/176/149/188 tokens다. 길이와 위치도
+함께 달라졌으므로 순수 언어 이해의 단일 원인이나 전체 QA 성능으로 해석하지
+않는다. EOS가 없는23개는 실제 정상 반환된 length 종료이며 재생성하지 않았다.
+runtime/UTF-8/저장 오류는0이고 모든 관측 command가 COMPLETED/exit0이다.
+
+새 SMALL optimizer0/generation80/teacher0, prompt12,704·생성1,433 tokens,
+기록된 관측 active9.002496292초다. 문항 변형 직접 회귀1/1 PASS이며, 최초
+테스트 컴파일의 ModelRequest PartialEq 누락은 기존 native digest 비교로
+고쳤다(모델 호출0, 실패 로그 보존). I2 결과는 BRIDGE_PREPARATION_REQUIRED다.
+좁은 bridge 자료·직접 회귀·독립 A2가 완료되기 전에는 학습하지 않는다.
+
+동결 source digest `a8614a8ccfef19543391bd1708e940ac7580abff3cc2527ee6b62c2b3ae5a884`,
+binary SHA256 `dc522e6968ce81e302814f59f510a2c17f87ec151bef2310cc1a03c77887d66d`.
+부모 native `c47e34c7ac4f88dd08b5e719bf4d0364f139ac5002bf4572fe55b37dac823925`와
+11264 weights/Adam/tokenizer는 보존된다. 준비와 raw/결과는
+`artifacts/qa-integrity-bridge-20260923-probe/`, 명령·출력·source diff는
+`artifacts/qa-integrity-bridge-20260923-implementation/`에 보존한다.
+준비 SHA256 `da326135bfae546848c70da1cb3dcf8d6e77514b43164b509fed4e154e76e8d7`,
+결과 SHA256 `b0fa3f27860c2e3890440d135a9c2a4ae7f3d6790edd1410d9206cd38f20ea43`.
+학습·bridge 개발 gate는 아직 NOT_RUN이며 S4/S5/S6·Goal1은 NOT_ACCEPTED다.
+
 ## 2026-09-23 QA 인용 집계 수리 및 역사 재채점
 
 R3-QA-INTEGRITY-AND-BRIDGE-1.0의 I1이다. 기준 source
