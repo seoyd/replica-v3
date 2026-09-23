@@ -1,6 +1,6 @@
 # 진단 및 구현 상태
 
-## 2026-09-24 QA 문자열 값 연구 — 직접 회귀 PASS, 독립 A 대기
+## 2026-09-24 QA 문자열 값 연구 — 직접 회귀·독립 A PASS
 
 `R3-QA-WORD-VALUE-1.0`: CLEANUP_EXECUTION=CANCELLED_BY_USER;
 APPLIED=false, rollback0. 감사 도구·계획·독립 A/B 및 무호출 종료 수리를
@@ -31,6 +31,10 @@ source는 `915e2f04f3294cccc73f0d12f058589e6408a462`다.
 추가 `word_scope_never_confirmation`1/1 PASS(exit0,29.99초)는 SMALL/TINY,
 품질 PASS/FAIL 모두에서 confirmation을 열기 전에 거부함을 검증했다.
 이 추가 실행의 모델 호출은0이며, 최종 source는 이 권한 차단만 추가한다.
+독립 동일 검사도1/1 PASS(exit0,30.92초,모델0)다. code candidate는
+`c1f82a719dcd72ecca2e7b8024384562423f37c2`이고 정상 push 후 remote 전체
+SHA 일치를 확인했다. 최종 실행물 `replica-train-final`의 SHA256은
+`d8e20a6b304fc9d1575b7ab43dca557f276486c3515a60b790f5d0468940b3b4`다.
 직접 증거는 `artifacts/qa-word-value-20260924-evidence/`, process 원자료는
 `artifacts/qa-word-value-20260924-tiny-process-01/`과 `-02/`, typed 경계
 fixture는 `artifacts/qa-word-value-20260924-typed-gates-01/`에 보존한다.
@@ -40,6 +44,14 @@ target359,424, 최대 전체길이205이다. 이는3072회 계획 비용이며 �
 실제 SMALL 소비량이 아니다. 기존 명시적 lineage37파일에서 확보한
 노출/예약 ID4771개와 새 ID의 중복을 막았다. 독립 A 이전에는 학습이나
 부모 새 관측을 시작하지 않는다. 모델 품질·S4/S5/S6·Goal1은 새로 수용하지 않았다.
+독립 [A 보고서](QA_WORD_VALUE_REVIEW_A_2026-09-24.md)는 PASS이며,
+최종 준비 hash에 묶인 `review-a.r3b`의 confirmed 발행·readback도 완료됐다.
+다음은 계약에 고정한 부모400회 관측이다.
+최종 준비 경로는 `artifacts/qa-word-value-20260924-study-final`이며,
+preparation SHA256은 `4e24d661b530df45477d731ff683bcf8c6d66b4d54f34d4079b2198df6a0891c`다.
+기존915 후보의 미실행 준비도 보존한다. 준비 전 여유91,834,804KiB는
+산출물 보수 추정12GiB와 보호 여유16GiB를 충족했다. 이는 계획량이며
+실측 회수량이나 실제 생성 파일 용량이 아니다. 추가 inventory/정리0.
 
 ## 2026-09-24 무호출 종료 수리·아티팩트 dry-run — 독립 A/B PASS
 
