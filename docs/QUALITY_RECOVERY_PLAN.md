@@ -1,5 +1,29 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active scope: artifact hygiene and no-call finalization
+
+R3-ARTIFACT-HYGIENE-AND-FINALIZATION-1.0 permits zero new SMALL/TINY
+optimizer, generation, teacher or diagnostic backward calls. Previous bridge
+quality failure, QA640 and accepted11264 remain unchanged. A fully RETURNED QA
+journal can finish at the active-time cap through the existing diagnostic caller:
+verify historical producer/model/policy/cases, per-call resolutions and pure-time
+segment accounting before publishing final/score. Partial work retains original
+source and model-budget admission. Missing/UNKNOWN/cancel/mixed/storage failures
+remain blocking. Finalizer provenance and bounded management work (900 seconds,
+512 MiB of observation files) are separate from preserved model active usage.
+Interrupted management publication is fail-closed; complete final/score reentry
+only verifies immutable results. Limits are cooperative, not tensor/fsync preemption.
+
+The narrow four-row RETURNED process regression and independent A passed without
+model calls. Artifacts are separately inventoried once with no-follow metadata;
+known references and selected exact hashes inform an explicit dry-run plan.
+Keep originals, native/Adam/raw/policies/receipts, exact binaries and dependencies,
+unique readers/patches/logs, unknown trees and root target. No original deletion,
+move, hardlink substitution or archive overwrite is authorized. A later apply
+requires explicit approval of the exact plan digest and fresh identity/reference/
+writer checks. This task creates no new quality, confirmation, S4/S5/S6 or Goal1
+acceptance and does not reopen any closed experiment budget.
+
 ## Closed execution: instruction bridge completion and diagnostic QA
 
 The registered study executed1536 updates to14336. Independent A and B passed

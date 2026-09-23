@@ -1,5 +1,26 @@
 # 진단 및 구현 상태
 
+## 2026-09-24 무호출 종료 수리 — 독립 A PASS, 용량 감사 진행
+
+`R3-ARTIFACT-HYGIENE-AND-FINALIZATION-1.0`의 H1/H2를 실제 구현했다.
+QA caller가 완전한 RETURNED journal을 검증한 뒤 신규 모델 예산과 분리해
+final/score를 확정한다. 원 producer source/binary와 새 finalizer를 구분하고
+active 누계는 유지한다. 부분 호출은 원래 예산/source 조건을 계속 적용한다.
+새 관리 작업도 pending/UNKNOWN·취소·손상·mixed-error에서 차단한다.
+
+`bridge_returned_finalization_process`: 구현자1/1 PASS(11.04초),
+독립 A1/1 PASS(11.24초), 각각 새 process15개. 기존 TINY4행을 보존하며
+7200초 equality/재진입/remaining1/누락·변조/취소·I/O/sync 실패를 검증했다.
+모든 신규 SMALL/TINY optimizer/generation/teacher/backward는0이다.
+독립 근거: [A 보고서](ARTIFACT_HYGIENE_REVIEW_A_2026-09-24.md).
+로컬 실행 증거는 `artifacts/artifact-hygiene-20260924-finalization-process`,
+`artifacts/artifact-hygiene-20260924-independent-a`, 동결 실행물·diff는
+`artifacts/artifact-hygiene-20260924-evidence`에 보존한다.
+
+보호11264 수용, bridge14336 품질 FAIL, 기존 QA0/640은 그대로다.
+이를 이번 실행의 새 품질 측정으로 세지 않는다. S4/S5/S6/Goal1은 미수용.
+용량 감사와 독립 B는 별도이며 실제 삭제/이동/치환은0이다.
+
 ## 2026-09-24 지시문 bridge 후속 학습·QA640 종료 — 품질 미달
 
 독립 [A](INSTRUCTION_BRIDGE_COMPLETION_REVIEW_A_2026-09-24.md) 수용 후

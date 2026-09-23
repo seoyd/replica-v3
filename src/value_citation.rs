@@ -2360,6 +2360,75 @@ pub(in super::super::super) fn mean_review(root:&Path,citation:bool)->Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bridge_returned_finalization_process() -> Result<()> {
+        const NAME:&str="bridge-qa-primary";
+        const TEST:&str="training::fresh::identifiable::binding::citation::tests::bridge_returned_finalization_process";
+        let original=PathBuf::from(std::env::var_os("R3_RETURNED_FIXTURE").ok_or_else(||bad("preserved four-row RETURNED fixture required; no model calls permitted"))?);
+        let root=original.join(MEAN_ARMS[1]);let p=historical_plan(&root)?;
+        if !p.tiny{return Err(bad("four-row TINY fixture only"));}
+        let(end,d)=bridge_review_endpoint(&root,&p)?;bridge_diagnostic_admission(&p,&end,&d)?;
+        verify_review_b(&original,&comparison(&original,&p,&end,&d)?)?;
+        let panel=bridge_diagnostic_cases(&original,&p,false)?;assert_eq!(panel.1.len(),4);
+        let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
+        let binding:binary::Value=read_confirmed(&original.join(format!("{NAME}-started.r3b")))?;
+        let prior=bridge_diagnostic_prior_usage(&p,NAME)?;
+        if let Some(dir)=std::env::var_os("R3_RETURNED_CHILD") {
+            let result=bridge_diagnostic_output(Path::new(&dir),&root,&p,&end,&panel,&tok,NAME,&binding["identity"],prior);
+            let expected=std::env::var("R3_RETURNED_EXPECT").unwrap();
+            if expected=="PASS" {result?;}else{let error=result.expect_err("invalid journals must fail").to_string();
+                assert!(!error.contains("FORBIDDEN_MODEL_ENTRY"),"model entry attempted");assert!(error.contains(&expected),"expected {expected}: {error}");}
+            println!("RETURNED_PROCESS optimizer=0 generation=0 teacher=0 backward=0 result={expected}");return Ok(());
+        }
+        if !cfg!(feature="test-support"){return Err(bad("test-support required"));}
+        let base=PathBuf::from(std::env::var_os("R3_RETURNED_OUTPUT").ok_or_else(||bad("new evidence output required"))?);
+        std::fs::create_dir(&base)?;let base=base.canonicalize()?;
+        let original_hash=file_hash(&original.join(format!("{NAME}.r3rows")))?;
+        let copy=|label:&str|->Result<PathBuf>{let dir=base.join(label);std::fs::create_dir(&dir)?;
+            for entry in std::fs::read_dir(&original)?{let entry=entry?;let n=entry.file_name();let s=n.to_string_lossy();
+                if s.starts_with(NAME)&&s!=format!("{NAME}-finished.r3b")&&s!=format!("{NAME}-score.r3b")&& !s.contains("finalization"){std::fs::copy(entry.path(),dir.join(n))?;}}
+            let first:binary::Value=read_confirmed(&dir.join(format!("{NAME}-segment-000-finished.r3b")))?;
+            let path=dir.join(format!("{NAME}-segment-001-finished.r3b"));let mut last:binary::Value=read_confirmed(&path)?;
+            last["control"]["elapsed_seconds"]=binary::record!(p.evaluation.active_seconds as f64-prior.0-first["control"]["elapsed_seconds"].as_f64().unwrap());
+            last["control"]["terminal_reason"]=binary::record!("TIME_BUDGET");last["control"]["observed_conditions"]=binary::record!(["TIME_BUDGET"]);last["error"]=binary::record!("model: TIME_BUDGET");
+            std::fs::write(path,binary::to_storage_vec(&last)?)?;Ok(dir)};
+        let child=|dir:&Path,expected:&str,fault:bool,label:&str|->Result<()>{let mut cmd=std::process::Command::new(std::env::current_exe()?);
+            cmd.args(["--exact",TEST,"--nocapture"]).env("R3_RETURNED_CHILD",dir).env("R3_RETURNED_EXPECT",expected).env("R3_FINALIZATION_NO_MODEL","1");
+            if fault{cmd.env("R3_FRESH_PUBLISH_FAULT","finished-sync");}
+            let out=cmd.output()?;std::fs::write(base.join(format!("{label}.stdout")),&out.stdout)?;std::fs::write(base.join(format!("{label}.stderr")),&out.stderr)?;
+            assert!(out.status.success(),"{label}: {} {}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));Ok(())};
+        let success=copy("complete")?;assert_eq!(segmented_usage(&success,NAME)?.0+prior.0,p.evaluation.active_seconds as f64);
+        // Boundary reader and the actual shared caller run on the same bytes.
+        assert_eq!(segmented_returned(&success,NAME,&binding,&panel.1,&tok)?.0.len(),4);
+        child(&success,"PASS",false,"complete")?;
+        let hashes=["r3rows","finished.r3b","score.r3b"].map(|suffix|file_hash(&success.join(if suffix=="r3rows"{format!("{NAME}.{suffix}")}else{format!("{NAME}-{suffix}")})).unwrap());
+        child(&success,"PASS",false,"idempotent")?;
+        assert_eq!(hashes,["r3rows","finished.r3b","score.r3b"].map(|suffix|file_hash(&success.join(if suffix=="r3rows"{format!("{NAME}.{suffix}")}else{format!("{NAME}-{suffix}")})).unwrap()));
+        for label in ["missing","unknown","model","policy","order","truncated","extra","duplicate","cancel","mixed","remaining"] {
+            let dir=copy(label)?;let raw=dir.join(format!("{NAME}.r3rows"));let mut rows=binary::read_value_records(&raw)?;
+            let lastpath=dir.join(format!("{NAME}-segment-001-finished.r3b"));let mut last:binary::Value=read_confirmed(&lastpath)?;
+            match label {
+                "missing"=>{std::fs::remove_file(dir.join(format!("{NAME}-generation-0003-000-resolved.r3b")))?;},
+                "unknown"=>{std::fs::remove_file(&lastpath)?;},
+                "model"|"policy"=>{let mut b=binding.clone();if label=="model"{b["checkpoint"]=binary::record!("wrong");}else{b["identity"]["policy"]=binary::record!("wrong");}std::fs::write(dir.join(format!("{NAME}-started.r3b")),binary::to_storage_vec(&b)?)?;},
+                "cancel"|"mixed"=>{last["control"]["observed_conditions"]=binary::record!(["TIME_BUDGET",if label=="cancel"{"CANCELLED"}else{"IO_ERROR"}]);std::fs::write(&lastpath,binary::to_storage_vec(&last)?)?;},
+                "truncated"=>{let b=std::fs::read(&raw)?;std::fs::write(&raw,&b[..b.len()-1])?;},
+                _=>{match label{"order"=>rows.swap(1,2),"extra"=>rows.push(rows[1].clone()),"duplicate"=>rows[2]=rows[1].clone(),"remaining"=>{rows.pop();
+                        for suffix in ["prepared","resolved"]{std::fs::remove_file(dir.join(format!("{NAME}-generation-0003-000-{suffix}.r3b")))?;}
+                        last["returned_after"]=binary::record!(3);last["control"]["generation_calls"]=binary::record!(1);
+                        last["prefix"]=binary::record!(digest(&rows)?);last["call_records"]=binary::to_value(segmented_call_files(&dir,NAME)?)?;
+                        last["generated_tokens"]=binary::record!(rows[3]["raw_tokens"].as_array().unwrap().len());std::fs::write(&lastpath,binary::to_storage_vec(&last)?)?;},_=>unreachable!()}
+                    let mut f=std::fs::File::create(&raw)?;for r in &rows{binary::write_value_record(&mut f,r)?;}}
+            }
+            child(&dir,if label=="remaining"{"budget exhausted"}else{""},false,label)?;
+            assert!(!dir.join(format!("{NAME}-finished.r3b")).exists());
+        }
+        let sync=copy("sync")?;child(&sync,"sync error AFTER",true,"sync")?;
+        assert!(sync.join(format!("{NAME}-finished.r3b")).exists());assert!(pending_path(&sync.join(format!("{NAME}-finished.r3b"))).exists());
+        child(&sync,"publication UNKNOWN",false,"sync-sticky")?;
+        assert_eq!(file_hash(&original.join(format!("{NAME}.r3rows")))?,original_hash);
+        println!("FINALIZATION_PROCESS 15 child processes; returned4 cap7200; no-call strict positives/negatives; optimizer0 generation0 teacher0 backward0 evidence={}",base.display());Ok(())
+    }
     fn generic_resume_rejected(path:&Path)->Result<()> {
         let l=checkpoint::load(path,Device::Cpu,true)?;
         assert_eq!(l.manifest.training.as_ref().unwrap().resume_binding.as_ref().unwrap().family,checkpoint::ANSWER_MEAN_FAMILY);
@@ -4285,24 +4354,110 @@ fn bridge_diagnostic_cases(study:&Path,p:&Plan,transfer:bool)->Result<Panel> {
 }
 pub(in super::super::super) fn bridge_diagnostic_qa(study:&Path,transfer:bool)->Result<()> {
     let study=study.canonicalize()?;let lock=std::fs::File::open(&study)?;lock.try_lock().map_err(|_|bad("bridge diagnostic already running"))?;
-    let root=study.join(MEAN_ARMS[1]);let p=plan_read(&root)?;let(end,d)=bridge_review_endpoint(&root,&p)?;bridge_diagnostic_admission(&p,&end,&d)?;
+    let root=study.join(MEAN_ARMS[1]);let p=historical_plan(&root)?;let(end,d)=bridge_review_endpoint(&root,&p)?;bridge_diagnostic_admission(&p,&end,&d)?;
     verify_review_b(&study,&comparison(&study,&p,&end,&d)?)?;
     // Reviewer reproduction is required independently of candidate eligibility.
     for errors in [false,true]{let(es,_,_)=bridge_review_cases(&root,&p,end.step,errors)?;if !es.is_empty(){observed(&study,if errors{"bridge-review-errors"}else{"bridge-review-normal"},&p,&end.checkpoint_hash,&es,true)?;}}
     let panel=bridge_diagnostic_cases(&study,&p,transfer)?;let name=if transfer{"bridge-qa-transfer"}else{"bridge-qa-primary"};
     let s:binary::Value=read(&study.join("selection.r3b"))?;let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
-    let raw=study.join(format!("{name}.r3rows"));let count=if raw.exists(){binary::read_value_records(&raw)?.len().checked_sub(1).ok_or_else(||bad("QA missing header"))?}else{0};
-    let remaining=panel.1.len().checked_sub(count).ok_or_else(||bad("QA extra returned rows"))?;
-    let mut control=observation_control(&p,remaining,0)?;
-    #[cfg(feature="test-support")]
-    if p.tiny&&std::env::var("R3_BRIDGE_QA_STOP").as_deref()==Ok("before"){control.fixture_boundary=Some("confirmation_next_generation".into());}
     let identity=binary::record!({"policy":digest(&p)?,"checkpoint":end.checkpoint_hash,"mode":"DIAGNOSTIC_ONLY","old_qa":s["old_qa_hashes"],
         "generation_limit":128,"generation_count":panel.1.len(),"teacher_limit":0,"context":2048,"candidate_authority":false,"S4_authority":false});
-    let rows=segmented_collect(&study,name,&root.join(&end.checkpoint),&panel.1,&tok,&identity,control)?;
-    observed(&study,name,&p,&end.checkpoint_hash,&panel.1,false)?;
-    let mut score=qa_rows_score(&panel,&rows,&tok,p.tiny,&end.checkpoint_hash,&file_hash(&raw)?)?;
+    bridge_diagnostic_output(&study,&root,&p,&end,&panel,&tok,name,&identity,bridge_diagnostic_prior_usage(&p,name)?)
+}
+fn bridge_diagnostic_prior_usage(p:&Plan,name:&str)->Result<(f64,usize,usize)> {
+    let mut total=usage(p)?;
+    if own(p).study.join(format!("{name}-started.r3b")).exists() {
+        let local=segmented_usage(&own(p).study,name)?;
+        total.0-=local.0;total.1=total.1.checked_sub(local.1).ok_or_else(||bad("diagnostic usage underflow"))?;
+    }
+    if !total.0.is_finite()||total.0<0. {return Err(bad("diagnostic prior usage invalid"));}Ok(total)
+}
+// This is the shared production output caller, including strict admission,
+// scoring and confirmed publication. Process tests reuse historical RETURNED
+// journals in an isolated output directory; they never simulate model output.
+fn bridge_diagnostic_output(study:&Path,root:&Path,p:&Plan,end:&Segment,panel:&Panel,tok:&ByteBpe,name:&str,identity:&binary::Value,prior:(f64,usize,usize))->Result<()> {
+    const IO_BYTES:u64=512*1024*1024;
+    let raw=study.join(format!("{name}.r3rows"));
+    let mut input_bytes=0u64;let mut entries=0usize;
+    for entry in std::fs::read_dir(study)? {
+        let entry=entry?;entries+=1;if entries>16_384{return Err(bad("finalization directory bound"));}
+        if entry.file_name().to_string_lossy().starts_with(name) {
+            let m=std::fs::symlink_metadata(entry.path())?;
+            if !m.is_file()||m.file_type().is_symlink(){return Err(bad("finalization input is not a regular file"));}
+            input_bytes=input_bytes.checked_add(m.len()).ok_or_else(||bad("finalization input size overflow"))?;
+            if input_bytes>IO_BYTES {return Err(bad("finalization input byte bound"));}
+        }
+    }
+    let count=if raw.exists(){binary::read_value_records(&raw)?.len().checked_sub(1).ok_or_else(||bad("QA missing header"))?}else{0};
+    let remaining=panel.1.len().checked_sub(count).ok_or_else(||bad("QA extra returned rows"))?;
+    let local=if study.join(format!("{name}-started.r3b")).exists(){segmented_usage(study,name)?}else{(0.,0,0)};
+    let active=(prior.0+local.0,prior.1+local.1,prior.2);
+    if !active.0.is_finite()||active.0<0.||active.1>p.evaluation.generation_limit||active.2>p.evaluation.teacher_limit {
+        return Err(bad("finalization usage invalid"));
+    }
+    let management_start=study.join(format!("{name}-finalization-started.r3b"));
+    let management_end=study.join(format!("{name}-finalization.r3b"));
+    if (management_start.exists()||pending_path(&management_start).exists()) && !management_end.exists() {
+        return Err(bad("finalization interrupted; publication UNKNOWN"));
+    }
+    if pending_path(&management_end).exists(){return Err(bad("finalization pending publication"));}
+    let mut management=None;
+    let rows=if remaining==0 {
+        let mut control=recovery::RunControl::command(false)?;control.set_call_limits(0,0);
+        control.check("qa_finalization_admission")?;
+        let binding=binary::record!({"segments":1,"identity":identity,"checkpoint":file_hash(&root.join(&end.checkpoint))?,
+            "cases":digest(&panel.1)?,"source":p.source,"binary":p.binary,"decoding":"normal-greedy-strict-utf8-eos"});
+        if binding["checkpoint"]!=end.checkpoint_hash {return Err(bad("finalization native identity"));}
+        let(rows,elapsed)=segmented_returned(study,name,&binding,&panel.1,tok)?;
+        // A bounded cooperative deadline may return just beyond its limit, but
+        // unexplained over-cap accounting is not a fresh finalization permission.
+        if active.0>p.evaluation.active_seconds as f64 {
+            let(_,_,segments)=segmented_usage(study,name)?;
+            let last:binary::Value=read_confirmed(&study.join(format!("{name}-segment-{:03}-finished.r3b",segments.checked_sub(1).ok_or_else(||bad("finalization missing segment"))?)))?;
+            if last["control"]["terminal_reason"]!="TIME_BUDGET"||last["control"]["observed_conditions"]!=binary::record!(["TIME_BUDGET"]) {
+                return Err(bad("finalization unexplained over-cap usage"));
+            }
+        }
+        let final_path=study.join(format!("{name}-finished.r3b"));
+        let needs_publication=!final_path.exists()||!study.join(format!("{name}-score.r3b")).exists();
+        let final_record=binary::record!({"policy":identity["policy"],"checkpoint":binding["checkpoint"],"binding":binding,
+            "completed":rows.len(),"matched":0,"control":{"terminal_reason":"COMPLETED","observed_conditions":[],
+            "generation_calls":rows.len(),"teacher_calls":0,"elapsed_seconds":elapsed},
+            "generated_tokens":rows.iter().map(|r|r["raw_tokens"].as_array().unwrap().len()).sum::<usize>(),"error":null,"raw":file_hash(&raw)?});
+        control.check("qa_finalization_publish")?;
+        if needs_publication {
+            publish_confirmed(&management_start,&binary::record!({"schema":1,"source":source_digest()?,"binary":file_hash(&std::env::current_exe()?)?,
+                "binding":digest(&binding)?,"raw":file_hash(&raw)?,"active_seconds":active.0,"active_cap":p.evaluation.active_seconds,
+                "management_seconds_limit":900,"input_bytes":input_bytes,"input_bytes_limit":IO_BYTES,"generation":0,"teacher":0,"optimizer":0}))?;
+        }
+        if final_path.exists() {if read_confirmed::<binary::Value>(&final_path)?!=final_record{return Err(bad("diagnostic final changed"));}}
+        else {publish_confirmed(&final_path,&final_record)?;}
+        management=Some((control,active,needs_publication));rows
+    }else{
+        // Only the original frozen executable can admit more model work. The
+        // historical reader above grants no relaxed time or source admission.
+        if active.0>=p.evaluation.active_seconds as f64 {return Err(bad("binding observation budget exhausted"));}
+        if plan_read(root)?!=*p{return Err(bad("diagnostic current plan changed"));}
+        let mut control=observation_control(p,remaining,0)?;
+        #[cfg(feature="test-support")]
+        if p.tiny&&std::env::var("R3_BRIDGE_QA_STOP").as_deref()==Ok("before"){control.fixture_boundary=Some("confirmation_next_generation".into());}
+        segmented_collect(study,name,&root.join(&end.checkpoint),&panel.1,tok,identity,control)?
+    };
+    observed(study,name,p,&end.checkpoint_hash,&panel.1,false)?;
+    let mut score=qa_rows_score(panel,&rows,tok,p.tiny,&end.checkpoint_hash,&file_hash(&raw)?)?;
     score["mode"]=binary::record!("DIAGNOSTIC_ONLY");score["candidate_authority"]=binary::record!(false);
     let path=study.join(format!("{name}-score.r3b"));if path.exists(){if read_confirmed::<binary::Value>(&path)?!=score{return Err(bad("diagnostic score changed"));}}else{publish_confirmed(&path,&score)?;}
+    if let Some((mut control,active,needs_publication))=management {
+        control.check("qa_finalization_score_durable")?;
+        let receipt=study.join(format!("{name}-finalization.r3b"));
+        if receipt.exists(){let r:binary::Value=read_confirmed(&receipt)?;
+            if r["raw"]!=file_hash(&raw)?||r["final"]!=file_hash(&study.join(format!("{name}-finished.r3b")))?||r["score"]!=file_hash(&path)? {return Err(bad("finalization receipt binding"));}}
+        else if needs_publication {publish_confirmed(&receipt,&binary::record!({"schema":1,"mode":"NO_CALL_FINALIZATION","start":file_hash(&management_start)?,"source":source_digest()?,"binary":file_hash(&std::env::current_exe()?)?,
+            "producer_source":p.source,"producer_binary":p.binary,"active_seconds":active.0,"active_cap":p.evaluation.active_seconds,
+            "management_seconds":control.receipt()["elapsed_seconds"],"management_seconds_limit":900,"input_bytes":input_bytes,"input_bytes_limit":IO_BYTES,
+            "input_bytes_kind":"unique observation files; not physical IO","generation":0,"teacher":0,"optimizer":0,
+            "raw":file_hash(&raw)?,"final":file_hash(&study.join(format!("{name}-finished.r3b")))?,"score":file_hash(&path)?}))?;}
+    }
     println!("QA_BRIDGE_DIAGNOSTIC panel={} full={}/{} EOS={} outside={} parse={} generation_count={} S4=false GOAL1_ACCEPTED=false",panel.0,score["full"],score["total"],score["EOS"],score["outside_id"],score["parse_failure_rows"],rows.len());Ok(())
 }
 fn qa_tape(ms:&[Meta])->Result<Vec<[usize;8]>> {

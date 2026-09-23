@@ -1946,6 +1946,8 @@ fn segmented_collect(root:&Path,name:&str,path:&Path,es:&[Episode],tok:&ByteBpe,
         let mut f=std::fs::OpenOptions::new().write(true).append(exists).create_new(!exists).open(&raw)?;
         if !exists {append_row(&mut f,&binding)?;std::fs::File::open(root)?.sync_all()?;}
         if before<es.len() {
+            #[cfg(feature="test-support")]
+            if std::env::var_os("R3_FINALIZATION_NO_MODEL").is_some() {return Err(bad("FORBIDDEN_MODEL_ENTRY"));}
             let l=checkpoint::load(path,Device::Cpu,false)?;
             for (i,e) in es.iter().enumerate().skip(before) {
                 control.check("confirmation_next_generation")?;
@@ -1984,6 +1986,24 @@ fn segmented_collect(root:&Path,name:&str,path:&Path,es:&[Episode],tok:&ByteBpe,
         "teacher_calls":0,"elapsed_seconds":elapsed},"generated_tokens":rows.iter().map(|r|r["raw_tokens"].as_array().map(Vec::len).unwrap_or(0)).sum::<usize>(),
         "error":null,"raw":file_hash(&raw)?}))?;
     Ok(rows)
+}
+// Read-only admission for already RETURNED observations. This does not grant a
+// new segment, call, candidate or training budget. The producer identity stays
+// historical; a later finalizer is recorded separately by the caller.
+fn segmented_returned(root:&Path,name:&str,binding:&binary::Value,es:&[Episode],tok:&ByteBpe)
+    ->Result<(Vec<binary::Value>,f64)> {
+    if read_confirmed::<binary::Value>(&root.join(format!("{name}-started.r3b")))?!=*binding {
+        return Err(bad("finalization producer/input binding changed"));
+    }
+    let(elapsed,calls,_)=segmented_usage(root,name)?;
+    let rows=segmented_prefix(root,name,binding,es,tok)?;
+    if rows.len()!=es.len() || calls!=es.len() {return Err(bad("finalization has remaining calls"));}
+    for row in &rows {
+        let attempt=row["attempt"].as_str().ok_or_else(||bad("finalization returned attempt missing"))?;
+        let r:binary::Value=read_confirmed(&root.join(attempt.replace("-prepared","-resolved")))?;
+        if r["state"]!="RETURNED" || r["calls"]!=1 {return Err(bad("finalization requires accounted RETURNED calls"));}
+    }
+    Ok((rows,elapsed))
 }
 fn swap_control() -> Result<recovery::RunControl> {
     let flag=std::sync::Arc::new(AtomicBool::new(false));let signal=flag.clone();
