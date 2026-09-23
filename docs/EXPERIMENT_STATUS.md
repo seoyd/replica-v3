@@ -2,6 +2,12 @@
 
 ## 2026-09-24 무호출 종료 수리·아티팩트 dry-run — 독립 A/B PASS
 
+최종 code candidate는 `e2e354a7f24babb61d13ac2f1266c1cfd12d7b0e`이며
+정상 push 후 원격 SHA 일치를 확인했다. 수리/감사 source와 독립 보고서
+게시 commit은 구분한다. 기준 `c502e66872ad6abdf463990c5992061d3ec3a19c`
+대비 실제 code diff는 아래 evidence의 `candidate.diff`이며 SHA256은
+`0104827ab321f32d10e3f0c25a98c53eae143e3cc217145562802177f6eae84d`다.
+
 `R3-ARTIFACT-HYGIENE-AND-FINALIZATION-1.0`의 H1/H2를 실제 구현했다.
 QA caller가 완전한 RETURNED journal을 검증한 뒤 신규 모델 예산과 분리해
 final/score를 확정한다. 원 producer source/binary와 새 finalizer를 구분하고
