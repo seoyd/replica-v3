@@ -45,7 +45,15 @@ generation168/teacher168이다. 기존 pure report 명령은 exit0으로 모든 
 panel/decision/trace/종료 비교를 재검증했다. 등록된 active 사용량은
 2068.345996375초이고 학습 로그의 최대 sampled RSS는6,880,704KiB다.
 teacher는 같은 자체 모델의 무학습 gold-prefix 진단이며 외부 모델이 아니다.
-독립 B 재채점·제한 재현은 별도 기록한다.
+독립 [B 보고서](QA_INTEGRITY_REVIEW_B_2026-09-23.md)는 실행·결과 무결성 PASS,
+bridge 품질 FAIL을 확인했다. native5/trace1536/raw6528/teacher6528 전수검산과
+새 process 정상32·실패 pair12 재현이44/44 일치했다(원오답6개 포함).
+외부 ID3·다른 제공 사건1·값만 오답2로 분리되며 보호28+116개 파일은 불변이다.
+최종 SMALL 합계는 optimizer1536/generation6652/teacher6528,
+생성 token96,717·등록 active2072.37719825초다. B의 추가 optimizer/teacher는0이다.
+B report-only commit/확인된 remote는
+`de103834ccc992ec471376283fb743bbcb253116`이고 reviewed source와 구분한다.
+조건부 fit·QA640·S4 미실행과 Goal1 미수용은 변경하지 않는다.
 
 ## 2026-09-23 작은 지시문 bridge 준비와 직접 검증 — A2 대기
 
