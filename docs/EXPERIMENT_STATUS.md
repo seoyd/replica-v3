@@ -47,6 +47,14 @@ target359,424, 최대 전체길이205이다. 이는3072회 계획 비용이며 �
 독립 [A 보고서](QA_WORD_VALUE_REVIEW_A_2026-09-24.md)는 PASS이며,
 최종 준비 hash에 묶인 `review-a.r3b`의 confirmed 발행·readback도 완료됐다.
 다음은 계약에 고정한 부모400회 관측이다.
+이 관측도 정상 완결했다: 기존 여섯 패널의 고정16개 raw parity16/16,
+word dev FULL0/192·support0·outside20·parse186,
+ID-renamed FULL0/192·support8·outside28·parse186이다.
+새 두 패널 모두 value0·QB0/96·SB0/96·ALL40/48·EOS192/192·오류0이다.
+SMALL generation400/teacher0/optimizer0을 소비했다. 새 범위의 미달을
+실행 실패로 세지 않으며 준비된 한 군의 학습 조건을 충족했다.
+실제 관측 로그는 evidence의 `parent-parity.log`, `parent-dev.log`,
+`parent-renamed.log`, canonical 원자료는 최종 study에 보존한다.
 최종 준비 경로는 `artifacts/qa-word-value-20260924-study-final`이며,
 preparation SHA256은 `4e24d661b530df45477d731ff683bcf8c6d66b4d54f34d4079b2198df6a0891c`다.
 기존915 후보의 미실행 준비도 보존한다. 준비 전 여유91,834,804KiB는
