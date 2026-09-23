@@ -48,6 +48,16 @@ Only bridge development+fit+B passage permits one oldQA640 check under its origi
 128-token contract. This is development transfer, not independent confirmation;
 S4 remains sealed and S4/S5/S6/Goal1 remain NOT_ACCEPTED in this scope.
 
+Execution uses `fresh qa-bridge-probe-*`, `qa-bridge-prepare`, the existing
+`fresh run`, and `qa-bridge-report`. Preparation binds the original QA path for
+the conditional scope check. `qa-bridge-review` selects32 metadata-only rows
+across all six panels (8/4/4/8/4/4), and `--errors` selects at most32 additional
+rows in failed query pairs; the latter is explicitly post-hoc diagnostic evidence.
+`qa-bridge-qa` requires the complete development/fit endpoint and a bound B report;
+`--transfer` selects the original128-row transfer split. No used confirmation is
+opened. Bridge episodes retain the existing citation family prefix so the same
+teacher path records actual target-token NLL, with variant/source lineage appended.
+
 ## Closed: retained value/citation capability and balanced QA transfer
 
 Execution closed at15360 after4096 new optimizer updates under frozen source

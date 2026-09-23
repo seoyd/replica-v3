@@ -22,6 +22,8 @@ const QA_CONTRACT: &str = "R3-RETAINED-QA-TRANSFER-1.0";
 const QA_POOL: usize = 8192;
 const QA_SCORER: &str = "strict-qa-independent-citation-ids-v2";
 const BRIDGE_CONTRACT: &str = "R3-QA-INTEGRITY-AND-BRIDGE-1.0";
+const BRIDGE_DATA: &str = "retained-instruction-bridge-v1";
+pub(in super::super::super) fn instruction_bridge(p:&Plan)->bool {p.identifiable.as_ref().is_some_and(|o|o.dataset==BRIDGE_DATA)}
 fn qa_task(p:&Plan,index:usize)->usize {if retained_qa(p)&&index>=3*POOL {3+(index-3*POOL)/QA_POOL}else{index/POOL}}
 pub(in super::super::super) fn retained_qa(p:&Plan)->bool {p.identifiable.as_ref().is_some_and(|o|o.dataset==QA_DATA)}
 pub(in super::super::super) fn precision(p:&Plan)->bool {p.identifiable.as_ref().is_some_and(|o|o.dataset==PREC_DATA)}
@@ -29,18 +31,19 @@ pub(in super::super::super) fn fidelity(p:&Plan)->bool {p.identifiable.as_ref().
 fn continuation(p:&Plan)->bool {precision(p) || fidelity(p) || p.identifiable.as_ref().is_some_and(|o|o.dataset==CONT_DATA)}
 fn citation_offset(p:&Plan,step:usize)->usize {step-p.origin_step()+if continuation(p)&&!fidelity(p)&&!precision(p)&&!p.tiny {32}else{0}}
 fn full_evaluation(p:&Plan,step:usize)->bool {
+    if instruction_bridge(p) {return !p.tiny&&[768,1536].contains(&(step-p.origin_step()));}
     if retained_qa(p) { return !p.tiny && [2048,4096].contains(&(step-p.origin_step())); }
     !p.tiny && if precision(p) {[768,1536].contains(&citation_offset(p,step))}
         else {[1536,3072].contains(&citation_offset(p,step))}
 }
 pub(in super::super::super) fn is_mean(p: &Plan) -> bool {
-    retained_qa(p) || continuation(p) || p.identifiable.as_ref().is_some_and(|o|o.dataset == MEAN_DATA)
+    instruction_bridge(p) || retained_qa(p) || continuation(p) || p.identifiable.as_ref().is_some_and(|o|o.dataset == MEAN_DATA)
 }
 pub(in super::super::super) fn answer_mean(p: &Plan) -> bool {
     is_mean(p) && own(p).arm == MEAN_ARMS[1]
 }
 pub(super) fn arms(p: &Plan) -> &'static [&'static str] {
-    if retained_qa(p) || continuation(p) { &[MEAN_ARMS[1]] } else if is_mean(p) { &MEAN_ARMS } else { &[ARM] }
+    if instruction_bridge(p) || retained_qa(p) || continuation(p) { &[MEAN_ARMS[1]] } else if is_mean(p) { &MEAN_ARMS } else { &[ARM] }
 }
 fn selected_root(study: &Path) -> PathBuf {
     study.join(if study.join(MEAN_ARMS[1]).is_dir() { MEAN_ARMS[1] } else { ARM })
@@ -64,6 +67,11 @@ pub(in super::super::super) fn is(p: &Plan) -> bool {
     is_mean(p) || p.identifiable.as_ref().is_some_and(|v| v.dataset == DATA)
 }
 pub(super) fn evaluation(p: &Plan) -> EvaluationPolicy {
+    if instruction_bridge(p) {
+        let mut e=super::evaluation(p.tiny);e.screen_steps.clear();
+        e.train_steps=if p.tiny{vec![p.origin_step()+2]}else{[256,768,1536].map(|n|p.origin_step()+n).to_vec()};
+        e.generation_limit=9216;e.teacher_limit=8192;e.active_seconds=7200;return e;
+    }
     if retained_qa(p) {
         let mut e=super::evaluation(p.tiny);
         e.screen_steps.clear();
@@ -107,6 +115,7 @@ pub(in super::super::super) fn endpoint(p: &Plan, step: usize, pending: bool) ->
         return [1,128,512,1024,1536,2048,2560,3072,3584,4096].into_iter()
             .map(|n|p.origin_step()+n).find(|&n|n>step).ok_or_else(||bad("retained QA budget closed"));
     }
+    if instruction_bridge(p) {return [1,256,768,1280,1536].into_iter().map(|n|p.origin_step()+n).find(|&n|n>step).ok_or_else(||bad("bridge budget closed"));}
     let points:&[usize]=if precision(p) {&[10497,10752,11264,11776,12032]}
         else if fidelity(p) {&[7425,7680,8192,8704,8960,9472,9728,10240,10496]}
         else if continuation(p) {&[4416,4480,4608,4736,5120,5632,5888,6400,6912,7424]}
@@ -631,6 +640,7 @@ fn prepare_inner(
     Ok(())
 }
 pub(super) fn verify_plan(root: &Path, p: &Plan) -> Result<()> {
+    if instruction_bridge(p) {return bridge_verify_plan(root,p);}
     if retained_qa(p) {return qa_verify_plan(root,p);}
     if continuation(p) {return verify_continuation(root,p);}
     if is_mean(p) { return verify_mean_plan(root,p); }
@@ -904,6 +914,7 @@ fn pass(s: &OrbitScore, total: usize, full: usize, qb: usize, all4: usize) -> bo
 }
 type Panel = (String, Vec<Episode>, Vec<Meta>);
 fn base_panels(root: &Path, p: &Plan, step: usize) -> Result<Vec<Panel>> {
+    if instruction_bridge(p) {return bridge_panels(root,p,step);}
     if retained_qa(p) {return qa_base_panels(root,p,step);}
     if !p.evaluation_due(step) {
         return Err(bad("citation unregistered evaluation"));
@@ -985,7 +996,7 @@ fn read_score(root: &Path, p: &Plan, step: usize, panel: &Panel) -> Result<binar
     let mut out = if is_v {
         binary::record!({"joint":orbit_score(es,ms,&raw[1..],&tok)?})
     } else {
-        binary::to_value(score_citation(es, ms, &raw[1..], &tok)?)?
+        binary::to_value(score_citation_profile(es, ms, &raw[1..], &tok,instruction_bridge(p))?)?
     };
     if is_mean(p) {
         let mut first=0;let mut extra=0;let mut length=0;let mut parsed=0;let mut runtime=0;
@@ -1004,6 +1015,7 @@ fn read_score(root: &Path, p: &Plan, step: usize, panel: &Panel) -> Result<binar
         if !is_v {
             out["parsed_single_id"]=binary::record!(parsed);out["citation_parse_failures"]=binary::record!(es.len()-parsed);
             out["valid_outside_id"]=binary::record!(valid_outside_ids(es,&raw[1..]));
+            if instruction_bridge(p){out["parse_failure_rows"]=binary::record!(raw[1..].iter().filter(|r|r["actual"].as_str().is_none_or(|s|citations(s).is_err())).count());}
         }
         out["teacher_objective"]=binary::record!("gold-prefix token CE diagnostic; not answer-mean training objective");
     }
@@ -1101,20 +1113,23 @@ fn dev_pass(scores: &BTreeMap<String, binary::Value>) -> Result<bool> {
 pub(super) fn panels(root: &Path, p: &Plan, step: usize) -> Result<Vec<Panel>> {
     let mut out = base_panels(root, p, step)?;
     if full_evaluation(p,step) {
-        let present = out.iter().take(if retained_qa(p) {out.len()}else{3})
+        let present = out.iter().take(if retained_qa(p)||instruction_bridge(p) {out.len()}else{3})
             .all(|(name, _, _)| root.join(format!("eval-{step:04}-{name}.r3b")).exists());
         if present {
-            let scores = out.iter().take(if retained_qa(p) {out.len()}else{3})
+            let scores = out.iter().take(if retained_qa(p)||instruction_bridge(p) {out.len()}else{3})
                 .map(|panel| Ok((panel.0.clone(), read_score(root, p, step, panel)?)))
                 .collect::<Result<BTreeMap<_, _>>>()?;
-            if dev_pass(&scores)? && (!retained_qa(p) || qa_dev_pass(&scores)?) {
-                out.extend(fit_panels(root, p)?);
+            if dev_pass(&scores)? && (!retained_qa(p) || qa_dev_pass(&scores)?) && (!instruction_bridge(p)||(bridge_dev_pass(&scores)?&&!qa_guard(root,p,step,&out)?["stop"].is_string())) {
+                if instruction_bridge(p){let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;let(tm,_,_)=verified_metadata(root,p)?;
+                    out.push(("bridge-fit1536".into(),c.train[3*POOL..].to_vec(),tm[3*POOL..].to_vec()));
+                }else{out.extend(fit_panels(root, p)?);}
             }
         }
     }
     Ok(out)
 }
 fn evaluation_result(root: &Path, p: &Plan, step: usize) -> Result<binary::Value> {
+    if instruction_bridge(p) {return bridge_decision(root,p,step);}
     if retained_qa(p) {return qa_decision(root,p,step);}
     let cases = panels(root, p, step)?;
     let scores = cases
@@ -1251,7 +1266,7 @@ pub(super) fn evaluate(
     }
     // Recompute development from its complete raw before scheduling fit panels.
     for (name, es, ms) in panels(root, p, step)?.into_iter().filter(|(n, _, _)| {
-        ["old512", "new1024", "VC0train1536", "VC1train1536"].contains(&n.as_str())
+        ["old512", "new1024", "VC0train1536", "VC1train1536", "bridge-fit1536"].contains(&n.as_str())
     }) {
         control.check("citation_conditional_fit")?;
         evaluate_panel(p, root, path, step, &name, &es, &ms, control)?;
@@ -1276,7 +1291,7 @@ fn trace(root: &Path, p: &Plan, end: &Segment) -> Result<binary::Value> {
     let mut input = 0u64;
     let mut target = 0u64;
     let mut counts = vec![0usize; c.train.len()];
-    let mut task = vec![[0usize; 3];if retained_qa(p) {5}else{3}];
+    let mut task = vec![[0usize; 3];if retained_qa(p) {5}else if instruction_bridge(p){4}else{3}];
     let mut files = BTreeMap::new();
     let mut mean_steps = Vec::new();
     for index in 0..128 {
@@ -1343,6 +1358,7 @@ fn trace(root: &Path, p: &Plan, end: &Segment) -> Result<binary::Value> {
                         "objective_denominator":denominator,"target_tokens":nt,"examples":stats.len(),"V_VC0_VC1_scalar_contribution":contributions,
                         "grad_norm":r["grad_norm"],"clip":r["clip"],"delta_norm":r["delta_norm"],"scope":"scalar contributions, not task gradient norms"});
                     if retained_qa(p) {if let binary::Value::Object(m)=&mut reduction {m.remove("V_VC0_VC1_scalar_contribution");} reduction["V_VC0_VC1_Q0_Q1_scalar_contribution"]=binary::record!(contributions);}
+                    if instruction_bridge(p) {if let binary::Value::Object(m)=&mut reduction {m.remove("V_VC0_VC1_scalar_contribution");} reduction["V_VC0_VC1_bridge_scalar_contribution"]=binary::record!(contributions);}
                     mean_steps.push(reduction);
                 }
                 input += ni as u64;
@@ -1369,6 +1385,11 @@ fn trace(root: &Path, p: &Plan, end: &Segment) -> Result<binary::Value> {
         if let binary::Value::Object(m)=&mut result {m.remove("tasks_V_VC0_VC1_samples_input_target");m.remove("unique_V_VC0_VC1");}
         result["tasks_V_VC0_VC1_Q0_Q1_samples_input_target"]=binary::record!(task);
         result["unique_V_VC0_VC1_Q0_Q1"]=binary::record!(unique);
+    }
+    if instruction_bridge(p) {
+        if let binary::Value::Object(m)=&mut result{m.remove("tasks_V_VC0_VC1_samples_input_target");m.remove("unique_V_VC0_VC1");}
+        result["tasks_V_VC0_VC1_bridge_samples_input_target"]=binary::record!(task);
+        result["unique_V_VC0_VC1_bridge"]=binary::record!(counts.chunks(POOL).map(|c|c.iter().filter(|&&n|n>0).count()).collect::<Vec<_>>());
     }
     Ok(result)
 }
@@ -1442,6 +1463,7 @@ fn observed(
     Ok(rows[1..].to_vec())
 }
 pub(super) fn authorize(root: &Path, p: &Plan) -> Result<()> {
+    if instruction_bridge(p) {return bridge_authorize(root,p);}
     if retained_qa(p) {return qa_authorize(root,p);}
     if continuation(p) {return continuation_authorize(root,p);}
     if is_mean(p) { return mean_authorize(root,p); }
@@ -1732,7 +1754,7 @@ pub(in super::super::super) fn seal(study: &Path, private: &Path) -> Result<()> 
 fn comparison(study: &Path, p: &Plan, end: &Segment, d: &binary::Value) -> Result<binary::Value> {
     let endpoint = binary::record!({"policy":digest(p)?,"checkpoint":end.checkpoint_hash,"step":end.step,"decision":d});
     Ok(
-        binary::record!({"contract":if retained_qa(p){QA_CONTRACT}else if precision(p){PREC_CONTRACT}else if fidelity(p){FID_CONTRACT}else if continuation(p){CONT_CONTRACT}else if is_mean(p){MEAN_CONTRACT}else{CONTRACT},"source":p.source,"preparation":file_hash(&study.join("preparation.r3b"))?,
+        binary::record!({"contract":if instruction_bridge(p){BRIDGE_CONTRACT}else if retained_qa(p){QA_CONTRACT}else if precision(p){PREC_CONTRACT}else if fidelity(p){FID_CONTRACT}else if continuation(p){CONT_CONTRACT}else if is_mean(p){MEAN_CONTRACT}else{CONTRACT},"source":p.source,"preparation":file_hash(&study.join("preparation.r3b"))?,
         "endpoints":BTreeMap::from([(own(p).arm.as_str(),endpoint)]),"selected":if d["eligible"]==true {Some(own(p).arm.as_str())}else{None},"goal1_ready":false}),
     )
 }
@@ -1839,7 +1861,7 @@ pub(in super::super::super) fn confirm(study: &Path) -> Result<()> {
     Ok(())
 }
 fn confirmation_admitted(study:&Path,p:&Plan,end:&Segment,d:&binary::Value)->Result<bool> {
-    if retained_qa(p) {return Ok(false);} // The inherited citation confirmation is already consumed.
+    if retained_qa(p)||instruction_bridge(p) {return Ok(false);} // The inherited citation confirmation is already consumed.
     #[cfg(all(test,feature="test-support"))]
     if p.tiny {
         let expected=binary::record!({"scope":"TINY confirmation protocol only; no quality acceptance","policy":digest(p)?,"checkpoint":end.checkpoint_hash,"count":8});
@@ -3220,6 +3242,99 @@ mod tests {
         println!("QA_FACTOR_REQUESTS 4x16 same record/ID/value/time/order/gold; only registered system/task changes; model_calls0");Ok(())
     }
     #[test]
+    fn qa_bridge_data_tape_and_answer_objective()->Result<()> {
+        let t=tempfile::tempdir()?;let study=super::super::tests::orbit_fixture(t.path())?;let root=study.join("BOTH");let p=plan_read(&root)?;let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
+        let(c,tm,dm)=source_pool(&root,&p,&tok)?;let(public,_,used)=fixture_reservation(&root,t.path())?;
+        let(r,(tm,dm,_),_)=make_pool(&c,&tm,&dm,&tok,&read_ids(&public,128)?,&read_ids(&used,128)?)?;
+        let originals=digest(&(&r.train,&r.validation))?;let (c,tm,dm,a)=bridge_pool_owned(r.clone(),tm,dm,&tok)?;
+        assert_eq!(digest(&(&c.train[..4608],&c.validation[..1536]))?,originals);assert_eq!((c.train.len(),tm.len(),c.validation.len(),dm.len()),(6144,6144,3072,3072));
+        let rows=bridge_tape();assert_eq!(a["sample_counts"],binary::record!([3072,1536,1536,6144]));
+        for epoch in 0..4 {let drawn=rows[epoch*384..(epoch+1)*384].iter().flat_map(|r|r[4..].iter().copied()).collect::<BTreeSet<_>>();assert_eq!(drawn.len(),1536);}
+        let frames=samples(&c.train,&tok,512)?;let ids=rows[0];let b=batch(&frames,&ids,&Device::Cpu)?;let width=b.input.dim(1)?;let vocab=tok.vocab_size();
+        let z=candle_core::Var::from_vec((0..8*width*vocab).map(|i|((i%19)as f32-9.)/13.).collect::<Vec<_>>(),(8,width,vocab),&Device::Cpu)?;
+        let(_,loss,n,den)=crate::training::response_objective(z.as_tensor(),&b,1.,true)?;assert_eq!(den,8);assert_eq!(n,ids.iter().map(|&i|frames[i].tokens.len()-frames[i].response_start).sum::<usize>());
+        let grad=loss.backward()?.get(&z).unwrap().flatten_all()?.to_vec1::<f32>()?;let mut sum=vec![0f32;grad.len()];let mut objective=0.;
+        for offset in [0,4]{let mb=batch(&frames,&ids[offset..offset+4],&Device::Cpu)?;let logits=z.narrow(0,offset,4)?.narrow(1,0,mb.input.dim(1)?)?;
+            let(_,l,_,d)=crate::training::response_objective(&logits,&mb,1.,true)?;assert_eq!(d,4);objective+=f64::from(l.to_scalar::<f32>()?)/2.;
+            for(a,b)in sum.iter_mut().zip((l*0.5)?.backward()?.get(&z).unwrap().flatten_all()?.to_vec1::<f32>()?){*a+=b;}}
+        assert!((objective-f64::from(loss.to_scalar::<f32>()?)).abs()<2e-5);assert!(grad.iter().zip(sum).all(|(a,b)|(a-b).abs()<2e-6));
+        let mask=b.mask.to_vec2::<f32>()?;for row in 0..8 {let s=&frames[ids[row]];assert_eq!(s.tokens.last(),Some(&EOS));assert_eq!(mask[row][s.tokens.len()-2],1.);
+            for pos in 0..width{if mask[row][pos]==0.{assert!(grad[(row*width+pos)*vocab..(row*width+pos+1)*vocab].iter().all(|x|*x==0.));}}}
+        let mut scores=BTreeMap::new();for(name,start)in ["value512","citation512","renamed512","S1Q0512","S0Q1512","S1Q1512"].into_iter().zip((0..6).map(|i|i*512)) {
+            let es=&c.validation[start..start+512];let ms=&dm[start..start+512];let raw=es.iter().map(|e|gold(e,&tok)).collect::<Result<Vec<_>>>()?;
+            let mut s=if name=="value512"{binary::record!({"joint":orbit_score(es,ms,&raw,&tok)?})}else{binary::to_value(score_citation_profile(es,ms,&raw,&tok,true)?)?};
+            s["valid_outside_id"]=binary::record!(0);s["parse_failure_rows"]=binary::record!(0);scores.insert(name.into(),s);
+        }
+        assert!(bridge_dev_pass(&scores)?);for name in scores.keys(){for(field,n)in[("swap_both",231),("all4",115),("full",487)]{let mut bad=scores.clone();bad.get_mut(name).unwrap()["joint"][field]=binary::record!(n);assert!(!bridge_dev_pass(&bad)?);}}
+        for field in ["valid_outside_id","parse_failure_rows"] {let mut bad=scores.clone();bad.get_mut("S1Q1512").unwrap()[field]=binary::record!(1);assert!(!bridge_dev_pass(&bad)?);}
+        println!("QA_BRIDGE_DATA rows6144 bridge1536 samples12288 input={} target={} complete_pairs/exact_exposure/no_leak/mixed_answer_gradient_8_vs_4plus4/EOS_mask PASS optimizer0 generation0 teacher0 synthetic_backward3 FD0",a["costs"]["input"],a["costs"]["target"]);Ok(())
+    }
+    #[test]
+    fn qa_bridge_raw_conditional_fit()->Result<()> {
+        let tmp=tempfile::tempdir()?;let study=super::super::tests::orbit_fixture(tmp.path())?;let source=study.join("BOTH");let original=plan_read(&source)?;
+        let tok=ByteBpe::load(&source.join("tokenizer.r3b"))?;let(c,tm,dm)=source_pool(&source,&original,&tok)?;let(public,_,used)=fixture_reservation(&source,tmp.path())?;
+        let(c,(tm,dm,_),_)=make_pool(&c,&tm,&dm,&tok,&read_ids(&public,128)?,&read_ids(&used,128)?)?;let(c,tm,dm,_)=bridge_pool_owned(c,tm,dm,&tok)?;
+        for label in ["pass","fit-fail","guard-stop"] {
+            let root=tmp.path().join(label);std::fs::create_dir(&root)?;copy_native(&source.join("tokenizer.r3b"),&root.join("tokenizer.r3b"))?;
+            data::native::write(&root.join("corpus.r3cor"),&c,true)?;write(&root.join("metadata.r3b"),&(tm.clone(),dm.clone(),dm.clone()))?;
+            let mut p=original.clone();p.tiny=false;p.corpus=file_hash(&root.join("corpus.r3cor"))?;p.metadata=file_hash(&root.join("metadata.r3b"))?;
+            let o=p.identifiable.as_mut().unwrap();o.study=root.clone();o.dataset=BRIDGE_DATA.into();o.arm=MEAN_ARMS[1].into();
+            p.fork=Some(Fork{study:root.clone(),study_hash:String::new(),parent_policy:String::new(),parent_state:String::new(),parent_adam:String::new(),origin_step:11264,origin_input:0,origin_target:0,
+                arm:MEAN_ARMS[1].into(),constant_lr:3e-5,target_limit:300000,original_corpus:p.corpus.clone(),tokenizer_training_hash:tok.train_hash.clone(),variants:None,variant_metadata:None,alternate_first:vec![],selector:None,selector_metadata:None,flip_first:vec![]});
+            p.config.max_steps=12800;p.config.budget_start_step=11264;p.config.max_tokens=4_000_000;p.config.warmup=0;p.config.lr=3e-5;p.config.seq_len=512;p.evaluation=evaluation(&p);let step=12032;
+            // Explicit single-endpoint record fixture; process tests exercise the actual schedule.
+            p.evaluation.train_steps=vec![step];let mut l=checkpoint::load(&source.join("initial.r3m"),Device::Cpu,false)?;
+            let mut state=TrainingState{resume_binding:None,contrast16:false,parent_checkpoint_hash:None,config:p.config.clone(),step,sampler_state:step as u64,consumed_tokens:0,target_tokens:0,
+                corpus_hash:c.manifest.train.sha256.clone(),validation_hash:c.manifest.validation.sha256.clone(),previous_corpora:vec![l.tokenizer.train_hash.clone()],initial_weight_hash:l.manifest.initial_weight_hash.clone(),train_loss:None,validation_loss:None};
+            state.resume_binding=Some(p.binding(&state,&l.tokenizer)?);l.manifest.training=Some(state);let native=root.join("fixture.r3m");let adam=Adam::new(&l.model.vars)?;
+            checkpoint::save(&native,&l.model,&l.tokenizer,l.manifest,&adam.moments)?;
+            for panel in bridge_panels(&root,&p,step)? {let wrong=if label=="guard-stop"&&panel.0=="value512"{24}else{0};precision_panel_fixture(&root,&p,step,&native,&panel,wrong)?;}
+            let all=panels(&root,&p,step)?;
+            if label=="guard-stop"{assert_eq!(all.len(),6);}else{assert_eq!(all.len(),7);assert!(bridge_decision(&root,&p,step).is_err());
+                precision_panel_fixture(&root,&p,step,&native,&all[6],if label=="fit-fail"{13}else{0})?;}
+            let d=bridge_decision(&root,&p,step)?;assert_eq!(d["development"],true);assert_eq!(d["eligible"],label=="pass");assert_eq!(d["fit"],label=="pass");assert_eq!(d["extend"],false);
+            assert_eq!(d["action"],match label{"pass"=>"CANDIDATE_FIXED_AT_12032","fit-fail"=>"BRIDGE_FIT_NOT_MET",_=>"SEVERE_RETENTION_REGRESSION"});
+            publish_confirmed(&root.join("fixture-decision.r3b"),&d)?;assert_eq!(read_confirmed::<binary::Value>(&root.join("fixture-decision.r3b"))?,d);
+        }
+        println!("QA_BRIDGE_RAW_GATE actual writer/reader/audit/decision missing-fit rejected; bad-fit terminal; good-fit early-fixed; severe64 blocks fit despite dev pass; model_calls0");Ok(())
+    }
+    #[test]
+    #[ignore = "explicit preserved TINY precision parent required; no SMALL fixture substitution"]
+    fn qa_bridge_native_process()->Result<()> {
+        const TEST:&str="training::fresh::identifiable::binding::citation::tests::qa_bridge_native_process";
+        if let Ok(path)=std::env::var("R3_BRIDGE_CHILD") {return run(Path::new(&path),std::env::var("R3_BRIDGE_ACTION").as_deref()!=Ok("one"));}
+        if !cfg!(feature="test-support"){return Err(bad("bridge explicit TINY test support"));}
+        let parent=PathBuf::from(std::env::var("R3_BRIDGE_TEST_PARENT").map_err(|_|bad("preserved TINY parent required"))?);
+        let base=PathBuf::from(std::env::var("R3_BRIDGE_TEST_ROOT").map_err(|_|bad("new process evidence path required"))?);std::fs::create_dir(&base)?;let base=base.canonicalize()?;
+        let old=historical_plan(&parent)?;if !old.tiny||!precision(&old){return Err(bad("TINY precision fixture only"));}
+        let child=|root:&Path,mode:&str,fault:Option<&str>,label:&str|->Result<()> {
+            let mut cmd=std::process::Command::new(std::env::current_exe()?);cmd.args(["--ignored","--exact",TEST,"--nocapture","--test-threads=1"])
+                .env("R3_BRIDGE_CHILD",root).env("R3_BRIDGE_ACTION",mode).env("VECLIB_MAXIMUM_THREADS","1").env("RAYON_NUM_THREADS","1");if let Some(f)=fault{cmd.env("R3_FRESH_CALL_STOP",f);}
+            let out=cmd.output()?;std::fs::write(base.join(format!("{label}.stdout")),&out.stdout)?;std::fs::write(base.join(format!("{label}.stderr")),&out.stderr)?;
+            assert!(out.status.success(),"{label}: {} {}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));Ok(())};
+        let mut natives=vec![];let mut outputs=vec![];let mut totals=[0usize;3];
+        for mode in ["continuous","split","eval-only"] {
+            let study=base.join(mode);bridge_prepare_inner(&parent,None,None,&study,true)?;super::super::tests::fixture_review(&study)?;
+            let root=study.join(MEAN_ARMS[1]);let p=plan_read(&root)?;let step=p.config.max_steps;
+            for which in 0..3{let mut wrong=p.clone();match which{0=>wrong.initial.push('0'),1=>wrong.config.lr=3e-4,_=>wrong.config.seq_len=256};assert!(bridge_verify_plan(&root,&wrong).is_err());}
+            let fault=format!("eval-{step:04}-S0Q14/generation/1/fresh_panel_row_durable");
+            child(&root,if mode=="split"{"one"}else{"run"},(mode=="eval-only").then_some(fault.as_str()),&format!("{mode}-0"))?;
+            let prefix=if mode=="eval-only"{let h=history(&root,&p)?;assert_eq!(h.last().unwrap().step,step);assert_eq!(h.last().unwrap().phase.as_deref(),Some("EvaluationPending"));Some(binary::read_value_records(&root.join(format!("eval-{step:04}-S0Q14.r3rows")))?)}else{None};
+            if mode!="continuous"{child(&root,"run",None,&format!("{mode}-1"))?;}
+            if let Some(prefix)=prefix{assert_eq!(&binary::read_value_records(&root.join(format!("eval-{step:04}-S0Q14.r3rows")))?[..prefix.len()],prefix.as_slice());let h=history(&root,&p)?;
+                assert_eq!(read::<binary::Value>(&root.join(format!("segment-{:04}/train-control.r3b",h.len()-1)))?["optimizer_calls"],0);}
+            let h=history(&root,&p)?;let end=h.last().unwrap();assert!(!end.resume);assert_eq!(end.stop,"BRIDGE_DEVELOPMENT_FAIL");assert!(run(&root,true).is_err());
+            bridge_review_endpoint(&root,&p)?;let(es,raw,_)=bridge_review_cases(&root,&p,step,false)?;assert_eq!(es.len(),24);assert_eq!(raw.len(),24);
+            assert!(bridge_qa(&study,false).is_err());assert!(confirm(&study).is_err());
+            let l=checkpoint::load(&root.join(&end.checkpoint),Device::Cpu,true)?;let s=l.manifest.training.as_ref().unwrap();
+            natives.push((l.model.weights_content_id()?,optimizer_hash(&l.optimizer)?,s.step,s.sampler_state,s.consumed_tokens,s.target_tokens));
+            let mut raw=vec![];for(name,_,_)in bridge_panels(&root,&p,step)?{for r in binary::read_value_records(&root.join(format!("eval-{step:04}-{name}.r3rows")))?.into_iter().skip(1){raw.push(binary::record!({"actual":r["actual"],"tokens":r["raw_tokens"],"finish":r["finish_reason"],"error":r["error"]}));}}outputs.push(raw);
+            for(i,e)in h.iter().enumerate(){totals[0]+=read::<binary::Value>(&root.join(format!("segment-{i:04}/train-control.r3b")))?["optimizer_calls"].as_u64().unwrap()as usize;totals[1]+=e.generations;totals[2]+=e.teachers;}
+        }
+        assert!(natives.windows(2).all(|x|x[0]==x[1]));assert!(outputs.windows(2).all(|x|x[0]==x[1]));assert_eq!(totals,[6,72,72]);
+        println!("QA_BRIDGE_PROCESS optimizer={} generation={} teacher={} continuous2/split1+1/evaluation_only2+0 SAME weights/Adam/clock/raw; preserved prefix; no quality claim; evidence={}",totals[0],totals[1],totals[2],base.display());Ok(())
+    }
+    #[test]
     fn answer_mean_native_process_resume() -> Result<()> {
         const CHILD:&str="R3_MEAN_CHILD";
         // Random native numeric continuation supplements the full fresh/evaluation
@@ -3753,7 +3868,7 @@ pub(in super::super::super) fn bridge_probe_report(study:&Path)->Result<()> {
         if name=="value" {orbit_score(&panel.1,&panel.2,&rows,&tok)?;continue;}
         let s=score_citation_profile(&panel.1,&panel.2,&rows,&tok,true)?;
         let outside=valid_outside_ids(&panel.1,&rows);let parse=rows.iter().filter(|r|r["actual"].as_str().is_none_or(|s|citations(s).is_err())).count();
-        let pass=pass(&s.joint,16,15,7,3)&&outside==0&&parse==0;
+        let pass=pass(&s.joint,16,15,7,3)&&s.joint.swap_both>=7&&outside==0&&parse==0;
         if name!="citation"{needs_training|=!pass;}
         let entry=binary::record!({"score":s,"valid_outside_rows":outside,"parse_failure_rows":parse,"gate":pass,"raw":file_hash(&study.join(format!("qa-factor-{name}.r3rows")))?});
         println!("QA_FACTOR {name} FULL={}/16 QB={}/8 SB={}/8 ALL4={}/4 value={} support={} outside={outside} parse={parse} errors={}",s.joint.full,s.joint.query_both,s.joint.swap_both,s.joint.all4,s.value_correct,s.citation_support_correct,s.joint.errors);
@@ -3765,6 +3880,216 @@ pub(in super::super::super) fn bridge_probe_report(study:&Path)->Result<()> {
         "usage":usage,"output_tokens":output_tokens,"optimizer":0,"S4":"NOT_OPENED","GOAL1_ACCEPTED":false});
     let path=study.join("probe-result.r3b");if path.exists(){if read_confirmed::<binary::Value>(&path)?!=result{return Err(bad("factor result disagreement"));}}else{publish_confirmed(&path,&result)?;}
     println!("QA_FACTOR_COMPLETE generation80 teacher0 optimizer0 output_tokens={output_tokens} needs_training={needs_training}");Ok(())
+}
+fn bridge_tape()->Vec<[usize;8]> {
+    // Each64-pair round visits distinct bases before changing form/ID/assignment.
+    let pairs=(0..12).flat_map(|round|(0..64).map(move|base|
+        3*POOL+(round%3)*512+((round/3)%2)*256+base*4+(round/6)*2)).collect::<Vec<_>>();
+    (0..1536).map(|step|{let v=(step%768)*2;let c=(1+step%2)*POOL+((step/2)%768)*2;
+        let a=pairs[(2*step)%768];let b=pairs[(2*step+1)%768];[v,v+1,c,c+1,a,a+1,b,b+1]}).collect()
+}
+fn bridge_episodes(es:&[Episode],ms:&[Meta],name:&str)->Result<(Vec<Episode>,Vec<Meta>)> {
+    let mut out=bridge_variant(es,SYSTEM,name)?;let mut meta=ms.to_vec();
+    if out.len()!=meta.len(){return Err(bad("bridge metadata length"));}
+    for (i,((e,m),source))in out.iter_mut().zip(&mut meta).zip(es).enumerate() {
+        e.id=format!("{BRIDGE_DATA}/{name}/{}",source.id);e.family=format!("{}/{BRIDGE_DATA}/{name}",source.family);e.sequence=e.family.clone();
+        e.request.request_id=e.id.clone();m.source_id=Some(source.id.clone());m.id=e.id.clone();m.base=e.family.clone();m.template=format!("{name}/{}",m.template);
+        let mut restored=e.request.clone();restored.system=source.request.system.clone();restored.input=source.request.input.clone();restored.request_id=source.request.request_id.clone();
+        if digest(&restored)?!=digest(&source.request)?||e.answer!=source.answer||m.view!=ms[i].view{return Err(bad("bridge changes outside declared fields"));}
+    }
+    Ok((out,meta))
+}
+fn bridge_pool(parent:&Path,tok:&ByteBpe)->Result<(data::native::Corpus,Vec<Meta>,Vec<Meta>,binary::Value)> {
+    let old=historical_plan(parent)?;let c=verified_corpus(&parent.join("corpus.r3cor"),&old.corpus)?;let(tm,dm,_)=verified_metadata(parent,&old)?;
+    bridge_pool_owned(c,tm,dm,tok)
+}
+fn bridge_pool_owned(c:data::native::Corpus,tm:Vec<Meta>,dm:Vec<Meta>,tok:&ByteBpe)->Result<(data::native::Corpus,Vec<Meta>,Vec<Meta>,binary::Value)> {
+    if c.train.len()!=4608||c.validation.len()!=1536||tm.len()!=4608||dm.len()!=1536{return Err(bad("bridge retained corpus shape"));}
+    let mut selected=(0..384).map(|i|Ok((digest(&(&tm[POOL+4*i].base,BRIDGE_DATA))?,i))).collect::<Result<Vec<_>>>()?;selected.sort();selected.truncate(64);
+    let mut source=vec![];let mut meta=vec![];
+    for id_version in 1..=2 {for(_,base)in &selected {
+        let at=id_version*POOL+4*base;
+        if tm[at..at+4].iter().enumerate().any(|(view,m)|m.base!=tm[at].base||m.view!=view){return Err(bad("bridge complete source orbit"));}
+        source.extend_from_slice(&c.train[at..at+4]);meta.extend_from_slice(&tm[at..at+4]);
+    }}
+    let mut train=c.train.clone();let mut train_meta=tm.clone();let mut dev=c.validation.clone();let mut dev_meta=dm.clone();
+    for name in ["S1Q0","S0Q1","S1Q1"] {
+        let(es,ms)=bridge_episodes(&source,&meta,name)?;train.extend(es);train_meta.extend(ms);
+        let(es,ms)=bridge_episodes(&c.validation[512..1024],&dm[512..1024],name)?;dev.extend(es);dev_meta.extend(ms);
+    }
+    let heldout=c.validation.iter().map(semantic_skeleton).collect::<Result<BTreeSet<_>>>()?;
+    let mut prompts=BTreeSet::new();
+    for e in &train {if heldout.contains(&semantic_skeleton(e)?){return Err(bad("bridge train/dev semantic overlap"));}
+        prompts.insert(digest(&tok.prepare_with_framing(&e.request,neural::Framing::QuestionEvidence,2048,"bridge-split")?.token_ids)?);}
+    for e in &dev {if prompts.contains(&digest(&tok.prepare_with_framing(&e.request,neural::Framing::QuestionEvidence,2048,"bridge-split")?.token_ids)?){return Err(bad("bridge prompt leakage"));}}
+    let rows=bridge_tape();let costs=qa_token_cost(&train,&rows,tok)?;qa_token_cost(&dev,&[],tok)?;
+    if costs["input"].as_u64().is_none_or(|n|n>4_000_000)||costs["target"].as_u64().is_none_or(|n|n>300_000){return Err(bad("BLOCKED_BUDGET bridge token costs"));}
+    for(i,count)in costs["counts"].as_array().unwrap().iter().enumerate(){let expected=if i<POOL{2}else if i<3*POOL{1}else{4};if *count!=expected{return Err(bad("bridge exact exposure"));}}
+    for row in &rows {for pair in row.chunks_exact(2) {if pair[1]!=pair[0]+1||train_meta[pair[0]].base!=train_meta[pair[1]].base||train_meta[pair[1]].view!=train_meta[pair[0]].view+1{return Err(bad("bridge complete query pair"));}}
+        if semantic_skeleton(&train[row[4]])?==semantic_skeleton(&train[row[6]])?{return Err(bad("bridge batch repeats semantic base"));}}
+    let mut manifest=c.manifest;manifest.generator=BRIDGE_DATA.into();manifest.split_rule="unchanged retention; train-only hash64 sources, three request variants; inherited dev semantic groups".into();manifest.train=data::native::split("train",&train);manifest.validation=data::native::split("validation",&dev);
+    let audit=binary::record!({"selected":selected,"source_metadata":meta,"costs":costs,"physical_rows":6144,"bridge_rows":1536,"bridge_dev_rows":1536,"independent_dev_bases":128,"case_counts_V_VC0_VC1_bridge":[2,1,1,4],"sample_counts":[3072,1536,1536,6144],"ANSWER_coefficients":[0.25,0.125,0.125,0.5],"normalizer":8,"selection_uses_model_scores":false,"confirmation_read":false});
+    Ok((data::native::from_episodes(manifest,train,dev)?,train_meta,dev_meta,audit))
+}
+fn bridge_plan(old:&Plan,study:&Path,s:&binary::Value)->Result<Plan> {
+    let mut p=old.clone();let state:TrainingState=binary::from_value(s["parent_state"].clone())?;
+    let get=|key:&str|s[key].as_str().map(str::to_owned).ok_or_else(||bad("bridge policy field"));
+    p.source=get("source")?;p.binary=get("binary")?;p.initial=get("physical")?;p.initial_weights=get("weights")?;
+    p.corpus=get("corpus")?;p.transfer=get("transfer")?;p.metadata=get("metadata")?;
+    p.config.seq_len=512;p.config.lr=3e-5;p.config.warmup=0;p.config.max_steps=state.step+if p.tiny{2}else{1536};
+    p.config.budget_start_step=state.step;p.config.budget_start_tokens=state.consumed_tokens;p.config.max_tokens=state.consumed_tokens+4_000_000;
+    let o=p.identifiable.as_mut().ok_or_else(||bad("bridge parent profile"))?;o.study=study.into();o.dataset=BRIDGE_DATA.into();o.rows.truncate(state.step);
+    if o.rows.len()!=state.step{return Err(bad("bridge parent tape cursor"));}o.rows.extend(bridge_tape().into_iter().take(if p.tiny{2}else{1536}));p.train_order=digest(&o.rows)?;p.order=vec![(0..6144).collect()];
+    let f=p.fork.as_mut().ok_or_else(||bad("bridge parent fork"))?;f.study=study.into();f.study_hash=file_hash(&study.join("selection.r3b"))?;
+    f.parent_policy=digest(old)?;f.parent_state=digest(&state)?;f.parent_adam=get("adam")?;f.origin_step=state.step;f.origin_input=state.consumed_tokens;f.origin_target=state.target_tokens;
+    f.original_corpus=p.corpus.clone();f.constant_lr=3e-5;f.target_limit=300_000;p.evaluation=evaluation(&p);Ok(p)
+}
+pub(in super::super::super) fn bridge_prepare(probe:&Path,old_qa:&Path,output:&Path)->Result<()> {
+    let probe=probe.canonicalize()?;bridge_probe_plan(&probe)?;
+    let observed:binary::Value=read_confirmed(&probe.join("probe-result.r3b"))?;
+    if observed["status"]!="BRIDGE_PREPARATION_REQUIRED"||observed["needs_training"]!=true||observed["usage"][1]!=80||observed["usage"][2]!=0{return Err(bad("probe does not justify bridge training"));}
+    let prep:binary::Value=read_confirmed(&probe.join("probe-preparation.r3b"))?;
+    bridge_prepare_inner(Path::new(prep["parent"].as_str().ok_or_else(||bad("bridge parent"))?),Some(&probe),Some(old_qa),output,false)
+}
+fn bridge_prepare_inner(parent:&Path,probe:Option<&Path>,old_qa:Option<&Path>,output:&Path,tiny:bool)->Result<()> {
+    if tiny!=cfg!(all(test,feature="test-support")) || tiny!=probe.is_none(){return Err(bad("explicit bridge TINY/production boundary"));}
+    let parent=parent.canonicalize()?;let old=historical_plan(&parent)?;let end=history(&parent,&old)?.last().cloned().ok_or_else(||bad("bridge parent endpoint"))?;
+    let native=parent.join(&end.checkpoint);let l=checkpoint::load(&native,Device::Cpu,true)?;let state=l.manifest.training.as_ref().ok_or_else(||bad("bridge parent optimizer"))?;
+    if !precision(&old)||old.tiny!=tiny||end.resume||end.phase.as_deref()!=Some("Finished")||(!tiny&&(end.step!=11264||end.stop!="CANDIDATE_FIXED_AT_11264"))
+        || state.step!=end.step||state.sampler_state!=end.step as u64||state.resume_binding!=Some(old.binding(state,&l.tokenizer)?)
+        || !answer_mean(&old)||old.config.lr!=3e-5||old.config.first_target_weight!=1.||old.config.microbatch!=8||old.config.accumulation!=1||old.framing()!=neural::Framing::QuestionEvidence{return Err(bad("bridge exact protected parent/objective/clock"));}
+    let(c,tm,dm,audit)=bridge_pool(&parent,&l.tokenizer)?;let output=std::path::absolute(output)?;
+    let mut s=binary::record!({"contract":BRIDGE_CONTRACT,"source":source_digest()?,"binary":file_hash(&std::env::current_exe()?)?,"parent":parent,"parent_endpoint":end,"parent_policy":file_hash(&parent.join("plan.r3b"))?,"parent_terminal":file_hash(&terminal_path(&parent,&end)?)?,
+        "parent_state":state,"physical":file_hash(&native)?,"weights":l.model.weight_hash()?,"adam":optimizer_hash(&l.optimizer)?,"probe":probe,"audit":audit,"new_updates":if tiny{2}else{1536},"historical_resume_unchanged":true,"objective":checkpoint::ANSWER_MEAN_OBJECTIVE,"lr_bits":3e-5f64.to_bits()});
+    if let Some(probe)=probe {s["probe_result"]=binary::record!(file_hash(&probe.join("probe-result.r3b"))?);s["probe_preparation"]=binary::record!(file_hash(&probe.join("probe-preparation.r3b"))?);}
+    if let Some(path)=old_qa {let path=path.canonicalize()?;let mut hashes=BTreeMap::new();for name in ["corpus.r3cor","transfer.r3cor","metadata.r3b"]{hashes.insert(name,file_hash(&path.join(name))?);}s["old_qa"]=binary::record!(path);s["old_qa_hashes"]=binary::record!(hashes);
+        for transfer in [false,true]{bridge_old_qa(&s,transfer)?;}
+    }else if !tiny{return Err(bad("bridge conditional original QA provenance required"));}
+    std::fs::create_dir(&output)?;let root=output.join(MEAN_ARMS[1]);std::fs::create_dir(&root)?;
+    data::native::write(&root.join("corpus.r3cor"),&c,true)?;copy_native(&root.join("corpus.r3cor"),&root.join("transfer.r3cor"))?;write(&root.join("metadata.r3b"),&(tm,dm.clone(),dm))?;
+    copy_native(&native,&root.join("initial.r3m"))?;copy_native(&parent.join("tokenizer.r3b"),&root.join("tokenizer.r3b"))?;
+    for name in ["corpus","transfer","metadata"]{s[name]=binary::record!(file_hash(&root.join(format!("{name}.{}",if name=="metadata"{"r3b"}else{"r3cor"})))?);}
+    write(&output.join("selection.r3b"),&s)?;let p=bridge_plan(&old,&output,&s)?;write(&root.join("plan.r3b"),&p)?;bridge_verify_plan(&root,&p)?;
+    if !p.parent_entry(&root.join("initial.r3m"),&l)?{return Err(bad("bridge native parent entry"));}
+    publish_confirmed(&output.join("preparation.r3b"),&binary::record!({"contract":BRIDGE_CONTRACT,"source":p.source,"binary":p.binary,"selection":file_hash(&output.join("selection.r3b"))?,"arms":{(MEAN_ARMS[1]):{"policy":file_hash(&root.join("plan.r3b"))?,"initial":p.initial,"corpus":p.corpus,"tape":p.train_order}},"optimizer":0,"generation":0,"teacher":0}))?;
+    println!("QA_BRIDGE_PREPARED rows6144 bridge1536 updates0 input={} target={} samples12288 A2_PENDING",s["audit"]["costs"]["input"],s["audit"]["costs"]["target"]);Ok(())
+}
+fn bridge_verify_plan(root:&Path,p:&Plan)->Result<()> {
+    let s:binary::Value=read(&own(p).study.join("selection.r3b"))?;let parent=Path::new(s["parent"].as_str().ok_or_else(||bad("bridge parent path"))?);let old=historical_plan(parent)?;
+    let end:Segment=binary::from_value(s["parent_endpoint"].clone())?;
+    if s["contract"]!=BRIDGE_CONTRACT||*p!=bridge_plan(&old,&own(p).study,&s)?||root!=own(p).study.join(MEAN_ARMS[1])
+        || s["parent_policy"]!=file_hash(&parent.join("plan.r3b"))?||s["parent_terminal"]!=file_hash(&terminal_path(parent,&end)?)?
+        || p.initial!=file_hash(&parent.join(&end.checkpoint))?||p.initial!=file_hash(&root.join("initial.r3m"))?{return Err(bad("bridge frozen policy/parent"));}
+    let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;let(c,tm,dm,audit)=bridge_pool(parent,&tok)?;
+    let actual=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;let(am,ad,ax)=verified_metadata(root,p)?;
+    if digest(&(&c.manifest,&c.train,&c.validation))?!=digest(&(&actual.manifest,&actual.train,&actual.validation))?
+        || digest(&(&tm,&dm,&dm))?!=digest(&(&am,&ad,&ax))?||audit!=s["audit"]||tok.id()!=p.tokenizer {return Err(bad("bridge exact owned corpus/tape/cost"));}
+    if !p.tiny {for transfer in [false,true]{bridge_old_qa(&s,transfer)?;}}
+    bridge_probe_usage(p)?;Ok(())
+}
+pub(super) fn bridge_probe_usage(p:&Plan)->Result<(f64,usize,usize)> {
+    if p.tiny{return Ok((0.,0,0));}
+    let s:binary::Value=read(&own(p).study.join("selection.r3b"))?;let probe=Path::new(s["probe"].as_str().ok_or_else(||bad("bridge probe path"))?);
+    if s["probe_result"]!=file_hash(&probe.join("probe-result.r3b"))?||s["probe_preparation"]!=file_hash(&probe.join("probe-preparation.r3b"))?{return Err(bad("bridge probe identity"));}
+    let q=bridge_probe_plan(probe)?;let result:binary::Value=read_confirmed(&probe.join("probe-result.r3b"))?;
+    let usage=work(&q)?;if result["needs_training"]!=true||result["usage"]!=binary::record!(usage)||usage.1!=80||usage.2!=0{return Err(bad("bridge probe missing/failed usage"));}
+    Ok((usage.0,usage.1,usage.2))
+}
+fn bridge_authorize(root:&Path,p:&Plan)->Result<()> {
+    bridge_verify_plan(root,p)?;expansion_review(p)?;
+    let prep:binary::Value=read_confirmed(&own(p).study.join("preparation.r3b"))?;
+    if prep["selection"]!=file_hash(&own(p).study.join("selection.r3b"))?{return Err(bad("bridge A2 selection binding"));}Ok(())
+}
+fn bridge_panels(root:&Path,p:&Plan,step:usize)->Result<Vec<Panel>> {
+    if !p.evaluation_due(step){return Err(bad("unregistered bridge evaluation"));}
+    let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;let(_,ms,_)=verified_metadata(root,p)?;
+    let n=if p.tiny{4}else if full_evaluation(p,step){512}else{64};
+    ["value","citation","renamed","S1Q0","S0Q1","S1Q1"].into_iter().enumerate().map(|(i,name)|{
+        let es=c.validation.get(i*512..i*512+n).ok_or_else(||bad("missing bridge panel"))?;
+        Ok((format!("{name}{n}"),es.to_vec(),ms[i*512..i*512+n].to_vec()))
+    }).collect()
+}
+fn bridge_dev_pass(scores:&BTreeMap<String,binary::Value>)->Result<bool> {
+    for name in ["value512","citation512","renamed512","S1Q0512","S0Q1512","S1Q1512"] {
+        let s=scores.get(name).ok_or_else(||bad("missing bridge development panel"))?;let j:OrbitScore=binary::from_value(s["joint"].clone())?;
+        if !pass(&j,512,488,232,116)||j.swap_both<232{return Ok(false);}
+        if name!="value512"&&(s["value_correct"].as_u64().is_none_or(|n|n<508)||s["citation_support_correct"].as_u64().is_none_or(|n|n<508)||s["valid_outside_id"]!=0||s["parse_failure_rows"]!=0){return Ok(false);}
+    }Ok(true)
+}
+fn bridge_decision(root:&Path,p:&Plan,step:usize)->Result<binary::Value> {
+    let panels=panels(root,p,step)?;let scores=panels.iter().map(|panel|Ok((panel.0.clone(),read_score(root,p,step,panel)?))).collect::<Result<BTreeMap<_,_>>>()?;
+    let models=scores.values().map(|s|s["model"].as_str().ok_or_else(||bad("bridge model identity"))).collect::<Result<BTreeSet<_>>>()?;if models.len()!=1{return Err(bad("mixed bridge endpoint"));}
+    let guard=qa_guard(root,p,step,&panels)?;let regression=guard["stop"].is_string();let dev=full_evaluation(p,step)&&bridge_dev_pass(&scores)?;
+    let fit=if dev&&!regression{let f=scores.get("bridge-fit1536").ok_or_else(||bad("bridge fit missing"))?;let j:OrbitScore=binary::from_value(f["joint"].clone())?;
+        pass(&j,1536,1524,756,372)&&f["valid_outside_id"]==0&&f["parse_failure_rows"]==0}else{false};
+    let eligible=dev&&fit&&!regression;
+    let(action,extend)=if regression{(guard["stop"].as_str().unwrap().to_string(),false)}else if eligible{(format!("CANDIDATE_FIXED_AT_{step}"),false)}else if dev{("BRIDGE_FIT_NOT_MET".into(),false)}else if step==p.config.max_steps{("BRIDGE_DEVELOPMENT_FAIL".into(),false)}else{("CONTINUE_WITHIN_REGISTERED_CAP".into(),true)};
+    Ok(binary::record!({"policy":digest(p)?,"step":step,"model":models.into_iter().next(),"panels":scores,"guard":guard,"development":dev,"fit":fit,"eligible":eligible,"regression":regression,"action":action,"extend":extend,"stop":(!extend).then_some(action),"S4":"NOT_OPENED","GOAL1_ACCEPTED":false}))
+}
+pub(in super::super::super) fn bridge_report(study:&Path)->Result<()> {
+    let study=study.canonicalize()?;let root=study.join(MEAN_ARMS[1]);let p=historical_plan(&root)?;
+    if !instruction_bridge(&p){return Err(bad("bridge report profile"));}let h=history(&root,&p)?;let end=h.last().ok_or_else(||bad("bridge not run"))?;
+    for step in p.evaluation.train_steps.iter().copied().filter(|&n|n<=end.step) {
+        if step==end.step&&end.phase.as_deref()==Some("EvaluationPending"){continue;}
+        let d=bridge_decision(&root,&p,step)?;if d!=read_confirmed::<binary::Value>(&root.join(format!("citation-decision-{step:04}.r3b")))?{return Err(bad("bridge raw/decision mismatch"));}
+        for(name,s)in d["panels"].as_object().unwrap(){println!("QA_BRIDGE_PANEL step={step} {name} full={} QB={} SB={} ALL4={} value={} support={} outside={} parse={} EOS={} errors={}",s["joint"]["full"],s["joint"]["query_both"],s["joint"]["swap_both"],s["joint"]["all4"],s["value_correct"],s["citation_support_correct"],s["valid_outside_id"],s["parse_failure_rows"],s["joint"]["eos"],s["joint"]["errors"]);}
+    }
+    let t=trace(&root,&p,end)?;println!("QA_BRIDGE_TRACE updates={} input={} target={} exposures={} usage={:?} durable={} step={} resume={} stop={}",t["updates"],t["input"],t["target"],t["tasks_V_VC0_VC1_bridge_samples_input_target"],work(&p)?,end.checkpoint_hash,end.step,end.resume,end.stop);
+    if !end.resume&&end.phase.as_deref()==Some("Finished"){let(e,d)=close(&root,&p)?;println!("QA_BRIDGE_COMPARISON {}",comparison(&study,&p,&e,&d)?);}Ok(())
+}
+fn bridge_review_cases(root:&Path,p:&Plan,step:usize,errors:bool)->Result<(Vec<Episode>,Vec<binary::Value>,binary::Value)> {
+    let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;let mut es=vec![];let mut expected=vec![];let mut selected=vec![];
+    // Fixed metadata-only coverage is 8/4/4/8/4/4. Error selection is a separate
+    // diagnostic of complete failed query pairs and is not an accuracy estimate.
+    for (panel_index,(name,cases,ms)) in bridge_panels(root,p,step)?.into_iter().enumerate() {
+        let raw=binary::read_value_records(&root.join(format!("eval-{step:04}-{name}.r3rows")))?;
+        let normal=if p.tiny{4}else{[8,4,4,8,4,4][panel_index]};
+        if raw.len()!=cases.len()+1{return Err(bad("bridge reproduction complete raw"));}
+        let mut indices=vec![];
+        for start in (0..cases.len()).step_by(2) {
+            if ms[start].base!=ms[start+1].base||ms[start].view%2!=0||ms[start+1].view!=ms[start].view+1{return Err(bad("bridge reproduction query pair"));}
+            let mut wrong=false;
+            for i in start..start+2 {let r=&raw[i+1];verify_generated(r,&tok)?;if r["id"]!=cases[i].id||r["expected"]!=cases[i].answer{return Err(bad("bridge reproduction raw content"));}
+                wrong|=!recovery::strict_answer_match(r["actual"].as_str(),&cases[i].answer,r["finish_reason"]=="stop",!r["error"].is_null())||r["generation_completed"]!=true;}
+            if if errors{start>=normal&&wrong&&es.len()+indices.len()<32}else{start<normal}{indices.extend([start,start+1]);}
+        }
+        for &i in &indices {es.push(cases[i].clone());expected.push(raw[i+1].clone());}
+        selected.push(binary::record!({"panel":name,"indices":indices,"raw":file_hash(&root.join(format!("eval-{step:04}-{name}.r3rows")))?}));
+    }
+    if es.len()>32{return Err(bad("bridge reproduction call cap"));}Ok((es,expected,binary::record!(selected)))
+}
+fn bridge_review_endpoint(root:&Path,p:&Plan)->Result<(Segment,binary::Value)> {
+    if !instruction_bridge(p){return Err(bad("bridge reviewer profile"));}let(end,d)=close(root,p)?;
+    if !["BRIDGE_DEVELOPMENT_FAIL","BRIDGE_FIT_NOT_MET","SEVERE_RETENTION_REGRESSION","PERSISTENT_RETENTION_REGRESSION"].contains(&end.stop.as_str())
+        && !(d["eligible"]==true&&end.stop==format!("CANDIDATE_FIXED_AT_{}",end.step)){return Err(bad("bridge reviewer complete quality endpoint required"));}Ok((end,d))
+}
+pub(in super::super::super) fn bridge_review(study:&Path,errors:bool)->Result<()> {
+    let study=study.canonicalize()?;let root=study.join(MEAN_ARMS[1]);let p=historical_plan(&root)?;let(end,_)=bridge_review_endpoint(&root,&p)?;
+    let(es,raw,indices)=bridge_review_cases(&root,&p,end.step,errors)?;
+    if es.is_empty(){println!("QA_BRIDGE_REVIEW errors={errors} no additional failed pairs; generation0");return Ok(());}
+    let name=if errors{"bridge-review-errors"}else{"bridge-review-normal"};
+    orbit_observe(&study,name,&root.join(&end.checkpoint),&es,&binary::record!({"policy":digest(&p)?,"checkpoint":end.checkpoint_hash,"indices":indices,"posthoc_errors":errors}),Some(&raw),observation_control(&p,es.len(),0)?)?;
+    observed(&study,name,&p,&end.checkpoint_hash,&es,true)?;
+    println!("QA_BRIDGE_REVIEW errors={errors} matched={} generation={} teacher0 optimizer0",es.len(),es.len());Ok(())
+}
+fn bridge_old_qa(s:&binary::Value,transfer:bool)->Result<Panel> {
+    let path=Path::new(s["old_qa"].as_str().ok_or_else(||bad("bridge original QA path"))?);let name=if transfer{"transfer.r3cor"}else{"corpus.r3cor"};
+    let c=verified_corpus(&path.join(name),s["old_qa_hashes"][name].as_str().ok_or_else(||bad("bridge original QA hash"))?)?;
+    let bytes=std::fs::read(path.join("metadata.r3b"))?;if s["old_qa_hashes"]["metadata.r3b"]!=neural::hash(&bytes){return Err(bad("bridge original QA metadata"));}
+    let(_,dm,xm):(Vec<Meta>,Vec<Meta>,Vec<Meta>)=binary::from_slice(&bytes)?;let ms=if transfer{xm}else{dm};let count=if transfer{128}else{512};
+    if c.validation.len()!=count||ms.len()!=count||c.validation.iter().zip(&ms).any(|(e,m)|e.id!=m.id||e.answer.is_empty()||e.request.limits.max_tokens!=128){return Err(bad("bridge unchanged QA128 inputs"));}
+    Ok((format!("qa-old_qa-{}",if transfer{"transfer"}else{"primary"}),c.validation,ms))
+}
+pub(in super::super::super) fn bridge_qa(study:&Path,transfer:bool)->Result<()> {
+    let study=study.canonicalize()?;let root=study.join(MEAN_ARMS[1]);let p=plan_read(&root)?;let(end,d)=bridge_review_endpoint(&root,&p)?;
+    if d["eligible"]!=true{return Err(bad("bridge development and fit required before QA"));}
+    verify_review_b(&study,&comparison(&study,&p,&end,&d)?)?;
+    for errors in [false,true]{let(es,_,_)=bridge_review_cases(&root,&p,end.step,errors)?;if !es.is_empty(){observed(&study,if errors{"bridge-review-errors"}else{"bridge-review-normal"},&p,&end.checkpoint_hash,&es,true)?;}}
+    let s:binary::Value=read(&study.join("selection.r3b"))?;let panel=bridge_old_qa(&s,transfer)?;let name=if transfer{"bridge-qa-transfer"}else{"bridge-qa-primary"};
+    orbit_observe(&study,name,&root.join(&end.checkpoint),&panel.1,&binary::record!({"policy":digest(&p)?,"checkpoint":end.checkpoint_hash,"old_qa":s["old_qa_hashes"],"generation_limit":128}),None,observation_control(&p,panel.1.len(),0)?)?;
+    let rows=observed(&study,name,&p,&end.checkpoint_hash,&panel.1,false)?;let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
+    let score=qa_rows_score(&panel,&rows,&tok,p.tiny,&end.checkpoint_hash,&file_hash(&study.join(format!("{name}.r3rows")))?)?;
+    publish_confirmed(&study.join(format!("{name}-score.r3b")),&score)?;println!("QA_BRIDGE_SCOPE {score} S4=false S5=false S6=false GOAL1_ACCEPTED=false");Ok(())
 }
 fn qa_tape(ms:&[Meta])->Result<Vec<[usize;8]>> {
     if ms.len()!=3*POOL+2*QA_POOL {return Err(bad("retained QA metadata pool"));}
@@ -3937,8 +4262,14 @@ fn qa_score(root:&Path,p:&Plan,step:usize,panel:&Panel)->Result<binary::Value> {
     let(name,es,ms)=panel;let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
     let summary=audit_panel(root,p,step,name,es,ms,&tok)?;
     let raw=binary::read_value_records(&root.join(format!("eval-{step:04}-{name}.r3rows")))?;
+    qa_rows_score(panel,&raw[1..],&tok,p.tiny,&summary.model,&summary.raw_hash)
+}
+fn qa_rows_score(panel:&Panel,rows:&[binary::Value],tok:&ByteBpe,tiny:bool,model:&str,raw_hash:&str)->Result<binary::Value> {
+    let(name,es,ms)=panel;
+    if rows.len()!=es.len()||ms.len()!=es.len(){return Err(bad("QA score complete panel"));}
+    for ((e,m),r)in es.iter().zip(ms).zip(rows){if m.id!=e.id||r["id"]!=e.id||r["expected"]!=e.answer{return Err(bad("QA score content binding"));}verify_generated(r,tok)?;}
     let mut groups=vec![[0usize;8];8];let mut exact=vec![];let(mut eos,mut errors,mut length,mut runtime,mut utf8,mut outside)=(0,0,0,0,0,0);let mut g_types=BTreeMap::<String,[usize;2]>::new();
-    for ((e,m),r) in es.iter().zip(ms).zip(&raw[1..]) {
+    for ((e,m),r) in es.iter().zip(ms).zip(rows) {
         let good=recovery::strict_answer_match(r["actual"].as_str(),&e.answer,r["finish_reason"]=="stop",!r["error"].is_null())&&r["generation_completed"]==true;
         exact.push(good);let stop=r["finish_reason"]=="stop";let err=!r["error"].is_null();
         eos+=usize::from(stop);errors+=usize::from(!stop||err);length+=usize::from(r["finish_reason"]=="length");
@@ -3958,7 +4289,7 @@ fn qa_score(root:&Path,p:&Plan,step:usize,panel:&Panel)->Result<binary::Value> {
         }
     }else{
         let mut bases=BTreeMap::<&str,Vec<usize>>::new();for(i,m)in ms.iter().enumerate(){bases.entry(&m.base).or_default().push(i);}
-        for ix in bases.values(){if (!p.tiny&&ix.len()!=4)||![2,4].contains(&ix.len())||ix.iter().enumerate().any(|(j,&i)|ms[i].view!=j||ms[i].bucket!=ms[ix[0]].bucket){return Err(bad("old QA four-view identity"));}
+        for ix in bases.values(){if (!tiny&&ix.len()!=4)||![2,4].contains(&ix.len())||ix.iter().enumerate().any(|(j,&i)|ms[i].view!=j||ms[i].bucket!=ms[ix[0]].bucket){return Err(bad("old QA four-view identity"));}
             let at=ix[0];let g=&mut old_relations[ms[at].bucket];g[0]+=1;
             for j in 1..ix.len(){g[2*j-1]+=1;g[2*j]+=usize::from(exact[at]&&exact[ix[j]]);}
             g[7]+=usize::from(es[at].answer!=es[ix[1]].answer);
@@ -3968,9 +4299,9 @@ fn qa_score(root:&Path,p:&Plan,step:usize,panel:&Panel)->Result<binary::Value> {
     }
     let fixed=es.iter().zip(ms).filter(|(_,m)|m.bucket==7).map(|(e,_)|e.answer.as_str()).collect::<BTreeSet<_>>();
     let mut h=[0usize;3];let mut non_h=[0usize;2];
-    for ((r,m),good) in raw[1..].iter().zip(ms).zip(&exact) {let emission=r["actual"].as_str().is_some_and(|s|fixed.contains(s));if m.bucket==7 {h[0]+=1;h[1]+=usize::from(emission);h[2]+=usize::from(*good);}else{non_h[0]+=1;non_h[1]+=usize::from(emission);}}
+    for ((r,m),good) in rows.iter().zip(ms).zip(&exact) {let emission=r["actual"].as_str().is_some_and(|s|fixed.contains(s));if m.bucket==7 {h[0]+=1;h[1]+=usize::from(emission);h[2]+=usize::from(*good);}else{non_h[0]+=1;non_h[1]+=usize::from(emission);}}
     let parse_failures=groups.iter().map(|g|g[6]).sum::<usize>();
-    let mut out=binary::record!({"scorer":QA_SCORER,"parse_failure_rows":parse_failures,"model":summary.model,"raw":summary.raw_hash,"cases":digest(es)?,"total":es.len(),"full":exact.iter().filter(|x|**x).count(),"exact":exact,
+    let mut out=binary::record!({"scorer":QA_SCORER,"parse_failure_rows":parse_failures,"model":model,"raw":raw_hash,"cases":digest(es)?,"total":es.len(),"full":exact.iter().filter(|x|**x).count(),"exact":exact,
         "EOS":eos,"errors":errors,"length":length,"runtime_errors":runtime,"UTF8_errors":utf8,"outside_id":outside,"buckets":groups,"QUERY_BOTH_planned_correct":pairs,"G_subtypes_planned_correct":g_types,
         "G_resolution_planned_unresolved_resolved_both":resolutions,"H_fixed_planned_emitted_strict":h,"non_H_fixed_planned_emitted":non_h,
         "bucket_fields":["planned","full","errors","exact_nonempty_support","outside_id","wrong_provided_id","parse_failure","empty_citation"],"ALL4":"NOT_DEFINED","scope":"old four views or balanced complementary two views; strict complete answer"});
@@ -4046,7 +4377,7 @@ fn qa_dev_pass(scores:&BTreeMap<String,binary::Value>)->Result<bool> {
 fn qa_guard(root:&Path,p:&Plan,step:usize,panels:&[Panel])->Result<binary::Value> {
     let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;let mut before=[0usize;3];let mut previous=None;
     for at in p.evaluation.train_steps.iter().copied().filter(|&n|n<=step) {
-        let cases=if at==step {panels.to_vec()}else{qa_base_panels(root,p,at)?};let mut screens=vec![];let mut hashes=vec![];let mut after=[0usize;3];let mut stop=None;
+        let cases=if at==step {panels.to_vec()}else{base_panels(root,p,at)?};let mut screens=vec![];let mut hashes=vec![];let mut after=[0usize;3];let mut stop=None;
         for (i,panel) in cases[..3].iter().enumerate() {
             let path=root.join(format!("eval-{at:04}-{}.r3rows",panel.0));let raw=binary::read_value_records(&path)?;let n=if p.tiny{4}else{64};
             let score=if i==0 {orbit_score(&panel.1[..n],&panel.2[..n],&raw[1..n+1],&tok)?}else{score_citation(&panel.1[..n],&panel.2[..n],&raw[1..n+1],&tok)?.joint};

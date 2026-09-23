@@ -1,5 +1,64 @@
 # 진단 및 구현 상태
 
+## 2026-09-23 작은 지시문 bridge 준비와 직접 검증 — A2 대기
+
+I2의 정상 반환된 입력별 결손에 따라 기존11264에서 별도 연구를 준비한다.
+원본 V/VC0/VC1 4608행은 그대로 두고 train-only metadata hash로64개
+결합군을 선택한다. 두 ID판의 모든4 view×3 system/문구 조합으로1536행을
+추가한다. 세 dev512는 같은 원문128개 결합군의 파생 패널이며 독립1536개
+상황으로 세지 않는다. 현재 source는 기존 native Plan/fork/RunControl/
+scorer/teacher 경로를 사용하며, 사용한 confirmation이나 S4는 열지 않는다.
+
+직접 자료/수치 회귀는1/1 PASS: 전 tape1536의12,288노출, V/VC0/VC1/bridge
+각3072/1536/1536/6144, query pair·두 배정·서로 다른 bridge base를 검사했다.
+같은 입력의8개 batch와4+4 누적 ANSWER gradient를 비교하고 prompt/padding
+제외·EOS 포함을 확인했다. synthetic backward3, optimizer/generation/teacher0.
+이는 TINY mapping의 비용 검사이며 SMALL의 실제 비용은 별도 준비물에 기록한다.
+
+최초 실제 TINY process 시험은2 optimizer·24 generation·24 teacher 후
+INTEGRITY_FAIL로 종료했다. 새 family prefix가 기존 citation teacher의 상세
+target NLL 조건에서 빠진 것이 원인이었다. 기존 citation family 뒤에 변형
+계보를 붙이도록 연결했으며 실패 checkpoint/raw는 삭제하거나 재개하지 않았다.
+별도 경로의 continuous2 / split1+1 / 마지막 평가-only2+0 회귀는1/1 PASS
+(357.86초)다. weights·Adam·clock·raw가 같고 재개된 평가의 optimizer는0이다.
+정상 품질실패의 reviewer 읽기 허용과 후보/confirmation/QA 진행 거부도 검사했다.
+이 실행의 실제 사용량은 optimizer6/generation72/teacher72이며 실패분과 별도다.
+
+기존 typed panel fixture를 사용한 새 conditional-fit 회귀도1/1 PASS
+(110.64초, 모델 호출0)다. 실제6×512 raw/teacher/summary→audit→decision에서
+fit 누락 거부,1536행 중13오답의 BRIDGE_FIT_NOT_MET, 완전 fit의 +768 조기 고정,
+전체 V488/512이나 고정64가40/64인 severe guard의 fit 미실행을 확인했다.
+최초 fixture는 synthetic budget 시작값 누락으로 사전 거부됐고 수정 후 통과했다.
+독립 A1을 새 준비 승인으로 재사용하지 않으며 A2 전 SMALL 학습은0이다.
+
+현재 source의 기존 `replica-check quick --retained-qa`는3/3 PASS(exit0)다.
+혼합 ANSWER CE, 실제 QA writer/reader/scorer/gate(208.07초), native framing
+cache의 다른 입력 거부를 실행했다. 추가 bridge 문구/자료 회귀2/2와 별도
+conditional-fit1/1이 통과했고, 명시 ignored process 시험은 앞서 별도로
+실행했다. 0-test나 ignored를 PASS에 합산하지 않았다. 전체 테스트는 실행하지
+않았다. checker의 원본 증거는 `artifacts/qa-integrity-bridge-20260923-quick-final/`이다.
+
+관련 원자료: `artifacts/qa-integrity-bridge-20260923-implementation/`,
+실패 보존 `artifacts/qa-integrity-bridge-20260923-tiny-01/`,
+수정 후 시험 `artifacts/qa-integrity-bridge-20260923-tiny-02/`.
+현재 상태는 준비/검증 진행 중이며 BRIDGE 품질·S4/S5/S6·Goal1은 미수용이다.
+
+실제 SMALL 준비는 exit0/모델 호출0으로 완료했다. 전체 tape 비용은 입력
+2,064,384·target162,816·sample12,288이며4M/300K 한도 안이다. 복사된
+initial native는 원본11264의 physical
+`c47e34c7ac4f88dd08b5e719bf4d0364f139ac5002bf4572fe55b37dac823925`와 같다.
+Adam `f4402d071c11273d4c12cb482904b5fc51373a7ad4c4ffa4b90cb562c643df64`를
+reset하지 않았다. 실제 연구는 `artifacts/qa-integrity-bridge-20260923-study-final/`이다.
+
+- source digest `9b46c11e60cf4ecbd44a77d28c82f70b59dc94895e5a2a81149c2f0576c500b4`
+- executable `341f018c30aa57feaf6ae1a8e50ddadedb1c91492a998da0f76bdd12b2ea6394`
+- preparation `7c8fc48fef59c47ab065e0f563eff300040a41344d89ce5823d2648acea1c378`
+- plan `13d292570d17b39c7e69b502a29cc2dfeacf0c41bb93dbae672349c9b864c261`
+- corpus `0e5728231f4f7f9fb8d3971f2df926067a97a6ec89434d0973bb47ec69e34879`
+
+소스 diff와 실행 파일은 구현 증거 디렉터리의 `bridge-source.diff`,
+`executable-bridge`에 동결했다. 독립 A2 승인 전에는 학습을 시작하지 않는다.
+
 ## 2026-09-23 보호11264 입력 2×2 관측 — bridge 준비 필요
 
 독립 A1 수리 source `281b8591145bb3dfc674eb52163cc5a7b459b200`와

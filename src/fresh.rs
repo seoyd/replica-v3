@@ -35,6 +35,10 @@ pub enum Command {
     QaBridgeProbePrepare { #[arg(long)] previous: PathBuf, #[arg(long)] balanced: PathBuf, #[arg(long)] output: PathBuf, #[arg(long)] review_a1: PathBuf },
     QaBridgeProbe { #[arg(long)] study: PathBuf, #[arg(long,value_parser=["value","citation","S1Q0","S0Q1","S1Q1"])] panel: String },
     QaBridgeProbeReport { #[arg(long)] study: PathBuf },
+    QaBridgePrepare { #[arg(long)] probe: PathBuf, #[arg(long)] old_qa: PathBuf, #[arg(long)] output: PathBuf },
+    QaBridgeReport { #[arg(long)] study: PathBuf },
+    QaBridgeReview { #[arg(long)] study: PathBuf, #[arg(long)] errors: bool },
+    QaBridgeQa { #[arg(long)] study: PathBuf, #[arg(long)] transfer: bool },
     RetainedQaReview { #[arg(long)] root: PathBuf, #[arg(long,value_parser=["old_qa","balanced"])] panel: String },
     CitationContinueParent { #[arg(long)] study: PathBuf, #[arg(long)] citation: bool },
     AnswerMeanParent { #[arg(long)] study: PathBuf },
@@ -1756,6 +1760,10 @@ pub fn execute(command: Command) -> Result<()> {
         Command::QaBridgeProbePrepare {previous,balanced,output,review_a1} => identifiable::binding::citation::bridge_probe_prepare(&previous,&balanced,&output,&review_a1),
         Command::QaBridgeProbe {study,panel} => identifiable::binding::citation::bridge_probe(&study,&panel),
         Command::QaBridgeProbeReport {study} => identifiable::binding::citation::bridge_probe_report(&study),
+        Command::QaBridgePrepare {probe,old_qa,output} => identifiable::binding::citation::bridge_prepare(&probe,&old_qa,&output),
+        Command::QaBridgeReport {study} => identifiable::binding::citation::bridge_report(&study),
+        Command::QaBridgeReview {study,errors} => identifiable::binding::citation::bridge_review(&study,errors),
+        Command::QaBridgeQa {study,transfer} => identifiable::binding::citation::bridge_qa(&study,transfer),
         Command::RetainedQaReview {root,panel} => identifiable::binding::citation::qa_review(&root,&panel),
         Command::CitationContinueParent { study,citation } => identifiable::binding::citation::continuation_parent(&study,citation),
         Command::AnswerMeanParent { study } => identifiable::binding::citation::mean_parent(&study),
@@ -2737,7 +2745,7 @@ fn evaluate_panel(
     meta: &[Meta],
     control: &mut recovery::RunControl,
 ) -> Result<PanelResult> {
-    if identifiable::binding::citation::retained_qa(p) || identifiable::binding::citation::fidelity(p) || identifiable::binding::citation::precision(p) {
+    if identifiable::binding::citation::instruction_bridge(p) || identifiable::binding::citation::retained_qa(p) || identifiable::binding::citation::fidelity(p) || identifiable::binding::citation::precision(p) {
         control.restrict_rss(12*1024*1024);
         control.check("fidelity_inference_rss")?;
     }
