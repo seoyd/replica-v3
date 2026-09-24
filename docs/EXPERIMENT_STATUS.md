@@ -1,6 +1,13 @@
 # 진단 및 구현 상태
 
-## 2026-09-24 Teacher device closure — preparation and direct regressions
+## 2026-09-24 Teacher device closure — complete, model quality not accepted
+
+Final successor verdict PASS with independent A-delta/A-caller/B. Original
+training and predecessor diagnosis remain FAILED_UNCHANGED; D2_REUSE VERIFIED;
+ACTUAL_METAL_TEACHER_CALLER PASS; TEACHER_MAIN192/192;
+TEACHER_INDEPENDENT24/24; FRESH_REPRODUCTION_A64/64 and M64/64.
+MODEL_QUALITY FAIL, MUON_ADOPTION NO, S4/S5/S6/GOAL1 NOT_ACCEPTED.
+The following preparation checkpoints retain what was known at each phase.
 
 Starting HEAD `673883ceea433ca351c1629edac9d365d3945e7a`; delta from the
 device repair `f5895057ba40e1758c72bf7dba5e37fef21d6445` was reports only.
@@ -29,6 +36,112 @@ A-delta and A-caller are separate prerequisites. Goal1 remains false.
 Independent final-executable boundary tests then passed1/1 each, exit0,
 wall27.87s and30.12s, with no model calls. Those tests validate D2/failure and
 lineage rejection; they do not establish the actual teacher caller yet.
+
+### Actual caller and main192, same frozen source
+
+Source `1344ae3b4e2f359db81d889e1c2c24b2356e7b17` was normally pushed with remote
+full SHA verified. Independent A-delta was recorded separately in report commit
+`9ec73db26866ca215f8d0435ac0665474cf7d50b`. Actual successor root:
+`artifacts/teacher-device-20260924-run/`; policy
+`0b1b017796960c4d0c84814252101a49e6950ccc57118a50ded2aa7a5e6c740c`, plan file
+SHA256 `5b2368f13073d41ced50ecff960ee20c3653065b9cee07a2eefb8889e24c4b4a`.
+Source digest `de2b727ed908a9b99717f19e5d0e44811fe222511645b0c09b0f6e8be2140d0c`.
+
+The actual parent/A/M first teacher calls completed on Metal F32: one each,
+48 target tokens total, 1/64 coverage each. A fresh process pure readback had
+zero model calls; an independent reader checked native/input/logits/device,
+full shifted targets, NLL/argmax/bytes/EOS and durable row/resolution bindings.
+Independent A-caller PASS receipt SHA256
+`16efeb95aae29450259488bf48135783697b275cfde41c032d2555c1fe0ab504`.
+Main continuation generated63 teacher rows per model. Independent full readback
+confirmed all192 examples/3,072 targets and unchanged first3: no regeneration.
+Main active time14.170670251s, generation/optimizer/backward0. These observations
+establish the repaired caller, not word or citation quality.
+
+| Gold-prefix token correct / denominator | Parent train / dev | A train / dev | M train / dev |
+|---|---|---|---|
+| FORMAT |50/160 /47/160|160/160 /160/160|140/160 /140/160|
+| ID |24/256 /20/256|48/256 /34/256|34/256 /24/256|
+| CLOSE |0/32 /0/32|32/32 /32/32|2/32 /8/32|
+| EOS |0/32 /0/32|32/32 /32/32|32/32 /32/32|
+| MIXED value/format token |0/32 /0/32|12/32 /5/32|0/32 /0/32|
+
+VALUE-only tokens have zero denominator because the actual tokenizer combines
+value and part of grammar; this is unavailable, not value accuracy0%. Clean
+eight-digit ID spans have full byte coverage but all-token-correct0/32 in every
+model/split. The independent reader verified that result. Teacher FORMAT token
+accuracy is not complete FORMAT-span accuracy where MIXED crosses its boundary.
+Gold-prefix ID errors rule out an explanation solely from earlier freely
+generated wrong prefixes; they do not identify a single learning mechanism.
+Original free train128 remains A FULL0/value50/support0, M FULL0/value0/support2.
+The bounded sample contains only the registered values/exposures, not full-corpus
+fit or universal tokenizer/optimizer capability evidence.
+
+### Completed calls and durable successor close
+
+On the unchanged frozen source, the independent reviewer executed teacher8 per
+model (24 total) and replay64 per arm (128 total). All commands exited0. Teacher
+gold/argmax matched and NLL retained the absolute1e-5 threshold. Replay retained
+raw token, strict decode, EOS and length outcomes, including M's two invalid
+UTF-8 outputs. These wrong outputs remain quality failures, not successful QA.
+The fixed first3 teachers were reused within192, not regenerated. Final usage:
+teacher216, generation128, optimizer0, backward0, execution failures0, UNKNOWN0;
+active40.235394543s. The completed prior D2's896 rows were referenced read-only;
+historical generation310 and failed teacher1 remain separate usage.
+
+Actual close exited0, wall37.41s. A separate process report then exited0,
+wall21.62s, with all model budgets spent and no new calls. Its logical run size
+was1,450,079 bytes. Final `composite.r3b` physical SHA256:
+`3c35b40dbabac5eb80f5e9b284b6f5025a27b1127b65b90aaa2f2f318f88e99c`;
+content digest `963b88385a4c7b696756f85dcb905bf44e8ca8371629f656f9eaf9526d2fa126`.
+Logs: `artifacts/teacher-device-20260924-evidence/close.log` and
+`final-readback.log`; independent calls and scalar checks are under the separate
+review evidence root above. Hash/corpus/report wall time is not Metal forward
+latency. Final independent close verification is recorded in
+`docs/TEACHER_DEVICE_CLOSURE_REVIEW_2026-09-24.md`.
+
+Independent B PASS native receipt SHA256
+`9b9fc816e863415e2991245798aeded6c776663c137851f4662830a33752ee76`:
+`artifacts/teacher-device-20260924-review/review-b.r3b`. Independent closed
+recount exited0 in1.04s; role/span aggregates agreed exactly. Check24 had maximum
+absolute NLL difference0 over384 targets. Total new teacher targets3,456
+(main3,072 plus check384), generated tokens2,105 (A924/M1,181). Each selected
+teacher train case occurred twice in each original A/M512 tape; the parent
+shares the manifest, not a claim that its weights received those exposures.
+This subset differs from the full train128 histogram42 once/86 twice.
+An independent fresh report exited0 in21.46s and preserved all733 run file
+names/hashes, creating no row or model call at exhausted call budgets.
+
+Scoped logical bytes measured before issuing the final B receipt: run733 files
+1,450,079 bytes; implementer evidence24 files22,247,885 bytes; reviewer scratch690
+files13,194,826 bytes; total36,892,790 bytes. This includes the frozen executor,
+small reviewer binaries and isolated fixtures, not copies of model/corpus/vendor.
+Final receipt/report additions are separately retained. Allocated target growth
+and unknown transient peak remain reported above; no cleanup/inventory of old
+artifacts was performed.
+
+On the fixed train32/dev32 subset, A's first free token mismatch lies in MIXED
+20/27 times and ID12/5 times; M's is MIXED32/32. The independent reader found
+teacher argmax equal to that first wrong free token in64/64 cases per arm,
+where the preceding prefix is still identical. This does not equate later
+gold-prefix and freely generated trajectories. Earlier original512 update norms
+(A0.0905808754, M0.0086761903 on the first update) and different optimizer costs
+remain protocol differences, not evidence of a Muon defect or a justified
+tenfold LR increase. This fixed configuration supplies no adoption evidence.
+
+Next proposal only: isolate selected-event-ID binding by changing the training
+response from word plus citation to the selected eight-digit ID plus EOS, with
+an original-response control. A possible separately authorized comparison would
+start both arms from the same A512 weights/Adam, keep the existing train inputs,
+QE/tokenizer/LR/ANSWER CE and schedule equal, and cap each arm at128 updates
+(256 total). No heldout or observed wrong output becomes training data. This
+response-format intervention also changes target length and ANSWER weighting;
+it is not an optimizer-isolation claim. Failure to improve disjoint heldout
+exact-ID accuracy within that budget would reject it as a useful remedy. An
+ID-only gain would not establish word-plus-citation or QA quality: retain the
+original full-answer and V/VC checks. This proposal was NOT_RUN and grants no
+new execution budget. The observation motivating it is poor clean ID accuracy
+even under a gold prefix, not proof of a specific attention or memory mechanism.
 
 ## 2026-09-24 Metal F32 optimizer study — stopped at A512/M512
 

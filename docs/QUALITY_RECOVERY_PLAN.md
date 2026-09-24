@@ -1,6 +1,6 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: actual teacher caller and endpoint diagnostic closure
+## Closed: actual teacher caller and endpoint diagnostic closure
 
 `R3-TEACHER-DEVICE-CLOSURE-1.0` reads only the three completed generation lanes
 of the preserved failed endpoint diagnosis. Its original generation310 and
@@ -25,6 +25,16 @@ may finalize at exhausted call/time limits. Old NS/Metal/optimizer/D2 regression
 learning, QA640, confirmation, FP4 and cleanup are out of scope. Independent
 receipts bind actual phase evidence; successful closure does not accept Muon,
 model quality, S4/S5/S6 or Goal1. Next quality change is a proposal only.
+
+Executed on frozen source1344ae3: A-delta/A-caller and independent B PASS,
+main teacher192 plus independent24, A/M replay64 each, generation tokens2,105,
+teacher targets3,456, optimizer/backward0. First3 are part of192; old896 rows
+were reused without regenerating D2. Actual active time40.235394543s. Pure close
+and fresh-process readback completed with all call budgets spent, preserving
+old failures. Successor diagnosis is PASS; model quality remains FAIL, Muon
+adoption NO, S4/S5/S6/Goal1 NOT_ACCEPTED. No training follows from this close.
+Detailed evidence and the one unexecuted next proposal are in the current status
+and `docs/TEACHER_DEVICE_CLOSURE_REVIEW_2026-09-24.md`.
 
 ## Closed partial: preserved Muon endpoints, evaluation only
 
