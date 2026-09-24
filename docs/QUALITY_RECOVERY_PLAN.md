@@ -1,6 +1,29 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: CPU reference preservation and opt-in Metal F32
+## Active: bounded Metal F32 reduction repair
+
+`R3-METAL-REDUCTION-REPAIR-1.0` starts from source
+`f4ae62b647ffecfb89129e775d687c218f410ab3` and closure `cdabcc64`.
+LegacyB is closed; existing CPU, protected11264, raw failures and Adam are preserved.
+First reproduce the frozen middle-axis sum once, then verify GPU permutation,
+physical contiguous materialization and suffix reduction against the original oracle.
+If correct, vendor exactly Candle core0.11.0 with provenance/license and patch only
+its Metal F32 strided Sum boundary. Keep CPU/CUDA/other reductions unchanged.
+Do not change tolerances, model equations, tokenizer, precision, or use CPU fallback.
+
+Required gates: public sum/layouts → analytic repeat VJP and actual GQA Q/K/V →
+TINY full gradients/first Adam → independent Runtime A → bound runtime/native/cache/
+worker and protected P128/C64 → CPU16/Metal16/Metal1+15 and synchronized measurements
+→ independent Runtime B. Failed prerequisite keeps dependent stages blocked.
+New caps: SMALL48 updates, generation584, teacher256, diagnostic backward32;
+TINY64 updates, generation96/teacher96, whole-model forward/backward64 each;
+primitive reductions256, VJP backward192. Active7200s, segment900s, one compute
+process; compilation/reporting excluded. New owned evidence/vendor≤1.5GiB and
+build growth≤8GiB; pre-existing cache growth baseline is UNKNOWN.
+No cleanup or extra quality learning. CPU remains default; runtime acceptance,
+numerical accuracy, output preservation, performance and Goal1 are separate.
+
+### Previous closed baseline
 
 Execution closure: M1 is independently `B_COVERAGE_COMPLETE` (16 new,42 reused
 physical observations; fixed normal32/failure32 overlap6). M2 reached actual

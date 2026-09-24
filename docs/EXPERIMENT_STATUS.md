@@ -1,5 +1,19 @@
 # 진단 및 구현 상태
 
+## 2026-09-24 Metal reduction repair — G0/G1
+
+Source baseline `f4ae62b647ffecfb89129e775d687c218f410ab3`, initial HEAD
+`cdabcc64f55d9cae400a95e2579ebe8cbb30de92`; existing untracked `.DS_Store` preserved.
+Rust/Cargo1.98.1, macOS27.0(26A428), Apple M4 GPU10/Metal4 were read this run.
+LegacyB is not rerun. New evidence: `artifacts/metal-reduction-20260924/`.
+Frozen binary SHA256 `3bd26da935b4c55df7c771a28fa9add80ace9c3719781955f3ff0df41c567544`:
+original sum regression executed once, exit101; detailed RED output retained.
+New SMALL/TINY model/optimizer/generation calls0; primitive sums2 (CPU1/Metal1).
+GPU equivalent-path diagnostic passed (test1/exit0): physical copy and suffix sum
+exactly match the scalar oracle. Additional primitive sum1, GPU temporary24,576B,
+host readback36,864B. No training admitted.
+Protection hashes reuse the prior named-file ledger; no inventory/deletion occurred.
+
 ## 2026-09-24 Metal F32 준비와 이전 adapter B 표본 보완
 
 원 source849d8bb와 closure a9ae778의 원본/실패를 보존한다. 이번 장치는
