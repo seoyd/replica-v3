@@ -22,3 +22,76 @@ The frozen direct caller fixtures passed final3072, early joint acceptance1536, 
 Independent isolated metadata fixtures invoked the actual dispatcher for UNKNOWN, cancelled control and wrong native physical hash. Each exited101 with its expected rejection before a new segment/attempt/native; the supervising check passed with all model calls0. The initial TINY fixture origin mismatch was fixed before source freeze and both actual runs validated the correction. The standalone reader's first compile missed the existing zstd extern; that log is preserved and its corrected compile/readback passed. No confirmed blocker remains.
 
 Evidence is under `artifacts/full-response-fit-20260925-review/`: immutable `phase-a.md`, `preparation-readback.r3b`, `tiny-readback.r3b`, `blocked-dispatch/readback.r3b`, actual logs and native A receipt. Matching direct evidence is under `artifacts/full-response-fit-20260925-evidence/`. Frozen executor SHA256: `f1aa135e0eb71bafdf9006c5de7f655cda84335b4661bd335ab67f7303fe7495`; tests: `390c049588468f240aba9f65eda8a7496fc3516437ad58e7dd337041a99e422e`. Original corpus, native states, terminal decisions, failures and prior reports were read-only.
+
+## Independent partial closure — final B incomplete
+
+The same independent reviewer subsequently read the actual bounded run, using
+standalone Rust readers and the existing locked dependencies. Product source
+still matches80ec58a37bf50d41a919a0ddfed86b4c969fd4b8. The frozen executor hash
+also matches. Raw/state audit exited0 in4.17s; teacher readback exited0 in0.49s.
+All new audit generation/teacher/optimizer/backward counts are0. These are
+scratch readbacks, not a canonical completion or B acceptance receipt.
+
+The original terminal is success=false/resume=false/fit=false and records
+INTEGRITY_FAIL with direct cause `FULL_FIT backward budget exhausted`.
+Committed3069 plus discarded3 equals the unchanged backward cap3072. No
+numerical corruption was found by this audit. Final model/Adam/cursor are
+17981/3645/3069; last evaluated cursor2304. Native physical
+f61db3b873859f2aac5083ace36385067f8cbb4d250cdd4d364d0eea289ea55c and all
+19026816 finite Adam scalars were verified;11 protected references match A.
+The failed terminal was neither edited nor treated as a normal final endpoint.
+
+All scheduled256/768/1536/2304 raw panels independently match their strict
+scores, EOS/error decoding, policy/model/request binding and guard chain.
+Parent16 raw parity also agrees. S1Q1 warned at1536 (fixed64 FULL57/ALL411)
+and cleared at2304 (61/13); there was no retention stop. At1536 word/renamed/
+train192 had FULL31/32/30, whole-value50/43/51, support91/126/123 and
+outside-ID101/66/69 respectively. ALL4 was0 in each. Representative train
+word accuracy was 왼쪽4/48, 오른쪽3/48, 직진21/48, 대기2/48; its six word-pair
+totals were3/4/3/9/0/11 of32. This is not full train1536 acceptance.
+
+Teacher64 at1536 is only a readback of the existing gold-prefix computation.
+Train/dev ID tokens242/256 and232/256 coexist with full eight-digit ID20/32
+and14/32. Clean FORMAT160/160, CLOSE32/32 and EOS32/32 pass in each split;
+MIXED4/32 and5/32 do not. VALUE-only is N/A and whole FORMAT spans are
+excluded because of boundary MIXED, distinct from the clean FORMAT tokens.
+The sample covers only 왼쪽/오른쪽16 each per split; train32 had new exact
+exposure4 and prior FULL0. Free word/renamed/train192 first differences are
+MIXED142/149/141, ID19/11/21 and exact31/32/30. These diagnostics do not
+establish a tokenizer defect or substitute for final free generation.
+
+Verified actual costs including discarded work are input4927268,
+target359394 and padding798940. Generation3280 returned44030tokens;
+teacher64 used1024target tokens. Active accounting3035.100428542s includes
+A24.90s; TINY remains8 optimizer/backward and0 generation/teacher. New
+committed word exposure is1524×8 and12×7; cumulative exact FULL is1292×8
+and244×9. Discarded backward exposures are separate. The final native's
+quality, full train1536 and OLD_FULL64 are unmeasured.
+
+**B_FINAL/B_PARITY=NOT_RUN_SCOPE_BLOCKED.** Normal32/failure reproduction
+and final teacher8 were not run. A passing partial raw audit cannot authorize
+new calls after this failure, complete missing panels, or accept a candidate.
+No final3069 score is inferred from an earlier checkpoint. GOAL1_READY=false.
+
+Scoped snapshot epoch1790272255 measured study9848files/1044907746bytes,
+evidence17/42505633 and review72/19190377 logical bytes. Their sum1106603756
+exceeds1GiB by32861932; only the implementation's owned-study check is below
+that limit. Allocated bytes are1081413632/42545152/19378176 respectively.
+Later report growth and other direct-fixture roots are excluded, and build
+peak is UNKNOWN. No cleanup or global inventory was performed. The next
+proposed action is separately authorized no-learning final-native evaluation,
+not another training intervention; this audit did not grant or execute it.
+
+The scratch note `artifacts/full-response-fit-20260925-review/partial-audit.md`
+contains the exact reader commands, binary/source hashes and raw-log paths;
+SHA2560bcc0159506dae1257aa0be4fab13e32692e57c2b7ba6f848ca61064083974c3.
+Readbacks: partial-readback.r3b
+2c6df18b61722bbfa359d5c049522b6a9edbce0f5439b772c274b5f6d20c4769;
+teacher-partial-readback.r3b
+598d9ec730173d61a296d8c63dc266071833fe6e38ca7f695674ea5db4d7fa10;
+partial-details.r3b
+2409fd55f0b414756efacf48691931b1bed2f7bdf5eecb3e7919eff58cdc9c6d.
+Final reader compile/execution commands exited0. The first teacher-reader
+compile omitted the existing sha2 extern and failed; its log is preserved,
+and the corrected link command passed. This was a reviewer command failure,
+not a product-code defect. No further verification was added after closure.

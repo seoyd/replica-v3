@@ -1,6 +1,18 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: full response fit
+## Closed by backward budget: full response fit
+
+The frozen source80ec58a37bf50d41a919a0ddfed86b4c969fd4b8 executed3,069
+optimizer updates and three returned, discarded backward calls at command
+deadlines. Total backward3,072 exhausted the registered cap. The final native
+is model17981/Adam3645/cursor3069; the original terminal has resume=false and
+records `FULL_FIT backward budget exhausted`. No budget was extended and the
+terminal was not rewritten. Scheduled3072, full train1536, final OLD_FULL64 and
+final B model reproduction were not executed. The last evaluated checkpoint
+is2304; its scores are not measurements of the3069 native. Independent review
+of the existing evidence is read-only, with no new model calls. Any separately
+authorized final diagnostic must preserve this run and its incomplete status.
+The registered design below remains historical, not renewed learning authority.
 
 `R3-FULL-RESPONSE-FIT-1.0` is a new single FULL continuation from the closed
 F64 native (model14912, Adam576, optimizer origin14336). The original F/I

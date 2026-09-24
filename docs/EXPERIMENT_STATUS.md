@@ -1,6 +1,108 @@
 # 진단 및 구현 상태
 
-## 2026-09-25 Full response fit — A accepted, single-arm execution started
+## 2026-09-25 Full response fit — backward cap reached before final evaluation
+
+Frozen-source learning ended with3,069 committed optimizer updates and three
+returned backward computations discarded before Adam because of command
+deadlines. Total backward3,072 reached the registered cap. The last command
+exited1 at `FULL_FIT backward budget exhausted`; its native save completed at
+model17981/Adam3645/cursor3069. The original terminal records resume=false,
+fit=false and evaluated=2304. Its generic failure classification is preserved;
+the observed cause is the backward budget, not evidence of a numerical or
+checkpoint-integrity defect. No3,073rd backward or3,070th optimizer ran.
+
+Last durable: `artifacts/full-response-fit-20260925-study/F/segment-004-step-3069.r3m`,
+physicalf61db3b873859f2aac5083ace36385067f8cbb4d250cdd4d364d0eea289ea55c,
+114182592bytes. The final study owns1044907746bytes, below1GiB. This scope
+excludes retained executables, build intermediates and isolated test/review
+fixtures; it is not a whole-repository disk measurement. Frozen executables
+are22767792+19604416bytes, separately retained as build evidence; overall
+build peak remains UNKNOWN.
+
+The discarded calls are step945/segment001, step1700/segment002 and
+step2719/segment003. Their input/target costs and exposures count as actual
+work, although they made no optimizer update. Time-resume checkpoints944,
+1699 and2718, scheduled checkpoints1/256/768/1536/2304, and final3069 all
+remain preserved. The scheduled3072 checkpoint does not exist; no earlier
+native is relabeled as3072. Full train1536, final OLD_FULL64 and final B
+generation/teacher reproduction are NOT_RUN. A separate final diagnostic
+was requested but is not authorized by elapsed time or by this report.
+
+| Additional updates | V FULL | VC FULL | S1Q1 FULL | Word FULL | Renamed FULL | Train FULL |
+|---|---:|---:|---:|---:|---:|---:|
+|256|64/64|64/64|62/64|0/64|0/64|NOT_RUN|
+|768|64/64|64/64|63/64|1/64|2/64|1/192|
+|1536|512/512|504/512|449/512|31/192|32/192|30/192|
+|2304|64/64|64/64|61/64|9/64|15/64|NOT_RUN|
+|3069 final native|NOT_RUN|NOT_RUN|NOT_RUN|NOT_RUN|NOT_RUN|NOT_RUN|
+
+Panel sizes differ by the registered schedule. The1536 word and renamed
+panels each had QUERY_BOTH1/96, SWAP_BOTH0/96 and ALL40/48. Train192 had all
+three joint counts0. At2304 word/renamed each had QUERY_BOTH2/32,
+SWAP_BOTH0/32 and ALL40/16; outside-ID rows were22 and10. These partial
+accuracy gains do not establish consistent selection. At1536 the fixed64
+S1Q1 prefix warned (FULL57, ALL411), then cleared at2304 (FULL61, ALL413).
+This was not a retention-stop endpoint. Full1536 S1Q1 had outside62 and VC
+outside8, so neither endpoint was promoted through an averaged score.
+
+CODE_DIRECT=PASS; CODE_A=PASS; FULL_FIT_EXECUTION=INCOMPLETE_BUDGET;
+CANDIDATE_DEVELOPMENT=false; FINAL_MODEL_QUALITY=NOT_EVALUATED;
+TRAIN_FIT=NOT_RUN_FULL1536; OLD_FULL64=NOT_RUN; GOAL1_READY=false.
+The original protected11264, F/I A/B and closed failure states remain valid
+within their prior scopes. Preparation and admission evidence follow.
+
+Independent read-only partial audit exited0 in4.17s with zero model calls.
+All executed scheduled raw panels and guard decisions, parent16 parity,
+native clocks, complete finite Adam state and11 protected references agreed.
+Committed input/target/padding:4922464/359058/798152. Three discarded
+forward/backward calls additionally consumed4804/336/788, totaling
+4927268/359394/798940. Committed examples24552 and discarded examples24 are
+separate. New exact word exposures are1524 rows×8 and12 rows×7. All12 short
+rows had prior FULL exposure1: cumulative exact FULL is1292 rows×8 and244
+rows×9. Earlier different-system semantic exposure remains separate, and
+discarded observations are not optimizer-applied exposure.
+
+SMALL generation3280 returned44030 tokens; teacher64 is gold-prefix
+diagnosis, not generated-answer correctness. Model/numeric active accounting
+is3035.100428542seconds including direct/independent A24.90seconds. SMALL
+optimizer3069/backward3072 and TINY optimizer8/backward8 are separate;
+TINY generation/teacher0. Final Adam digest is
+a29eac59b58b8355c42bde430cd854e2f6f4b9bef9a8eb9c823052645bec0847
+over19026816 finite moment scalars. Independent final-model generation and
+teacher reproduction remain NOT_RUN_SCOPE_BLOCKED; a successful raw audit
+does not replace those B requirements or restore final evaluation authority.
+
+The1536 teacher64 reader exited0 in0.49s without a new teacher call. Train/dev
+ID tokens were242/256 and232/256; complete eight-digit ID accuracy20/32 and
+14/32. Clean FORMAT tokens were160/160 in each split, CLOSE/EOS32/32 each,
+and MIXED boundary tokens4/32 and5/32. VALUE-only is N/A because this tokenizer
+has no isolated VALUE denominator in the fixed sample. FORMAT span-level
+exclusions caused by boundary MIXED must not be mistaken for missing clean
+FORMAT tokens. First-error classes were train MIXED28/NONE4 and dev
+MIXED27/ID2/NONE3. The sample covers only 왼쪽/오른쪽,16 each per split;
+train32 had new exact FULL exposure4 and prior FULL0. It is neither all four
+words nor free-generation accuracy. These findings do not prove a tokenizer
+defect or a single cause of the full-response failures.
+
+Same-request parent pairing at1536: word gained31/lost0 among192; renamed
+gained32/lost0 among192; S1Q1 gained0/lost7 among the common64; value/citation
+lost0 among their common64. At2304 the respective64-row gains/losses were
+word9/0, renamed15/0, S1Q1 0/3. Denominator and checkpoint differences remain
+explicit. No final3069 score is inferred from these observations.
+
+Scoped byte snapshot at Unix1790272255: study9848files/1044907746bytes,
+evidence17files/42505633bytes, review72files/19190377bytes. The three roots
+total1106603756 logical bytes,32861932 above1GiB. Only the implementation's
+owned-study check is below1GiB; this report does not claim the entire new
+evidence footprint meets1GiB. Subsequent report text adds a small amount;
+no files were deleted, moved, replaced or deduplicated. Build/evidence copies
+are disclosed separately rather than hidden by the study-only counter.
+
+NEXT_RECOMMENDATION=complete a separately authorized, no-learning full-fit
+measurement of the actual3069 native before selecting a new quality variable.
+The earlier FULL teacher and heldout results locate unresolved word/boundary
+and ID errors, but full train fit at the final model is unmeasured. A new loss,
+LR, tokenizer or data intervention is therefore not selected or executed here.
 
 The new single F continuation references the original F64 native at
 `artifacts/selected-event-id-v11-20260924-study/F/segment-001-step-64.r3m`.
@@ -53,9 +155,8 @@ command wall). First actual SMALL update saved native
 `F/segment-000-step-1.r3m` at model14913/Adam577/cursor1,
 physical9eb1e4a7bb5e71c8ddf932ff985c4c48fd3ac7481bd22f667f9ef77f062d73d4.
 It consumed input1528/target102, ANSWER CE0.63627803, source tape576;
-native114182592bytes. A new process is continuing from that saved state.
-CODE_DIRECT=PASS; CODE_A=PASS; FULL_FIT_EXECUTION=RUNNING;
-MODEL_QUALITY=NOT_YET_EVALUATED; GOAL1_READY=false.
+native114182592bytes. Subsequent new processes continued from that state;
+the bounded execution and its incomplete final evaluation are recorded above.
 
 ## 2026-09-25 Selected event ID protocol1.1 — execution accepted, quality failed
 
