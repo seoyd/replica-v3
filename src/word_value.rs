@@ -7,7 +7,7 @@ const WORDS: [&str; 4] = ["왼쪽", "오른쪽", "직진", "대기"];
 const KEEP: usize = 6144;
 const DEV: usize = 3072;
 pub(in super::super::super::super) fn is(p: &Plan) -> bool {
-    p.identifiable.as_ref().is_some_and(|o| o.dataset == DATA)
+    adapt::is(p) || p.identifiable.as_ref().is_some_and(|o| o.dataset == DATA)
 }
 
 // Value is an entire, nonempty string. No vocabulary restriction, trimming or
@@ -346,7 +346,7 @@ pub(super) fn panels(root:&Path,p:&Plan,step:usize)->Result<Vec<Panel>> {
     if (full_evaluation(p,step)||p.tiny)&&out.iter().all(|x|root.join(format!("eval-{step:04}-{}.r3b",x.0)).exists()) {
         let scores=out.iter().map(|panel|Ok((panel.0.clone(),super::read_score(root,p,step,panel)?))).collect::<Result<BTreeMap<_,_>>>()?;
         let(w,r)=development(&scores,p,step)?;
-        if !guard(root,p,step)?["stop"].is_string()&&((w&&r)||step==p.config.max_steps) {
+        if !guard(root,p,step)?["stop"].is_string()&&((w&&r)||(!adapt::is(p)&&step==p.config.max_steps)) {
             let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;let(tm,_,_)=verified_metadata(root,p)?;let n=if p.tiny{4}else{1536};
             out.push((format!("word-fit{n}"),c.train[KEEP..KEEP+n].to_vec(),tm[KEEP..KEEP+n].to_vec()));
         }
@@ -359,13 +359,13 @@ pub(super) fn decision(root:&Path,p:&Plan,step:usize)->Result<binary::Value> {
     let g=guard(root,p,step)?;let regression=g["stop"].is_string();let (words,retained)=development(&scores,p,step)?;
     let fit_key=format!("word-fit{}",if p.tiny{4}else{1536});let fit=scores.get(&fit_key).map(|s|word_pass(s,true,p.tiny)).transpose()?;
     let eligible=words&&retained&&fit==Some(true)&&!regression;
-    let action=if regression{g["stop"].as_str().unwrap().to_owned()}else if eligible{format!("CANDIDATE_FIXED_AT_{step}")}else if fit.is_some(){format!("FINAL_WORD_QUALITY_FAIL_AT_{step}")}else{"CONTINUE_WITHIN_REGISTERED_CAP".into()};
+    let action=if regression{g["stop"].as_str().unwrap().to_owned()}else if eligible{format!("CANDIDATE_FIXED_AT_{step}")}else if fit.is_some(){format!("FINAL_WORD_QUALITY_FAIL_AT_{step}")}else if adapt::is(p)&&step==p.config.max_steps{format!("FINAL_ADAPTER_WORD_QUALITY_FAIL_AT_{step}")}else{"CONTINUE_WITHIN_REGISTERED_CAP".into()};
     let extend=action=="CONTINUE_WITHIN_REGISTERED_CAP";
     if extend&&step==p.config.max_steps{return Err(bad("word final missing fit/decision"));}
     Ok(binary::record!({"policy":digest(p)?,"step":step,"model":models.into_iter().next(),"panels":scores,"guard":g,"word_development":words,"retention_joint":retained,
         "development":words&&retained,"fit":fit,"eligible":eligible,"regression":regression,"action":action,"extend":extend,"stop":(!extend).then_some(action),"S4":"NOT_OPENED","GOAL1_ACCEPTED":false}))
 }
-fn parent_cases(root:&Path,p:&Plan,name:&str)->Result<(Vec<Episode>,Vec<Meta>,Option<Vec<binary::Value>>)> {
+pub(super) fn parent_cases(root:&Path,p:&Plan,name:&str)->Result<(Vec<Episode>,Vec<Meta>,Option<Vec<binary::Value>>)> {
     let c=verified_corpus(&root.join("corpus.r3cor"),&p.corpus)?;let(_,ms,_)=verified_metadata(root,p)?;
     if name=="dev"||name=="renamed" {let at=DEV+if name=="renamed"{192}else{0};let n=if p.tiny{4}else{192};return Ok((c.validation[at..at+n].to_vec(),ms[at..at+n].to_vec(),None));}
     if name!="parity"{return Err(bad("word parent panel"));}
@@ -382,6 +382,7 @@ fn parent_cases(root:&Path,p:&Plan,name:&str)->Result<(Vec<Episode>,Vec<Meta>,Op
 }
 pub(in super::super::super::super) fn parent_observe(study:&Path,name:&str)->Result<()> {
     let study=study.canonicalize()?;let root=study.join(MEAN_ARMS[1]);let p=plan_read(&root)?;if !is(&p){return Err(bad("word parent profile"));}expansion_review(&p)?;
+    if adapt::is(&p){return Err(bad("adapter permits only registered zero-delta parity"));}
     let(es,ms,expected)=parent_cases(&root,&p,name)?;let label=format!("word-parent-{name}");
     orbit_observe(&study,&label,&root.join("initial.r3m"),&es,&binary::record!({"policy":digest(&p)?,"checkpoint":p.initial,"selection":"six-panel metadata coverage and first failed pairs"}),expected.as_deref(),observation_control(&p,es.len(),0)?)?;
     let rows=observed(&study,&label,&p,&p.initial,&es,expected.is_some())?;
@@ -435,7 +436,7 @@ pub(in super::super::super::super) fn review(study:&Path)->Result<()> {
 }
 pub(in super::super::super::super) fn qa(study:&Path,transfer:bool)->Result<()> {
     let study=study.canonicalize()?;let lock=std::fs::File::open(&study)?;lock.try_lock().map_err(|_|bad("word diagnostic already running"))?;
-    let root=study.join(MEAN_ARMS[1]);let p=historical_plan(&root)?;let(end,d)=close(&root,&p)?;diagnostic_admission(&p,&end,&d)?;
+    let root=study.join(MEAN_ARMS[1]);let p=historical_plan(&root)?;if adapt::is(&p){return Err(bad("adapter QA not authorized"));}let(end,d)=close(&root,&p)?;diagnostic_admission(&p,&end,&d)?;
     verify_review_b(&study,&comparison(&study,&p,&end,&d)?)?;let(es,_)=review_cases(&root,&p,end.step)?;observed(&study,"word-review",&p,&end.checkpoint_hash,&es,true)?;
     let panel=bridge_diagnostic_cases(&study,&p,transfer)?;let name=if transfer{"bridge-qa-transfer"}else{"bridge-qa-primary"};let s:binary::Value=read(&study.join("selection.r3b"))?;
     let identity=binary::record!({"policy":digest(&p)?,"checkpoint":end.checkpoint_hash,"mode":"DIAGNOSTIC_ONLY","old_qa":s["old_qa_hashes"],"generation_limit":128,"generation_count":panel.1.len(),"teacher_limit":0,"context":2048,"candidate_authority":false,"S4_authority":false});

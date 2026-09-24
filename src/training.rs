@@ -918,6 +918,9 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
     }
     let started = Instant::now();
     let mut loaded = checkpoint::load(run.checkpoint, Device::Cpu, run.resume)?;
+    if loaded.model.adapter().is_some() && fresh.is_none() {
+        return Err(Error::Invalid("adapter requires its explicitly bound execution profile".into()));
+    }
     let framing = fresh.map_or(neural::Framing::QuestionEvidence, |(p, _)| p.framing());
     if loaded.manifest.training.is_some() && loaded.manifest.framing()? != framing {
         return Err(Error::Invalid(
@@ -1387,10 +1390,22 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
             control.check("before_training_optimizer")?;
             let actual_lr=fresh.map_or_else(||config.learning_rate(state.step+1),|(p,_)|p.learning_rate(state.step+1));
             executed_optimizer_calls += 1;
+            let adam_step = replica_v3::neural::artifact::adapter_base(&loaded.model)
+                .map_or(Ok(state.step+1),|base|state.step.checked_sub(base.step).map(|n|n+1)
+                    .ok_or_else(||Error::Invalid("adapter optimizer clock before base".into())))?;
+            let mut adapter_norms=[[0f64;4];2];
             let (grad_norm, delta) = if let Some(obs)=&mut signal_observation {
-                adam.step_constant_observed(&loaded.model.vars,&gradients,&config,state.step+1,actual_lr,
+                adam.step_constant_observed(&loaded.model.vars,&gradients,&config,adam_step,actual_lr,
                     |name,_,old,next|obs.delta(name,old,next))?
-            } else {adam.step_constant(&loaded.model.vars, &gradients, &config, state.step + 1,actual_lr)?};
+            } else if loaded.model.adapter().is_some() {
+                adam.step_constant_observed(&loaded.model.vars,&gradients,&config,adam_step,actual_lr,|name,g,old,next|{
+                    let group=if name.ends_with(".a"){0}else{1};
+                    for (i,t) in [g.clone(),old.clone(),next.clone(),(next-old)?].iter().enumerate(){
+                        let norm=t.sqr()?.sum_all()?.to_scalar::<f32>()?as f64;
+                        if !norm.is_finite(){return Err(Error::Model("nonfinite adapter observation".into()));}adapter_norms[group][i]+=norm;
+                    }Ok(())
+                })?
+            } else {adam.step_constant(&loaded.model.vars, &gradients, &config, adam_step,actual_lr)?};
             state.step += 1;
             state.target_tokens += targets as u64;
             state.sampler_state = if fresh.is_some() {state.step as u64} else {rng.state};
@@ -1399,6 +1414,12 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
             if let Some(trace)=&mut fresh_trace {
                 use std::io::Write;
                 let mut row=replica_v3::binary::record!({"step":state.step,"sampler":state.sampler_state,"epoch":fresh.map_or(state.step/1024,|(p,_)|p.epoch(state.step)),"paired_cursor":fresh.and_then(|(p,_)|p.pair_position(state.step-1)),"draw":fresh.map(|(p,_)|p.draw(state.step-1)),"sample_indices":balanced,"tasks":task_stats,"input":step_tokens,"target":targets,"ce":state.train_loss,"objective":objective_sum/objective_denominator as f64,"lr":actual_lr,"lr_bits":actual_lr.to_bits(),"grad_norm":grad_norm,"clip":(config.clip/(grad_norm+1e-12)).min(1.),"delta_norm":delta});
+                if let Some(base)=replica_v3::neural::artifact::adapter_base(&loaded.model) {
+                    row["adapter"]=replica_v3::binary::record!({"base_step":base.step,"base_content":base.content,"base_physical":base.physical,
+                        "updates":adam_step,"parameters":loaded.model.vars.values().map(|v|v.elem_count()).sum::<usize>(),
+                        "adam_bytes":adam.moments.values().map(|v|v.elem_count()*4).sum::<usize>(),
+                        "A_B_gradient_before_after_delta_l2":adapter_norms.map(|g|g.map(f64::sqrt)),"finite":true});
+                }
                 if fresh.is_some_and(|(p,_)|p.is_answer_mean_study()) {
                     row["token_ce"]=replica_v3::binary::record!(loss_sum/targets as f64);
                     row["answer_mean_ce"]=replica_v3::binary::record!(answer_ce_sum/examples as f64);

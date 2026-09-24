@@ -1,5 +1,53 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: frozen-base q/v adaptation and independent precision probe
+
+`R3-PROTECTED-ADAPTATION-PRECISION-1.0` preserves accepted11264, normal
+bridge14336 and failed14464. The latter remains closed. This is a new14336
+fork with frozen base tensors, q/v rank8/alpha8/dropout0 in all layers,
+normal A(std=1/sqrt(hidden), seed20260924), zero B, fresh adapter-only Adam,
+constant LR3e-4, decay0 and no warmup. Historical full-tune changed different
+parameters/Adam/LR/decay; it is not a one-variable causal comparison.
+ANSWER CE, QE, tokenizer, original word7680/validation3456 and the exact first
+1024 updates of its tape are unchanged. Shared inputs use immutable path/hash
+references. No old model/data copying, inventory or cleanup is authorized.
+
+The actual trainable registry is A/B only (SMALL59904 parameters). Native
+delta records bind the base file/content/config/tokenizer/framing, tensor
+registry, adapter/Adam, objective, policy, tape and cursor. Effective step is
+base14336+updates; fresh Adam bias correction uses updates. No automatic merge.
+Generic full-tune resume rejects this profile. The same adapter is active for
+every input in training, prefill and cached generation.
+
+Direct numerical/native-process tests and independent A precede zero-delta16
+parity and learning. Save/restart after update1. At64/128/256/512 evaluate
+V64,VC64,S1Q1-64,word64,renamed64. Final1024 evaluates six old512 panels,
+word192/renamed192 and exposed train128. Retain the existing parent-relative
+severe/persistent guard. Only a jointly passing development endpoint permits
+word fit1536; old/word/fit gates are unchanged. Normal completed or guard-stopped
+integrity endpoints permit bounded independent B reproduction, irrespective
+of candidate eligibility. Cancel/UNKNOWN/I/O remain blocking. No QA640,
+confirmation or S4/S5/S6 is authorized by this study.
+
+P caps:1024 SMALL optimizer,8192 generation,8192 teacher,4M input/400k target,
+7200 active seconds,900 per segment. Shared TINY caps:32/192/192 including
+failed and reviewer calls. No diagnostic SMALL backward or automatic search.
+New immutable evidence/models/data cap1GiB; mutable build growth cap8GiB;
+free space must retain16GiB plus planned writes. One heavy process; locked
+offline builds reuse the managed target with CARGO_INCREMENTAL=0. Preserve
+actual final executables and receipts; no savings are claimed for existing
+release incremental defaults.
+
+Q independently uses accepted11264 only. `R3-FP4-E2M1-B32-F32S-EXPERIMENTAL`
+packs q/k/v/o/gate/up/down in row blocks32 with F32 scale; tied embedding and
+norms remain F32. This is neither MXFP4 nor NVFP4. Dequantized tensors execute
+the existing F32 CPU/Accelerate path. Primitive codec tests precede native16
+parity plus dequantized256 normal generations on metadata-first V128/VC128.
+Optimizer/teacher0,900s cap. Report output regressions, actual bytes and
+process peakRSS including dequantization; no FP4 GPU/training/S6 claim.
+Code, frozen-base identity, active retention, word learning and precision
+results are separate verdicts. GOAL1_READY remains false.
+
 ## Closed scope: four-word QA value selection
 
 The registered run stopped at additional128 / absolute14464 with

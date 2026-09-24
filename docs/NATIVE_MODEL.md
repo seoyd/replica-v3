@@ -1,5 +1,27 @@
 # Native model implementation
 
+The2026-09-24 protected adaptation profile adds only q/v rank8 updates to the
+existing F32 model: `xWᵀ + (8/8)(xAᵀ)Bᵀ`. It keeps base tensors constant and
+registers only A/B for gradients and Adam. All input types share that adapter,
+including prefill and cached decode. Frozen base identity and active output
+retention are separate tests. See the active recovery plan for bounded budgets;
+this profile is not automatically the product default or an accepted model.
+
+Its R3BIN delta stores typed base file/content/architecture/tokenizer/framing
+identities, rank/alpha/seed, exact q/v shapes, little-endian F32 A/B and moments,
+their hashes and the existing training manifest. The loader reuses common native
+metadata validation, then validates the adapter registry and effective/base/Adam
+clocks. It loads original inference tensors without historical full Adam.
+Missing delta, changed base, wrong objective/profile and pending publication
+fail closed. Full merged weights are not emitted.
+
+The separate `R3-FP4-E2M1-B32-F32S-EXPERIMENTAL` research tool packs selected
+matrices in32-value row blocks with F32 scale and nearest-even-code ties using
+F64 distances. It preserves signed zero, uses scale1 for zero blocks and minimum
+positive subnormal scale on underflow. Norms and the single tied embedding stay
+F32. This is neither MXFP4 nor NVFP4. Inference fully dequantizes to the ordinary
+F32 CPU path; it provides no FP4 GPU or training performance claim.
+
 Current model on2026-09-19: the fresh joint baseline trained4096 updates from
 seed17/random weights and zero Adam. Own train-only tokenizer vocab562;
 SMALL parameters9,513,408; CPU F32 Accelerate thread1. Existing6-layer TR++

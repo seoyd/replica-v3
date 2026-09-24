@@ -1,5 +1,52 @@
 # 진단 및 구현 상태
 
+## 2026-09-24 보호 기반 adapter — 준비/직접 회귀, SMALL 미실행
+
+실행 전 보호 파일 SHA256을 확인했다. bridge14336은
+`15015900a3c91a6b8ed87e9c2ecb8f7faf124849e5dcf8f40203cddf267e30d9`,
+11264는 `c47e34c7ac4f88dd08b5e719bf4d0364f139ac5002bf4572fe55b37dac823925`,
+실패14464는 `152c18bc1656e2fbbb7889fd3bbae826b15d33abb5d012fc4ab6985b3302d6f5`다.
+기존 종료·수용·원문을 변경하지 않았다. 시작 여유86,791,612KiB,
+기존 전체 inventory/정리 실행0. Rust/Cargo1.98.1, locked/offline/Accelerate.
+
+q/v LoRA를 직접 Rust로 구현하고 기존 forward/cache, native loader,
+ANSWER trainer와 word guard에 연결했다. Base는 상수 Tensor이고 A/B만
+Vars/Adam을 갖는다. Delta는 원 base 한 벌을 참조하는 typed R3BIN이다.
+예비 독립 source 검토에서 지적한 공통 metadata 검증 누락을 보완했다.
+
+직접 scalar/cache 시험2/2, TINY process 시험1/1 PASS. 최초 process
+시험은 기존 EOS tensor fixture의 O=0 때문에 q/v 갱신이0인 것을
+발견해 assertion FAIL로 보존했다. 이후 해당 fixture의 종료/평가 재개
+시험과 random native의 비영 gradient·2 대1+1 새 process 비교를 분리했다.
+후자는 adapter/Adam/cursor/raw 동일, base 불변, ANSWER8 대4+4 gradient
+동등성을 확인했다. 실패 포함 현재 TINY optimizer10/generation108/
+teacher108이며 직접 수식 backward는 별도다. SMALL optimizer/generation/
+teacher0. 최종 source 동결과 실제 독립 A 전이므로 모델 품질 판정은 NOT_RUN.
+
+신규 증거: `artifacts/protected-adaptation-20260924-evidence/`,
+`artifacts/protected-adaptation-20260924-process-01/`(실패),
+`artifacts/protected-adaptation-20260924-process-02/`(통과).
+후속 source 계측 변경은 최종 A에서 검증한다. FP4는 별도 무학습
+storage/dequant/F32 reference이며 코드 PASS를 모델/S6 수용으로 바꾸지 않는다.
+
+독립 A의 동결 process 시험도1/1 PASS(exit0,31.74초), 준비 reader도
+exit0 PASS다. 누적 TINY optimizer18/generation180/teacher180을 실제
+ledger로 확인했다(남은14/12/12). 기존 native 저장 회귀3/3, FP4 codec1/1
+PASS도 이번 실행이다. production source digest는
+`fa0080d2abbc7376f89c0df73560b4522756e779366f3d10607f95000fe7b952`,
+동결 실행물 SHA256은
+`7d707564bbeb54fa8d77695e782633139740ba64534ee72661cd395c64c444fd`다.
+준비 study는 `artifacts/protected-adaptation-20260924-study-final/`이며
+preparation SHA256은 `266a47f994ee046f288518d092ae9f7d4af13ccd19738bac58e8dc67eed66ffc`.
+SMALL adapter59904개/weights239616B/Adam479232B, initial delta141811B.
+앞1024 tape의 전수 비용은 input1512064/target119808/padding138368,
+노출 V1024/VC0 512/VC1 512/bridge2048/word4096이다. 학습 전 새 owned
+roots1081파일/53,311,319 logical bytes(공유 symlink 제외)를 확인했다.
+변경된 Replica crate retained build outputs의 보수적 상한은67,335,036B.
+개별 cache 사전 크기 baseline이 없어 정확한 순증가는 UNKNOWN이며,
+이를 절감량으로 표시하지 않는다. 삭제0, 기존 전체 inventory0이다.
+
+
 ## 2026-09-24 QA 문자열 값 연구 — +128 보존 guard 종료, 재개 불가
 
 `c1f82a719dcd72ecca2e7b8024384562423f37c2`와 동결 실행물로 실제

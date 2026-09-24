@@ -12,12 +12,13 @@ use crate::{
     codec::{PublicationTiming, Reader, publish_new_measured, put_bytes, put_varint},
 };
 use candle_core::{Device, Tensor};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
-    path::Path,
+    path::{Path,PathBuf},
     time::Instant,
 };
 
@@ -27,6 +28,108 @@ const MAX_HEADER: usize = 2 * 1024 * 1024;
 const MAX_FILE: u64 = 192 * 1024 * 1024;
 const MAGIC: &[u8; 8] = b"R3MODEL\0";
 type TensorMap = BTreeMap<String, Tensor>;
+const DELTA_FORMAT: &str = "R3-QV-ADAPTER-F32-RESUME-v1";
+const MAX_DELTA:usize=4*1024*1024;
+#[derive(Clone,Debug,Serialize,Deserialize,PartialEq,Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterBase {
+    pub path:PathBuf,
+    pub physical:String,
+    pub content:String,
+    pub architecture:String,
+    pub tokenizer:String,
+    pub framing:[u8;32],
+    pub step:usize,
+}
+#[derive(Clone,Debug,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeltaTensor { name:String, shape:Vec<usize>, digest:String, bytes:crate::binary::Value }
+#[derive(Clone,Debug,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeltaRecord {
+    format:String, base:AdapterBase, descriptor:super::transformer::QvAdapter,
+    adapter_updates:usize, effective_step:usize, manifest:Manifest, tensors:Vec<DeltaTensor>,
+}
+fn delta_file(path:&Path)->Result<bool>{let mut magic=[0;8];File::open(path)?.read_exact(&mut magic)?;Ok(&magic==b"R3BIN\0\0\0")}
+fn delta_record(path:&Path)->Result<DeltaRecord>{
+    if path.with_extension("pending.r3b").exists(){return Err(bad("adapter publication pending"));}
+    Ok(crate::binary::from_slice(&super::read_bounded(path,MAX_DELTA)?)?)
+}
+pub fn bind_adapter_base(model:&mut Transformer,base:AdapterBase)->Result<()> {
+    if model.adapter().is_none()||model.base_content_id()?!=base.content||model.config.semantic_id()?!=base.architecture {
+        return Err(bad("adapter base tensor identity"));
+    }
+    model.adapter_base=Some(base);Ok(())
+}
+pub fn adapter_base(model:&Transformer)->Option<&AdapterBase>{model.adapter_base.as_ref()}
+fn decode_delta(record:&DeltaRecord,device:Device,resume:bool)->Result<Loaded>{
+    let b=&record.base;let m=&record.manifest;let s=m.training.as_ref().ok_or_else(||bad("adapter resume state required"))?;
+    if record.format!=DELTA_FORMAT||!b.path.is_absolute()||delta_file(&b.path)?
+        ||super::hash(&super::read_bounded(&b.path,MAX_FILE as usize)?)!=b.physical
+        ||record.effective_step!=s.step||record.adapter_updates!=s.step.checked_sub(b.step).ok_or_else(||bad("adapter clock"))?
+        ||s.sampler_state!=s.step as u64||s.config.weight_decay!=0.||s.config.lr.to_bits()!=3e-4f64.to_bits()||s.config.warmup!=0
+        ||s.config.first_target_weight!=1.||s.config.microbatch!=8||s.config.accumulation!=1
+        ||s.step>s.config.max_steps||s.consumed_tokens>s.config.max_tokens||s.target_tokens>s.consumed_tokens
+        ||s.parent_checkpoint_hash.as_deref()!=Some(b.physical.as_str())||s.config.budget_start_step!=b.step
+        ||s.resume_binding.as_ref().is_none_or(|v|v.family!=checkpoint::ANSWER_MEAN_FAMILY||v.normalizer!=2||v.execution!=1||v.framing!=b.framing) {
+        return Err(bad("adapter profile/base/clock/objective/optimizer contract"));
+    }
+    let mut l=load(&b.path,device.clone(),false)?;
+    if l.model.weights_content_id()?!=b.content||l.model.config.semantic_id()?!=b.architecture||l.tokenizer.id()!=b.tokenizer
+        ||l.manifest.framing()?.digest()!=b.framing||l.manifest.training.as_ref().map(|v|v.step)!=Some(b.step)
+        ||m.architecture!=l.model.config||m.tokenizer_sha256!=b.tokenizer||m.dtype!="F32"
+        ||m.trained_steps!=record.effective_step||m.initial_weight_hash!=l.manifest.initial_weight_hash {
+        return Err(bad("adapter original model/tokenizer/framing mismatch"));
+    }
+    // The common validator owns lineage, status, finite losses and optimizer
+    // metadata. Only the trainable tensor registry differs for a delta.
+    let mut common=m.clone();common.tensors=checkpoint::expected(m);
+    checkpoint::validate_metadata(&common,&l.tokenizer)?;
+    let shapes=record.descriptor.shapes(&m.architecture)?;let mut expected=BTreeMap::new();
+    for(n,d)in &shapes{for prefix in ["model.","adam.m.","adam.v."]{expected.insert(format!("{prefix}{n}"),d.clone());}}
+    if m.tensors!=expected||record.tensors.len()!=expected.len(){return Err(bad("adapter tensor registry/Adam count"));}
+    let(mut weights,mut optimizer)=(BTreeMap::new(),BTreeMap::new());let mut seen=std::collections::BTreeSet::new();
+    for t in &record.tensors {
+        let bytes=match &t.bytes{crate::binary::Value::Bytes(v)=>v,_=>return Err(bad("adapter payload is not raw bytes"))};
+        if !seen.insert(&t.name)||expected.get(&t.name)!=Some(&t.shape)||bytes.len()!=t.shape.iter().product::<usize>()*4||super::hash(bytes)!=t.digest {
+            return Err(bad("adapter tensor shape/length/hash"));
+        }
+        let values=bytes.chunks_exact(4).map(|b|f32::from_le_bytes(b.try_into().unwrap())).collect::<Vec<_>>();
+        if values.iter().any(|v|!v.is_finite())||record.adapter_updates==0&&t.name.starts_with("adam.")&&values.iter().any(|&v|v!=0.) {return Err(bad("adapter nonfinite/nonfresh moments"));}
+        let tensor=Tensor::from_vec(values,t.shape.clone(),&device)?;
+        if let Some(n)=t.name.strip_prefix("model."){weights.insert(n.to_owned(),tensor);}else if resume {optimizer.insert(t.name.clone(),tensor);}
+    }
+    l.model.install_adapter(record.descriptor.clone(),weights)?;bind_adapter_base(&mut l.model,b.clone())?;
+    if l.model.weights_content_id()?!=m.model_content_digest||l.model.weight_hash()?!=m.weights_sha256
+        ||m.weights_bytes!=shapes.values().map(|d|d.iter().product::<usize>()*4).sum::<usize>() {return Err(bad("combined adapter model identity"));}
+    l.manifest=m.clone();l.optimizer=optimizer;Ok(l)
+}
+fn save_delta(path:&Path,model:&Transformer,tok:&ByteBpe,mut m:Manifest,adam:&TensorMap)->Result<(Manifest,SaveStats)> {
+    let started=Instant::now();let base=model.adapter_base.clone().ok_or_else(||bad("adapter missing explicit base reference"))?;
+    let descriptor=model.adapter().cloned().ok_or_else(||bad("adapter missing descriptor"))?;
+    if model.base_content_id()?!=base.content||tok.id()!=base.tokenizer{return Err(bad("frozen base changed"));}
+    let s=m.training.as_ref().ok_or_else(||bad("adapter state absent"))?;let step=s.step;
+    let mut tensors=vec![];let mut registry=BTreeMap::new();
+    for(n,t)in model.vars.iter().map(|(n,v)|(format!("model.{n}"),v.as_detached_tensor())).chain(adam.iter().map(|(n,t)|(n.clone(),t.clone()))) {
+        let bytes=tensor_bytes(&t)?;registry.insert(n.clone(),t.dims().to_vec());
+        tensors.push(DeltaTensor{name:n,shape:t.dims().to_vec(),digest:super::hash(&bytes),bytes:crate::binary::Value::Bytes(bytes)});
+    }
+    m.architecture=model.config.clone();m.dtype="F32".into();m.tokenizer_sha256=tok.id();m.weights_sha256=model.weight_hash()?;
+    m.model_content_digest=model.weights_content_id()?;m.weights_bytes=model.vars.values().map(|v|v.elem_count()*4).sum();m.tensors=registry;m.trained_steps=step;
+    let record=DeltaRecord{format:DELTA_FORMAT.into(),adapter_updates:step.checked_sub(base.step).ok_or_else(||bad("adapter step before base"))?,effective_step:step,
+        base,descriptor,manifest:m.clone(),tensors};
+    let bytes=crate::binary::to_storage_vec(&record)?;
+    if bytes.len()>MAX_DELTA{return Err(bad("adapter byte cap"));}
+    let _:Loaded=decode_delta(&record,Device::Cpu,true)?;
+    // Reuse the confirmed-publication interlock and the native no-clobber/fsync
+    // publisher. A failed final sync leaves pending and is never loadable.
+    let pending=path.with_extension("pending.r3b");
+    crate::codec::publish_new(&pending,|f,_|{f.write_all(&crate::binary::to_vec(&crate::binary::record!({"destination":path,"content":super::hash(&bytes)}))?)?;Ok(())})?;
+    let(_,publication)=publish_new_measured(path,|f,_|{f.write_all(&bytes)?;f.seek(SeekFrom::Start(0))?;let mut read=vec![];f.read_to_end(&mut read)?;
+        let r:DeltaRecord=crate::binary::from_slice(&read)?;decode_delta(&r,Device::Cpu,true)?;Ok(())})?;
+    std::fs::remove_file(pending)?;
+    Ok((m,SaveStats{publication,total_ms:started.elapsed().as_secs_f64()*1000.,..Default::default()}))
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArtifactKind {
     Inference,
@@ -650,11 +753,13 @@ fn read_tensors(
     Ok((model, optimizer, stats))
 }
 pub fn metadata(path: &Path) -> Result<(Manifest, ByteBpe)> {
+    if delta_file(path)?{let l=decode_delta(&delta_record(path)?,Device::Cpu,false)?;return Ok((l.manifest,l.tokenizer));}
     let h = read_header(&mut File::open(path)?)?;
     Ok((h.manifest, h.tokenizer))
 }
 pub fn load_with_stats(path: &Path, device: Device, resume: bool) -> Result<(Loaded, LoadStats)> {
     let start = Instant::now();
+    if delta_file(path)?{let r=delta_record(path)?;let l=decode_delta(&r,device,resume)?;return Ok((l,LoadStats{ready_ms:start.elapsed().as_secs_f64()*1000.,header_bytes:std::fs::metadata(path)?.len(),..Default::default()}));}
     let mut file = File::open(path)?;
     let h = read_header(&mut file)?;
     let (weights, optimizer, mut stats) = read_tensors(&mut file, &h, resume, &device)?;
@@ -703,6 +808,7 @@ pub fn save_with_stats(
     mut manifest: Manifest,
     optimizer: &BTreeMap<String, Tensor>,
 ) -> Result<(Manifest, SaveStats)> {
+    if model.adapter().is_some(){return save_delta(path,model,tokenizer,manifest,optimizer);}
     let start = Instant::now();
     let mut stats = SaveStats::default();
     if let Some(s) = &manifest.training {

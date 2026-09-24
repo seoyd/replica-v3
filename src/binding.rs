@@ -951,7 +951,7 @@ fn work(p: &Plan) -> Result<(f64, usize, usize, u64, u64)> {
             "qa-review-old_qa", "qa-review-balanced",
             "qa-factor-value", "qa-factor-citation", "qa-factor-S1Q0", "qa-factor-S0Q1", "qa-factor-S1Q1",
             "bridge-review-normal", "bridge-review-errors", "bridge-qa-primary", "bridge-qa-transfer", "bridge-parent-parity",
-            "word-parent-parity", "word-parent-dev", "word-parent-renamed", "word-review",
+            "word-parent-parity", "word-parent-dev", "word-parent-renamed", "word-review", "adapter-zero-parity",
         ] {
             let study = &own(p).study;
             if study.join(format!("{name}-started.r3b")).exists() {
@@ -982,7 +982,9 @@ pub(in super::super) fn usage(p: &Plan) -> Result<(f64, usize, usize)> {
 }
 pub(in super::super) fn remaining(p: &Plan, target: bool) -> Result<u64> {
     let w = work(p)?;
-    let (cap, n) = if citation::word::is(p) {
+    let (cap, n) = if citation::adapt::is(p) {
+        if target {(400_000u64,w.4)}else{(4_000_000u64,w.3)}
+    } else if citation::word::is(p) {
         if target {(1_000_000u64,w.4)}else{(8_000_000u64,w.3)}
     } else if citation::instruction_bridge(p) {
         if target {(300_000u64,w.4)}else{(4_000_000u64,w.3)}
@@ -1758,7 +1760,11 @@ fn orbit_report_panels(root:&Path,p:&Plan,last:usize) -> Result<()> {
 // One bounded observation path for swap/parity/confirmation. Start precedes
 // model loading; every returned call is durable, and a missing final is UNKNOWN.
 fn orbit_observe(root:&Path,name:&str,path:&Path,es:&[Episode],identity:&binary::Value,
-    previous:Option<&[binary::Value]>,mut control:recovery::RunControl) -> Result<Vec<binary::Value>> {
+    previous:Option<&[binary::Value]>,control:recovery::RunControl) -> Result<Vec<binary::Value>> {
+    orbit_observe_loaded(root,name,path,es,identity,previous,control,||checkpoint::load(path,Device::Cpu,false))
+}
+fn orbit_observe_loaded(root:&Path,name:&str,path:&Path,es:&[Episode],identity:&binary::Value,
+    previous:Option<&[binary::Value]>,mut control:recovery::RunControl,load:impl FnOnce()->Result<checkpoint::Loaded>) -> Result<Vec<binary::Value>> {
     let binding=binary::record!({"identity":identity,"checkpoint":file_hash(path)?,"cases":digest(&es)?,"source":source_digest()?,
         "binary":file_hash(&std::env::current_exe()?)?,"decoding":"normal-greedy-strict-utf8-eos"});
     write(&root.join(format!("{name}-started.r3b")),&binding)?;
@@ -1766,7 +1772,7 @@ fn orbit_observe(root:&Path,name:&str,path:&Path,es:&[Episode],identity:&binary:
     let mut rows=vec![];let mut matched=0;
     let result=(||->Result<()> {
         let mut f=std::fs::OpenOptions::new().create_new(true).write(true).open(&raw)?;
-        let l=checkpoint::load(path,Device::Cpu,false)?;
+        let l=load()?;
         append_row(&mut f,&binding)?;
         for (i,e) in es.iter().enumerate() {
             control.check("orbit_next_generation")?;

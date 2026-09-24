@@ -3,6 +3,10 @@
 use super::*;
 #[path = "word_value.rs"]
 pub(in super::super::super) mod word;
+#[path = "protected_adaptation.rs"]
+pub(in super::super::super) mod adapt;
+#[path = "precision_probe.rs"]
+pub(in super::super::super) mod fp4;
 
 const DATA: &str = "value-citation-bridge-v1";
 const CONTRACT: &str = "R3-VALUE-CITATION-BRIDGE-1.0";
@@ -36,6 +40,7 @@ pub(in super::super::super) fn fidelity(p:&Plan)->bool {p.identifiable.as_ref().
 fn continuation(p:&Plan)->bool {precision(p) || fidelity(p) || p.identifiable.as_ref().is_some_and(|o|o.dataset==CONT_DATA)}
 fn citation_offset(p:&Plan,step:usize)->usize {step-p.origin_step()+if continuation(p)&&!fidelity(p)&&!precision(p)&&!p.tiny {32}else{0}}
 fn full_evaluation(p:&Plan,step:usize)->bool {
+    if adapt::is(p) {return !p.tiny && step==p.config.max_steps;}
     if word::is(p) {return !p.tiny&&[1536,3072].contains(&(step-p.origin_step()));}
     if instruction_bridge(p) {return !p.tiny&&[768,1536].contains(&(step-p.origin_step()));}
     if retained_qa(p) { return !p.tiny && [2048,4096].contains(&(step-p.origin_step())); }
@@ -73,6 +78,11 @@ pub(in super::super::super) fn is(p: &Plan) -> bool {
     is_mean(p) || p.identifiable.as_ref().is_some_and(|v| v.dataset == DATA)
 }
 pub(super) fn evaluation(p: &Plan) -> EvaluationPolicy {
+    if adapt::is(p) {
+        let mut e=super::evaluation(p.tiny);e.screen_steps.clear();
+        e.train_steps=if p.tiny {vec![p.origin_step()+2]}else{[64,128,256,512,1024].map(|n|p.origin_step()+n).to_vec()};
+        e.generation_limit=if p.tiny{192}else{8192};e.teacher_limit=e.generation_limit;e.active_seconds=7200;return e;
+    }
     if word::is(p) {
         let mut e=super::evaluation(p.tiny);e.screen_steps.clear();
         e.train_steps=if p.tiny{vec![p.origin_step()+2]}else{[128,512,1536,3072].map(|n|p.origin_step()+n).to_vec()};
@@ -125,6 +135,9 @@ pub(in super::super::super) fn endpoint(p: &Plan, step: usize, pending: bool) ->
     if retained_qa(p) {
         return [1,128,512,1024,1536,2048,2560,3072,3584,4096].into_iter()
             .map(|n|p.origin_step()+n).find(|&n|n>step).ok_or_else(||bad("retained QA budget closed"));
+    }
+    if adapt::is(p) {
+        return [1,64,128,256,512,1024].into_iter().map(|n|p.origin_step()+n).find(|&n|n>step).ok_or_else(||bad("adapter update budget closed"));
     }
     if word::is(p) {
         return [1,128,512,1024,1536,2048,2560,3072].into_iter().map(|n|p.origin_step()+n).find(|&n|n>step).ok_or_else(||bad("word update budget closed"));
@@ -654,6 +667,7 @@ fn prepare_inner(
     Ok(())
 }
 pub(super) fn verify_plan(root: &Path, p: &Plan) -> Result<()> {
+    if adapt::is(p) {return adapt::verify(root,p);}
     if word::is(p) {return word::verify(root,p);}
     if instruction_bridge(p) {return bridge_verify_plan(root,p);}
     if retained_qa(p) {return qa_verify_plan(root,p);}
@@ -1493,6 +1507,7 @@ fn observed(
     Ok(rows[1..].to_vec())
 }
 pub(super) fn authorize(root: &Path, p: &Plan) -> Result<()> {
+    if adapt::is(p) {return adapt::authorize(root,p);}
     if word::is(p) {return word::authorize(root,p);}
     if instruction_bridge(p) {return bridge_authorize(root,p);}
     if retained_qa(p) {return qa_authorize(root,p);}
@@ -1784,7 +1799,7 @@ pub(in super::super::super) fn seal(study: &Path, private: &Path) -> Result<()> 
 }
 fn comparison(study: &Path, p: &Plan, end: &Segment, d: &binary::Value) -> Result<binary::Value> {
     let endpoint = binary::record!({"policy":digest(p)?,"checkpoint":end.checkpoint_hash,"step":end.step,"decision":d});
-    if word::is(p) {return Ok(binary::record!({"contract":word::CONTRACT,"source":p.source,"preparation":file_hash(&study.join("preparation.r3b"))?,"endpoints":BTreeMap::from([(own(p).arm.as_str(),endpoint)]),"selected":if d["eligible"]==true{Some(own(p).arm.as_str())}else{None},"goal1_ready":false}));}
+    if word::is(p) {return Ok(binary::record!({"contract":if adapt::is(p){adapt::CONTRACT}else{word::CONTRACT},"source":p.source,"preparation":file_hash(&study.join("preparation.r3b"))?,"endpoints":BTreeMap::from([(own(p).arm.as_str(),endpoint)]),"selected":if d["eligible"]==true{Some(own(p).arm.as_str())}else{None},"goal1_ready":false}));}
     Ok(
         binary::record!({"contract":if bridge_completion(p){BRIDGE_COMPLETION_CONTRACT}else if instruction_bridge(p){BRIDGE_CONTRACT}else if retained_qa(p){QA_CONTRACT}else if precision(p){PREC_CONTRACT}else if fidelity(p){FID_CONTRACT}else if continuation(p){CONT_CONTRACT}else if is_mean(p){MEAN_CONTRACT}else{CONTRACT},"source":p.source,"preparation":file_hash(&study.join("preparation.r3b"))?,
         "endpoints":BTreeMap::from([(own(p).arm.as_str(),endpoint)]),"selected":if d["eligible"]==true {Some(own(p).arm.as_str())}else{None},"goal1_ready":false}),

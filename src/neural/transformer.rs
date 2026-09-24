@@ -318,6 +318,37 @@ pub struct Transformer {
     identity: String,
     tokenizer_identity: String,
     kernel: Kernel,
+    frozen: Option<BTreeMap<String, Tensor>>,
+    adapter: Option<QvAdapter>,
+    pub(crate) adapter_base: Option<super::artifact::AdapterBase>,
+}
+/// Explicit execution profile; no task-dependent selection or dropout.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct QvAdapter {
+    pub profile: String,
+    pub rank: usize,
+    pub alpha_bits: u64,
+    pub seed: u64,
+}
+impl QvAdapter {
+    pub fn registered(seed: u64) -> Self {
+        Self { profile: "R3-QV-LORA-R8-A8-F32-v1".into(), rank: 8, alpha_bits: 8f64.to_bits(), seed }
+    }
+    pub fn shapes(&self, config: &Config) -> Result<BTreeMap<String, Vec<usize>>> {
+        config.validate()?;
+        if self.profile != "R3-QV-LORA-R8-A8-F32-v1" || self.rank != 8 || self.alpha_bits != 8f64.to_bits() {
+            return Err(Error::Invalid("unsupported q/v adapter profile/rank/scaling".into()));
+        }
+        let mut shapes = BTreeMap::new();
+        for i in 0..config.layers {
+            for (name, out) in [("q",config.heads*config.head_dim),("v",config.kv_heads*config.head_dim)] {
+                shapes.insert(format!("adapter.layer.{i}.{name}.a"),vec![self.rank,config.hidden]);
+                shapes.insert(format!("adapter.layer.{i}.{name}.b"),vec![out,self.rank]);
+            }
+        }
+        Ok(shapes)
+    }
 }
 pub fn attention_mask(
     query: std::ops::Range<usize>,
@@ -488,6 +519,9 @@ impl Transformer {
             identity: String::new(),
             tokenizer_identity: String::new(),
             kernel: Kernel::Reference,
+            frozen: None,
+            adapter: None,
+            adapter_base: None,
         };
         model.refresh_identity()?;
         Ok(model)
@@ -528,6 +562,9 @@ impl Transformer {
             identity: String::new(),
             tokenizer_identity: String::new(),
             kernel: Kernel::Reference,
+            frozen: None,
+            adapter: None,
+            adapter_base: None,
         };
         model.refresh_identity()?;
         Ok(model)
@@ -536,7 +573,7 @@ impl Transformer {
         use sha2::{Digest, Sha256};
         let mut digest = Sha256::new();
         digest.update(self.config.id()?);
-        for (name, var) in &self.vars {
+        for (name, var) in self.content_tensors() {
             digest.update(name.as_bytes());
             for x in var.flatten_all()?.to_vec1::<f32>()? {
                 digest.update(x.to_le_bytes());
@@ -567,7 +604,7 @@ impl Transformer {
     pub fn weights_content_id(&self) -> Result<String> {
         use sha2::{Digest, Sha256};
         let mut digest = Sha256::new();
-        for (name, var) in &self.vars {
+        for (name, var) in self.content_tensors() {
             digest.update((name.len() as u64).to_le_bytes());
             digest.update(name.as_bytes());
             digest.update((var.rank() as u64).to_le_bytes());
@@ -579,6 +616,61 @@ impl Transformer {
             }
         }
         Ok(format!("{:x}", digest.finalize()))
+    }
+    fn content_tensors(&self) -> BTreeMap<&str, &Tensor> {
+        let mut out: BTreeMap<_,_> = self.vars.iter().map(|(n,v)|(n.as_str(),v.as_tensor())).collect();
+        if let Some(base)=&self.frozen { out.extend(base.iter().map(|(n,t)|(n.as_str(),t))); }
+        out
+    }
+    pub fn adapter(&self) -> Option<&QvAdapter> { self.adapter.as_ref() }
+    pub fn base_tensors(&self) -> BTreeMap<String,Tensor> {
+        self.frozen.clone().unwrap_or_else(||self.vars.iter().map(|(n,v)|(n.clone(),v.as_detached_tensor())).collect())
+    }
+    pub fn base_content_id(&self)->Result<String> {
+        if let Some(base)=&self.frozen {
+            use sha2::{Digest,Sha256};let mut h=Sha256::new();
+            for(name,t)in base {h.update((name.len() as u64).to_le_bytes());h.update(name.as_bytes());h.update((t.rank() as u64).to_le_bytes());
+                for &n in t.dims(){h.update((n as u64).to_le_bytes());}for x in t.flatten_all()?.to_vec1::<f32>()?{h.update(x.to_le_bytes());}}
+            Ok(format!("{:x}",h.finalize()))
+        }else{self.weights_content_id()}
+    }
+    fn weight(&self,name:&str)->&Tensor {
+        match &self.frozen {Some(base)=>&base[name],None=>self.vars[name].as_tensor()}
+    }
+    pub fn initialize_adapter(&mut self, descriptor: QvAdapter) -> Result<()> {
+        let mut rng=Rng::new(descriptor.seed);let mut tensors=BTreeMap::new();
+        for(name,shape)in descriptor.shapes(&self.config)? {
+            let n=shape.iter().product();let scale=1f32/(self.config.hidden as f32).sqrt();
+            let values=if name.ends_with(".a"){(0..n).map(|_|rng.normal()*scale).collect()}else{vec![0f32;n]};
+            tensors.insert(name,Tensor::from_vec(values,shape,&self.device)?);
+        }
+        self.install_adapter(descriptor,tensors)
+    }
+    pub fn install_adapter(&mut self,descriptor:QvAdapter,tensors:BTreeMap<String,Tensor>)->Result<()> {
+        if self.adapter.is_some()||self.frozen.is_some(){return Err(Error::Invalid("adapter already installed".into()));}
+        let shapes=descriptor.shapes(&self.config)?;
+        if tensors.len()!=shapes.len(){return Err(Error::Corrupt("missing/extra adapter tensor".into()));}
+        let mut vars=BTreeMap::new();
+        for(name,shape)in shapes {
+            let t=tensors.get(&name).ok_or_else(||Error::Corrupt(format!("missing adapter {name}")))?;
+            if t.dims()!=shape||t.dtype()!=DType::F32||!t.device().same_device(&self.device)
+                ||t.flatten_all()?.to_vec1::<f32>()?.iter().any(|v|!v.is_finite()) {
+                return Err(Error::Corrupt(format!("adapter shape/dtype/nonfinite {name}")));
+            }
+            vars.insert(name,Var::from_tensor(t)?);
+        }
+        // Drop all base Vars: autograd retains activation flow through constant
+        // weights, but no base leaf gradients or optimizer slots can be allocated.
+        self.frozen=Some(self.base_tensors());self.vars=vars;self.adapter=Some(descriptor);
+        self.refresh_identity()
+    }
+    fn projection(&self,x:&Tensor,name:&str,kernel:Kernel,profile:&mut Option<&mut ForwardTimings>)->Result<Tensor> {
+        let base=measured_linear(x,self.weight(name),kernel,profile)?;
+        if let Some(a)=&self.adapter {
+            let down=measured_linear(x,self.vars[&format!("adapter.{name}.a")].as_tensor(),kernel,profile)?;
+            let up=measured_linear(&down,self.vars[&format!("adapter.{name}.b")].as_tensor(),kernel,profile)?;
+            Ok((base+(up*(f64::from_bits(a.alpha_bits)/a.rank as f64))?)?)
+        }else{Ok(base)}
     }
     pub fn bind_tokenizer(&mut self, id: &str) -> Result<()> {
         self.tokenizer_identity = id.into();
@@ -658,20 +750,20 @@ impl Transformer {
         {
             return Err(Error::Invalid("native token ID".into()));
         }
-        let embed = self.vars["embedding"].as_tensor();
+        let embed = self.weight("embedding");
         let mut x = embed
             .index_select(&ids.flatten_all()?, 0)?
             .reshape((batch, len, c.hidden))?;
         for i in 0..c.layers {
-            let w = |name: &str| self.vars[&format!("layer.{i}.{name}")].as_tensor();
+            let w = |name: &str| self.weight(&format!("layer.{i}.{name}"));
             let norm = rms_norm(&x, w("attn_norm"), c.eps)?;
-            let q = measured_linear(&norm, w("q"), kernel, &mut profile)?
+            let q = self.projection(&norm, &format!("layer.{i}.q"), kernel, &mut profile)?
                 .reshape((batch, len, c.heads, c.head_dim))?
                 .transpose(1, 2)?;
             let k = measured_linear(&norm, w("k"), kernel, &mut profile)?
                 .reshape((batch, len, c.kv_heads, c.head_dim))?
                 .transpose(1, 2)?;
-            let v = measured_linear(&norm, w("v"), kernel, &mut profile)?
+            let v = self.projection(&norm, &format!("layer.{i}.v"), kernel, &mut profile)?
                 .reshape((batch, len, c.kv_heads, c.head_dim))?
                 .transpose(1, 2)?;
             let q = rotary(&rms_norm(&q, w("q_norm"), c.eps)?, position, c.rope_theta)?;
@@ -727,7 +819,7 @@ impl Transformer {
             cache.position += len;
         }
         Ok(measured_linear(
-            &rms_norm(&x, self.vars["final_norm"].as_tensor(), c.eps)?,
+            &rms_norm(&x, self.weight("final_norm"), c.eps)?,
             embed,
             kernel,
             &mut profile,
@@ -876,4 +968,53 @@ pub fn masked_loss(logits: &Tensor, targets: &Tensor, mask: &Tensor) -> Result<(
         .gather(&targets.reshape((b * t, 1))?, 1)?
         .reshape((b, t))?;
     Ok((((selected * mask)?.sum_all()? / -(count as f64))?, count))
+}
+
+#[cfg(test)]
+mod adapter_tests {
+    use super::*;
+    #[test]
+    fn adapter_scalar_gradient_and_frozen_registry()->Result<()> {
+        let mut m=Transformer::init(Config::tiny(264),71,Device::Cpu)?;
+        let before=m.weights_content_id()?;m.initialize_adapter(QvAdapter::registered(20260924))?;
+        assert_eq!(m.base_content_id()?,before);
+        assert!(m.frozen.as_ref().unwrap().values().all(|t|!t.is_variable()));
+        assert_eq!(m.vars.len(),8);
+        assert_eq!(QvAdapter::registered(1).shapes(&Config::small(562))?.values().map(|s|s.iter().product::<usize>()).sum::<usize>(),59904);
+        for rows in [1usize,5] {for name in ["layer.0.q","layer.0.v"] {
+            let input:Vec<f32>=(0..rows*32).map(|n|(n as f32-25.)/100.).collect();
+            let x=Tensor::from_vec(input.clone(),(1,rows,32),&Device::Cpu)?;
+            let a=format!("adapter.{name}.a");let b=format!("adapter.{name}.b");let out=m.vars[&b].dim(0)?;
+            m.vars[&b].set(&Tensor::zeros((out,8),DType::F32,&Device::Cpu)?)?;
+            let y=m.projection(&x,name,Kernel::Reference,&mut None)?;let base=linear(&x,m.weight(name))?;
+            assert_eq!(y.flatten_all()?.to_vec1::<f32>()?,base.flatten_all()?.to_vec1::<f32>()?);
+            let gradients=y.sum_all()?.backward()?;let ga=gradients.get(&m.vars[&a]).unwrap().flatten_all()?.to_vec1::<f32>()?;
+            assert!(ga.iter().all(|&x|x==0.));let gb=gradients.get(&m.vars[&b]).unwrap().to_vec2::<f32>()?;
+            let av=m.vars[&a].to_vec2::<f32>()?;
+            for row in &gb{for k in 0..8{let expected=(0..rows).map(|n|(0..32).map(|i|input[n*32+i]as f64*av[k][i]as f64).sum::<f64>()).sum::<f64>();assert!((row[k]as f64-expected).abs()<2e-5);}}
+            assert!(gb.iter().flatten().any(|&v|v.abs()>1e-5));
+            let bv:Vec<f32>=(0..out*8).map(|i|((i%7)as f32-3.)/100.).collect();m.vars[&b].set(&Tensor::from_vec(bv.clone(),(out,8),&Device::Cpu)?)?;
+            let y=m.projection(&x,name,Kernel::Reference,&mut None)?;let result=y.flatten_all()?.to_vec1::<f32>()?;let base=base.flatten_all()?.to_vec1::<f32>()?;
+            for n in 0..rows {for o in 0..out {let delta=(0..8).map(|k|bv[o*8+k]as f64*(0..32).map(|i|input[n*32+i]as f64*av[k][i]as f64).sum::<f64>()).sum::<f64>();assert!((result[n*out+o]as f64-base[n*out+o]as f64-delta).abs()<2e-5);}}
+            let g=y.sum_all()?.backward()?;let ga=g.get(&m.vars[&a]).unwrap().to_vec2::<f32>()?;
+            for k in 0..8{for i in 0..32{let expected=(0..out).map(|o|bv[o*8+k]as f64).sum::<f64>()*(0..rows).map(|n|input[n*32+i]as f64).sum::<f64>();assert!((ga[k][i]as f64-expected).abs()<2e-5);}}
+            assert!(ga.iter().flatten().any(|&v|v.abs()>1e-5));
+        }}
+        assert_eq!(m.base_content_id()?,before);println!("ADAPTER scalar q/v batch1,5 forward/gradient PASS; synthetic_backward8 native_generation0 optimizer0");Ok(())
+    }
+    #[test]
+    fn adapter_prefill_cached_identity_and_zero_parity()->Result<()> {
+        let mut m=Transformer::init(Config::tiny(264),72,Device::Cpu)?;let ids=Tensor::from_vec(vec![10u32,11,12,13,14,15],(1,6),&Device::Cpu)?;
+        let plain=m.forward(&ids,None)?.flatten_all()?.to_vec1::<f32>()?;let mut stale=m.cache("scope");
+        m.initialize_adapter(QvAdapter::registered(20260924))?;
+        assert!(m.forward_cached(&ids,&mut stale,"scope").is_err());
+        assert_eq!(plain,m.forward(&ids,None)?.flatten_all()?.to_vec1::<f32>()?);
+        for(n,v)in &m.vars {if n.ends_with(".b"){v.set(&Tensor::full(0.005f32,v.shape(),&m.device)?)?;}}
+        m.refresh_identity()?;let full=m.forward(&ids,None)?;let mut cache=m.cache("scope");
+        for n in 0..6 {let cached=m.forward_cached(&ids.narrow(1,n,1)?,&mut cache,"scope")?;
+            for(a,b)in cached.flatten_all()?.to_vec1::<f32>()?.iter().zip(full.narrow(1,n,1)?.flatten_all()?.to_vec1::<f32>()?){assert!((*a-b).abs()<2e-5);}}
+        assert!(m.install_adapter(QvAdapter::registered(2),BTreeMap::new()).is_err());
+        let mut bad=QvAdapter::registered(1);bad.rank=4;assert!(bad.shapes(&m.config).is_err());
+        println!("ADAPTER native full forwards3 cached forwards6; normal generation0 optimizer0; stale cache rejected");Ok(())
+    }
 }
