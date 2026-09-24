@@ -860,8 +860,21 @@ impl Transformer {
         timeout_ms: u64,
         cancel: &AtomicBool,
         scope: &str,
-        mut observe: impl FnMut(u32),
+        observe: impl FnMut(u32),
     ) -> Result<Generated> {
+        self.generate_inner(prompt,max_new,timeout_ms,cancel,scope,observe,false)
+    }
+    /// Same decoder with explicit synchronization only for bounded measurements.
+    #[allow(clippy::too_many_arguments)]
+    pub fn generate_profiled(
+        &self,prompt:&[u32],max_new:usize,timeout_ms:u64,cancel:&AtomicBool,scope:&str,
+        observe:impl FnMut(u32),
+    )->Result<Generated>{self.generate_inner(prompt,max_new,timeout_ms,cancel,scope,observe,true)}
+    #[allow(clippy::too_many_arguments)]
+    fn generate_inner(
+        &self,prompt:&[u32],max_new:usize,timeout_ms:u64,cancel:&AtomicBool,scope:&str,
+        mut observe:impl FnMut(u32),measured:bool,
+    )->Result<Generated>{
         if prompt.is_empty()
             || max_new == 0
             || max_new > 512
@@ -905,6 +918,8 @@ impl Transformer {
             logits = Some(self.forward_cached(&input, &mut cache, scope)?);
         }
         let mut logits = logits.expect("nonempty prompt");
+        if measured {self.device.synchronize()?;}
+        let prefill_ms=start.elapsed().as_millis()as u64;let decode_start=Instant::now();
         let mut tokens = Vec::new();
         let mut first_token_ms = None;
         let mut finish = "length";
@@ -938,7 +953,9 @@ impl Transformer {
                 )?;
             }
         }
+        if measured {self.device.synchronize()?;}
         Ok(Generated {
+            synchronized_phases_ms:measured.then(||(prefill_ms,decode_start.elapsed().as_millis()as u64)),
             tokens,
             generated,
             finish: finish.into(),
@@ -952,6 +969,8 @@ impl Transformer {
 }
 #[derive(Debug, Serialize)]
 pub struct Generated {
+    #[serde(skip_serializing_if="Option::is_none")]
+    pub synchronized_phases_ms: Option<(u64,u64)>,
     pub tokens: Vec<u32>,
     pub generated: usize,
     pub finish: String,

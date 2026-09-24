@@ -78,6 +78,24 @@ pub(super) struct RunControl {
     hook: Option<Box<dyn FnMut(&str, &Arc<AtomicBool>)>>,
 }
 impl RunControl {
+    pub(super) fn cancellation(&self) -> Arc<AtomicBool> { self.cancel.clone() }
+    pub(super) fn deadline(&self) -> Instant { self.deadline }
+    pub(super) fn restrict_seconds(&mut self, seconds:f64) -> Result<()> {
+        if !seconds.is_finite() || seconds<=0. { return Err(Error::Invalid("active time budget exhausted".into())); }
+        self.deadline=self.deadline.min(self.start+Duration::from_secs_f64(seconds));Ok(())
+    }
+    pub(super) fn begin_external_generation(&mut self) -> Result<()> {
+        self.effective_timeout(u64::MAX)?;
+        self.generation_calls+=1;self.attempted_case_count+=1;Ok(())
+    }
+    pub(super) fn returned_external_generation(&mut self) { self.completed_generation_count+=1; }
+    /// Caller must first verify all work and the durable endpoint. This seals
+    /// command accounting without converting a pure time stop into work failure.
+    pub(super) fn seal_completed_no_call(&mut self) -> Result<()> {
+        let _=self.check("completed_no_call");
+        self.terminal=true;
+        if self.observed.iter().all(|s|*s==StopReason::TimeBudget) {Ok(())} else {self.stop_result()}
+    }
     #[cfg(feature="test-support")]
     pub(super) fn fixture_deadline(&mut self){self.deadline=Instant::now();}
     #[cfg(feature = "test-support")]
@@ -1148,6 +1166,12 @@ pub(super) fn observe_generation(
     control: &mut RunControl,
     automatic_teacher: bool,
 ) -> ObservedCall<Value> {
+    observe_generation_mode(loaded,e,request,control,automatic_teacher,false)
+}
+pub(super) fn observe_generation_profiled(loaded:&Loaded,e:&Episode,request:&ModelRequest,control:&mut RunControl)->ObservedCall<Value> {
+    observe_generation_mode(loaded,e,request,control,false,true)
+}
+fn observe_generation_mode(loaded:&Loaded,e:&Episode,request:&ModelRequest,control:&mut RunControl,automatic_teacher:bool,measured:bool)->ObservedCall<Value> {
     let mut entered = false;
     let mut row = record!({"id":e.id,"scene":scene(e),"category":e.category,"family":e.family,"question":e.request.input,"generated_question":request.input,
         "evidence":e.request.evidence,"generated_evidence":request.evidence,"expected":e.answer,"exact_match":false,"actual":null,"error":null,"generation_started":false,"generation_completed":false,"interruption":null});
@@ -1178,13 +1202,7 @@ pub(super) fn observe_generation(
         if let Some(hook) = &mut control.hook {
             hook("native_generation_entered", &cancel);
         }
-        let result = loaded.model.generate_observed(
-            &prompt.token_ids,
-            request.limits.max_tokens as usize,
-            effective_timeout,
-            &cancel,
-            &e.id,
-            |id| {
+        let observe = |id| {
                 raw.push(id);
                 #[cfg(feature = "test-support")]
                 if loaded.model.config.hidden == 32
@@ -1197,8 +1215,12 @@ pub(super) fn observe_generation(
                 if let Some(hook) = &mut control.hook {
                     hook("token_generated", &cancel);
                 }
-            },
-        );
+            };
+        let result = if measured {
+            loaded.model.generate_profiled(&prompt.token_ids,request.limits.max_tokens as usize,effective_timeout,&cancel,&e.id,observe)
+        }else{
+            loaded.model.generate_observed(&prompt.token_ids,request.limits.max_tokens as usize,effective_timeout,&cancel,&e.id,observe)
+        };
         if let Err(error) = &result {
             if matches!(error, Error::Cancelled) {
                 control.observe(StopReason::Cancelled);

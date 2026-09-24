@@ -5,16 +5,28 @@
 Actual Metal creation is mandatory; unavailability fails before model load.
 Runtime device naming is distinct from unchanged R3MODEL content/semantic IDs.
 Cache binds its Device, CPU-only decode GEMV is refused, and publication waits
-for device synchronization. This connection is experimental, not runtime acceptance.
-The direct TINY gradient gate failed, independently reproduced as middle-axis
-sum error in Candle0.11.0 Metal. Shared Adam therefore rejects Metal before
-weight/moment mutation; device-bound training/restart and SMALL quality/speed
-validation are not implemented/accepted. See the current status for exact scope.
+for device synchronization. The original direct TINY gradient failure was
+independently traced to middle-axis Sum in Candle0.11.0 Metal. That failure and
+its frozen executable remain preserved. The vendored0.11.0 Rust dispatch patch
+now sends F32 strided Sum through a GPU physical U||R copy and the existing
+contiguous suffix reducer. It replaces the unsafe dispatch path; it does not
+claim to repair the original strided shader. Other devices/dtypes/reductions
+and model equations are unchanged.
+
+Independent Runtime A accepted the tested primitive/VJP/TINY update boundary.
+Shared generic Adam still rejects Metal before mutation. Only the registered
+F32 validation profile admits the fixed CPU16/Metal16/Metal1+15 workload, binding
+parent, objective, data/tape, constant LR, patch/lock/binary and actual device/OS.
+Its policy digest is carried in the existing native ResumeBinding; a moved native
+cannot silently resume through the default objective or a different profile.
+Runtime profile is separate from legacy model/tokenizer/semantic identities.
+See [current execution evidence](EXPERIMENT_STATUS.md) and the independent runtime
+reports for exact tested scope; broad QA/Goal1 acceptance is not implied.
 
 |Precision|Available source capability|Current evidence/limit|
 |---|---|---|
 |F32 CPU|Native tensors, norms/loss/Adam and Accelerate|Existing accepted reference; unchanged default|
-|F32 Metal|Candle0.11.0 forward/backward kernels, actual M4 Device|TINY forward/CE pass; gradient fails; optimizer admission closed|
+|F32 Metal|Patched Candle0.11.0, actual M4 Device|Runtime A numerical PASS; protected output and bounded48-update/restart execution recorded separately; generic optimizer remains closed|
 |F16|Metal kernel dtype branches exist|SOURCE_READ only; no reduced-precision model/update tested|
 |BF16|Candle Device::supports_bf16 returns true for Metal; dtype branches exist|Capability flag is not full operator/backward acceptance; NOT_RUN|
 

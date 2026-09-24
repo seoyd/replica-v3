@@ -92,8 +92,45 @@ impl Backend {
         } else { Err(Error::Model("BACKEND_MISMATCH; CPU fallback forbidden".into())) }
     }
     pub fn runtime_revision(self) -> String {
+        if self == Self::Metal0 {
+            return format!("replica-native-trpp-v1;candle-0.11.0;Metal:0/F32;{};lock={};greedy;native-role-bytes-v1",METAL_SUM_PATCH,hash(include_bytes!("../Cargo.lock")));
+        }
         format!("replica-native-trpp-v1;candle-0.11.0;{};greedy;native-role-bytes-v1",
             match self { Self::Cpu => cpu_backend(), Self::Metal0 => "Metal:0/F32" })
+    }
+}
+
+pub const METAL_SUM_PATCH: &str = "metal-f32-sum-contiguous-v1";
+/// Execution provenance only. Never enters architecture, tokenizer or weight identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeProfile {
+    pub backend: Backend,
+    pub actual_device: String,
+    pub dtype: String,
+    pub accumulator: String,
+    pub patch: String,
+    pub patch_source: String,
+    pub lock: String,
+    pub binary: String,
+    pub os_build: String,
+    pub fast_math: String,
+}
+impl RuntimeProfile {
+    pub fn capture(backend:Backend,device:&candle_core::Device)->Result<Self> {
+        backend.verify(device)?;
+        let os=std::process::Command::new("sw_vers").output()?;
+        if !os.status.success(){return Err(Error::Model("runtime OS identity unavailable".into()));}
+        Ok(Self {backend,actual_device:format!("{:?}",device.location()),dtype:"F32".into(),
+            accumulator:"F32;existing-Candle-kernels".into(),patch:METAL_SUM_PATCH.into(),
+            patch_source:hash(include_bytes!("../vendor/candle-core-0.11.0/src/metal_backend/mod.rs")),
+            lock:hash(include_bytes!("../Cargo.lock")),binary:hash(&std::fs::read(std::env::current_exe()?)?),
+            os_build:String::from_utf8(os.stdout).map_err(|_|Error::Model("runtime OS identity UTF8".into()))?,fast_math:"UNKNOWN".into()})
+    }
+    pub fn verify(&self,device:&candle_core::Device)->Result<()> {
+        if self != &Self::capture(self.backend,device)? {
+            return Err(Error::Invalid("RUNTIME_PROFILE_MISMATCH; optimizer_calls=0".into()));
+        }Ok(())
     }
 }
 

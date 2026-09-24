@@ -17,8 +17,12 @@ pub(super) fn is_binding_expansion(p:&Plan)->bool {
 const SYSTEM: &str = "제공된 기록과 질문만으로 답하세요. 요구한 원문 또는 값을 쓰고 근거를 [event:번호]로 인용하세요. 근거가 없거나 모호하면 구별해서 유보하세요. 순서만으로 원인을 단정하지 마세요.";
 #[path = "identifiable.rs"]
 mod identifiable;
+#[path = "metal_runtime.rs"]
+mod metal_runtime;
 #[derive(Subcommand)]
 pub enum Command {
+    /// Bounded, explicitly registered backend validation; no quality learning.
+    MetalRuntime { #[command(subcommand)] action: metal_runtime::Action },
     /// Same sealed citation data/tape, TOKEN reference and answer-mean CE fork.
     AnswerMeanPrepare { #[arg(long)] previous: PathBuf, #[arg(long)] output: PathBuf },
     CitationContinuePrepare { #[arg(long)] previous: PathBuf, #[arg(long)] output: PathBuf },
@@ -1767,6 +1771,7 @@ fn source_digest() -> Result<String> {
 }
 pub fn execute(command: Command) -> Result<()> {
     match command {
+        Command::MetalRuntime {action} => metal_runtime::run(action),
         Command::AnswerMeanPrepare { previous,output } => identifiable::binding::citation::mean_prepare(&previous,&output,false),
         Command::CitationContinuePrepare { previous,output } => identifiable::binding::citation::continuation_prepare(&previous,&output,false),
         Command::CitationFidelityPrepare { previous,output,parent_review } => identifiable::binding::citation::fidelity_prepare(&previous,&output,&parent_review,false),

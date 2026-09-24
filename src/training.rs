@@ -477,7 +477,7 @@ impl Adam {
             return Err(Error::Invalid("optimizer rate/clock".into()));
         }
         if vars.values().any(|v|v.device().is_metal()) {
-            return Err(Error::Unsupported("METAL_F32_TRAINING_NOT_ACCEPTED: Candle0.11.0 middle-axis reduction fails the registered gradient gate; optimizer_calls=0".into()));
+            return Err(Error::Unsupported("METAL_F32_TRAINING_NOT_ACCEPTED: verified parent-bound runtime profile required; optimizer_calls=0".into()));
         }
         self.apply_admitted_step(vars,grads,config,step,lr,observe)
     }
@@ -2204,6 +2204,7 @@ mod tests {
             ByteBpe::train(&["가".as_bytes().to_vec()], &neural::hash(b"fixture"), 264).unwrap();
         let ids = tok.encode(&[0xea, 0xb0]).unwrap();
         let generated = neural::transformer::Generated {
+            synchronized_phases_ms: None,
             tokens: ids.clone(),
             generated: ids.len() + 1,
             finish: "stop".into(),

@@ -3300,6 +3300,7 @@ fn row_output(row: &EvalRow, l: &Loaded) -> Result<(Option<String>, bool)> {
     let (_, _, decoded_error) = decode_generated(
         &l.tokenizer,
         Ok(neural::transformer::Generated {
+            synchronized_phases_ms: None,
             tokens: row.tokens[..end].to_vec(),
             generated: row.tokens.len(),
             finish: if row.finish == Finish::Eos {

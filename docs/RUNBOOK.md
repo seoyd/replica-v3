@@ -1,5 +1,32 @@
 # Replica v3 B0 runbook
 
+## Bounded Metal F32 runtime validation
+
+CPU remains default. The Metal Sum repair uses the single vendored Candle
+core0.11.0 package; builds use `CARGO_INCREMENTAL=0`, `--locked --offline` and
+`--features accelerate,metal`. Keep one compute process and set
+`VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1` for this comparison.
+
+`replica-train fresh metal-runtime --help` lists the existing-harness actions:
+prepare/observe/report bind the numerical A and frozen development cases;
+prepare-execution registers the next executable explicitly; worker/cache precede
+the fixed cpu16/metal16/metal-split actions; endpoints verifies identical Metal
+restart state before generating; benchmark uses eight fixed requests, one warmup
+and three measured rounds. These are bounded one-shot diagnostics, not a generic
+Metal training permission or a reason to repeat closed observations.
+
+Plans, starts, completed work and final receipts use existing native R3BIN
+publication. A train action that is already complete can verify/finalize the same
+durable endpoint without more optimizer/generation calls. Missing, pending,
+cancelled or failed work cannot become a new attempt. Worker accounting begins
+after READY before request delivery; an entered call without a return is not
+reported as a proven no-call. Command budgets retain elapsed evidence across
+actions and fail closed on unknown usage. Refer to the current status for frozen
+binary/source hashes, named local evidence and closed budgets.
+
+Artifact cleanup is not authorized by this runtime work. No deletion, migration,
+recompression or additional inventory is needed to run the declared diagnostics.
+
 ## Read-only artifact accounting and completed QA finalization
 
 Completed RETURNED QA can finish through `fresh qa-bridge-qa --diagnostic`

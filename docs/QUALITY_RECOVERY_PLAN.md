@@ -23,6 +23,24 @@ build growth≤8GiB; pre-existing cache growth baseline is UNKNOWN.
 No cleanup or extra quality learning. CPU remains default; runtime acceptance,
 numerical accuracy, output preservation, performance and Goal1 are separate.
 
+Execution ledger: G1 reproduced the original RED once; G2/G3 and independent
+Runtime A closed successfully. G4 completed P/C384 and worker8 generations,
+and full/chunk/token cache at the eight registered lengths through2048. The
+registered G5 CPU16/Metal16/Metal1+15 budget is exhausted at48 actual updates;
+all three final native checkpoints are step14352. The same-Metal weights/Adam/
+cursor/tokens match exactly. Endpoint48 and synchronized benchmark64 generations
+completed. There is no remaining optimizer allowance or permission to rerun a
+closed arm. Independent Runtime B and publication close the execution evidence;
+they do not authorize QA learning or change S4/S5/S6/Goal1 acceptance.
+
+The bounded CLI uses immutable profile/start/completed/final records and the
+existing RunControl/native codec. All actions share a cumulative7200s allowance,
+with at most900s per segment. Completed durable work can finish with calls0;
+only a pure time stop is compatible with that completion. Cancel, pending,
+UNKNOWN, mismatched model/policy or missing work remain blocked. A lost outer
+timing receipt can be recovered only from complete proof and a conservative
+wall-time upper bound including downtime, never by inventing zero usage.
+
 ### Previous closed baseline
 
 Execution closure: M1 is independently `B_COVERAGE_COMPLETE` (16 new,42 reused

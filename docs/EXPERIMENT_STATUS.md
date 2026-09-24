@@ -1,5 +1,116 @@
 # 진단 및 구현 상태
 
+## 2026-09-24 Metal runtime — G4/G5 execution
+
+Runtime A remains accepted for the G2/G3 numerical boundary. G4's frozen
+executable `artifacts/metal-reduction-20260924/replica-train-g4` has SHA256
+`6b4ff08c8e9e733faa1176a97b15112a3e8dc385f1d1f98b420a58bde6fce2ca`.
+Its registered runtime plan is
+`artifacts/metal-reduction-20260924-runtime/runtime-plan.r3b`, SHA256
+`ac209ad634446b52a17756a89829ebf52678c0ba14342c12220f0db2f7c9a45b`.
+Actual normal greedy generation, CPU/Accelerate thread1 versus Metal F32:
+
+| Fixed development panel | CPU | Metal | Different raw token sequences | CPU correct lost |
+|---|---:|---:|---:|---:|
+| Protected11264 V64+VC64 | 128/128 | 128/128 | 0 | 0 |
+| Base14336 S1Q1 first32+word first32 | 32/64 | 32/64 | 0 | 0 |
+
+All384 calls returned EOS without error. CPU protected output also matched the
+existing raw tokens, provided evidence and native prompt digest. This preserves
+the measured protected outputs; it is not new QA quality learning. This Metal
+reduction defect does not establish a cause for earlier CPU quality failures.
+
+The next execution phase explicitly binds a new executable while requiring the
+same patch, lock, device, F32 and OS profile. Frozen training executable SHA256
+`95c94f2892bcb3475f98fead9a1f2cb44bc9b0c3d31c4a8b295d7c074da4e1ba`,
+worker SHA256 `3b7d342b2ba65e3f76b16d8eca245c5378a98d5795a77e6de5993438dd385d1a`.
+Source is HEAD4556b6d plus `g45-tracked.diff` SHA256
+`80abfe67a9b6a4b781acb5d77b7b27cb746c54d1463d74cd699fe9133acc90d5`
+and `g45-metal_runtime.rs` SHA256
+`b8a0289d09c4b53add05cca263e5479d22d8e5b13ed92a8acd2afa5567c131f3`.
+Both files are retained under the same evidence root.
+
+Runtime provenance binds native objective/tape/parent on the bounded optimizer
+entry. Generic Metal Adam stays closed. Existing CPU semantic identity is intact.
+Independent source inspection found and the implementer corrected worker call
+accounting, complete-work finalization and cumulative active-budget connections
+before SMALL updates. The actual control regression passed1/1 with model calls0.
+CPU/Metal normal versus timed TINY generation passed1/1, actual TINY generations4,
+updates0. The timed decoder shares the normal native greedy implementation.
+Phase budgets subtract the four completed panel durations and prior action wall
+durations from7200s, with a conservative120s reservation for preceding numerical
+tests (not reported as measured active time). Segment deadline is at most900s.
+Interrupted elapsed is UNKNOWN unless complete proof allows a conservative wall
+upper bound including downtime; a missing/failed command blocks later work.
+
+Actual worker CPU4+Metal4 returned correct responses, matching native/runtime
+identity and prompt/evidence receipts; load-timeout and cancellation before the
+request frame invoked no model. Metal cache full/chunk/token comparisons passed
+lengths1/127/128/255/256/257/512/2048, including local eviction and absolute RoPE.
+Largest observed pointwise difference was9.059906005859375e-6; unchanged bound
+is1e-4+1e-3*abs(reference). No extra decode beyond context2048 was requested.
+
+CPU16, Metal16 and actual fresh-process Metal1+15 all completed at step14352.
+New SMALL updates48/48; no further optimizer work is authorized. Each arm used
+the same parent14336 weights/Adam, first16 existing word-mix batches, LR3e-5,
+ANSWER CE and batch8:128 example exposures, input23,776/target1,872 tokens.
+Combined training input71,328/target5,616; diagnostic reference calls are separate.
+CPU/Metal first loss5.485621/5.4856205, last2.6675978/2.6675944. Actual first Metal
+gradient, Adam m/v and weight delta passed the preregistered per-tensor gates.
+Two additional CPU batch reference forward/backwards (16 teacher-forced samples)
+were diagnostics, not optimizer steps. The old parent and failures were not opened
+for resume. Metal16 versus fresh-process1+15 has identical weights,136 Adam
+tensors, step/cursor and token counts. All three endpoint panels scored12/16;
+none is a new quality candidate. Independent read-only audit confirms48 updates,
+input71,328/target5,616/padding5,856 and implementer504 generations/output6,274 tokens.
+Six new native checkpoints are each114,181,184B, total685,087,104B; step0 references
+the original. These are backend validation artifacts, not new accepted QA models.
+
+### Synchronized M4 measurements (same frozen debug build, thread1)
+
+Generation uses base14336, the same eight requests, one warmup and three measured
+rounds per backend. n24 is per backend; p95 uses nearest-rank ceil(0.95*n)-1.
+Every timed call synchronizes before/after, and phase timing uses the same decoder.
+
+| Observed metric | CPU/Accelerate | Metal F32 |
+|---|---:|---:|
+| Native load seconds | 8.640659 | 7.905586 |
+| Generation median / p95 seconds | 0.968259 / 1.245332 | 0.529780 / 0.586828 |
+| Generation min–max seconds | 0.263488–1.330686 | 0.096498–0.628927 |
+| TTFT median / p95 ms | 255 / 310 | 63 / 70 |
+| Prefill median / p95 ms | 255 / 310 | 62 / 69 |
+| Decode median / p95 ms | 706 / 940 | 455.5 / 512 |
+| Median ms per actual output token | 64.5785 | 31.3785 |
+| Last sampled RSS KiB (not peak) | 198,448 | 104,672 |
+| Update median ms, n16 | 12,882.219 | 806.692 |
+| Update p95 / min–max ms, including first-step diagnostics | 14,882.283 / 12,583.400–14,882.283 | 7,405.429 / 767.031–7,405.429 |
+
+Generation median speedup1.83x and update median15.97x are confined to these
+workloads/build/thread settings, not a claim about an optimal CPU or all inference.
+Update measurements exclude the explicit CPU reference diagnostic time but the
+first update retains extra comparison/host-readback overhead; its tail is not a
+clean throughput sample. Full generation request lengths remain reported per case.
+GPU allocator live/peak, total model canonicalization copy bytes and isolated cold
+shader preparation are UNKNOWN. Shader preparation is included in warmup; unified
+GPU and host memory are not added. G1 separately measured24,576B temporary/copy.
+No precision/optimizer/kernel exploration followed these measurements.
+
+Independent Runtime B's exact-library audit and fresh-process32 reproduction
+passed: CPU16 and Metal16 each reproduced16/16 stored raw outputs, including
+their four incorrect answers (FULL12/16, not a claim of16 correct). Its completed
+CPU action reentry exited0 with no optimizer/generation calls. New combined
+SMALL generation count is536/584 = P/C384 + worker8 + endpoints48 + benchmark64
++ independent32; optimizer stays48/48. TINY totals remain optimizer4, generation4,
+diagnostic forward38/backward24; explicit primitive reductions162 and VJP44.
+No LegacyB/FP4/confirmation/QA640 replay was added. GENERAL_QA_IMPROVED remains
+NOT_ESTABLISHED and S4/S5/S6/Goal1 remain unaccepted.
+
+Combined SMALL output tokens6,710; independent32 contributed436 tokens and
+58.950814292s. Registered model/numeric execution ledger plus fresh reproduction
+totals1,335.663630291s, or1,455.663630291s including the conservative120s reservation,
+under7200s. Compile, source review and pure file audit are separate. UNKNOWN
+model calls0; the original five protected file hashes match after execution.
+
 ## 2026-09-24 Metal reduction repair — G0/G1
 
 Source baseline `f4ae62b647ffecfb89129e775d687c218f410ab3`, initial HEAD

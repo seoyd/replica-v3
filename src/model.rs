@@ -141,10 +141,19 @@ impl Drop for OwnedChild {
 }
 // The only adapter transport; tests supply a Rust child instead of a model.
 pub fn run_worker(
-    mut command: Command,
+    command: Command,
     request: &ModelRequest,
     cancel: &AtomicBool,
     load_timeout: Duration,
+) -> Result<ModelResponse> {
+    run_worker_observed(command, request, cancel, load_timeout, None, || Ok(()))
+}
+/// The callback runs after READY, before a request can reach the child. A failed
+/// return after this boundary is an attempted call, never a proven no-call.
+pub fn run_worker_observed(
+    mut command: Command, request: &ModelRequest, cancel: &AtomicBool,
+    load_timeout: Duration, command_deadline: Option<Instant>,
+    mut before_request: impl FnMut() -> Result<()>,
 ) -> Result<ModelResponse> {
     request.limits.validate()?;
     if request.evidence.items.len() > MAX_EVIDENCE {
@@ -199,7 +208,8 @@ pub fn run_worker(
         let _ = tx.send(response.map(Some));
     }));
     let receive = |timeout: Duration| -> Result<Option<ModelResponse>> {
-        let deadline = Instant::now() + timeout;
+        let local = Instant::now() + timeout;
+        let deadline = command_deadline.map_or(local, |d| d.min(local));
         loop {
             if cancel.load(Ordering::Relaxed) {
                 return Err(Error::Cancelled);
@@ -222,6 +232,7 @@ pub fn run_worker(
     if receive(load_timeout)?.is_some() {
         return Err(Error::Model("invalid startup protocol".into()));
     }
+    before_request()?;
     owned.threads.push(thread::spawn(move || {
         let _ = stdin
             .write_all(&(bytes.len() as u32).to_le_bytes())
@@ -230,7 +241,8 @@ pub fn run_worker(
     }));
     let response = receive(Duration::from_millis(request.limits.timeout_ms))?
         .ok_or_else(|| Error::Model("missing model response".into()))?;
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let local = Instant::now() + Duration::from_secs(2);
+    let deadline = command_deadline.map_or(local, |d| d.min(local));
     loop {
         if cancel.load(Ordering::Relaxed) {
             return Err(Error::Cancelled);
@@ -359,7 +371,8 @@ pub fn worker(config: ModelConfig) -> Result<()> {
     };
     write_frame(&mut stdout, &response, MAX_RESPONSE)
 }
-fn native_revision(
+/// Shared native identity for the product worker and bounded backend verifier.
+pub fn native_revision(
     manifest: &crate::neural::checkpoint::Manifest,
     tokenizer: &crate::neural::ByteBpe,
 ) -> Result<String> {
