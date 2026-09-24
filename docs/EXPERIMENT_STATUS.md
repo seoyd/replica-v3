@@ -14,6 +14,30 @@ exactly match the scalar oracle. Additional primitive sum1, GPU temporary24,576B
 host readback36,864B. No training admitted.
 Protection hashes reuse the prior named-file ledger; no inventory/deletion occurred.
 
+### G2/G3 actual reduction repair and independent A
+
+The one vendored Candle core0.11.0 package is linked by explicit Cargo patch;
+nn/metal-kernels remain0.11.0. Official archive and registry source matched before
+patching. `vendor/candle-core-0.11.0/REPLICA_PATCH.md` records provenance/license.
+Only the Metal F32 strided Sum branch materializes U||R on GPU, then uses the
+existing suffix reducer. ORIGINAL_STRIDED_SHADER_FIXED=false; no CPU fallback.
+Original public sum: exact error0. Representative22 layout/API cases passed;
+zero-byte Metal construction preserves its existing rejection. An initial fixture
+incorrectly expected that constructor to succeed; its failure log is retained.
+Analytic repeat K/V G2/G4, actual GQA Q/K/V and the complete primitive chain passed.
+Actual TINY TOKEN/ANSWER all gradients, masked batch8 versus4+4, first Adam delta
+and m/v passed. Production Metal Adam admission is still closed.
+
+Independent Runtime A executed7 named tests, each1/1 PASS/exit0, and confirmed
+the5 protected original hashes. Its frozen source is HEAD37e3f4d plus
+`g3-stats-candidate.diff` SHA256
+`3eab6a19ae8b963ba73d5a56ed5cca6d629f5546b4a36e46d345e65e0ccab4e7`.
+Test binary SHA256 `f9cf303e5d32c01c4e76cf457f5bf4c7607c03ed118a293d8171e308362cd811`.
+New combined implementer/reviewer usage: TINY optimizer4, whole-model forward38,
+backward24, SMALL/generation/teacher0. Explicit primitive sum162, VJP backward44;
+internal full-model tensor operations are included in model calls, not misreported
+as individual primitive fixtures. G4/G5 remain NOT_RUN pending the next gated work.
+
 ## 2026-09-24 Metal F32 준비와 이전 adapter B 표본 보완
 
 원 source849d8bb와 closure a9ae778의 원본/실패를 보존한다. 이번 장치는

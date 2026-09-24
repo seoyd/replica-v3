@@ -1,0 +1,32 @@
+--- a/src/metal_backend/mod.rs
++++ b/src/metal_backend/mod.rs
+@@ -382,6 +382,29 @@
+             return Ok(Self::new(buffer, device, dst_el, dtype));
+         }
+ 
++        // Replica patch metal-f32-sum-contiguous-v1 (2026-09-24): the original
++        // F32 strided reducer fails the middle-axis scalar oracle. Materialize
++        // U || R on this GPU, preserving offset/zero strides, then use the
++        // unchanged contiguous suffix reducer. Tensor/autograd semantics stay
++        // at the caller; this does not fix or modify the original shader.
++        if matches!(op, ReduceOp::Sum) && self.dtype == DType::F32 && !src_dims.contains(&0) {
++            let count = dims.iter().try_fold(1usize, |n, &d| n.checked_mul(d))
++                .ok_or_else(|| crate::Error::Msg("Metal sum materialization size overflow".into()))?;
++            count.checked_mul(self.dtype.size_in_bytes())
++                .ok_or_else(|| crate::Error::Msg("Metal sum materialization byte overflow".into()))?;
++            let buffer = device.new_buffer_builder()
++                .with_size_for(count, self.dtype)
++                .with_label("sum_canonical_materialization")
++                .build()?;
++            let mut contiguous = Self::new(buffer, device, count, self.dtype);
++            let permuted = Layout::new(reduction_shape.clone(), stride, layout.start_offset());
++            self.copy_strided_src(&mut contiguous, 0, &permuted)?;
++            let suffix: Vec<usize> = (dims.len() - sum_dims.len()..dims.len()).collect();
++            // The recursive dispatch necessarily takes the contiguous branch
++            // above: the layout is physical contiguous and R is a suffix.
++            return contiguous.reduce_op(op, &Layout::contiguous(reduction_shape), &suffix);
++        }
++
+         let (name, check_empty, return_index) = match (op, self.dtype) {
+             (ReduceOp::Sum, DType::F32) => ("fast_sum_f32_strided", false, false),
+             (ReduceOp::Min, DType::F32) => ("fast_min_f32_strided", true, false),
