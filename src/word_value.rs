@@ -430,9 +430,79 @@ fn review_cases(root:&Path,p:&Plan,step:usize)->Result<(Vec<Episode>,Vec<binary:
 }
 pub(in super::super::super::super) fn review(study:&Path)->Result<()> {
     let study=study.canonicalize()?;let root=study.join(MEAN_ARMS[1]);let p=historical_plan(&root)?;let(end,_)=close(&root,&p)?;
+    if adapt::is(&p){return Err(bad("adapter fixed normal32 requires adapter-review-complete; legacy42 preserved"));}
     if !is(&p){return Err(bad("word review profile"));}let(es,raw)=review_cases(&root,&p,end.step)?;
     orbit_observe(&study,"word-review",&root.join(&end.checkpoint),&es,&binary::record!({"policy":digest(&p)?,"checkpoint":end.checkpoint_hash,"selection":"one fixed query pair per panel plus complete failed pairs; capped64"}),Some(&raw),observation_control(&p,es.len(),0)?)?;
     observed(&study,"word-review",&p,&end.checkpoint_hash,&es,true)?;println!("WORD_REVIEW generation={} matched={} teacher0 optimizer0",es.len(),es.len());Ok(())
+}
+
+// Normal means a predetermined procedure sample, not a correct answer. This
+// policy belongs only to the completed adapter screen, not historical word QA.
+fn adapter_normal(panels:&[Panel])->Result<Vec<Episode>> {
+    let mut out=vec![];let mut ids=BTreeSet::new();
+    for (index,(name,count)) in [("value64",8),("citation64",6),("S1Q164",6),("word64",6),("word-renamed64",6)].into_iter().enumerate(){
+        let (actual,es,ms)=panels.get(index).ok_or_else(||bad("adapter normal missing panel"))?;
+        if actual!=name||es.len()!=64||ms.len()!=es.len(){return Err(bad("adapter normal panel shape/order"));}
+        for at in (0..count).step_by(2){
+            if ms[at].base!=ms[at+1].base||ms[at].view%2!=0||ms[at+1].view!=ms[at].view+1{return Err(bad("adapter normal complete oriented query pair"));}
+            for i in at..at+2 {if es[i].id!=ms[i].id||!ids.insert(es[i].id.clone()){return Err(bad("adapter normal duplicate/metadata ID"));}out.push(es[i].clone());}
+        }
+    }
+    if panels.len()!=5||out.len()!=32{return Err(bad("adapter normal32 required"));}Ok(out)
+}
+fn missing_normal(normal:&[Episode],old:&[Episode])->Result<Vec<usize>> {
+    if normal.len()!=32||old.len()<10||old.len()>42||(old.len()-10)%2!=0{return Err(bad("adapter review normal/failure counts"));}
+    let mut seen=BTreeMap::new();for e in old {if seen.insert(&e.id,e).is_some(){return Err(bad("duplicate old review ID"));}}
+    let mut ids=BTreeSet::new();let mut missing=vec![];
+    for(i,e)in normal.iter().enumerate(){if !ids.insert(&e.id){return Err(bad("duplicate normal review ID"));}
+        if let Some(prior)=seen.get(&e.id){if digest(*prior)?!=digest(e)?{return Err(bad("reused case/request identity"));}}else{missing.push(i);}}
+    if missing.len()>22||old.len()+missing.len()>64{return Err(bad("adapter review unique-call cap"));}Ok(missing)
+}
+fn same_output(a:&binary::Value,b:&binary::Value)->Result<()> {
+    for k in ["id","expected","raw_tokens","actual","error","finish_reason","generation_completed"]{if a[k]!=b[k]{return Err(bad("adapter review reused output mismatch"));}}Ok(())
+}
+pub(in super::super::super::super) fn complete_review(study:&Path,output:&Path,check:bool)->Result<()> {
+    let study=study.canonicalize()?;let output=std::path::absolute(output)?;
+    let root=study.join(MEAN_ARMS[1]);let p=historical_plan(&root)?;
+    if !adapt::is(&p)||p.tiny{return Err(bad("adapter SMALL coverage profile required"));}
+    let(end,_)=close(&root,&p)?;let (old_es,old_expected)=review_cases(&root,&p,end.step)?;
+    let old=observed(&study,"word-review",&p,&end.checkpoint_hash,&old_es,true)?;
+    for(a,b)in old.iter().zip(&old_expected){same_output(a,b)?;}
+    let fixed=panels(&root,&p,end.step)?;let normal=adapter_normal(&fixed)?;
+    let missing=missing_normal(&normal,&old_es)?;
+    let mut originals=BTreeMap::new();for(name,es,_)in &fixed {
+        let rows=binary::read_value_records(&root.join(format!("eval-{:04}-{name}.r3rows",end.step)))?;
+        if rows.len()!=es.len()+1{return Err(bad("adapter complete original panel"));}
+        for(e,r)in es.iter().zip(&rows[1..]){if r["id"]!=e.id||r["expected"]!=e.answer||originals.insert(e.id.clone(),r.clone()).is_some(){return Err(bad("adapter original row identity"));}}
+    }
+    let es=missing.iter().map(|&i|normal[i].clone()).collect::<Vec<_>>();
+    let expected=es.iter().map(|e|originals[&e.id].clone()).collect::<Vec<_>>();
+    let mut execution=p.clone();execution.source=source_digest()?;execution.binary=file_hash(&std::env::current_exe()?)?;
+    let registration=binary::record!({"contract":"R3-METAL-F32-BASELINE-1.0","policy":digest(&execution)?,"original_policy":digest(&p)?,
+        "original_source":p.source,"original_binary":p.binary,"source":execution.source,"binary":execution.binary,
+        "checkpoint":end.checkpoint_hash,"step":end.step,"output":output,"normal":digest(&normal)?,"normal_ids":normal.iter().map(|e|&e.id).collect::<Vec<_>>(),
+        "legacy_finished":file_hash(&study.join("word-review-finished.r3b"))?,"legacy_raw":file_hash(&study.join("word-review.r3rows"))?,
+        "reused_ids":normal.iter().filter(|e|old_es.iter().any(|o|o.id==e.id)).map(|e|&e.id).collect::<Vec<_>>(),"missing_ids":es.iter().map(|e|&e.id).collect::<Vec<_>>(),
+        "normal_count":32,"failure_count":old_es.len()-10,"legacy_calls":old.len(),"new_calls":es.len(),"unique_calls":old.len()+es.len(),"candidate_authority":false});
+    let registered=study.join("word-review-supplement.r3b");
+    if !check {
+        // The study-root claim precedes all calls; a lost child cannot reopen it.
+        publish_confirmed(&registered,&registration)?;std::fs::create_dir(&output)?;
+        let control=observation_control(&p,es.len(),0)?;
+        orbit_observe(&output,"normal-supplement",&root.join(&end.checkpoint),&es,&registration,Some(&expected),control)?;
+    }
+    if read_confirmed::<binary::Value>(&registered)?!=registration{return Err(bad("adapter supplement registration mismatch"));}
+    let supplemental=observed(&output,"normal-supplement",&execution,&end.checkpoint_hash,&es,true)?;
+    for(a,b)in supplemental.iter().zip(&expected){same_output(a,b)?;}
+    let tok=ByteBpe::load(&root.join("tokenizer.r3b"))?;
+    for e in &normal {let r=old_es.iter().position(|o|o.id==e.id).map(|i|&old[i])
+        .or_else(||es.iter().position(|o|o.id==e.id).map(|i|&supplemental[i])).ok_or_else(||bad("normal32 coverage incomplete"))?;
+        same_output(r,&originals[&e.id])?;verify_generated(r,&tok)?;
+    }
+    let closure=binary::record!({"state":"B_COVERAGE_COMPLETE","registration":file_hash(&registered)?,"supplement":file_hash(&output.join("normal-supplement-finished.r3b"))?,
+        "normal_count":32,"failure_count":old_es.len()-10,"new_calls":es.len(),"unique_calls":old.len()+es.len(),"reused_normal":32-es.len(),"model_quality":"FAIL","resume":false,"optimizer":0,"teacher":0});
+    let path=output.join("coverage.r3b");if check {if read_confirmed::<binary::Value>(&path)?!=closure{return Err(bad("adapter coverage closure"));}}else{publish_confirmed(&path,&closure)?;}
+    println!("B_COVERAGE_COMPLETE normal32 failures{} reused{} new{} unique{} optimizer0 teacher0",old_es.len()-10,32-es.len(),es.len(),old.len()+es.len());Ok(())
 }
 pub(in super::super::super::super) fn qa(study:&Path,transfer:bool)->Result<()> {
     let study=study.canonicalize()?;let lock=std::fs::File::open(&study)?;lock.try_lock().map_err(|_|bad("word diagnostic already running"))?;
@@ -446,6 +516,33 @@ pub(in super::super::super::super) fn qa(study:&Path,transfer:bool)->Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "explicit preserved adapter corpus and raw; no model calls"]
+    fn adapter_normal_completion_boundaries()->Result<()> {
+        let study=PathBuf::from(std::env::var("R3_ADAPTER_STUDY").map_err(|_|bad("adapter fixture path"))?);
+        let root=study.join(MEAN_ARMS[1]);let p=historical_plan(&root)?;let(end,_)=close(&root,&p)?;
+        let mut ps=panels(&root,&p,end.step)?;let fixed=adapter_normal(&ps)?;
+        assert_eq!(fixed.len(),32);
+        let(old,_)=review_cases(&root,&p,end.step)?;let missing=missing_normal(&fixed,&old)?;
+        assert_eq!(old.len(),42);assert_eq!(missing.len(),16);assert_eq!(old.len()+missing.len(),58);
+        // Answers/errors never participate in normal selection.
+        for(_,es,_)in &mut ps {for e in es{e.answer="changed fixture status".into();}}
+        assert_eq!(adapter_normal(&ps)?.iter().map(|e|&e.id).collect::<Vec<_>>(),fixed.iter().map(|e|&e.id).collect::<Vec<_>>());
+        let zero=(0..5).flat_map(|i|[old[2*i].clone(),old[2*i+1].clone()]).collect::<Vec<_>>();
+        assert_eq!(missing_normal(&fixed,&zero)?.len(),22); // no failed samples
+        let mut too_many=old.clone();too_many.extend_from_slice(&fixed[..2]);assert!(missing_normal(&fixed,&too_many).is_err());
+        let mut duplicate=old.clone();duplicate[1]=duplicate[0].clone();assert!(missing_normal(&fixed,&duplicate).is_err());
+        let mut changed=old.clone();changed[0].request.input.push_str(" changed");assert!(missing_normal(&fixed,&changed).is_err());
+        let mut cut=ps.clone();cut[0].1.truncate(7);assert!(adapter_normal(&cut).is_err());
+        let mut pair=ps.clone();pair[0].2[1].view=pair[0].2[0].view;assert!(adapter_normal(&pair).is_err());
+        let mut ids=ps.clone();ids[1].1[0].id=ids[0].1[0].id.clone();ids[1].2[0].id=ids[0].1[0].id.clone();assert!(adapter_normal(&ids).is_err());
+        let old_output:binary::Value=read_confirmed(&study.join("word-review-finished.r3b"))?;
+        assert_eq!(old_output["completed"],42);
+        assert!(complete_review(&study,&study.join("unissued-coverage"),true).is_err());
+        let mut wrong=p.clone();wrong.initial.push('x');assert!(observed(&study,"word-review",&wrong,&end.checkpoint_hash,&old,true).is_err());
+        assert!(observed(&study,"word-review",&p,"wrong-model",&old,true).is_err());
+        println!("ADAPTER_NORMAL32 fixed[8,6,6,6,6] old42 reused16 missing16 unique58; normal10 cannot close; malformed/duplicate/model/empty failures/cap PASS; model_calls0");Ok(())
+    }
     fn parent()->Result<PathBuf>{Ok(PathBuf::from(std::env::var("R3_WORD_PARENT").map_err(|_|bad("explicit preserved parent path required"))?))}
     #[test]
     #[ignore = "reads only the registered plan/terminal; zero model calls"]

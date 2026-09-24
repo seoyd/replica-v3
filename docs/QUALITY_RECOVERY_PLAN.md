@@ -1,5 +1,55 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: CPU reference preservation and opt-in Metal F32
+
+`R3-METAL-F32-BASELINE-1.0` preserves source849d8bb, accepted11264,
+base14336, the failed adapter14464, all prior raw and immutable reviews.
+Latest closure a9ae778 retains A and the42 replay/raw evidence but rejects
+complete B coverage: fixed normal10 is short of32. M1 selects first complete
+query pairs8/6/6/6/6 from V/VC/S1Q1/word/renamed, independently of correctness.
+Only the difference from existing RETURNED cases is generated (cap22,
+total unique64); failed32 and original producers remain separately bound.
+An immutable study-root claim precedes supplemental calls; incomplete/UNKNOWN
+coverage cannot authorize a retry or full acceptance. The failed model stays
+failed and cannot resume.
+
+Then add explicit CPU(default) / Metal0 F32 execution with locked Candle0.11.0,
+no CPU fallback or equation/tokenizer/native content-hash reinterpretation.
+Runtime device identity is separate from preserved math/model identity and
+binds cache and new training provenance. Required operators, actual tensors,
+gradients/Adam, synchronization, host transfers and native reload are verified.
+Direct numerical tests and independent Runtime A precede protected P128
+(11264 V64/VC64) and challenge C64 (14336 S1Q1/word32 each) on CPU and Metal,
+plus worker4 per backend. Protected CPU-correct answers/support/EOS may not
+be lost. Token mismatches and quality changes are separate results.
+
+Registered tolerances: finite forward/logits/KV abs<=1e-4+1e-3*abs(reference);
+CE abs<=1e-5+1e-3*abs(reference); gradient tensor NRMSE<=1e-2 and cosine>=.999
+where nonzero, near-zero max_abs<=1e-6; one-update delta NRMSE<=2e-2,
+near-zero max_abs<=1e-7. NRMSE denominator is max(reference L2,1e-6*sqrt(N)).
+Integer inputs/masks/cursor and original tensor bytes must match exactly.
+NaN/Inf fail; thresholds are not changed after observing results.
+
+Only after numerical/protected M3 gates pass, run the same14336 weights/Adam,
+word mixed batch8 tape, ANSWER CE and LR3e-5: CPU16, Metal16, Metal1+15 in a
+new process. Maximum48 SMALL updates, diagnostic scope only. Compare each
+step and identical-backend restart; save only source reference and needed1/16
+states. Each endpoint gets16 fixed generations. Bench8 fixed requests with
+warmup1/measured3 per backend, synchronize before/after timings. Distinguish
+load/compile/prefill/decode/TTFT/IPC/validation, current/peak RSS and Metal
+allocator metrics. Numerical pass does not imply speed gain (target1.2x).
+
+Overall caps: SMALL generation704, teacher256, optimizer48, diagnostic
+backward32; TINY optimizer64/generation96/teacher96. Primitive ops separate.
+Active7200s, segment900s, evidence1.5GiB, build-growth upper bound8GiB;
+UNKNOWN/cancel/numeric/storage errors block dependent work. One heavy process,
+incremental0, compatible target reuse. No inventory/cleanup/deletion/move,
+FP4 rerun, half-precision training, Muon, new attention or quality fine-tuning.
+Missing Metal dependencies may be obtained from the registry without a Candle
+upgrade, with lock changes reported. Independent LegacyB, Runtime A/B and
+code/numerical/protected-quality/speed verdicts are distinct. CPU remains the
+default; GENERAL_QA_IMPROVED=NOT_ESTABLISHED and GOAL1_READY=false.
+
 ## Closed execution: frozen-base q/v adaptation and independent precision probe
 
 The actual adapter run stopped at128 new updates / effective14464 with

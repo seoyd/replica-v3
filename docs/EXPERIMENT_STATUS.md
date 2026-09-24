@@ -1,5 +1,36 @@
 # 진단 및 구현 상태
 
+## 2026-09-24 Metal F32 준비와 이전 adapter B 표본 보완
+
+원 source849d8bb와 closure a9ae778의 원본/실패를 보존한다. 이번 장치는
+macOS27.0(26A428), Apple M4 GPU10 cores/Metal4이며 설치 Rust1.98.1을 사용한다.
+CPU 기본값과 Candle0.11.0은 유지한다. 이전 FP4는 저장 후 CPU F32 복호화
+증거만 재사용하며 새 FP4 실행은0이다. 새 품질 학습은 승인된 작업이 아니다.
+
+M1은 adapter 전용 `fresh adapter-review-complete`로 normal32를 고정한다.
+V/VC/S1Q1/word/renamed에서 정오와 무관한 첫 query pair8/6/6/6/6행이다.
+기존 normal10+failure32의 RETURNED42 중16행을 재사용하고 차집합16회만
+새로 실행했다. 실제 CLI exit0, normal32/failure32, 중복6, 고유 호출58이다.
+원 raw와 producer 신원을 덮어쓰지 않고 study-root 등록과 별도 supplement를
+연결했다. 이번 SMALL optimizer0/teacher0; adapter 품질 FAIL과 resume=false는
+유지한다. 독립 LegacyB 무호출 검산은 아래 별도 보고서로 종결한다.
+
+직접 테스트 `adapter_normal_completion_boundaries`는 실제 보존 panel을 읽는
+명시적 ignored regression으로 1/1 PASS(exit0,67.10초), 모델 호출0이다.
+고정 선택, pair/ID/내용/모델 불일치, 부족한 coverage, 호출 상한을 검사한다.
+실행 근거는 로컬 `artifacts/metal-f32-20260924-evidence/`의 build/test 로그와
+`m1-candidate.diff`, 동결 `replica-train-m1`이다. 실행 binary SHA256
+`ebd143525598ec322feded1524f61b8ceb8d5df94506879c0fc34e89f615d68d`,
+test binary `fdc0ee13893aefb817c88e981771cfa9dc60baaa3f95fa9429f59fe5af20193b`,
+source patch `020208ad8b7979961b72d2b50e3f69a3af2f09825c5edbe92b06b951cf936583`.
+보완 원자료는 로컬 `artifacts/metal-f32-20260924-legacy-b/`에 있다.
+
+실행 제한 이탈: 위 무호출 regression과 production compile이 약27초 겹쳤다.
+모델 실행/성능 측정은 없었으며 해당 구간을 backend benchmark로 사용하지 않는다.
+후속 빌드와 모델 실행은 순차 수행한다. 기존 파일 삭제/이동/재압축0.
+M2~M5 및 Runtime A/B는 아직 NOT_RUN; 코드·수치·보호품질·속도는 별도 판정하며
+GENERAL_QA_IMPROVED=NOT_ESTABLISHED, GOAL1_READY=false다.
+
 ## 2026-09-24 보호 기반 adapter 실행 종료 / FP4 F32 reference
 
 Source `849d8bb39bebfd9a6e0194f60ad2680b63e2adf1`과 동결 executable

@@ -49,6 +49,8 @@ pub enum Command {
     WordParent { #[arg(long)] study: PathBuf, #[arg(long,value_parser=["parity","dev","renamed"])] panel: String },
     WordReport { #[arg(long)] study: PathBuf },
     WordReview { #[arg(long)] study: PathBuf },
+    /// Complete the adapter's fixed normal32 using only missing RETURNED cases.
+    AdapterReviewComplete { #[arg(long)] study: PathBuf, #[arg(long)] output: PathBuf, #[arg(long)] check: bool },
     WordQa { #[arg(long)] study: PathBuf, #[arg(long)] transfer: bool },
     QaBridgeReview { #[arg(long)] study: PathBuf, #[arg(long)] errors: bool, #[arg(long,conflicts_with="errors")] parent: bool },
     QaBridgeQa { #[arg(long)] study: PathBuf, #[arg(long)] transfer: bool, #[arg(long)] diagnostic: bool },
@@ -1789,6 +1791,7 @@ pub fn execute(command: Command) -> Result<()> {
         Command::WordParent {study,panel} => identifiable::binding::citation::word::parent_observe(&study,&panel),
         Command::WordReport {study} => identifiable::binding::citation::word::report(&study),
         Command::WordReview {study} => identifiable::binding::citation::word::review(&study),
+        Command::AdapterReviewComplete {study,output,check} => identifiable::binding::citation::word::complete_review(&study,&output,check),
         Command::WordQa {study,transfer} => identifiable::binding::citation::word::qa(&study,transfer),
         Command::QaBridgeReview {study,errors,parent} => if parent{identifiable::binding::citation::bridge_parent_parity(&study)}else{identifiable::binding::citation::bridge_review(&study,errors)},
         Command::QaBridgeQa {study,transfer,diagnostic} => if diagnostic{identifiable::binding::citation::bridge_diagnostic_qa(&study,transfer)}else{identifiable::binding::citation::bridge_qa(&study,transfer)},
