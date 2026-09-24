@@ -111,6 +111,39 @@ totals1,335.663630291s, or1,455.663630291s including the conservative120s reserv
 under7200s. Compile, source review and pure file audit are separate. UNKNOWN
 model calls0; the original five protected file hashes match after execution.
 
+### Final scoped closure
+
+Source candidate: `cef33c777a1db32e3937046d401a9927bbf87046`, normally pushed and
+verified against the actual origin/main SHA. [Runtime A](METAL_REDUCTION_RUNTIME_A_2026-09-24.md)
+and [Runtime B](METAL_REDUCTION_RUNTIME_B_2026-09-24.md) accept their stated scopes.
+The B report SHA256 is
+`4794ded74da941825f08b58299d134abf66eaad5934bd8bf6a1428e1b3f80c14`;
+its later report-publication commit is separate from reviewed source.
+
+Scoped `du -A -sk` measured only this task's four new evidence roots and the one
+vendor directory:1,018,915KiB apparent size (hardlinked files counted once).
+Counting B's shared binary at both paths gives a conservative approximately1.06GB
+path-total, still below1.5GiB. This is not APFS reclaimed space or build net growth.
+Build growth stays UNKNOWN because no pre-build cache baseline was taken. There
+was no original artifact inventory, deletion, movement, recompression or replacement.
+
+| Final contract field | Verdict |
+|---|---|
+| METAL_SUM_PUBLIC_PATH / BROADCAST_VJP / GQA_QKV_GRADIENT / TINY_UPDATE | PASS, independent A |
+| STRIDED_SHADER_STATUS | Correct GPU canonicalization replaces unsafe path; original shader not repaired |
+| CPU_REFERENCE_UNCHANGED / PROTECTED_QUALITY | PASS within fixed P128 and historical raw |
+| METAL_DEVICE_ACTUAL / CPU_FALLBACK_COUNT | M4 registry4294968525, F32 / 0 |
+| TRAINING_ADMISSION | Only exact registered F32 profile; generic Metal Adam remains blocked |
+| NATIVE_RESUME / CACHE_PARITY / SAME_METAL_RESTART | PASS within the declared profile and lengths |
+| SMALL48_COMPLETED / INDEPENDENT_RUNTIME_B | 48/48 / PASS |
+| PERFORMANCE_PER_WORKLOAD | Measured gain for declared generation/update workloads; limits above |
+| GENERAL_QA_IMPROVED / S4,S5,S6,Goal1 | NOT_ESTABLISHED / NOT_ACCEPTED |
+
+Execution evidence: `artifacts/metal-reduction-20260924/`; immutable plans/raw/native:
+`artifacts/metal-reduction-20260924-runtime/`; independent evidence:
+`artifacts/metal-reduction-20260924-runtime-a/` and `artifacts/metal-reduction-20260924-runtime-b/`.
+No model/corpus/private raw was staged or uploaded.
+
 ## 2026-09-24 Metal reduction repair — G0/G1
 
 Source baseline `f4ae62b647ffecfb89129e775d687c218f410ab3`, initial HEAD
