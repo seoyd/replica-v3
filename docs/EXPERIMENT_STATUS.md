@@ -1,6 +1,6 @@
 # 진단 및 구현 상태
 
-## 2026-09-24 Metal F32 optimizer study — U0/U1 verified, independent A
+## 2026-09-24 Metal F32 optimizer study — stopped at A512/M512
 
 Initial HEAD52e718eab0ad01396faf85aa6a803c751e8b1330, source baselinecef33c7.
 U0 executed: existing five-file protection ledger all matched; vendor patch,
@@ -18,7 +18,8 @@ RETURNED work at7200s with optimizer/generation/teacher0; this latter fixture us
 synthetic completed records and is not a model quality observation.
 Implementer TINY10/primitive43 and independent TINY10/primitive55 total20/98.
 Numerical/process elapsed11.44+27.57=39.01s, excluding build and read-only data audit.
-B and model quality remain NOT_RUN, Goal1 remains false.
+At admission B/model quality were NOT_RUN; the final execution is recorded below.
+Goal1 remains false.
 Current evidence root: `artifacts/muon-quality-20260924-evidence/`.
 The new optimizer study is a fresh-state comparison from trained14336 weights;
 it is not a repeat of historical inherited-Adam or LoRA fine-tuning.
@@ -33,6 +34,114 @@ Policy digest `6133bfd80aebf586b409fc67e6f4f78a8444df98d50c6e10685c83250d871399`
 parent native SHA256 `15015900a3c91a6b8ed87e9c2ecb8f7faf124849e5dcf8f40203cddf267e30d9`.
 Failed preparation before any model invocation is preserved separately; its
 oversized aggregate hash encoding was replaced by ordered per-row digests.
+
+### Actual bounded execution and incomplete closure
+
+Executed source `6d71d0418222039c7e23440cffaf78c09a26ce7f` was pushed and the full
+remote SHA matched before learning. Independent A passed. Original14336 normal16
+Metal outputs matched historical raw token/EOS/error receipts. Both first losses
+were5.4856205; fresh states were zero, learned initial weights identical. First
+weight delta norm A0.0905808754/M0.0086761903. Both +1 native files were loaded in
+a new process. No Adam moments were inherited and no learned weights were reset.
+
+Each arm actually completed512 updates,4096 examples/3584 unique rows,
+input753,536/target59,904/padding71,296. Combined optimizer1024/2048 authorized
+maximum; the unused1024 is closed, not an invitation to continue. A +128 S1Q1
+51/64 ALL4 10/16 and +512 54/64 ALL4 10/16 caused PERSISTENT_RETENTION. M was
+allowed only to the same +512. A segment paused cleanly at A512/M436 after
+900.859671208s including cooperative preservation, then a fresh process resumed
+the same tape/local clock. Synchronous GPU/fsync boundaries are not preemptible.
+
+| Local512 fixed panel | A FULL / QB / SB / ALL4 | M FULL / QB / SB / ALL4 |
+|---|---|---|
+| V64 |64 /32 /32 /16|64 /32 /32 /16|
+| VC64 |63 /31 /31 /15|64 /32 /32 /16|
+| S1Q164 |54 /22 /26 /10|40 /17 /19 /8|
+| word64 |0 /0 /0 /0|0 /0 /0 /0|
+| renamed64 |0 /0 /0 /0|INCOMPLETE;10/64 returned|
+
+A word64 matched14 whole values but0 exact supports, with64 valid outside-ID
+rows; renamed64 matched15 values/support0/outside64. M word64 matched0 values
+and0 supports, with20 outside-ID rows and50 malformed rows (these sets may
+overlap), EOS52/64. The first generated token is not used as a Korean value
+metric. Both have word ALL4 0/16; renamed's endpoint paired comparison is
+incomplete. Lower training loss therefore does not establish the required skill.
+
+M's last returned row (`renamed/2/id0/1`, ordinal9) contained17 tokens including
+EOS; generation returned, but strict UTF-8 decoding failed. No NaN or Metal
+kernel error was observed. The frozen caller wrongly escalated any nonnull
+output error to INTEGRITY_FAIL. Original segment2 is success=false/resume=false;
+it remains unchanged. The pure report also exits1 on this sticky failure. No
+additional model calls are allowed under this failed study. Word train128,
+teacher diagnostics, B fresh reproductions and1024 full panels are NOT_RUN.
+No model is promoted; general QA, S4/S5/S6 and Goal1 remain unaccepted.
+
+Independent read-only recount verified29 complete panels and the10-row final
+partial panel:1866 evaluation RETURNED rows plus baseline16 =1882 generations,
+output26,982 tokens, teacher0. Recorded study active time including A admission
+is1043.33592275s; later no-call repair tests and read-only audit are separate.
+Committed training input1,507,072/target119,808/padding142,592. A time-boundary
+forward/backward for M local437 was discarded before optimizer: input1400,
+target102, optimizer0; it is extra consumed computation, not an extra update.
+
+Synchronized512-step medians (seconds): A forward/backward0.548857375,
+optimizer0.1154697085, whole observed step0.668259333; M0.549039896,
+0.1706262915,0.722869146. Muon adds NS matrix operations and scalar health checks;
+these are equal-update measurements, not equal-FLOPs comparisons or a claim
+against the historical CPU debug baseline.
+
+Last durable A native `A/segment-001-step-512.r3m` has SHA256
+`a549392f3f12ebdea95616d6d66043f9b88e1e56ce40ab74d6159304069a8da0`;
+M native `M/segment-002-step-512.r3m` has SHA256
+`bca802ec29fe4c92a977cc501a928e1f91fc4bf3e4caf60969a1817bf5a9974c`.
+Both absolute steps are14848. These are failed research endpoints. Adam native
+size114,182,528B versus Muon77,020,608B reflects one hidden momentum tensor, not
+half total memory. One live process RSS observation was864,432KiB; RSS peak/GPU
+temporary tensor peak were not measured. Timings exclude batch construction;
+forward/backward includes entry publication and selected-step scalar readback.
+This is a single LR/reset condition, not a general Muon capability verdict.
+
+### Post-run correction, without reopening the run
+
+Independent B identified the output/guard classification issue in the executed
+source. `verify_output_result` now permits only raw-verified, normally RETURNED
+strict UTF-8 output failure as a wrong quality row; text stays null. Both new and
+reused rows use this boundary. Actual generation errors, non-time command stops,
+cancel, malformed receipts and UNKNOWN still block. Guard uses the existing
+scorer's error/non-EOS union instead of `total-EOS`, so EOS decode failures count.
+Original raw, policies, native files, failed terminal and frozen executable remain.
+Verified command-capped TIME_BUDGET rows with0 or partial tokens retain their
+previous reuse semantics. Exact timeout/provenance fields and immutable returned
+call resolutions are required; request timeout or mixed error does not qualify.
+
+The new actual collector/scorer/guard fixture reproduced RED1/1 on the old logic,
+then GREEN1/1: one EOS UTF-8 failure plus three length endings is severe4, never
+three. Two related native/no-call and fresh-process finalization tests also passed
+1/1 each. New fixture model optimizer/generation/teacher calls are all0; fixtures
+are synthetic completed rows, not additional quality observations. Logs are under
+the same evidence root. This correction does not retroactively complete evaluation
+or authorize a new training attempt. Independent B read-only closure is separate.
+The final0/partial-token timeout reuse extension passed1/1 in the implementer
+run and1/1 independently. Final module SHA256 is
+`ba40871565d9a54a2a2c5782f857e54fc888dd1eb5390ec56abe55de70a8f62a`;
+final test binary SHA256 is
+`e0c6fb7268e6d33cb73b6c55d1e1033ebed5405cd76b859096ee8dd879764633`,
+preserved as `replica-train-tests-timeout-final` in the evidence root. Subsequent
+synthetic boundary tests used22.18s implementer/5.48s reviewer process time
+(conservative sums), with all model calls0. These are separate from the frozen
+study's usage and do not restore its eligibility.
+
+Final CLI locked/offline release build passed; SHA256
+`5b29cce4f4285f482afeb0215fd946ffb4d587ad11494d73503bfe1e68f7b839`,
+preserved as `replica-train-closure-final`. It did not run further learning or
+quality generation. Independent [A](MUON_QUALITY_REVIEW_A_2026-09-24.md) and
+[B](MUON_QUALITY_REVIEW_B_2026-09-24.md) retain their separate source/evidence
+identities. B verifies available partial evidence and the final correction;
+it explicitly does not accept the incomplete reproduction/fit scope.
+The new study alone contains4879 files/468,258,526 logical bytes, including
+459,426,880 native bytes across5 files. Managed target growth observed36,168KiB;
+logical model size, allocated blocks and peak memory are different quantities.
+No original artifact inventory, cleanup or default model promotion occurred.
 
 ## 2026-09-24 Metal runtime — G4/G5 execution
 

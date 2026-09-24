@@ -1,6 +1,6 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: fixed Metal F32 fresh optimizer comparison
+## Closed execution: fixed Metal F32 fresh optimizer comparison
 
 `R3-METAL-F32-MUON-QUALITY-1.0`: original14336 weights, original word-value
 train7680/dev3456, exact first1024 batch8 draws (review4/word4), ANSWER CE,
@@ -40,6 +40,17 @@ same locked release accelerate+metal build, incremental off. No data/seed/LR
 search or automatic extension. Independent B recounts raw and reproduces
 fixed normal32 plus at most32 failures per arm, unique union<=64. Original
 models/Adam/raw/user changes remain untouched; no artifact cleanup.
+
+Actual run ended at A512/M512 (absolute14848), total1024 updates. A reached
+PERSISTENT_RETENTION; M's +512 renamed panel stopped after10 RETURNED rows
+when the caller misclassified a strict UTF-8 output failure as INTEGRITY_FAIL.
+Original success=false/resume=false and incomplete evaluation remain sticky.
+No remaining budget, train-fit, reproduction or extra phase is implicitly opened.
+The narrow output/guard correction is separately tested with model calls0:
+normal verified decode failures count as quality errors, and the guard uses the
+existing scorer's error/non-EOS union. Execution/runtime/cancel/UNKNOWN still
+block. B can audit existing partial raw/state, but full B acceptance is incomplete.
+See current status for actual source, endpoints, evidence and scoped conclusions.
 
 ## Closed: bounded Metal F32 reduction repair
 

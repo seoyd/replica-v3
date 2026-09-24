@@ -205,20 +205,51 @@ fn save_arm(s:&Study,index:usize,arm:usize,l:&mut checkpoint::Loaded,o:&Optimize
     checkpoint::save(&path,&l.model,&l.tokenizer,l.manifest.clone(),&o.tensors)?;
     p.physical=file_hash(&path)?;p.native=path;println!("DURABLE arm={} local={} absolute={} bytes={}",ARMS[arm],p.local,s.parent_step+p.local,std::fs::metadata(&p.native)?.len());Ok(())
 }
+fn verify_output_result(row:&binary::Value,tok:&ByteBpe)->Result<()> {
+    verify_generated(row,tok)?;
+    // Preserve a proven command-capped RETURNED timeout at the same cursor.
+    // Its immutable call resolution is checked by the collector, not inferred
+    // from an absent result; no request timeout/cancel/UNKNOWN is admitted here.
+    if row["row_version"]==2&&row["generation_started"]==true&&row["generation_completed"]==false
+        &&row["generation"].is_null()&&row["actual"].is_null()&&row["decode_error"].is_null()
+        &&row["error"]=="model: native generation timeout"&&row["generation_error"]==row["error"]
+        &&row["error_class"]=="timeout"&&row["finish_reason"]=="timeout"
+        &&row["timeout_cap_source"]=="command"&&row["command_stop"]=="TIME_BUDGET"&&row["interruption"]=="TIME_BUDGET"
+        &&row["effective_timeout_ms"].as_u64().zip(row["original_timeout_ms"].as_u64()).is_some_and(|(a,b)|a>0&&a<b)
+        &&row["raw_generated_count"].as_u64()==row["raw_tokens"].as_array().map(|v|v.len() as u64)
+        &&(row["diagnostic_stop_error"].is_null()||row["diagnostic_stop_error"]=="model: TIME_BUDGET") {return Ok(());}
+    if !row["generation_error"].is_null()
+        || !row["command_stop"].is_null()&&row["command_stop"]!="TIME_BUDGET"
+        || !row["diagnostic_stop_error"].is_null()&&row["command_stop"]!="TIME_BUDGET" {
+        return Err(bad("native execution/command failure"));
+    }
+    if !row["error"].is_null(){
+        // Only a verified normal RETURNED output can be a quality error.
+        // Decode stays strict: invalid text remains null and never scores exact.
+        if row["row_version"]!=2||row["generation_completed"]!=true
+            ||row["decode_error"]!=row["error"]||row["error_class"]!="strict_utf8" {
+            return Err(bad(&format!("native generation error {}",row["error"])));
+        }
+        let ids:Vec<u32>=binary::from_value(row["generation"]["tokens"].clone())?;
+        let bytes=tok.decode_bytes(&ids)?;
+        if std::str::from_utf8(&bytes).is_ok(){return Err(bad("unverified UTF-8 output error"));}
+    }
+    Ok(())
+}
 fn generated(l:&checkpoint::Loaded,root:&Path,label:&str,es:&[Episode],binding:&binary::Value,c:&mut RunControl)->Result<Vec<binary::Value>>{
     let path=root.join(format!("{label}.r3rows"));let mut entries=if path.exists(){binary::read_value_records(&path)?}else{vec![]};
     if entries.first().is_some_and(|v|v!=binding){return Err(bad("evaluation binding changed"));}
     let mut rows=if entries.is_empty(){vec![]}else{entries.drain(1..).collect()};
     if rows.len()>es.len(){return Err(bad("extra RETURNED rows"));}
-    for(i,row)in rows.iter().enumerate(){call_attempt(root,label,"generation",binding,&es[i],i,Some(row))?;verify_generated(row,&l.tokenizer)?;if row["id"]!=es[i].id||row["expected"]!=es[i].answer{return Err(bad("RETURNED case changed"));}}
+    for(i,row)in rows.iter().enumerate(){call_attempt(root,label,"generation",binding,&es[i],i,Some(row))?;verify_output_result(row,&l.tokenizer)?;if row["id"]!=es[i].id||row["expected"]!=es[i].answer{return Err(bad("RETURNED case changed"));}}
     let mut f=std::fs::OpenOptions::new().append(true).create_new(!path.exists()).open(&path)?;
     if entries.is_empty(){append_row(&mut f,binding)?;std::fs::File::open(root)?.sync_all()?;}
     for(i,e)in es.iter().enumerate().skip(rows.len()){
         c.check("muon_next_generation")?;let attempt=prepare_call(root,label,"generation",binding,e,i)?;
         let mut row=match recovery::observe_generation(l,e,&e.request,c,false){ObservedCall::Returned(r)=>r,ObservedCall::NotInvoked(_)=>{resolve_call(&attempt,None,c)?;c.stop_result()?;return Err(bad("not invoked without stop"));}};
         row["attempt"]=binary::record!(attempt.file_name().unwrap().to_string_lossy());append_row(&mut f,&row)?;resolve_call(&attempt,Some(&row),c)?;
-        verify_generated(&row,&l.tokenizer)?;let error=row["error"].clone();rows.push(row);
-        if !error.is_null(){c.stop_result()?;return Err(bad(&format!("native generation error {error}")));}
+        let verified=verify_output_result(&row,&l.tokenizer);rows.push(row);
+        if verified.is_err(){c.stop_result()?;verified?;}
         if i%64==63{println!("PANEL {label} returned={}/{}",i+1,es.len());}
     }Ok(rows)
 }
@@ -280,11 +311,11 @@ fn decision(s:&Study,arm:usize,p:&Progress,scores:&BTreeMap<String,binary::Value
         let full=j["full"].as_u64().ok_or_else(||bad("guard missing full"))?;
         let all4=j["all4"].as_u64().ok_or_else(||bad("guard missing ALL4"))?;
         // At the full endpoint, independently score the same fixed first64.
-        let (full,all4,errors)=if total==64{(full,all4,total-j["eos"].as_u64().ok_or_else(||bad("guard missing EOS"))?)}else{
+        let (full,all4,errors)=if total==64{(full,all4,j["errors"].as_u64().ok_or_else(||bad("guard missing error count"))?)}else{
             let panel=panels(s,p.local,false)?.into_iter().find(|v|v.0==*name).ok_or_else(||bad("guard panel"))?;
             let raw=binary::read_value_records(&dir.join(format!("eval-{}-{name}.r3rows",p.local)))?;
             let tok=scoring_tokenizer(s)?;let r=scored(name,&panel.1[..64],&panel.2[..64],&raw[1..65],&tok)?;
-            (r["joint"]["full"].as_u64().unwrap(),r["joint"]["all4"].as_u64().unwrap(),64-r["joint"]["eos"].as_u64().unwrap())
+            (r["joint"]["full"].as_u64().unwrap(),r["joint"]["all4"].as_u64().unwrap(),r["joint"]["errors"].as_u64().ok_or_else(||bad("guard missing error count"))?)
         };
         streak[i]=if full<60||all4<12{streak[i]+1}else{0};
         if full<=48||errors>=4{stop=Some("SEVERE_RETENTION".to_owned());}
@@ -694,6 +725,68 @@ mod tests {
         let mut cancelled=RunControl::new(std::sync::Arc::new(AtomicBool::new(true)),std::time::Duration::from_secs(1),u64::MAX)?;
         assert!(cancelled.seal_completed_no_call().is_err());
         println!("NATIVE_BOUNDARY evidence={} optimizer0 generation0 teacher0",dir.display());Ok(())
+    }
+    #[test]
+    #[ignore="RETURNED decode quality vs runtime; actual collector/scorer/guard, model calls0"]
+    fn returned_decode_quality_guard()->Result<()> {
+        let root=PathBuf::from(std::env::var("R3_MUON_PREPARATION").map_err(|_|bad("explicit prepared study required"))?);
+        let mut s:Study=read_confirmed(&root.join("plan.r3b"))?;
+        let(c,_,dm)=inputs(&s)?;let es=&c.validation[..64];let ms=&dm[..64];
+        let l=checkpoint::load(&s.parent,Device::Cpu,false)?;
+        let dir=std::env::temp_dir().join(format!("replica-muon-output-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));std::fs::create_dir(&dir)?;
+        s.root=dir.clone();std::fs::create_dir(dir.join("A"))?;
+        let mut rows=vec![];
+        for e in es {
+            let tokens=l.tokenizer.encode(e.answer.as_bytes())?;let mut raw=tokens.clone();raw.push(EOS);
+            rows.push(binary::record!({"row_version":2,"id":e.id,"expected":e.answer,"question":e.request.input,"generated_evidence":e.request.evidence,"raw_tokens":raw,"actual":e.answer,"error":null,"generation_error":null,"decode_error":null,"finish_reason":"stop","generation_completed":true,"generation":{"tokens":tokens,"generated":raw.len(),"finish":"stop"},"exact_match":true}));
+        }
+        let valid=scored("value",es,ms,&rows,&l.tokenizer)?;
+        let invalid=l.tokenizer.encode(&[0x80])?;let mut raw=invalid.clone();raw.push(EOS);
+        let error=l.tokenizer.decode(&invalid).unwrap_err().to_string();
+        rows[0]["raw_tokens"]=binary::record!(raw);rows[0]["actual"]=binary::Value::Null;
+        rows[0]["generation"]=binary::record!({"tokens":invalid,"generated":raw.len(),"finish":"stop"});
+        rows[0]["error"]=binary::record!(error);rows[0]["decode_error"]=binary::record!(error);
+        rows[0]["error_class"]=binary::record!("strict_utf8");rows[0]["exact_match"]=binary::record!(false);
+        verify_output_result(&rows[0],&l.tokenizer)?;
+        for i in [4,8,12] {let ids=rows[i]["generation"]["tokens"].clone();rows[i]["raw_tokens"]=ids.clone();rows[i]["finish_reason"]=binary::record!("length");rows[i]["generation"]["finish"]=binary::record!("length");rows[i]["generation"]["generated"]=binary::record!(ids.as_array().unwrap().len());rows[i]["exact_match"]=binary::record!(false);}
+        let binding=binary::record!({"synthetic_fixture":true,"cases":digest(&es)?,"call_protocol":1});
+        let ctl=RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),std::time::Duration::from_secs(10),u64::MAX)?;
+        let mut f=std::fs::OpenOptions::new().write(true).create_new(true).open(dir.join("output.r3rows"))?;append_row(&mut f,&binding)?;
+        for(i,row)in rows.iter_mut().enumerate(){let attempt=prepare_call(&dir,"output","generation",&binding,&es[i],i)?;row["attempt"]=binary::record!(attempt.file_name().unwrap().to_string_lossy());append_row(&mut f,row)?;resolve_call(&attempt,Some(row),&ctl)?;}
+        let hash=file_hash(&dir.join("output.r3rows"))?;
+        let mut zero=RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),std::time::Duration::ZERO,u64::MAX)?;zero.set_call_limits(0,0);
+        let reused=generated(&l,&dir,"output",es,&binding,&mut zero)?;zero.seal_completed_no_call()?;
+        assert_eq!(reused,rows);assert_eq!(file_hash(&dir.join("output.r3rows"))?,hash);assert_eq!(zero.receipt()["generation_calls"],0);
+        let score=scored("value",es,ms,&reused,&l.tokenizer)?;
+        assert_eq!(score["joint"]["errors"],4);assert_eq!(score["joint"]["eos"],61);assert_eq!(score["joint"]["full"],60);
+        let p=Progress{local:32,native:s.parent.clone(),physical:s.parent_hash.clone(),stop:None,evaluated:0,fit:false};
+        let scores=BTreeMap::from([("value".into(),score),("citation".into(),valid.clone()),("S1Q1".into(),valid)]);
+        assert_eq!(decision(&s,0,&p,&scores)?,Some("SEVERE_RETENTION".into()));
+        for count in [0usize,1] {
+            let label=format!("timeout{count}");let mut row=rows[1].clone();let ids=l.tokenizer.encode(es[1].answer.as_bytes())?;
+            row["raw_tokens"]=binary::record!(&ids[..count]);row["raw_generated_count"]=binary::record!(count);
+            row["actual"]=binary::Value::Null;row["generation"]=binary::Value::Null;
+            row["generation_started"]=binary::record!(true);row["generation_completed"]=binary::record!(false);
+            row["error"]=binary::record!("model: native generation timeout");row["generation_error"]=row["error"].clone();
+            row["error_class"]=binary::record!("timeout");row["finish_reason"]=binary::record!("timeout");row["exact_match"]=binary::record!(false);
+            row["timeout_cap_source"]=binary::record!("command");row["command_stop"]=binary::record!("TIME_BUDGET");row["interruption"]=row["command_stop"].clone();
+            row["effective_timeout_ms"]=binary::record!(1);row["original_timeout_ms"]=binary::record!(1000);
+            verify_output_result(&row,&l.tokenizer)?;
+            for field in ["timeout_cap_source","command_stop","diagnostic_stop_error"] {let mut broken=row.clone();broken[field]=binary::record!("not a clean command timeout");assert!(verify_output_result(&broken,&l.tokenizer).is_err());}
+            let attempt=prepare_call(&dir,&label,"generation",&binding,&es[1],0)?;row["attempt"]=binary::record!(attempt.file_name().unwrap().to_string_lossy());
+            let path=dir.join(format!("{label}.r3rows"));let mut f=std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+            append_row(&mut f,&binding)?;append_row(&mut f,&row)?;resolve_call(&attempt,Some(&row),&ctl)?;let hash=file_hash(&path)?;
+            let mut zero=RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),std::time::Duration::ZERO,u64::MAX)?;zero.set_call_limits(0,0);
+            assert_eq!(generated(&l,&dir,&label,&es[1..2],&binding,&mut zero)?,vec![row]);zero.seal_completed_no_call()?;
+            assert_eq!(file_hash(&path)?,hash);assert_eq!(zero.receipt()["generation_calls"],0);
+        }
+        for field in ["generation_completed","generation_error","decode_error","diagnostic_stop_error","command_stop"]{
+            let mut broken=rows[0].clone();broken[field]=if field=="generation_completed"{binary::record!(false)}else if field=="decode_error"{binary::Value::Null}else{binary::record!("runtime failure")};
+            assert!(verify_output_result(&broken,&l.tokenizer).is_err(),"{field}");
+        }
+        let mut cancelled=RunControl::new(std::sync::Arc::new(AtomicBool::new(true)),std::time::Duration::from_secs(1),u64::MAX)?;
+        assert!(cancelled.seal_completed_no_call().is_err());
+        println!("OUTPUT_GUARD strictUTF8/EOS1+length3 => severe4; raw unchanged; runtime/cancel blocked; optimizer0 generation0 teacher0 fixture={}",dir.display());Ok(())
     }
     #[test]
     #[ignore="actual TINY new process continuation2 vs1+1;8 optimizer total"]

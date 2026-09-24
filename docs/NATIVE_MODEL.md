@@ -315,7 +315,9 @@ not implemented. There is no accepted product model or Goal1 pass.
 
 ## Objective-owned RESUME (2026-09-18)
 
-The current writer uses R3MODEL wire2; the reader explicitly supports wire1 and2.
+Ordinary saves use R3MODEL wire2. Explicit fresh-optimizer research resumes use
+wire3 with a typed optimizer protocol; the reader supports wire1,2,3. Generic
+training rejects protocol-bound research resumes. See STORAGE_FORMAT.md.
 The same F32 weights and tokenizer mapping remain the inference model identity.
 RESUME v2 requires a typed ResumeBinding in TrainingState, with semantic revision,
 response-CE, normalized-span, summed-pair or separate-side divergence family, exact first-target/alpha IEEE bits,
