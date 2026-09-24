@@ -1,5 +1,88 @@
 # 진단 및 구현 상태
 
+## 2026-09-24 Selected event ID protocol — preparation blocked, no model calls
+
+`R3-SELECTED-EVENT-ID-PROTOCOL-1.0` stopped at E1 input preflight.
+CODE_A=BLOCKED_INPUT_LENGTH; EXECUTION_COMPLETE=false; F_I_ENDPOINT=NOT_RUN;
+OPTIMIZER_CLOCK=parent512 unchanged; new run cursor/updates0;
+EXPOSURE_PARITY=NOT_RUN; TARGET_COST_DIFFERENCE=FULL16 versus ID_ONLY9 including
+EOS on the transformed word rows. ID_ONLY_DEV/RENAMED, FULL_DEV/RENAMED,
+OLD_FULL64, new RETENTION, TRAIN_SEEN, TEACHER_CONDITION and B_RECOUNT/PARITY
+are NOT_RUN. MODEL_QUALITY is unmeasured in this study; GOAL1_READY=false.
+Previous teacher/Metal acceptance, protected11264 and original failures remain.
+
+Starting HEAD `b9cf630a1b9a6dc91ecbe144006e7d06a7d9191e` contains only reporting
+changes after source `1344ae3b4e2f359db81d889e1c2c24b2356e7b17`. Existing user
+`.DS_Store` is preserved. The new local implementation draft adds neutral-system
+FULL/ID_ONLY corpus preparation, request-only labels, strict ID scoring,
+inherited Adam origin versus study cursor, two-mode evaluation and native
+restart tests in `src/muon.rs`, `src/muon_diagnosis.rs` and
+`src/neural/checkpoint.rs`. It is not independently accepted or published as
+completed source. This publication contains status/review documents only.
+
+Actual caller:
+`target/release/replica-train fresh muon event-prepare --diagnosis
+artifacts/teacher-device-20260924-run --audit
+docs/TEACHER_DEVICE_CLOSURE_RECHECK_2026-09-24.md --output
+artifacts/selected-event-id-20260924-study`.
+It exited1 before creating the study, derived corpora or normal preparation
+receipt. The initial bounds error was expanded with row/length details; the
+second call reproduced mode1/train row6144: provided2, excluded0, prompt250,
+answer+EOS9, generation limit32. Total259 exceeds the required256. No evidence
+was truncated and neither prompt nor length policy was changed.
+
+Independent Rust bounds-only verification exited0, checking every transformed
+word request from the original corpus/tokenizer. FULL train1536 and dev384
+all total234; ID_ONLY train1536 and dev384 all total259. Thus all1920 ID_ONLY
+rows violate256. Original first word request totals202 (prompt186+target16).
+The original corpus/tokenizer hashes remained identical. This independently
+confirms a contract/input conflict, not a model-quality or training failure.
+See `docs/SELECTED_EVENT_ID_PREPARATION_REVIEW_2026-09-24.md`.
+
+NEW_USAGE: SMALL/TINY optimizer0, backward0, generation0, teacher0, new exposure0.
+Direct and independent native/teacher process tests, baseline768, pair learning,
+endpoint evaluation and independent B are NOT_RUN because preparation failed.
+The independent bounds reader took0.75s wall, max RSS63,684,608 bytes; it did not
+construct a model. The preparation caller loaded the native for identity checks
+and opened the registered Metal device, but performed no forward or optimizer.
+Last durable model remains A512 absolute14848/Adam512; no new checkpoint exists.
+Its physical hash remains
+`a549392f3f12ebdea95616d6d66043f9b88e1e56ce40ab74d6159304069a8da0`;
+accepted predecessor composite remains
+`3c35b40dbabac5eb80f5e9b284b6f5025a27b1127b65b90aaa2f2f318f88e99c`.
+
+Local candidate patch against the starting HEAD:
+`artifacts/selected-event-id-20260924-evidence/candidate.patch`, SHA256
+`10d9d33b32d04ccd0396a28a9e8b1c942f1c4db1574de8eba6d13c876d06e89a`.
+Evidence: `artifacts/selected-event-id-20260924-evidence/` (build/test/caller
+logs and executables); independent evidence:
+`artifacts/selected-event-id-20260924-review/` (reader, bounds log/receipt).
+Bounds receipt SHA256
+`d9e5998fd8bc90f7e77fb784887633000e7ff902f6360400a1cf30fd4fd1a8c4`.
+No source/model/vendor/corpus tree was copied and no old artifact was removed.
+
+The final candidate builds with Rust1.98.1, `--release --locked --offline
+--features accelerate,metal`, incremental0 and one compute thread. Direct
+`training::fresh::muon::tests::event_review_request_and_clock_boundaries`
+executed1/1 PASS, exit0, no model calls. The same test had passed before the
+bounds-error message gained detail; it is one distinct test, not two independent
+gates. Compile failures (missing delimiter and fixture macro syntax) are retained
+in the logs and excluded from passing tests. No full suite was executed.
+Final preserved executor SHA256
+`277d3ad75fc1a02d836e343bad85decbb0301837c34f7b34ada2dd7b6879f9f1`;
+test executable SHA256
+`2bbfb9731fee56e78fc648e70604d7e93f0b98dbc32df778a3f36039b6e78be5`.
+The two new local evidence roots contain23 files /45,885,599 logical bytes at
+closure (including exact binaries, patch, logs and independent scratch readers).
+No derived study corpus, policy or model was published. Scoped target allocated
+size changed11,705,056 to11,706,100KiB (+1,044KiB); transient peak is UNKNOWN.
+
+NEXT_SIGNAL=INPUT_CONTRACT_BLOCKED. One unexecuted proposal is to authorize
+the same training length264 for both arms while retaining the exact prescribed
+system/questions/tokenizer and all other conditions. This changes a registered
+condition and is not applied here. It is not evidence that ID_ONLY learning will
+succeed; independent A and all later gates remain required.
+
 ## 2026-09-24 Teacher device closure — complete, model quality not accepted
 
 Final successor verdict PASS with independent A-delta/A-caller/B. Original

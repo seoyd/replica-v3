@@ -1,5 +1,44 @@
 # Diagnostic repair and bounded quality recovery
 
+## Blocked preparation: selected event ID output protocol
+
+`R3-SELECTED-EVENT-ID-PROTOCOL-1.0` forks the preserved A512 native at
+absolute14848 with inherited Adam512 (optimizer origin14336). FULL and ID_ONLY
+share a format-neutral system, original records and tape512..640. FULL retains
+the original value/citation task and target; ID_ONLY explicitly requests the
+selected current record's eight-digit ID. The four review rows remain unchanged.
+Both use Metal F32, QE, ANSWER CE, LR3e-5, batch8 and the same tokenizer/model.
+Request-only label verification is training/evaluation tooling, never inference.
+
+Preparation/direct regressions -> independent A -> parent768 new-contract
+generations -> conditional F/I128 updates each -> final cross-mode evaluation
+and independent B. Parent ID-only gates on both192-row versions (FULL183,
+QUERY_BOTH88, ALL444, outside/malformed/errors0) skip unnecessary learning.
+Otherwise save each arm at+1, restart, and run F64/I64/I128/F128. Retention is
+relative to actual A512 V64/VC63/S1Q154; drop>=12 or errors/nonEOS>=4 stops at
+the matched peer endpoint. Drop>=4 is a warning. Final endpoints receive both
+output contracts on dev192, renamed192 and original train128, OLD_FULL64 and
+V/VC/S1Q1 each64. RETURNED rows are reused; final evaluation may resume without
+another optimizer step. Teacher128/arm is gold-prefix evidence only.
+
+Caps: SMALL256 updates, generation4096, teacher288, TINY16 updates (direct8,
+independent8), TINY generation/teacher32 each, active3600s/segment900s,
+new immutable artifacts1GiB and scoped build growth2GiB. Execution/cancel/
+storage/binding/UNKNOWN errors block the peer. Old failures stay closed.
+Independent replay is normal32 plus failure<=32 per arm, teacher16 per arm.
+I must exceed both parent and F by FULL16/QB8 on each ID version without severe
+retention regression for a follow-up signal. This is a protocol comparison,
+not a pure target-length experiment or full-answer/Goal1 acceptance. No QA640,
+confirmation, S4, optimizer/precision change, cleanup or automatic extension.
+
+The actual preparation caller stopped before publishing a study: ID_ONLY
+train row6144 has prompt250 plus target/EOS9, totaling259 > the fixed256 limit.
+Both evidence records are present, excluded0. No truncation, changed prompt,
+longer sequence, model call or training is authorized by this failure. The
+independent preparation review must distinguish this measured input conflict
+from an implementation acceptance or model-quality result. Later stages remain
+NOT_RUN until an explicit input/length decision resolves the conflict.
+
 ## Closed: actual teacher caller and endpoint diagnostic closure
 
 `R3-TEACHER-DEVICE-CLOSURE-1.0` reads only the three completed generation lanes
