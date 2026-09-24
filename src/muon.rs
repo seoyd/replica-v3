@@ -5,8 +5,12 @@ use recovery::{ObservedCall,RunControl};
 
 const CONTRACT:&str="R3-METAL-F32-MUON-QUALITY-1.0";
 const ARMS:[&str;2]=["A","M"];
+#[path="muon_diagnosis.rs"]
+mod diagnosis;
 #[derive(Subcommand)]
 pub enum Action {
+    /// Separately authorized, read-only endpoint observations; never resumes training.
+    Diagnose { #[command(subcommand)] command:diagnosis::Action },
     Prepare { #[arg(long)] parent:PathBuf, #[arg(long)] word_root:PathBuf, #[arg(long)] output:PathBuf },
     Admit { #[arg(long)] root:PathBuf, #[arg(long)] review:PathBuf },
     Baseline { #[arg(long)] root:PathBuf },
@@ -477,6 +481,7 @@ fn review(s:&Study,arm:usize)->Result<()> {
 }
 pub fn run(a:Action)->Result<()> {
     match a {
+        Action::Diagnose{command}=>diagnosis::run(command),
         Action::Prepare{parent,word_root,output}=>prepare(&parent,&word_root,&output),
         Action::Admit{root,review}=>admit(&root,&review),
         Action::Baseline{root}=>baseline(&load_study(&root,true)?),

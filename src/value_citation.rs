@@ -758,7 +758,7 @@ fn value(text: &str) -> Option<u8> {
 }
 // Diagnostic extraction only. The product's whole-response parser stays strict.
 // Inspect every start, including one nested after an unclosed/malformed prefix.
-fn individually_valid_ids(text: &str) -> BTreeSet<i64> {
+pub(in super::super::super) fn individually_valid_ids(text: &str) -> BTreeSet<i64> {
     text.match_indices("[event:").filter_map(|(start,_)| {
         let rest=&text[start+7..];
         rest.split_once(']').and_then(|(id,_)|id.parse::<i64>().ok()).filter(|id|*id>0)

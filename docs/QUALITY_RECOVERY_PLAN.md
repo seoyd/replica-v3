@@ -1,5 +1,32 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: preserved Muon endpoints, evaluation only
+
+`R3-MUON-ENDPOINT-DIAGNOSIS-1.0` observes the existing A512/M512 at
+absolute14848. Original failure, INTEGRITY_FAIL, resume=false, original B blocked,
+and accepted optimizer/Metal A remain unchanged. A separate native binary plan
+binds original parent14336, endpoint files, corpus, tape, immutable RETURNED
+resolutions and old/new producer identities. It grants no old train/review resume.
+
+D0 identities -> D1 narrow observation regressions -> independent A-delta ->
+D2 M renamed missing54 plus A/M original word train128 each -> D3 same
+parent/A/M train32+dev32 gold-prefix teacher -> D4 independent recount and
+normal32/failure<=32 replay per arm plus teacher8/model -> D5 closure.
+Reused original rows are586; completed posthoc endpoint table is640. Original
+ten M renamed rows, including strict invalid UTF-8, are never regenerated.
+Full string/value/support/outside-ID/parse/EOS and complete QB/SB/ALL4 are
+separate. Train membership and actual512-step exposure are distinguished.
+Teacher roles use actual full-target token bytes, including MIXED and EOS;
+gold-prefix metrics never replace free generation. No parent free generation.
+
+New caps: generation438, teacher216 examples, optimizer/backward0,
+active1800s/segment900s, evidence256MiB/build growth2GiB. Only proven time
+stops resume; UNKNOWN/cancel/runtime/binding/storage failures block. Complete
+RETURNED work can finalize without new calls after time exhaustion. Read/report
+does not create missing evidence. No QA640, confirmation, cleanup or training.
+Independent A precedes execution; independent B is new posthoc acceptance only.
+No new model-quality or Goal1 acceptance is granted by diagnostic completion.
+
 ## Closed execution: fixed Metal F32 fresh optimizer comparison
 
 `R3-METAL-F32-MUON-QUALITY-1.0`: original14336 weights, original word-value

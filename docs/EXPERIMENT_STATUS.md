@@ -13300,3 +13300,20 @@ train 앞128은0회64/1회48/2회8/3회8, 각각 정답9/18/2/2다. saved sample
 | u2-20000-exposure.txt | e73209cd51127694cd16be0c55456b3874c1eb934feef785a762cad076835147 |
 
 parent checkpoint, P1/U1, U2 start/probe/final은 덮어쓰거나 삭제하지 않았다.
+# Muon preserved-endpoint diagnosis — D0/D1, 2026-09-24
+
+`R3-MUON-ENDPOINT-DIAGNOSIS-1.0`: separate evaluation-only connection;
+original A512/M512 failure and old B blocked remain unchanged. Existing
+independent raw/state reader ran again:1866 historical panel rows,1024 original
+updates, original generation1882, teacher0 verified. These are historical usage.
+Protected11264/14336 and the older five-file preservation ledger still match.
+
+New code reuses generation/scoring/teacher, immutable call resolutions and
+RunControl. It adds checked endpoint references, missing-only completion,
+train exposure, token-byte roles and pure composite readback. New model calls,
+backward and optimizer are0. Seven scoped direct tests passed (including a new
+process at exhausted1800s and repeat readback with zero calls); independent
+A-delta is pending. No new quality conclusion or Muon adoption is authorized.
+Evidence: `artifacts/muon-endpoint-20260924-diagnosis/`, including
+`original-recount.log` and `direct-tests-final.log`. Original study and models
+are referenced in place. Matching target baseline11,706,736KiB; incremental off.
