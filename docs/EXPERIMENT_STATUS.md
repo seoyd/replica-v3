@@ -42,6 +42,28 @@ Independent scratch `artifacts/selected-event-id-20260924-review-v11/`.
 At this checkpoint CODE_A=PENDING, E2/E3/E4/B=NOT_RUN, MODEL_QUALITY=NOT_MEASURED,
 GOAL1_READY=false. Closed Metal/teacher/old failures are reused unchanged.
 
+### Independent A and parent baseline completed
+
+Frozen execution source is `2e98f6a834ffe440ce2f20dec4361dee8818ef29`, normally
+pushed and matched remotely. Independent A PASS was published separately as
+`759df32b99a561a19e40fba2d0d7b871e9f53fa6` (remote matched). Its typed receipt
+SHA256 `bdab0859fe2a2568f240c11d6cc5f7317e167e5d5c68771243f8d37773129035`
+binds policy/source/runtime and all six required boundaries. The independent
+reader verified all22,272 derived episodes, six length summaries, exact tape,
+cost and inherited-state bindings. Independent TINY8/backward8/teacher2/gen0
+passed including both fresh-process resumes and separate teacher readback.
+Total TINY16/backward16/teacher4/gen0; no further TINY updates. A charges32s
+conservatively. See `docs/SELECTED_EVENT_ID_V11_REVIEW_2026-09-25.md`.
+
+The frozen executor's baseline command exited0: parent FULL-word0/192 and
+FULL-renamed0/192, ID_ONLY-word0/192 and ID_ONLY-renamed0/192; all QB/SB/ALL4
+zero, EOS192 on every panel. FULL outside/malformed rows were96/96 and104/88;
+ID_ONLY outside0/malformed192 in both versions. These are new protocol
+observations, not old D2 replays. Generation768, optimizer0, teacher0.
+The ID-only skip gate is false, so the already authorized bounded comparison
+follows. Raw and call receipts remain in the study root; baseline-000.log is
+under the execution evidence root. Model quality remains unaccepted.
+
 ## 2026-09-24 Selected event ID protocol — preparation blocked, no model calls
 
 `R3-SELECTED-EVENT-ID-PROTOCOL-1.0` stopped at E1 input preflight.
