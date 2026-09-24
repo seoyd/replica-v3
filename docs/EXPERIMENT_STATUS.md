@@ -1,6 +1,54 @@
 # 진단 및 구현 상태
 
-## 2026-09-25 Selected event ID protocol1.1 — prepared, independent A pending
+## 2026-09-25 Selected event ID protocol1.1 — common64 endpoint complete, B pending
+
+### Actual bounded comparison completed
+
+CODE_A=PASS; execution source remains
+`2e98f6a834ffe440ce2f20dec4361dee8818ef29`. Both arms saved their first inherited
+update at model14849/Adam513/cursor1, then a new process continued to the
+common endpoint model14912/Adam576/cursor64. SMALL updates128 total, not256;
+each arm consumed original tape[512..576], batch8, LR3e-5 and inherited Adam.
+No optimizer reset, further learning or altered protocol was used.
+
+| Actual endpoint | F | I |
+|---|---:|---:|
+| V FULL /64 | 64 | 64 |
+| VC FULL /64 | 64 | 64 |
+| S1Q1 FULL /64 | 64 | 57 |
+| S1Q1 EOS /64 | 64 | 60 |
+| FULL word /192; renamed /192; train /128 | 0; 0; 0 | 0; 0; 0 |
+| ID_ONLY word /192; renamed /192; train /128 | 0; 0; 0 | 0; 0; 0 |
+| OLD_FULL /64 | 0 | 0 |
+| Actual input / target / padding tokens | 104832 / 7488 / 14464 | 106880 / 5696 / 16512 |
+
+All new-mode QUERY_BOTH/SWAP_BOTH/ALL4 counts are zero. The I S1Q1 error/non-EOS
+union reached4, triggering registered SEVERE_RETENTION despite FULL57 exceeding
+the actual parent54. Both arms therefore closed at64; F did not independently
+trigger the guard. This is a normal bounded quality stop, not an execution or
+integrity failure. No128 endpoint or unconsumed-budget permission is implied.
+Each arm exposed512 rows (review256/word256), all unique. In the fixed train128,
+42 rows have parent/new exposures1/1 and86 have2/0. Even train performance must
+therefore be described as limited exposure, not demonstrated convergence.
+
+Train commands `fresh muon train --root ...` in train-000.log and train-001.log
+both exited0. The final segment has success=true, resume=false and complete
+final panels/teachers. The same frozen executor's pure `fresh muon report`
+exited0, verifying all panels, decisions, costs, clocks and endpoint hashes
+without model calls. Evidence: report-before-b.log in the execution root.
+It reports generation3328 (parent768 plus endpoints2560), teacher256,
+active634.440205458s including the32s A charge, study bytes474130095.
+The640 intermediate RETURNED rows are reused within final panels, not generated
+twice. Main backward128 is training only; separate diagnostic backward0.
+
+Last durable F: `F/segment-001-step-64.r3m`, physical
+`9ea752b455d0222cdbc414f799fd86e8a3aff1f31d3893f3571f7e215b4a3ca4`.
+Last durable I: `I/segment-001-step-64.r3m`, physical
+`865a6d8d4273e1e868b7e192ce53611ad018699fb884992ef2687e0e4efbb844`.
+Both are under the prepared study root below. NEXT_SIGNAL=NO_CLEAR_SIGNAL;
+MODEL_QUALITY=FAIL in the registered scope; GOAL1_READY=false. Independent B
+recount, normal/failure parity and teacher parity remain pending at this entry.
+The following preparation and A checkpoints are historical observations.
 
 CONTRACT_VERSION=1.1. Starting report HEAD44c9016a87baa57c4b27c3ff2a4dcfb486feed20
 was not an execution candidate. The preserved three-file draft exactly matched
