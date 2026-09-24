@@ -3,9 +3,14 @@
 use super::*;
 type Value=binary::Value;
 const ID:&str="R3-MUON-ENDPOINT-DIAGNOSIS-1.0";
+const CLOSURE:&str="R3-TEACHER-DEVICE-CLOSURE-1.0";
 
 #[derive(Subcommand)]
 pub enum Action {
+    Successor { #[arg(long)] predecessor:PathBuf, #[arg(long)] executor:PathBuf, #[arg(long)] audit:PathBuf, #[arg(long)] output:PathBuf },
+    Smoke { #[arg(long)] root:PathBuf, #[arg(long,value_parser=["parent","A","M"])] model:String },
+    ReadSmoke { #[arg(long)] root:PathBuf },
+    AdmitCaller { #[arg(long)] root:PathBuf, #[arg(long)] review:PathBuf },
     Prepare { #[arg(long)] original:PathBuf, #[arg(long)] audit:PathBuf, #[arg(long)] output:PathBuf },
     Admit { #[arg(long)] root:PathBuf, #[arg(long)] review:PathBuf },
     Observe { #[arg(long)] root:PathBuf, #[arg(long,value_parser=["missing","train-A","train-M","teacher-parent","teacher-A","teacher-M","replay-A","replay-M","check-parent","check-A","check-M"])] lane:String },
@@ -19,7 +24,11 @@ struct Diagnostic {
     contract:String,root:PathBuf,original:Study,endpoints:[Progress;2],refs:BTreeMap<PathBuf,String>,
     panels:Vec<RawRef>,source:String,runtime:RuntimeProfile,teacher_cases:Vec<usize>,
     generation_cap:usize,teacher_cap:usize,active_cap:f64,segment_cap:f64,bytes_cap:u64,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    predecessor:Option<Predecessor>,
 }
+#[derive(Clone,Serialize,Deserialize)]
+struct Predecessor { root:PathBuf,policy:String,failed_row:String,executor:PathBuf,manifests:BTreeMap<String,Value> }
 fn source()->Result<String>{digest(&(sources()?,neural::hash(include_bytes!("muon_diagnosis.rs"))))}
 fn bind(refs:&mut BTreeMap<PathBuf,String>,p:&Path)->Result<()> {refs.insert(p.canonicalize()?,file_hash(p)?);Ok(())}
 fn check_refs(d:&Diagnostic)->Result<()> {
@@ -123,17 +132,89 @@ fn prepare(original:&Path,audit:&Path,root:&Path)->Result<()> {
     std::fs::create_dir(root)?;let root=root.canonicalize()?;
     let d=Diagnostic{contract:ID.into(),root:root.clone(),original:s,endpoints:end.arms.clone(),refs,panels:panels_out,
         source:source()?,runtime:RuntimeProfile::capture(Backend::Metal0,&Backend::Metal0.open()?)?,teacher_cases:cases,
-        generation_cap:438,teacher_cap:216,active_cap:1800.,segment_cap:900.,bytes_cap:256*1024*1024};
+        generation_cap:438,teacher_cap:216,active_cap:1800.,segment_cap:900.,bytes_cap:256*1024*1024,predecessor:None};
     if d.runtime.patch!=d.original.runtime.patch||d.runtime.patch_source!=d.original.runtime.patch_source||d.runtime.lock!=d.original.runtime.lock
         ||d.runtime.actual_device!=d.original.runtime.actual_device{return Err(bad("diagnostic backend differs"));}
     publish_confirmed(&root.join("diagnostic-plan.r3b"),&d)?;
     println!("POSTHOC_PREPARED policy={} old_RETURNED586 missing54 train256 teacher192 replay_cap128 teacher_check_cap24 optimizer0 backward0 original_resume=false",digest(&d)?);Ok(())
 }
+// Read-only exception for three completed lanes, never an exception to segments().
+fn verified_d2(old:&Diagnostic)->Result<String>{
+    if old.contract!=ID||old.predecessor.is_some(){return Err(bad("specific predecessor scope required"));}
+    let mut totals=vec![];
+    for (i,name) in ["missing","train-A","train-M","teacher-parent"].iter().enumerate(){
+        let start_path=old.root.join(format!("observation-{i:03}-started.r3b"));
+        let start:Value=read_confirmed(&start_path)?;
+        let end:Value=read_confirmed(&old.root.join(format!("observation-{i:03}-finished.r3b")))?;
+        let(_,physical,es,teacher,_)=lane(old,name)?;let b=binding(old,name,&physical,&es)?;
+        if start["policy"]!=digest(old)?||start["lane"]!=*name||start["binding"]!=b||end["binding"]!=b||end["start"]!=file_hash(&start_path)? {return Err(bad("predecessor segment identity"));}
+        if i<3 {
+            if end["success"]!=true||end["resume"]!=false||end["control"]["observed_conditions"]!=binary::record!([])
+                ||end["control"]["generation_calls"]!=es.len()||end["control"]["teacher_calls"]!=0
+                ||read_confirmed::<Value>(&old.root.join(format!("{name}-finished.r3b")))?!=end {return Err(bad("D2 lane not complete"));}
+            let rows=new_rows(old,name,&es,&b,teacher)?;let tok=scoring_tokenizer(&old.original)?;
+            for(e,r)in es.iter().zip(rows){verify_output_result(&r,&tok)?;if r["id"]!=e.id||r["expected"]!=e.answer||r["request_digest"]!=digest(&e.request)?{return Err(bad("D2 case binding"));}}
+        } else {
+            let rows=binary::read_value_records(&old.root.join("teacher-parent-teachers.r3rows"))?;
+            if rows.len()!=2||rows[0]!=b{return Err(bad("predecessor teacher must have exactly one failed attempt"));}
+            call_attempt(&old.root,name,"teacher",&b,&es[0],0,Some(&rows[1]))?;
+            if end["success"]!=false||end["resume"]!=false||end["control"]["observed_conditions"]!=binary::record!(["INTEGRITY_FAIL"])
+                ||end["control"]["generation_calls"]!=0||end["control"]["teacher_calls"]!=1
+                ||rows[1]["ordinal"]!=0||rows[1]["id"]!=es[0].id||rows[1]["case"]!=digest(&es[0])?
+                ||rows[1]["teacher"]!=binary::record!({"error":"invalid input: native input shape/dtype/device/context/cache identity"})
+                ||end["error"]!=rows[1]["teacher"]["error"] {return Err(bad("not the verified device-input predecessor failure"));}
+            for absent in ["teacher-parent-finished.r3b","observation-004-started.r3b","composite.r3b"] {
+                if old.root.join(absent).exists()||pending_path(&old.root.join(absent)).exists(){return Err(bad("unexpected predecessor continuation/completion"));}
+            }
+            // The returned row is bound to the entered call's control and failed segment.
+            let attempt=old.root.join(rows[1]["attempt"].as_str().ok_or_else(||bad("failed attempt absent"))?);
+            let resolution:Value=read_confirmed(&attempt.with_file_name(attempt.file_name().unwrap().to_string_lossy().replace("-prepared","-resolved")))?;
+            if resolution["control"]["teacher_calls"]!=1||resolution["calls"]!=1||resolution["control"]["generation_calls"]!=0
+                ||resolution["control"]["observed_conditions"]!=binary::record!([]){return Err(bad("predecessor entry usage/mixed failure"));}
+            totals.push(end);let(_,g,t)=usage(&totals)?;if (g,t)!=(310,1){return Err(bad("predecessor usage"));}
+            return digest(&rows[1]);
+        }
+        totals.push(end);
+    }Err(bad("missing predecessor failure"))
+}
+fn predecessor(d:&Diagnostic)->Result<Diagnostic>{
+    let p=d.predecessor.as_ref().ok_or_else(||bad("successor required"))?;
+    let old=load(&p.root,false)?;
+    let mut runtime=old.runtime.clone();runtime.binary=d.runtime.binary.clone();
+    if digest(&old)?!=p.policy||digest(&old.original)?!=digest(&d.original)?||digest(&old.endpoints)?!=digest(&d.endpoints)?
+        ||old.teacher_cases!=d.teacher_cases||digest(&old.panels)?!=digest(&d.panels)?
+        ||verified_d2(&old)?!=p.failed_row||file_hash(&p.executor)?!=old.runtime.binary
+        ||runtime!=d.runtime {
+        return Err(bad("successor/predecessor lineage mismatch"));
+    }Ok(old)
+}
+fn successor(root:&Path,executor:&Path,audit:&Path,output:&Path)->Result<()> {
+    let old=load(root,false)?;let failed_row=verified_d2(&old)?;
+    if file_hash(executor)?!=old.runtime.binary{return Err(bad("predecessor executable mismatch"));}
+    // Source/native hashes and the independent provenance audit are retained as evidence,
+    // not accepted merely because a report contains a PASS word.
+    let mut refs=old.refs.clone();bind(&mut refs,audit)?;bind(&mut refs,executor)?;
+    for e in std::fs::read_dir(&old.root)? {let e=e?;if e.file_type()?.is_file(){bind(&mut refs,&e.path())?;}}
+    let mut manifests=BTreeMap::new();
+    for name in ["teacher-parent","teacher-A","teacher-M","check-parent","check-A","check-M","replay-A","replay-M"] {
+        let(_,model,es,teacher,expected)=lane(&old,name)?;
+        manifests.insert(name.into(),binary::record!({"native":model,"cases":digest(&es)?,"ids":es.iter().map(|e|&e.id).collect::<Vec<_>>(),"teacher":teacher,"reference_rows":expected.as_ref().map(digest).transpose()?}));
+    }
+    let runtime=RuntimeProfile::capture(Backend::Metal0,&Backend::Metal0.open()?)?;
+    std::fs::create_dir(output)?;
+    let mut d=old.clone();d.contract=CLOSURE.into();d.root=output.canonicalize()?;d.source=source()?;d.runtime=runtime;d.refs=refs;d.generation_cap=128;
+    d.predecessor=Some(Predecessor{root:old.root.clone(),policy:digest(&old)?,failed_row,executor:executor.canonicalize()?,manifests});
+    predecessor(&d)?;
+    publish_confirmed(&d.root.join("diagnostic-plan.r3b"),&d)?;
+    println!("SUCCESSOR_PREPARED policy={} reused_D2=896 historical_generation310 failed_teacher1 new_generation0 teacher0 optimizer0 backward0",digest(&d)?);Ok(())
+}
 fn load(root:&Path,execute:bool)->Result<Diagnostic> {
     let d:Diagnostic=read_confirmed(&root.join("diagnostic-plan.r3b"))?;
-    if d.contract!=ID||d.root!=root.canonicalize()?||d.generation_cap!=438||d.teacher_cap!=216||d.active_cap!=1800.||d.segment_cap!=900. {
+    if (d.predecessor.is_some()&&d.contract!=CLOSURE)||(d.predecessor.is_none()&&d.contract!=ID)
+        ||d.root!=root.canonicalize()?||d.generation_cap!=if d.predecessor.is_some(){128}else{438}||d.teacher_cap!=216||d.active_cap!=1800.||d.segment_cap!=900.||d.bytes_cap!=256*1024*1024 {
         return Err(bad("diagnosis policy/root/budget mismatch"));}
     check_refs(&d)?;inputs(&d.original)?;
+    if d.predecessor.is_some(){predecessor(&d)?;}
     if execute {
         if d.source!=source()?{return Err(bad("diagnostic frozen source mismatch"));}d.runtime.verify(&Backend::Metal0.open()?)?;
         let a:Value=read_confirmed(&root.join("review-a.r3b"))?;let path=Path::new(a["report"].as_str().ok_or_else(||bad("independent A absent"))?);
@@ -142,10 +223,42 @@ fn load(root:&Path,execute:bool)->Result<Diagnostic> {
 }
 fn admit(root:&Path,path:&Path)->Result<()> {
     let d=load(root,false)?;let r:Value=read(path)?;
+    if d.predecessor.is_some(){return admit_phase(&d,path,"A-delta");}
     if r["contract"]!=ID||r["source"]!=d.source||r["policy"]!=digest(&d)?||r["verdict"]!="PASS"
         ||r["tests_passed"].as_u64().is_none_or(|n|n<6)||r["optimizer_calls"]!=0||r["backward_calls"]!=0
         ||r["generation_calls"]!=0||r["teacher_calls"]!=0{return Err(bad("A-delta incomplete"));}
     publish_confirmed(&root.join("review-a.r3b"),&binary::record!({"accepted":true,"policy":digest(&d)?,"report":path.canonicalize()?,"report_hash":file_hash(path)?}))
+}
+fn admit_phase(d:&Diagnostic,path:&Path,phase:&str)->Result<()> {
+    if d.predecessor.is_none(){return Err(bad("successor admission required"));}
+    let r:Value=read_confirmed(path)?;
+    let caller=phase=="A-caller";
+    if r["contract"]!=CLOSURE||r["phase"]!=phase||r["policy"]!=digest(d)?||r["source"]!=d.source
+        ||r["runtime"]!=binary::record!(d.runtime)||r["verdict"]!="PASS"||r["optimizer_calls"]!=0||r["backward_calls"]!=0
+        ||r["generation_calls"]!=0||r["teacher_calls"]!=if caller{3}else{0}
+        ||r["evidence"].as_object().is_none_or(|v|v.is_empty()) {return Err(bad("independent successor admission binding"));}
+    for (path,hash) in r["evidence"].as_object().unwrap(){if file_hash(Path::new(path))?!=hash.as_str().ok_or_else(||bad("evidence hash"))?{return Err(bad("review evidence changed"));}}
+    if caller&&r["smoke"]!=digest(&smoke_readback(d)?)?{return Err(bad("A-caller smoke mismatch"));}
+    publish_confirmed(&d.root.join(if caller{"review-caller.r3b"}else{"review-a.r3b"}),&binary::record!({"accepted":true,"policy":digest(d)?,"report":path.canonicalize()?,"report_hash":file_hash(path)?}))
+}
+fn caller_accepted(d:&Diagnostic)->Result<()> {
+    let a:Value=read_confirmed(&d.root.join("review-caller.r3b"))?;
+    let path=Path::new(a["report"].as_str().ok_or_else(||bad("A-caller required"))?);
+    let r:Value=read_confirmed(path)?;
+    if a["accepted"]!=true||a["policy"]!=digest(d)?||a["report_hash"]!=file_hash(path)?||r["phase"]!="A-caller"||r["policy"]!=digest(d)?||r["source"]!=d.source||r["verdict"]!="PASS" {return Err(bad("A-caller evidence mismatch"));}Ok(())
+}
+fn smoke_readback(d:&Diagnostic)->Result<Value> {
+    if d.predecessor.is_none(){return Err(bad("successor smoke required"));}
+    let h=segments(d)?;let(_,g,t)=usage(&h)?;if g!=0||t!=3{return Err(bad("first-row caller usage must be three"));}
+    let tok=scoring_tokenizer(&d.original)?;let mut out=vec![];
+    for model in ["parent","A","M"] {
+        let name=format!("teacher-{model}");let(_,native,es,_,_)=lane(d,&name)?;let b=binding(d,&name,&native,&es)?;
+        let rows=prefix_rows(d,&name,&es,&b,true)?;
+        let done:Value=read_confirmed(&d.root.join(format!("{name}-prefix.r3b")))?;
+        if rows.len()!=1||done["binding"]!=b||done["success"]!=true||done["coverage"]!=1||done["planned"]!=64||done["work_remaining"]!=true{return Err(bad("smoke is not exactly first1/full64"));}
+        validate_forward(d,&es[..1],&rows,&tok)?;
+        out.push(binary::record!({"model":model,"binding":b,"row":digest(&rows[0])?,"prefix_final":file_hash(&d.root.join(format!("{name}-prefix.r3b")))?,"score":teacher_scores(&es[..1],&rows,&tok)?}));
+    }Ok(binary::record!({"policy":digest(d)?,"teacher_completed":3,"teacher_new":0,"generation_new":0,"models":out}))
 }
 // Same immutable publisher and RunControl as the learning harness, but a new
 // budget and observations only. No old-control exception and no training state.
@@ -169,13 +282,25 @@ fn original_rows(d:&Diagnostic,r:&RawRef)->Result<Vec<Value>> {
     let mut v=binary::read_value_records(&r.path)?;if v.len()!=r.count+1||v[0]!=r.header{return Err(bad("original row binding"));}Ok(v.drain(1..).collect())
 }
 fn new_rows(d:&Diagnostic,label:&str,es:&[Episode],b:&Value,teacher:bool)->Result<Vec<Value>> {
+    if d.predecessor.is_some()&&matches!(label,"missing"|"train-A"|"train-M"){
+        let old=predecessor(d)?;let(_,native,expected,t,_)=lane(&old,label)?;
+        if digest(&es)?!=digest(&expected)?||t!=teacher{return Err(bad("imported case manifest changed"));}
+        return new_rows(&old,label,es,&binding(&old,label,&native,es)?,teacher);
+    }
+    let rows=prefix_rows(d,label,es,b,teacher)?;
+    if rows.len()!=es.len(){return Err(bad("new raw incomplete"));}Ok(rows)
+}
+fn prefix_rows(d:&Diagnostic,label:&str,es:&[Episode],b:&Value,teacher:bool)->Result<Vec<Value>> {
     let path=d.root.join(format!("{label}{}.r3rows",if teacher{"-teachers"}else{""}));
-    let v=binary::read_value_records(&path)?;if v.len()!=es.len()+1||v[0]!=*b{return Err(bad("new raw incomplete/binding"));}
-    for(i,(e,r))in es.iter().zip(&v[1..]).enumerate(){call_attempt(&d.root,label,if teacher{"teacher"}else{"generation"},b,e,i,Some(r))?;}
+    let v=binary::read_value_records(&path)?;if v.is_empty()||v.len()>es.len()+1||v[0]!=*b{return Err(bad("new raw incomplete/binding"));}
+    for(i,(e,r))in es.iter().zip(&v[1..]).enumerate(){call_attempt(&d.root,label,if teacher{"teacher"}else{"generation"},b,e,i,Some(r))?;
+        if r["id"]!=e.id||teacher&&(r["ordinal"]!=i||r["case"]!=digest(e)?){return Err(bad("raw case/ordinal mismatch"));}}
+    if v.len()<=es.len(){call_attempt(&d.root,label,if teacher{"teacher"}else{"generation"},b,&es[v.len()-1],v.len()-1,None)?;}
     Ok(v[1..].to_vec())
 }
 fn binding(d:&Diagnostic,label:&str,model:&str,es:&[Episode])->Result<Value>{Ok(binary::record!({"policy":digest(d)?,"source":d.source,"runtime":d.runtime,"lane":label,"native":model,"cases":digest(&es)?,"planned":es.len(),"call_protocol":1}))}
 fn composite(d:&Diagnostic)->Result<Vec<(usize,Panel,Vec<Value>,Vec<Value>)>> {
+    if d.predecessor.is_some(){return composite(&predecessor(d)?);}
     let mut out=vec![];
     for r in &d.panels {let p=panels(&d.original,512,false)?.into_iter().find(|p|p.0==r.name).ok_or_else(||bad("unknown frozen panel"))?;
         let mut rows=original_rows(d,r)?;let mut refs=rows.iter().enumerate().map(|(i,row)|Ok(binary::record!({"path":r.path,"file_hash":d.refs[&r.path],"ordinal":i,"row_hash":digest(row)?,"producer":d.original.source,"historical":true}))).collect::<Result<Vec<_>>>()?;
@@ -223,6 +348,7 @@ fn role_tokens(answer:&str,gold:&[u32],tok:&ByteBpe)->Result<Vec<String>> {
 fn teacher_scores(es:&[Episode],rows:&[Value],tok:&ByteBpe)->Result<Value> {
     if es.len()!=rows.len(){return Err(bad("teacher incomplete"));}
     let mut totals=BTreeMap::<String,(usize,usize,f64)>::new();let mut details=vec![];
+    let mut spans=BTreeMap::<String,[usize;3]>::new();
     for(e,r)in es.iter().zip(rows){let t=&r["teacher"];let v=&t["target_token_observation"];
         let gold:Vec<u32>=binary::from_value(v["gold"].clone())?;let predicted:Vec<u32>=binary::from_value(v["argmax"].clone())?;let nll:Vec<f64>=binary::from_value(v["nll"].clone())?;
         let mut expected=tok.encode(e.answer.as_bytes())?;expected.push(EOS);
@@ -230,9 +356,25 @@ fn teacher_scores(es:&[Episode],rows:&[Value],tok:&ByteBpe)->Result<Value> {
             ||t["training_prompt_matches_generation"]!=true||t["answer_tokenizer_roundtrip"]!=true||r["case"]!=digest(e)?{return Err(bad("teacher shift/target/scalar mismatch"));}
         let roles=role_tokens(&e.answer,&gold,tok)?;
         for(i,role)in roles.iter().enumerate(){let x=totals.entry(role.clone()).or_default();x.0+=1;x.1+=usize::from(gold[i]==predicted[i]);x.2+=nll[i];}
+        let value_bytes=e.answer.split_once("입니다. [event:").unwrap().0.len();
+        for (role,expected_bytes) in [("VALUE",value_bytes),("FORMAT","입니다. [event:".len()),("ID",8)] {let x=spans.entry(role.into()).or_default();
+            let mut covered=0;for(i,r)in roles.iter().enumerate(){if r==role{covered+=tok.decode_bytes(&[gold[i]])?.len();}}
+            if covered!=expected_bytes{x[2]+=1;}else{x[0]+=1;x[1]+=usize::from(roles.iter().enumerate().filter(|(_,r)|r.as_str()==role).all(|(i,_)|gold[i]==predicted[i]));}}
         details.push(binary::record!({"id":e.id,"roles":roles,"first_argmax_difference":gold.iter().zip(&predicted).position(|(a,b)|a!=b),"target_tokens":gold.len()}));
     }
-    Ok(binary::record!({"condition":"gold prefix; not free generation","examples":es.len(),"forward_invocations":rows.len(),"roles":totals,"cases":details}))
+    let means=totals.iter().map(|(k,(n,_,sum))|(k.clone(),sum/(*n as f64))).collect::<BTreeMap<_,_>>();
+    Ok(binary::record!({"condition":"gold prefix; not free generation","examples":es.len(),"forward_invocations":rows.len(),"roles":totals,"mean_nll":means,"span_covered_correct_excluded":spans,"span_exclusion":"MIXED crossing this span boundary leaves incomplete byte coverage","cases":details}))
+}
+fn validate_forward(d:&Diagnostic,es:&[Episode],rows:&[Value],tok:&ByteBpe)->Result<()> {
+    teacher_scores(es,rows,tok)?;
+    let samples=samples_with_framing(es,tok,d.original.config.seq_len,neural::Framing::QuestionEvidence)?;
+    for(s,r)in samples.iter().zip(rows){let n=s.response_start;let f=&r["teacher"]["native_forward"];
+        if f["model_device"]!=d.runtime.actual_device||f["input_device"]!=d.runtime.actual_device||f["logits_device"]!=d.runtime.actual_device
+            ||f["input_dtype"]!="U32"||f["logits_dtype"]!="F32"||f["logits_finite"]!=true
+            ||f["input_shape"]!=binary::record!([1,s.tokens.len()-1])||f["prompt_tokens"]!=n
+            ||f["prompt_digest"]!=digest(&&s.tokens[..n])?||f["input_tokens_digest"]!=digest(&&s.tokens[..s.tokens.len()-1])?
+            ||f["logits_shape"][0]!=s.tokens.len()-n {return Err(bad("actual teacher forward device/shift/finite evidence"));}
+    }Ok(())
 }
 fn lane(d:&Diagnostic,name:&str)->Result<(PathBuf,String,Vec<Episode>,bool,Option<Vec<Value>>)>{
     let arm=usize::from(name.ends_with('M'));let p=&d.endpoints[arm];
@@ -250,13 +392,19 @@ fn parity(a:&[Value],b:&[Value])->Result<()> {
         if x[key]!=y[key]{return Err(bad(&format!("POSTHOC_PARITY_FAIL {} {key}",x["id"])));}
     }}Ok(())
 }
-fn observe(d:&Diagnostic,name:&str)->Result<()> {
+fn observe(d:&Diagnostic,name:&str)->Result<()> {observe_until(d,name,false)}
+fn observe_until(d:&Diagnostic,name:&str,smoke:bool)->Result<()> {
     let history=segments(d)?;let (time,g,t)=usage(&history)?;
     if g>d.generation_cap||t>d.teacher_cap{return Err(bad("new diagnostic budget exceeded"));}
     let (path,model,es,teacher,expected)=lane(d,name)?;let b=binding(d,name,&model,&es)?;
-    let final_path=d.root.join(format!("{name}-finished.r3b"));
+    if let Some(p)=&d.predecessor {
+        if matches!(name,"missing"|"train-A"|"train-M"){return Err(bad("D2 is read-only; regeneration forbidden"));}
+        if p.manifests.get(name)!=Some(&binary::record!({"native":model,"cases":digest(&es)?,"ids":es.iter().map(|e|&e.id).collect::<Vec<_>>(),"teacher":teacher,"reference_rows":expected.as_ref().map(digest).transpose()?})){return Err(bad("frozen successor manifest changed"));}
+        if smoke {if !name.starts_with("teacher-"){return Err(bad("smoke requires main teacher"));}}else{caller_accepted(d)?;}
+    }else if smoke{return Err(bad("prefix collection is successor-only"));}
+    let final_path=d.root.join(format!("{name}-{}.r3b",if smoke{"prefix"}else{"finished"}));
     if final_path.exists(){let done:Value=read_confirmed(&final_path)?;
-        let _=new_rows(d,name,&es,&b,teacher)?;if done["binding"]!=b||done["success"]!=true{return Err(bad("completed observation binding"));}
+        let rows=if smoke{prefix_rows(d,name,&es,&b,true)?}else{new_rows(d,name,&es,&b,teacher)?};if done["binding"]!=b||done["success"]!=true||smoke&&rows.len()!=1{return Err(bad("completed observation binding"));}
         println!("REUSED_COMPLETE {name} new_calls0");return Ok(());}
     if owned_bytes(&d.root)?+8*1024*1024>d.bytes_cap{return Err(bad("new evidence byte budget"));}
     let cancel=std::sync::Arc::new(AtomicBool::new(false));let flag=cancel.clone();ctrlc::set_handler(move||flag.store(true,Ordering::Relaxed)).map_err(|e|bad(&e.to_string()))?;
@@ -266,9 +414,10 @@ fn observe(d:&Diagnostic,name:&str)->Result<()> {
     publish_confirmed(&start,&binary::record!({"policy":digest(d)?,"lane":name,"binding":b,"generation_used":g,"teacher_used":t}))?;
     let result=(||->Result<Value>{let l=checkpoint::load(&path,Backend::Metal0.open()?,false)?;
         if file_hash(&path)?!=model||l.tokenizer.semantic_id()!=d.original.tokenizer{return Err(bad("endpoint changed before call"));}
-        let rows=if teacher{teacher_prefix(&d.root,name,&b,&l,&es,&mut ctl)?}else{generated(&l,&d.root,name,&es,&b,&mut ctl)?};
+        let rows=if teacher{teacher_prefix_until(&d.root,name,&b,&l,&es,if smoke{1}else{es.len()},&mut ctl)?}else{generated(&l,&d.root,name,&es,&b,&mut ctl)?};
         let score=if teacher{
-            let score=teacher_scores(&es,&rows,&l.tokenizer)?;
+            if d.predecessor.is_some(){validate_forward(d,&es[..rows.len()],&rows,&l.tokenizer)?;}
+            let score=teacher_scores(&es[..rows.len()],&rows,&l.tokenizer)?;
             if name.starts_with("check-"){
                 let original=name.replacen("check-","teacher-",1);let(_,native,all,_,_)=lane(d,&original)?;
                 let old=new_rows(d,&original,&all,&binding(d,&original,&native,&all)?,true)?;
@@ -285,7 +434,7 @@ fn observe(d:&Diagnostic,name:&str)->Result<()> {
         l.model.device.synchronize()?;ctl.seal_completed_no_call()?;Ok(score)
     })();
     if let Err(e)=&result{ctl.classify_error(e);}
-    let record=binary::record!({"start":file_hash(&start)?,"binding":b,"success":result.is_ok(),"resume":result.is_err()&&ctl.receipt()["observed_conditions"]==binary::record!(["TIME_BUDGET"]),"control":ctl.receipt(),"score":result.as_ref().ok(),"error":result.as_ref().err().map(ToString::to_string)});
+    let record=binary::record!({"start":file_hash(&start)?,"binding":b,"success":result.is_ok(),"coverage":if result.is_ok(){Some(if smoke{1}else{es.len()})}else{None},"planned":es.len(),"work_remaining":smoke,"resume":result.is_err()&&ctl.receipt()["observed_conditions"]==binary::record!(["TIME_BUDGET"]),"control":ctl.receipt(),"score":result.as_ref().ok(),"error":result.as_ref().err().map(ToString::to_string)});
     // Publish the lane final before declaring its segment successful. A failed
     // final publication leaves a started segment without success (fail closed).
     if result.is_ok(){publish_confirmed(&final_path,&record)?;}
@@ -331,11 +480,13 @@ fn assemble(d:&Diagnostic)->Result<Value> {
     // stdout is a human report only. The execute commands own immutable finals;
     // this pure reader never creates missing evidence or changes eligibility.
     println!("COMPOSITE_CONTENT_DIGEST {}",digest(&outputs)?);
-    Ok(binary::record!({"policy":digest(d)?,"classification":"COMPOSITE_READBACK/POSTHOC","original_study":"FAILED_UNCHANGED","original_B":"BLOCKED_AS_RECORDED","outputs":outputs,"usage":usage(&h)?,"segments":digest(&h)?,"Goal1":false}))
+    Ok(binary::record!({"policy":digest(d)?,"classification":if d.predecessor.is_some(){"COMPOSITE_POSTHOC_SUCCESSOR"}else{"COMPOSITE_READBACK/POSTHOC"},"predecessor":d.predecessor,"original_study":"FAILED_UNCHANGED","original_B":"BLOCKED_AS_RECORDED","outputs":outputs,"usage":usage(&h)?,"segments":digest(&h)?,"Goal1":false}))
 }
 fn require_complete(d:&Diagnostic)->Result<()> {
     segments(d)?;
+    if d.predecessor.is_some(){predecessor(d)?;caller_accepted(d)?;}
     for name in ["missing","train-A","train-M","teacher-parent","teacher-A","teacher-M","replay-A","replay-M","check-parent","check-A","check-M"]{
+        if d.predecessor.is_some()&&matches!(name,"missing"|"train-A"|"train-M"){continue;}
         let(_,native,es,teacher,_)=lane(d,name)?;let b=binding(d,name,&native,&es)?;
         let r:Value=read_confirmed(&d.root.join(format!("{name}-finished.r3b")))?;
         if r["success"]!=true||r["binding"]!=b{return Err(bad("required observation final absent/failed"));}
@@ -343,6 +494,10 @@ fn require_complete(d:&Diagnostic)->Result<()> {
     }Ok(())
 }
 pub fn run(a:Action)->Result<()>{match a {
+    Action::Successor{predecessor,executor,audit,output}=>successor(&predecessor,&executor,&audit,&output),
+    Action::Smoke{root,model}=>observe_until(&load(&root,true)?,&format!("teacher-{model}"),true),
+    Action::ReadSmoke{root}=>{let d=load(&root,false)?;let v=smoke_readback(&d)?;println!("CALLER_READBACK digest={} {}",digest(&v)?,v);Ok(())},
+    Action::AdmitCaller{root,review}=>admit_phase(&load(&root,false)?,&review,"A-caller"),
     Action::Prepare{original,audit,output}=>prepare(&original,&audit,&output),
     Action::Admit{root,review}=>admit(&root,&review),
     Action::Observe{root,lane}=>observe(&load(&root,true)?,&lane),
@@ -353,11 +508,115 @@ pub fn run(a:Action)->Result<()>{match a {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore="native metadata load and synthetic journals only; no forward"]
+    fn prefix_empty_legacy_and_full_manifest_new_process()->Result<()> {
+        if let Ok(root)=std::env::var("R3_CLOSURE_PREFIX_CHILD") {
+            let d:Diagnostic=read(&PathBuf::from(root).join("fixture.r3b"))?;
+            let(_,native,es,_,_)=lane(&d,"teacher-parent")?;let b=binding(&d,"teacher-parent",&native,&es)?;
+            assert_eq!(prefix_rows(&d,"teacher-parent",&es,&b,true)?.len(),1);
+            assert!(new_rows(&d,"teacher-parent",&es,&b,true).is_err());
+            assert!(call_attempt(&d.root,"teacher-parent","teacher",&b,&es[1],1,None)?.is_some());
+            return Ok(());
+        }
+        let mut d=review_source()?;d.root=dir("prefix-process")?;
+        let l=checkpoint::load(&d.original.parent,Device::Cpu,false)?;
+        let mut c=RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),std::time::Duration::ZERO,u64::MAX)?;
+        assert!(teacher_prefix(&d.root,"empty",&binary::record!({"planned":0}),&l,&[],&mut c)?.is_empty());
+        let(_,native,es,_,_)=lane(&d,"teacher-parent")?;let b=binding(&d,"teacher-parent",&native,&es)?;
+        assert!(teacher_prefix_until(&d.root,"teacher-parent",&b,&l,&es,0,&mut c).is_err());
+        let path=d.root.join("teacher-parent-teachers.r3rows");let mut file=std::fs::File::create(&path)?;append_row(&mut file,&b)?;
+        let mut first=String::new();
+        for(i,e)in es.iter().enumerate(){let attempt=prepare_call(&d.root,"teacher-parent","teacher",&b,e,i)?;
+            let row=binary::record!({"ordinal":i,"id":e.id,"case":digest(e)?,"teacher":{"mean_nll":1.,"target_tokens_including_eos":2},"attempt":attempt.file_name().unwrap().to_string_lossy()});
+            append_row(&mut file,&row)?;resolve_call(&attempt,Some(&row),&c)?;
+            if i==0 {
+                first=digest(&row)?;assert_eq!(teacher_prefix_until(&d.root,"teacher-parent",&b,&l,&es,1,&mut c)?.len(),1);
+                write(&d.root.join("fixture.r3b"),&d)?;
+                let status=std::process::Command::new(std::env::current_exe()?).args(["--exact","training::fresh::muon::diagnosis::tests::prefix_empty_legacy_and_full_manifest_new_process","--ignored","--nocapture","--test-threads=1"]).env("R3_CLOSURE_PREFIX_CHILD",&d.root).status()?;assert!(status.success());
+            }
+        }
+        let rows=teacher_prefix_until(&d.root,"teacher-parent",&b,&l,&es,64,&mut c)?;
+        assert_eq!(rows.len(),64);assert_eq!(digest(&rows[0])?,first);assert_eq!(c.receipt()["teacher_calls"],0);
+        let mut broken=rows.clone();broken[1]=broken[0].clone();let mut records=vec![b.clone()];records.extend(broken);review_rows(&path,&records)?;
+        assert!(prefix_rows(&d,"teacher-parent",&es,&b,true).is_err());
+        assert_eq!(c.receipt()["generation_calls"],0);println!("PREFIX_TEST first1->64 same_binding, new_process, empty_legacy, exhausted_budget, duplicate_rejected; model_calls0");Ok(())
+    }
+// Independently authored by the closure reviewer; insert inside diagnosis tests.
+fn review_source() -> Result<Diagnostic> {
+    load(&PathBuf::from(std::env::var("R3_ENDPOINT_PREDECESSOR").map_err(|_|bad("explicit predecessor required"))?),false)
+}
+fn review_rows(path:&Path,rows:&[Value])->Result<()> {
+    let mut file=std::fs::File::create(path)?;for row in rows{append_row(&mut file,row)?;}Ok(())
+}
+fn review_put(path:&Path,value:&Value)->Result<()> {std::fs::write(path,binary::to_vec(value)?)?;Ok(())}
+// Copy only four narrow diagnostic journals. Native/corpus/original refs remain
+// in place, and every synthetic root-dependent digest is rebound consistently.
+fn review_fixture()->Result<Diagnostic> {
+    let old=review_source()?;let mut d=old.clone();d.root=dir("independent-closure")?;
+    for(i,label)in ["missing","train-A","train-M","teacher-parent"].iter().enumerate(){
+        let(_,native,es,teacher,_)=lane(&d,label)?;let b=binding(&d,label,&native,&es)?;
+        let filename=format!("{label}{}.r3rows",if teacher{"-teachers"}else{""});
+        let mut rows=binary::read_value_records(&old.root.join(&filename))?;rows[0]=b.clone();
+        for(j,row)in rows[1..].iter().enumerate(){
+            let name=row["attempt"].as_str().unwrap();let mut prepared:Value=read_confirmed(&old.root.join(name))?;
+            prepared["binding"]=b.clone();assert_eq!(prepared["ordinal"],j);review_put(&d.root.join(name),&prepared)?;
+            let resolved=name.replace("-prepared","-resolved");let mut value:Value=read_confirmed(&old.root.join(&resolved))?;
+            value["prepared"]=binary::record!(file_hash(&d.root.join(name))?);review_put(&d.root.join(&resolved),&value)?;
+        }
+        review_rows(&d.root.join(filename),&rows)?;
+        let start_name=format!("observation-{i:03}-started.r3b");let mut start:Value=read_confirmed(&old.root.join(&start_name))?;
+        start["policy"]=binary::record!(digest(&d)?);start["binding"]=b.clone();review_put(&d.root.join(&start_name),&start)?;
+        let end_name=format!("observation-{i:03}-finished.r3b");let mut end:Value=read_confirmed(&old.root.join(&end_name))?;
+        end["start"]=binary::record!(file_hash(&d.root.join(&start_name))?);end["binding"]=b;review_put(&d.root.join(end_name),&end)?;
+        if i<3{review_put(&d.root.join(format!("{label}-finished.r3b")),&end)?;}
+    }
+    review_put(&d.root.join("diagnostic-plan.r3b"),&binary::to_value(&d)?)?;
+    Ok(d)
+}
+#[test]
+#[ignore="independent closure predecessor negatives; narrow journals only; no model calls"]
+fn independent_successor_rejects_d2_and_failure_forgery()->Result<()> {
+    let d=review_fixture()?;let expected=verified_d2(&d)?;assert_eq!(expected,verified_d2(&review_source()?)?);
+    let raw=d.root.join("train-A.r3rows");let original=binary::read_value_records(&raw)?;
+    for kind in ["missing","duplicate","modified"]{
+        let mut changed=original.clone();match kind{"missing"=>{changed.pop();},"duplicate"=>{changed[2]=changed[1].clone();},_=>{changed[1]["id"]=binary::record!("incorrect-case");}}
+        review_rows(&raw,&changed)?;assert!(verified_d2(&d).is_err(),"accepted {kind} D2 row");review_rows(&raw,&original)?;
+    }
+    let resolution=d.root.join(original[1]["attempt"].as_str().unwrap().replace("-prepared","-resolved"));let value:Value=read_confirmed(&resolution)?;
+    for state in ["UNKNOWN","NOT_INVOKED"]{let mut changed=value.clone();changed["state"]=binary::record!(state);review_put(&resolution,&changed)?;assert!(verified_d2(&d).is_err(),"accepted incomplete D2 resolution");}
+    review_put(&resolution,&value)?;std::fs::write(pending_path(&resolution),b"unconfirmed")?;assert!(verified_d2(&d).is_err());std::fs::remove_file(pending_path(&resolution))?;
+    let finish=d.root.join("observation-003-finished.r3b");let original:Value=read_confirmed(&finish)?;
+    for condition in ["CANCELLED","UNKNOWN","NONFINITE","IO_ERROR"]{let mut changed=original.clone();changed["control"]["observed_conditions"]=binary::record!([condition]);review_put(&finish,&changed)?;assert!(verified_d2(&d).is_err(),"accepted mixed failure {condition}");}
+    let mut changed=original.clone();changed["error"]=binary::record!("unrelated runtime failure");review_put(&finish,&changed)?;assert!(verified_d2(&d).is_err());review_put(&finish,&original)?;
+    let failed=binary::read_value_records(&d.root.join("teacher-parent-teachers.r3rows"))?;
+    let resolved=d.root.join(failed[1]["attempt"].as_str().unwrap().replace("-prepared","-resolved"));let original:Value=read_confirmed(&resolved)?;
+    for condition in ["CANCELLED","UNKNOWN","NONFINITE","IO_ERROR"]{let mut changed=original.clone();changed["control"]["observed_conditions"]=binary::record!([condition]);review_put(&resolved,&changed)?;assert!(verified_d2(&d).is_err(),"accepted disguised failed resolution {condition}");}
+    review_put(&resolved,&original)?;assert_eq!(verified_d2(&d)?,expected);
+    assert!(segments(&d).is_err(),"old failed root was reopened without successor contract");
+    let mut wrong=d.clone();wrong.source=source()?;assert!(verified_d2(&wrong).is_err(),"historical D2 relabeled current producer");
+    println!("INDEPENDENT_D2_NEGATIVES_PASS fixture={} actual_generation0 teacher0 optimizer0 backward0",d.root.display());Ok(())
+}
+#[test]
+#[ignore="independent successor lineage negatives; original native refs read in place; no model calls"]
+fn independent_successor_rejects_identity_changes()->Result<()> {
+    let old=review_source()?;let parent=dir("independent-successor")?;let root=parent.join("run");
+    let executor=PathBuf::from(std::env::var("R3_ENDPOINT_EXECUTOR").map_err(|_|bad("explicit predecessor executor required"))?);
+    let audit=parent.join("audit.txt");std::fs::write(&audit,b"independent scoped fixture; not model evidence")?;
+    successor(&old.root,&executor,&audit,&root)?;let d=load(&root,false)?;predecessor(&d)?;
+    let mut changed=d.clone();changed.original.parent=changed.endpoints[0].native.clone();assert!(predecessor(&changed).is_err());
+    let mut changed=d.clone();changed.original.parent_step+=1;assert!(predecessor(&changed).is_err());
+    let mut changed=d.clone();changed.original.tokenizer="different-tokenizer".into();assert!(predecessor(&changed).is_err());
+    let mut changed=d.clone();changed.runtime.actual_device="Cpu".into();assert!(predecessor(&changed).is_err());
+    for arm in 0..2{let mut changed=d.clone();changed.endpoints[arm].physical="0".repeat(64);assert!(predecessor(&changed).is_err());let mut changed=d.clone();changed.endpoints[arm].local-=1;assert!(predecessor(&changed).is_err());}
+    let mut changed=d.clone();changed.teacher_cases.swap(0,1);assert!(predecessor(&changed).is_err());
+    println!("INDEPENDENT_LINEAGE_NEGATIVES_PASS parent/A/M/step/tokenizer/runtime/selection rejected; actual_generation0 teacher0 optimizer0 backward0");Ok(())
+}
     fn original()->Result<Study>{let p=PathBuf::from(std::env::var("R3_MUON_PREPARATION").map_err(|_|bad("explicit original study required"))?);load_study(&p,false)}
     fn dir(name:&str)->Result<PathBuf>{let p=std::env::temp_dir().join(format!("endpoint-{name}-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));std::fs::create_dir(&p)?;Ok(p)}
     fn policy(s:Study,root:PathBuf)->Result<Diagnostic>{
         let end=history(&s)?.last().unwrap().arms.clone();
-        Ok(Diagnostic{contract:ID.into(),root,original:s,endpoints:end,refs:BTreeMap::new(),panels:vec![],source:source()?,runtime:RuntimeProfile::capture(Backend::Metal0,&Backend::Metal0.open()?)?,teacher_cases:vec![],generation_cap:438,teacher_cap:216,active_cap:1800.,segment_cap:900.,bytes_cap:256*1024*1024})
+        Ok(Diagnostic{contract:ID.into(),root,original:s,endpoints:end,refs:BTreeMap::new(),panels:vec![],source:source()?,runtime:RuntimeProfile::capture(Backend::Metal0,&Backend::Metal0.open()?)?,teacher_cases:vec![],generation_cap:438,teacher_cap:216,active_cap:1800.,segment_cap:900.,bytes_cap:256*1024*1024,predecessor:None})
     }
     #[test]
     #[ignore="scoped original artifacts, no model call"]

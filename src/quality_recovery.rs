@@ -1446,6 +1446,10 @@ fn teacher_observation(
         returned_stop?;
     }
     let lp = candle_nn::ops::log_softmax(&logits, 1)?.to_vec2::<f32>()?;
+    if logits.dtype() != DType::F32 || !logits.device().same_device(&l.model.device)
+        || logits.to_vec2::<f32>()?.iter().flatten().any(|x| !x.is_finite()) {
+        return Err(Error::Model("nonfinite or misplaced diagnostic logits".into()));
+    }
     if lp.iter().flatten().any(|x| !x.is_finite()) {
         return Err(Error::Model("nonfinite diagnostic logits".into()));
     }
@@ -1533,7 +1537,8 @@ fn teacher_observation(
         "teacher_forced_correct_tokens":gold.iter().zip(&predicted).filter(|(a,b)|a==b).count(),"first_target_correct":gold[0]==predicted[0],"last_content_correct":gold.len()>1 && gold[gold.len()-2]==predicted[gold.len()-2],"eos_correct":predicted.last()==Some(&EOS),
         "first_argmax":predicted[0],"first_eos_probability":lp[0][EOS as usize].exp(),"first_gold_probability":lp[0][gold[0] as usize].exp(),"first_argmax_probability":lp[0][predicted[0] as usize].exp(),"first_gold_id":gold[0],
         "first_difference":difference,"first_byte_difference":byte_difference,"first_difference_field":byte_difference.map(|p|field_at(&e.answer,p)),"field_token_accuracy":field_accuracy,"training_prompt_matches_generation":framed[0].tokens[..framed[0].response_start]==*prompt,
-        "answer_tokenizer_roundtrip":l.tokenizer.decode(&gold[..gold.len()-1])?==e.answer}),
+        "answer_tokenizer_roundtrip":l.tokenizer.decode(&gold[..gold.len()-1])?==e.answer,
+        "native_forward":{"model_device":format!("{:?}",l.model.device.location()),"input_device":format!("{:?}",input.device().location()),"input_dtype":format!("{:?}",input.dtype()),"input_shape":input.dims(),"logits_device":format!("{:?}",logits.device().location()),"logits_dtype":format!("{:?}",logits.dtype()),"logits_shape":logits.dims(),"logits_finite":true,"prompt_tokens":prompt.len(),"input_tokens_digest":digest(&input.to_vec2::<u32>()?[0])?,"prompt_digest":digest(&prompt)?}}),
     )
 }
 // The same full-answer shift used by the diagnostic forward. Device placement

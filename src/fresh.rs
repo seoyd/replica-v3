@@ -2679,6 +2679,15 @@ fn teacher_prefix(
     episodes: &[Episode],
     control: &mut recovery::RunControl,
 ) -> Result<Vec<binary::Value>> {
+    teacher_prefix_until(root, prefix, binding, l, episodes, episodes.len(), control)
+}
+// A deliberate prefix retains the full manifest and immutable ordinal identity.
+// It is not a timeout, and callers must not publish a complete lane for it.
+fn teacher_prefix_until(
+    root: &Path, prefix: &str, binding: &binary::Value, l: &checkpoint::Loaded,
+    episodes: &[Episode], until: usize, control: &mut recovery::RunControl,
+) -> Result<Vec<binary::Value>> {
+    if (until == 0 && !episodes.is_empty()) || until > episodes.len() { return Err(bad("invalid teacher prefix limit")); }
     let raw = root.join(format!("{prefix}-teachers.r3rows"));
     let pending = root.join(format!("{prefix}-teacher-pending.r3b"));
     if pending.exists() {
@@ -2697,7 +2706,7 @@ fn teacher_prefix(
     } else {
         entries.drain(1..).collect::<Vec<_>>()
     };
-    if rows.len() > episodes.len() {
+    if rows.len() > until {
         return Err(bad("teacher cursor beyond completed prefix"));
     }
     for (i, (r, e)) in rows.iter().zip(episodes).enumerate() {
@@ -2726,7 +2735,7 @@ fn teacher_prefix(
         std::fs::File::open(root)?.sync_all()?;
     }
     let mut rows = rows;
-    for (i, e) in episodes.iter().enumerate().skip(rows.len()) {
+    for (i, e) in episodes.iter().enumerate().take(until).skip(rows.len()) {
         control.check("fresh_teacher_next")?;
         let attempt = prepare_call(root, prefix, "teacher", binding, e, i)?;
         #[cfg(feature = "test-support")]

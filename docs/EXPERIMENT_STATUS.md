@@ -1,5 +1,35 @@
 # 진단 및 구현 상태
 
+## 2026-09-24 Teacher device closure — preparation and direct regressions
+
+Starting HEAD `673883ceea433ca351c1629edac9d365d3945e7a`; delta from the
+device repair `f5895057ba40e1758c72bf7dba5e37fef21d6445` was reports only.
+User `.DS_Store` is preserved. The separate successor keeps original learning
+and endpoint diagnosis failures closed, references completed D2 rather than
+regenerating it, and permits only teacher/check/replay lanes. No new optimizer,
+backward, model export, corpus copy, vendor/lock change, or cleanup occurred.
+
+Direct tests executed: predecessor D2/failure negatives1/1 (29.17s), lineage
+negatives1/1 (34.12s), prefix/empty-legacy/new-process1/1 with child1/1 (4.01s),
+and final byte-role/scalar test1/1. All model calls0. The prefix collector's
+initial empty-input restriction was caught during independent source review;
+the existing empty teacher prefix remains valid and is now explicitly tested.
+An initial compile's three slice-reference type errors were corrected; failed
+build log remains preserved, not counted as a test. No whole suite was run.
+
+Frozen executor SHA256 `c6b89acddb2587abbef941ddc40813362330866e3a719bd84faa7f64a3c6907d`;
+final test executable SHA256 `e8d147b940e0439f451bdaa2a58750acda1c118ad3fc5f5a51572f39e2e16ac0`.
+Rust1.98.1, locked/offline release, accelerate+metal, incremental0, one compute
+thread. Scoped target allocated size changed11,704,540 to11,705,056KiB (+516KiB);
+peak temporary build growth UNKNOWN. Evidence root:
+`artifacts/teacher-device-20260924-evidence/`; independent evidence:
+`artifacts/teacher-device-20260924-review/`. Actual caller/main teachers and
+generation replay remain NOT_RUN at this preparation checkpoint. Independent
+A-delta and A-caller are separate prerequisites. Goal1 remains false.
+Independent final-executable boundary tests then passed1/1 each, exit0,
+wall27.87s and30.12s, with no model calls. Those tests validate D2/failure and
+lineage rejection; they do not establish the actual teacher caller yet.
+
 ## 2026-09-24 Metal F32 optimizer study — stopped at A512/M512
 
 Initial HEAD52e718eab0ad01396faf85aa6a803c751e8b1330, source baselinecef33c7.

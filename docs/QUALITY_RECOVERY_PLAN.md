@@ -1,5 +1,31 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: actual teacher caller and endpoint diagnostic closure
+
+`R3-TEACHER-DEVICE-CLOSURE-1.0` reads only the three completed generation lanes
+of the preserved failed endpoint diagnosis. Its original generation310 and
+teacher failure1 remain historical. Neither failed run is reopened. The new
+parent-bound binary plan references original896 rows, native parent14336/A512/M512,
+the fixed teacher64/check8/replay manifests, producers, runtime and source.
+D2 generation is disabled in this scope; original data and the device fix remain.
+
+T0 read-only binding -> T1 narrow successor/prefix regressions -> independent
+A-delta -> T2 actual first teacher row on each of three Metal F32 models, native
+row/resolution plus fresh-process pure readback -> independent A-caller -> T3
+remaining189 teachers -> T4 independent teacher24 and A/M replay<=128 -> T5 close.
+The first3 calls belong to main192. Prefix1/64 is deliberate incomplete work,
+not a timeout or complete lane. The same collector appends63 without replaying1.
+Teacher gold-prefix VALUE/FORMAT/ID/CLOSE/EOS/MIXED metrics remain separate from
+free-generation quality; train/dev/exposure denominators stay distinct.
+
+New generation128/teacher216/optimizer0/backward0, active1800s/segment900s,
+immutable evidence256MiB and build net growth2GiB. Only pure time may resume;
+execution/cancel/binding/storage/UNKNOWN blocks further calls. Full RETURNED work
+may finalize at exhausted call/time limits. Old NS/Metal/optimizer/D2 regressions,
+learning, QA640, confirmation, FP4 and cleanup are out of scope. Independent
+receipts bind actual phase evidence; successful closure does not accept Muon,
+model quality, S4/S5/S6 or Goal1. Next quality change is a proposal only.
+
 ## Closed partial: preserved Muon endpoints, evaluation only
 
 `R3-MUON-ENDPOINT-DIAGNOSIS-1.0` observes the existing A512/M512 at
