@@ -1,13 +1,14 @@
 # 진단 및 구현 상태
 
-## 2026-09-25 Full response fit — prepared, independent A pending
+## 2026-09-25 Full response fit — A accepted, single-arm execution started
 
 The new single F continuation references the original F64 native at
 `artifacts/selected-event-id-v11-20260924-study/F/segment-001-step-64.r3m`.
 Physical9ea752b455d0222cdbc414f799fd86e8a3aff1f31d3893f3571f7e215b4a3ca4,
 model14912/Adam576/origin14336; original cursor64 and closed F/I decisions
-are preserved. New cursor0 is a separate parent-bound policy. No SMALL update,
-generation or teacher has run for this study at preparation closure.
+are preserved. New cursor0 is a separate parent-bound policy. Source
+80ec58a37bf50d41a919a0ddfed86b4c969fd4b8 is frozen; its normal push matched the
+remote full SHA. At preparation closure all SMALL calls were0.
 
 Preparation: `artifacts/full-response-fit-20260925-study`.
 Policy403e9c50e054048f5967fb60ff5ea9731b8f987a019dc8c68794187c97322858;
@@ -39,9 +40,22 @@ Candidate source patchc4c5c22bf744381f6ebe2b3fd30e85214f02539a5d86094547eb2a60ea
 The prepared eight-native reservation is913460736 bytes plus64MiB allowance;
 the referenced parent is114182592 bytes and was not copied into the study.
 Compiler intermediates used CARGO_INCREMENTAL=0; build peak is UNKNOWN.
-Independent A actual caller verification remains pending; no self-approval.
-CODE_DIRECT=PASS; CODE_A=PENDING; FULL_FIT_EXECUTION=NOT_RUN;
-MODEL_QUALITY=NOT_RUN; GOAL1_READY=false.
+Independent A passed with receipt
+fd828a5bd2be46758960baba432ca7f03d86caa2dbda60587a721510e2d129e7.
+Independent TINY added4 updates/backward, generation0/teacher0: total TINY8.
+UNKNOWN, cancelled control and wrong native hash each blocked the actual caller
+before any new segment/attempt/native. A charges24.90s of direct+independent
+numeric execution. See FULL_RESPONSE_FIT_REVIEW_2026-09-25 for the separate
+review evidence. The admission command exited0 with matching policy/runtime.
+
+Parent16 exact raw tokens/text/EOS/error parity passed (generation16,8.02s
+command wall). First actual SMALL update saved native
+`F/segment-000-step-1.r3m` at model14913/Adam577/cursor1,
+physical9eb1e4a7bb5e71c8ddf932ff985c4c48fd3ac7481bd22f667f9ef77f062d73d4.
+It consumed input1528/target102, ANSWER CE0.63627803, source tape576;
+native114182592bytes. A new process is continuing from that saved state.
+CODE_DIRECT=PASS; CODE_A=PASS; FULL_FIT_EXECUTION=RUNNING;
+MODEL_QUALITY=NOT_YET_EVALUATED; GOAL1_READY=false.
 
 ## 2026-09-25 Selected event ID protocol1.1 — execution accepted, quality failed
 
