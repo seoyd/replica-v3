@@ -1,6 +1,17 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: frozen-base q/v adaptation and independent precision probe
+## Closed execution: frozen-base q/v adaptation and independent precision probe
+
+The actual adapter run stopped at128 new updates / effective14464 with
+`SEVERE_RETENTION_REGRESSION`, `resume=false`; S1Q1 FULL fell from64 to17/64.
+Unused optimizer allowance is closed. Zero-delta16 parity passed, but active
+retention and word learning did not. The separate11264 FP4 reference completed
+native16 plus dequantized256 calls with no measured count regression on this
+sample. Its codec/storage result is not GPU FP4, S6 or Goal1 acceptance.
+Independent B passed the intact endpoint audit and42/42 fresh reproduction;
+it did not accept model quality. The owned-root measurement is81,403,358 bytes,
+with retained touched build outputs bounded by67,335,036 bytes; deleted bytes0.
+The registered policy below is preserved, not reopened.
 
 `R3-PROTECTED-ADAPTATION-PRECISION-1.0` preserves accepted11264, normal
 bridge14336 and failed14464. The latter remains closed. This is a new14336

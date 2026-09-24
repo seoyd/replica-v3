@@ -1,5 +1,106 @@
 # 진단 및 구현 상태
 
+## 2026-09-24 보호 기반 adapter 실행 종료 / FP4 F32 reference
+
+Source `849d8bb39bebfd9a6e0194f60ad2680b63e2adf1`과 동결 executable
+`7d707564bbeb54fa8d77695e782633139740ba64534ee72661cd395c64c444fd`로 실행했다.
+[독립 A](PROTECTED_ADAPTATION_REVIEW_A_2026-09-24.md)는 PASS이며 report-only
+commit `ce8ec858156e86200675981f8f593883f251a7ea`를 정상 push하고 remote 전체
+SHA 일치를 확인했다. A가 검토한 worktree의 source digest
+`fa0080d2abbc7376f89c0df73560b4522756e779366f3d10607f95000fe7b952`는 위 source
+commit과 동일하다. 과거 수용·실패·운영 모델 포인터를 변경하지 않았다.
+
+**P 실행 결과: 품질 FAIL, 등록된 보존 guard로 종료.** Zero adapter의 정상
+출력16/16이 parent raw와 일치했다. 첫 update14337의 delta/Adam을 저장하고
+새 process에서 복원해64/128 평가점까지 실행했다. 신규 SMALL128 updates,
+1,024 exposures(복습512/word512), input186,752/target14,976/padding19,072.
+훈련/eval command3개 모두 exit0; canonical segment elapsed 합198.736초,
+process wall 합217.18초, 최대 command RSS4,435,935,232B다. Parent 누적
+token/step과 이번 새 사용량을 혼동하지 않는다. LR3e-4와 fresh adapter Adam,
+문항평균 CE를 사용했으므로 과거 full-tune과 한 변수 A/B라고 해석하지 않는다.
+
+|같은 active checkpoint의 패널|+64 FULL /64|+128 FULL /64|+128 값 / support|외부ID / parse|EOS / 길이종료|
+|---|---:|---:|---|---|---|
+|숫자 값|64|63|63 /해당없음|해당없음|64 /0|
+|숫자 인용|64|54|63 /55|9 /0|64 /0|
+|S1Q1|62|17|53 /21|40 /2|64 /0|
+|한글 word|0|0|0 /0|0 /64|64 /0|
+|ID 재명명 word|0|0|0 /0|0 /64|52 /12|
+
+14464의 S1Q1이 부모64/64에서17/64로 떨어져 `SEVERE_RETENTION_REGRESSION`,
+`resume=false`다. 재명명12건은32-token 정상 RETURNED 길이종료이며 실행 예외나
+UNKNOWN이 아니다. 추가 optimizer/최종 전수/fit/QA640/confirmation은 실행하지
+않았다. 마지막 durable delta는
+`artifacts/protected-adaptation-20260924-study-final/ANSWER-MEAN/segment-0002/final`,
+733,966B, physical SHA256
+`de9064bffc95aa8f09e5653c2878c0ee44ad8bd17349f746a2e9409532bcb9a2`다.
+Base14336의 파일 SHA256은 실행 뒤에도
+`15015900a3c91a6b8ed87e9c2ecb8f7faf124849e5dcf8f40203cddf267e30d9`이며,
+보호11264와 원래 full-tune 실패14464도 시작 hash와 같다. Base 불변은
+active adapter의 기존 출력 보존을 보장하지 않았다. 이번 word 전이를 얻었다고
+판정할 근거는 없다. 마지막 adapter optimizer clock128, effective step14464.
+
+**Q 실행 결과: codec PASS, 고정256개에서 관측된 품질 감소0.** 독립된11264를
+사용했다. Native parity16/16 후 FP4-dequant F32 정상 generation256회를
+실행했고 optimizer/teacher/calibration0이다. 값128과 인용128 모두 FULL128,
+QB64/64, SB64/64, ALL4 32/32, EOS128/128이다. 인용의 값/support128,
+outside/parse/error0이며 각각 float reference 대비 count delta0이다.
+다른 입력에서의 오류0 또는 S6 통과를 뜻하지 않는다.
+
+형식은 `R3-FP4-E2M1-B32-F32S-EXPERIMENTAL`이며 MXFP4/NVFP4가 아니다.
+전체9,513,408 중9,289,728(97.6488%)을 packed E2M1로 저장했고 나머지223,680은
+norm/tied embedding F32다. Packed4,644,864B + FP32 scales1,161,216B +
+untouched F32 894,720B = payload6,700,800B, 실제 파일6,713,446B다.
+F32 tensor payload는38,053,632B다. 이는 metadata/Adam을 포함한 기존 resume
+파일의 크기와 동일한 비교가 아니며 전체 artifacts 절감량으로 보고하지 않는다.
+Artifact SHA256 `5b9b502f5ea3afc6175d9b07e9311806241b3560269846f1729d4f1674bca37b`.
+실행은 전체 복호화 후 CPU/Accelerate F32이며 GPU FP4 kernel/FP4 학습은 없다.
+Base 검증 포함 dequant1,075.513ms,256-case 관측16.254초, 해당 command 전체
+wall52.97초/peakRSS5,069,979,648B다. 원자료 검산 등도 command 측정에 포함된다.
+관측 종료 currentRSS256,688KiB를 peakRSS로 바꾸지 않는다. 서로 다른16/256
+표본 시간으로 속도 개선을 주장하지 않는다.
+독립 수치 reader는 기존11264 `layer.0.q`의 고정 비답변 벡터1×384를
+원 F32/복호화 F32로 각각 한 번 곱했다. 최대 출력오차0.1609793454,
+RMS0.0381306630이며 primitive matmul2, whole-model forward/generation/
+teacher/optimizer0이다. Synthetic3×32 회귀와 실제 tensor 관측을 구분한다.
+
+독립 B는 원본128 update trace,640 raw/640 teacher, native24 A/B 및48 Adam
+tensor·clock128·base 불변을 재검산했다. 새 process의42개 재현은42/42 일치
+(오답26 포함), 추가 teacher/optimizer0이다. P 합계 generation698/teacher640/
+optimizer128, output10,489tokens/active204.478초이며 Q generation272/
+output2,584tokens/active17.772초다. **SMALL 총 generation970/teacher640/
+optimizer128/output13,073tokens**, UNKNOWN/runtime failure0이다.
+직접/독립 TINY는 실패 포함18 optimizer/180 generation/180 teacher로 별도다.
+직접 시험6개(수식/cache2, 기존 native3, FP4 primitive1)와 수정 후 process2회가
+PASS했고, 최초 EOS fixture assertion 실패는 삭제하지 않았다.
+
+준비자료는 `artifacts/protected-adaptation-20260924-study-final/`, 실행 증거는
+`artifacts/protected-adaptation-20260924-evidence/`, Q raw/result는
+`artifacts/protected-adaptation-20260924-fp4/`다. 실제 committed diff는 evidence의
+`candidate-committed.diff`이며 SHA256
+`ac0e929f4520024e1a6b3f1001cdc015a08b692e707263a526e38823abcd598f`다.
+원본/모델/Adam/corpus/raw/실행물은 Git에 올리지 않는다.
+[독립 B/Q 보고서](PROTECTED_ADAPTATION_REVIEW_B_2026-09-24.md)의 종료 무결성·
+bounded 재현은 PASS다. 그 보고서 SHA256은
+`99f4eee5e8a91042b201fb00bb95e3c5044b3a675c3c65c15d0e34449a363c7a`다.
+새로 소유한6개 root만 집계한 결과4,403파일/81,403,358 logical bytes이며,
+기존 base/corpus를 가리키는 symlink는 제외했다. 변경된 Replica build 산출물은
+46개/67,335,036B로 앞선 보수적 상한과 같다. 개별 사전 cache 크기 기록이 없어
+정확한 순증가 NEW_BUILD_BYTES는 UNKNOWN이다. 신규 evidence/model 총량1GiB와
+build 상한8GiB 이내이며, 마지막 디스크 여유86,250,272KiB다. 이 측정은 기존
+전체 artifacts inventory가 아니며 회수량을 주장하지 않는다. DELETED_BYTES=0,
+이동/재압축/cleanup0. Generic build 임시물과 보존해야 할 실제 실행물은 구분했다.
+
+최종 판정: **RESULT=PARTIAL(품질 미달), 구현·검증 범위=완료,
+CODE_VERDICT=PASS, INDEPENDENT_A/B=PASS, BASE_UNCHANGED=PASS,
+ACTIVE_RETENTION=FAIL, WORD_LEARNING=FAIL, MODEL_VERDICT=FAIL**.
+ADAPTER_PARAMS=59,904 / BYTES=239,616 / ADAM_BYTES=479,232,
+INFERENCE_DTYPE=F32, FP4_CODEC=PASS,
+FP4_QUALITY=NO_OBSERVED_REGRESSION_ON_FIXED256,
+FP4_EXECUTION_BACKEND=DEQUANTIZED_F32_CPU_ACCELERATE.
+GOAL1_READY=false, S4/S5/S6=NOT_RUN. 이 등록 연구의 미실행 잔여 학습은
+추가 실행 권한이 아니다. 더 이상의 source 변경·모델 호출은 수행하지 않는다.
+
 ## 2026-09-24 보호 기반 adapter — 준비/직접 회귀, SMALL 미실행
 
 실행 전 보호 파일 SHA256을 확인했다. bridge14336은
