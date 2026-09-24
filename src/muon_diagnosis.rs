@@ -130,7 +130,7 @@ fn prepare(original:&Path,audit:&Path,root:&Path)->Result<()> {
     let cases=(0..2).flat_map(|v|(0..4).flat_map(move|b|(0..4).map(move|q|6144+v*768+b*4+q)))
         .chain((3072..3104).map(|v|corpus.train.len()+v)).collect::<Vec<_>>();
     std::fs::create_dir(root)?;let root=root.canonicalize()?;
-    let d=Diagnostic{contract:ID.into(),root:root.clone(),original:s,endpoints:end.arms.clone(),refs,panels:panels_out,
+    let d=Diagnostic{contract:ID.into(),root:root.clone(),original:s,endpoints:end.arms.clone().try_into().map_err(|_|bad("diagnosis requires original two-arm endpoints"))?,refs,panels:panels_out,
         source:source()?,runtime:RuntimeProfile::capture(Backend::Metal0,&Backend::Metal0.open()?)?,teacher_cases:cases,
         generation_cap:438,teacher_cap:216,active_cap:1800.,segment_cap:900.,bytes_cap:256*1024*1024,predecessor:None};
     if d.runtime.patch!=d.original.runtime.patch||d.runtime.patch_source!=d.original.runtime.patch_source||d.runtime.lock!=d.original.runtime.lock
@@ -637,7 +637,7 @@ fn independent_successor_rejects_identity_changes()->Result<()> {
     fn original()->Result<Study>{let p=PathBuf::from(std::env::var("R3_MUON_PREPARATION").map_err(|_|bad("explicit original study required"))?);load_study(&p,false)}
     fn dir(name:&str)->Result<PathBuf>{let p=std::env::temp_dir().join(format!("endpoint-{name}-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));std::fs::create_dir(&p)?;Ok(p)}
     fn policy(s:Study,root:PathBuf)->Result<Diagnostic>{
-        let end=history(&s)?.last().unwrap().arms.clone();
+        let end=history(&s)?.last().unwrap().arms.clone().try_into().map_err(|_|bad("two-arm diagnostic fixture"))?;
         Ok(Diagnostic{contract:ID.into(),root,original:s,endpoints:end,refs:BTreeMap::new(),panels:vec![],source:source()?,runtime:RuntimeProfile::capture(Backend::Metal0,&Backend::Metal0.open()?)?,teacher_cases:vec![],generation_cap:438,teacher_cap:216,active_cap:1800.,segment_cap:900.,bytes_cap:256*1024*1024,predecessor:None})
     }
     #[test]

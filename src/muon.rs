@@ -6,12 +6,15 @@ use recovery::{ObservedCall,RunControl};
 const CONTRACT:&str="R3-METAL-F32-MUON-QUALITY-1.0";
 const ARMS:[&str;2]=["A","M"];
 const EVENT_CONTRACT:&str="R3-SELECTED-EVENT-ID-PROTOCOL-1.1";
+const FIT_CONTRACT:&str="R3-FULL-RESPONSE-FIT-1.0";
+const FIT_STEPS:[usize;5]=[256,768,1536,2304,3072];
 const EVENT_SYSTEM:&str="제공된 기록과 질문만으로 답하세요. 질문에서 지정한 출력 형식만 사용하세요. 기록에 없는 정보를 만들지 마세요. 근거가 없거나 모호하면 구별해서 유보하세요. 순서만으로 원인을 단정하지 마세요.";
 const EVENT_TASK:&str="유효한 현재 기록의 사건 번호만 8자리 숫자로 답하라.";
 #[path="muon_diagnosis.rs"]
 mod diagnosis;
 #[derive(Subcommand)]
 pub enum Action {
+    FullFitPrepare { #[arg(long)] prior_study:PathBuf, #[arg(long)] review_b:PathBuf, #[arg(long)] output:PathBuf },
     EventPrepare { #[arg(long)] diagnosis:PathBuf, #[arg(long)] audit:PathBuf, #[arg(long)] output:PathBuf },
     /// Separately authorized, read-only endpoint observations; never resumes training.
     Diagnose { #[command(subcommand)] command:diagnosis::Action },
@@ -34,6 +37,16 @@ struct Study {
     max_updates:usize,generation_cap:usize,teacher_cap:usize,active_cap:f64,segment_cap:f64,bytes_cap:u64,
     #[serde(default,skip_serializing_if="Option::is_none")]
     event:Option<EventProtocol>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    full_fit:Option<FullFit>,
+}
+#[derive(Clone,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FullFit {
+    predecessor:PathBuf, predecessor_hash:String, terminal_hash:String,
+    source_tape_hash:String, source_offset:usize, train_order:Vec<usize>,
+    prior_full_exposure:Vec<usize>, semantic_other_exposure:Vec<usize>,
+    exact_identities:Vec<String>, schedule:Vec<usize>,
 }
 #[derive(Clone,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -43,7 +56,7 @@ struct EventProtocol {
     retention:BTreeMap<String,binary::Value>, parent_exposure:Vec<usize>,
 }
 impl Study {
-    fn arms(&self)->[&'static str;2]{if self.event.is_some(){["F","I"]}else{ARMS}}
+    fn arms(&self)->&[&'static str]{if self.full_fit.is_some(){&["F"]}else if self.event.is_some(){&["F","I"]}else{&ARMS}}
     fn clock(&self,local:usize)->usize{self.event.as_ref().map_or(0,|e|e.optimizer.local_step)+local}
 }
 fn sources()->Result<String>{digest(&(source_digest()?,neural::hash(include_bytes!("muon.rs")),neural::hash(include_bytes!("metal_runtime.rs"))))}
@@ -378,6 +391,378 @@ fn event_review(s:&Study,arm:usize)->Result<()> {
         }ctl.seal_completed_no_call()?;Ok(())})();
     finish_observation(s,&label,indices,&mut ctl,&result,binary::record!({"normal":32,"selected":es.len(),"teacher":16,"native":p.physical}))?;result
 }
+
+fn fit_rotation(source:&[[usize;8]],offset:usize)->Result<Vec<[usize;8]>>{
+    if source.len()!=3072||offset>=source.len(){return Err(bad("FULL_FIT source tape bounds"));}
+    Ok(source[offset..].iter().chain(&source[..offset]).copied().collect())
+}
+fn fit_train_order(c:&data::native::Corpus,tm:&[Meta])->Result<Vec<usize>>{
+    let mut pairs=BTreeMap::<String,BTreeMap<String,Vec<usize>>>::new();
+    for i in 6144..c.train.len(){
+        let (pair,version)=tm[i].template.split_once("/id").ok_or_else(||bad("FULL_FIT word pair metadata"))?;
+        if !["0","1"].contains(&version)||tm[i].view>3{return Err(bad("FULL_FIT view/version"));}
+        pairs.entry(pair.into()).or_default().entry(c.train[i].binding.clone()).or_default().push(i);
+    }
+    if pairs.len()!=6{return Err(bad("FULL_FIT six word pairs required"));}
+    let mut selected=vec![];
+    for groups in pairs.values(){if groups.len()!=32{return Err(bad("FULL_FIT semantic group count"));}
+        for rows in groups.values().take(4){
+            let mut rows=rows.clone();rows.sort();
+            if rows.len()!=8||rows.iter().enumerate().any(|(j,&i)|tm[i].view!=j%4){return Err(bad("FULL_FIT complete two-ID four-view group"));}
+            selected.extend(rows);
+        }
+    }
+    let set=selected.iter().copied().collect::<BTreeSet<_>>();
+    if set.len()!=192{return Err(bad("FULL_FIT representative train192"));}
+    selected.extend((6144..7680).filter(|i|!set.contains(i)));Ok(selected)
+}
+fn fit_exposure(tape:&[[usize;8]])->Result<Vec<usize>>{
+    let mut out=vec![0;7680];for row in tape{
+        if row[..4].iter().any(|&i|i>=6144)||row[4..].iter().any(|&i|!(6144..7680).contains(&i)){return Err(bad("FULL_FIT review4/word4 slots"));}
+        for &i in row{out[i]+=1;}
+    }Ok(out)
+}
+fn fit_costs(c:&data::native::Corpus,tok:&ByteBpe,tape:&[[usize;8]])->Result<binary::Value>{
+    let ss=samples_with_framing(&c.train,tok,256,neural::Framing::QuestionEvidence)?;
+    let(mut input,mut target,mut padding,mut max_batch)=(0usize,0usize,0usize,0usize);
+    for row in tape{let n=row.iter().map(|&i|ss[i].tokens.len()-1).max().unwrap();max_batch=max_batch.max(n);
+        for &i in row{input+=ss[i].tokens.len()-1;target+=ss[i].tokens.len()-ss[i].response_start;padding+=n-(ss[i].tokens.len()-1);}}
+    if input>8_000_000||target>1_000_000{return Err(bad("FULL_FIT token budget"));}
+    Ok(binary::record!({"input":input,"target":target,"padding":padding,"max_shifted_batch_length":max_batch,"exposure":fit_exposure(tape)?}))
+}
+fn fit_identity(e:&Episode,tok:&ByteBpe)->Result<String>{
+    let p=tok.prepare_with_framing(&e.request,neural::Framing::QuestionEvidence,2048,"full-fit-input")?;
+    let mut target=tok.encode(e.answer.as_bytes())?;target.push(EOS);
+    if p.excluded.len()!=0||e.request.evidence.items.len()!=2||e.request.limits.max_tokens!=32
+        ||p.token_ids.len()+target.len()>256||target.len()>32{return Err(bad("FULL_FIT complete input bounds"));}
+    digest(&(tok.semantic_id(),neural::Framing::QuestionEvidence.digest(),digest(&p.token_ids)?,digest(&target)?))
+}
+fn fit_prepare(prior:&Path,review_b:&Path,output:&Path)->Result<()> {
+    let old=load_study(prior,false)?;
+    if old.full_fit.is_some()||old.contract!=EVENT_CONTRACT{return Err(bad("FULL_FIT requires closed F/I predecessor"));}
+    let h=history(&old)?;let terminal=h.last().ok_or_else(||bad("FULL_FIT predecessor absent"))?;
+    if !terminal.success||terminal.resume||!terminal.arms.iter().all(|a|a.fit)||terminal.arms[0].local!=64||terminal.arms[0].stop.is_some(){return Err(bad("FULL_FIT normal F64 required"));}
+    let review:binary::Value=read(review_b)?;
+    if review["phase"]!="B"||review["verdict"]!="PASS"||review["policy"]!=digest(&old)?||review["source"]!=old.source||review["runtime"]!=binary::record!(old.runtime){return Err(bad("FULL_FIT independent predecessor B binding"));}
+    let p=&terminal.arms[0];let l=checkpoint::load(&p.native,Device::Cpu,true)?;
+    let state=l.manifest.training.as_ref().ok_or_else(||bad("FULL_FIT parent training missing"))?;
+    let op=l.manifest.optimizer_protocol.clone().ok_or_else(||bad("FULL_FIT inherited Adam missing"))?;
+    let mut expected=old.event.as_ref().unwrap().optimizer.clone();expected.version=2;expected.family="ADAMW-INHERITED-V1".into();expected.study_start_step=Some(old.parent_step);expected.runtime_digest=digest(&old.runtime)?;expected.local_step=576;
+    if state.step!=14912||state.sampler_state!=64||op!=expected||state.config!=old.config||state.resume_binding!=Some(bind(&old,0,state,&l.tokenizer)?)
+        ||l.tokenizer.semantic_id()!=old.tokenizer||l.model.adapter().is_some(){return Err(bad("FULL_FIT parent weights/Adam/clock/objective"));}
+    let c=event_inputs(&old,0)?;let (original,tm,dm)=inputs(&old)?;let tok=&l.tokenizer;
+    let mut identities=vec![];
+    for(i,e)in c.train.iter().chain(&c.validation).enumerate(){let (at,is_train)=if i<c.train.len(){(i,true)}else{(i-c.train.len(),false)};
+        let source=if is_train{&original.train[at]}else{&original.validation[at]};
+        let expected=if (is_train&&at>=6144)||(!is_train&&at>=3072){event_episode(source,false)?}else{source.clone()};
+        if digest(e)?!=digest(&expected)?{return Err(bad("FULL_FIT frozen FULL/review content"));}
+        let identity=fit_identity(e,tok)?;if is_train{identities.push(identity);}
+    }
+    let e=old.event.as_ref().unwrap();let muon:Study=read_confirmed(&e.original)?;
+    let wp:Plan=read(&old.word_root.join("plan.r3b"))?;
+    let rows=&wp.identifiable.as_ref().ok_or_else(||bad("FULL_FIT original native tape absent"))?.rows;
+    let source=rows.get(wp.origin_step()..wp.origin_step()+3072).ok_or_else(||bad("FULL_FIT original3072 absent"))?;
+    if source[..1024]!=muon.tape||old.tape!=source[512..640]||wp.origin_step()!=14336{return Err(bad("BLOCKED_INPUT_LINEAGE: FULL_FIT source tape"));}
+    let mut prior_full=vec![0usize;7680];let mut seen=0usize;
+    for index in 0..h.len(){let path=old.root.join("F").join(format!("updates-{index:03}.r3rows"));if !path.exists(){continue;}
+        for row in binary::read_value_records(&path)?{if seen>=64||row["rows"]!=binary::record!(source[512+seen])||row["local"]!=seen+1||row["optimizer_local"]!=513+seen{return Err(bad("FULL_FIT prior actual tape/clock"));}
+            for &i in &source[512+seen]{prior_full[i]+=1;}seen+=1;
+        }}
+    if seen!=64||prior_full[6144..].iter().filter(|&&n|n==1).count()!=256||prior_full[6144..].iter().any(|&n|n>1){return Err(bad("FULL_FIT prior exact exposure"));}
+    for i in 6144..7680{if identities[i]==fit_identity(&original.train[i],tok)?{return Err(bad("FULL_FIT semantic-only parent has identical prompt"));}}
+    let tape=fit_rotation(source,576)?;let costs=fit_costs(&c,tok,&tape)?;
+    if fit_exposure(&tape)?[6144..].iter().any(|&n|n!=8){return Err(bad("FULL_FIT word cycle exposure"));}
+    let order=fit_train_order(&c,&tm)?;
+    let mut retained=BTreeMap::new();let mut refs=e.refs.clone();
+    for panel in event_panels(&old,true,false)?.into_iter().filter(|p|!p.0.starts_with("ID_ONLY")){
+        let(score,_)=event_read_panel(&old,"F",64,&l.model.weights_content_id()?,&panel,panel.1.len())?;
+        retained.insert(panel.0.clone(),score);
+        for suffix in [".r3rows".to_owned(),format!("-score-{}.r3b",panel.1.len())]{let path=old.root.join("F").join(format!("eval-64-{}{suffix}",panel.0));refs.insert(path.clone(),file_hash(&path)?);}
+    }
+    for name in ["value","citation","S1Q1"]{let j=&retained[name]["joint"];if j["full"]!=64||j["all4"]!=16||j["errors"]!=0{return Err(bad("FULL_FIT parent retention changed"));}}
+    let terminal_path=old.root.join(format!("segment-{:03}-finished.r3b",h.len()-1));
+    for path in [old.root.join("plan.r3b"),terminal_path.clone(),review_b.canonicalize()?,p.native.clone()]{refs.insert(path.clone(),file_hash(&path)?);}
+    let device=Backend::Metal0.open()?;let runtime=RuntimeProfile::capture(Backend::Metal0,&device)?;let mut same=old.runtime.clone();same.binary=runtime.binary.clone();if runtime!=same{return Err(bad("FULL_FIT runtime changed"));}
+    // Six scheduled natives plus two reserved time-split saves, without copying
+    // the inherited native, corpus or vendor into this study.
+    let planned_native_bytes=std::fs::metadata(&p.native)?.len().checked_mul(8).ok_or_else(||bad("FULL_FIT byte overflow"))?;
+    if planned_native_bytes+64*1024*1024>1<<30{return Err(bad("BLOCKED_DISK: FULL_FIT immutable reservation"));}
+    std::fs::create_dir(output)?;let root=output.canonicalize()?;std::fs::create_dir(root.join("F"))?;
+    let mut s=old.clone();s.contract=FIT_CONTRACT.into();s.root=root.clone();s.parent=p.native.clone();s.parent_hash=p.physical.clone();s.parent_content=l.model.weights_content_id()?;s.parent_adam=optimizer_hash(&l.optimizer)?;s.parent_step=14912;s.source=sources()?;s.runtime=runtime;
+    s.config.budget_start_step=14912;s.config.max_steps=17984;s.config.budget_start_tokens=state.consumed_tokens;s.config.max_tokens=state.consumed_tokens+costs["input"].as_u64().unwrap();s.tape=tape;s.costs=costs;
+    s.max_updates=3072;s.generation_cap=8448;s.teacher_cap=144;s.active_cap=7200.;s.bytes_cap=1<<30;
+    let event=s.event.as_mut().unwrap();event.optimizer=op;event.refs=refs;event.retention=retained;
+    s.full_fit=Some(FullFit{predecessor:old.root.clone(),predecessor_hash:file_hash(&old.root.join("plan.r3b"))?,terminal_hash:file_hash(&terminal_path)?,source_tape_hash:digest(&source)?,source_offset:576,train_order:order,prior_full_exposure:prior_full,semantic_other_exposure:e.parent_exposure.clone(),exact_identities:identities,schedule:FIT_STEPS.to_vec()});
+    fit_verify_inputs(&s)?;
+    publish_confirmed(&root.join("plan.r3b"),&s)?;
+    publish_confirmed(&root.join("preparation.r3b"),&binary::record!({"contract":s.contract,"policy":digest(&s)?,"source":s.source,"parent":s.parent_hash,"weights":s.parent_content,"adam":s.parent_adam,"model_step":14912,"optimizer_step":576,"cursor":0,"data_counts":[c.train.len(),c.validation.len(),tm.len(),dm.len()],"full_fit":s.full_fit,"costs":s.costs,"planned_native_bytes":planned_native_bytes,"model_calls":0}))?;
+    println!("FULL_FIT_PREPARED policy={} parent={} model14912 Adam576 cursor0 source576..3071/0..575 input={} target={} padding={} reserved_native_bytes={planned_native_bytes} calls0 A_PENDING",digest(&s)?,s.parent_hash,s.costs["input"],s.costs["target"],s.costs["padding"]);Ok(())
+}
+fn fit_verify_inputs(s:&Study)->Result<()> {
+    let f=s.full_fit.as_ref().ok_or_else(||bad("FULL_FIT profile absent"))?;
+    let old:Study=read_confirmed(&f.predecessor.join("plan.r3b"))?;
+    if file_hash(&f.predecessor.join("plan.r3b"))?!=f.predecessor_hash||old.full_fit.is_some()||old.contract!=EVENT_CONTRACT||s.parent_step!=14912
+        ||s.event.as_ref().unwrap().optimizer.local_step!=576||s.arms()!=["F"]||s.max_updates!=3072||f.source_offset!=576||f.schedule!=FIT_STEPS
+        ||s.generation_cap!=8448||s.teacher_cap!=144||s.active_cap!=7200.||s.config.lr!=3e-5||s.config.warmup!=0{return Err(bad("FULL_FIT policy/parent bounds"));}
+    let h=history(&old)?;let terminal=h.last().ok_or_else(||bad("FULL_FIT predecessor terminal missing"))?;
+    if !terminal.success||terminal.resume||terminal.arms[0].local!=64||terminal.arms[0].physical!=s.parent_hash
+        ||file_hash(&old.root.join(format!("segment-{:03}-finished.r3b",h.len()-1)))?!=f.terminal_hash{return Err(bad("FULL_FIT predecessor terminal changed"));}
+    let p:Plan=read(&s.word_root.join("plan.r3b"))?;let rows=&p.identifiable.as_ref().ok_or_else(||bad("FULL_FIT source tape missing"))?.rows;
+    let source=rows.get(p.origin_step()..p.origin_step()+3072).ok_or_else(||bad("FULL_FIT source tape extent"))?;
+    if digest(&source)?!=f.source_tape_hash||s.tape!=fit_rotation(source,f.source_offset)?{return Err(bad("FULL_FIT frozen rotated tape changed"));}
+    let c=event_inputs(s,0)?;let (_,tm,_)=inputs(s)?;let tok=scoring_tokenizer(s)?;
+    if f.train_order!=fit_train_order(&c,&tm)?||f.exact_identities.len()!=c.train.len()||fit_exposure(&source[512..576])?!=f.prior_full_exposure{return Err(bad("FULL_FIT selection/exposure mismatch"));}
+    for(e,id)in c.train.iter().zip(&f.exact_identities){if fit_identity(e,&tok)?!=*id{return Err(bad("FULL_FIT prompt-target identity changed"));}}
+    if fit_costs(&c,&tok,&s.tape)?!=s.costs{return Err(bad("FULL_FIT token costs changed"));}Ok(())
+}
+fn fit_panels(s:&Study)->Result<Vec<Panel>>{
+    let f=s.full_fit.as_ref().ok_or_else(||bad("FULL_FIT panels/profile"))?;let(old,tm,dm)=inputs(s)?;let c=event_inputs(s,0)?;
+    let mut out=vec![];for(name,at,n)in [("value",0,512),("citation",512,512),("S1Q1",2560,512),("FULL-word",3072,192),("FULL-renamed",3264,192)]{
+        out.push((name.into(),c.validation[at..at+n].to_vec(),dm[at..at+n].to_vec()));}
+    out.push(("FULL-train".into(),f.train_order.iter().map(|&i|c.train[i].clone()).collect(),f.train_order.iter().map(|&i|tm[i].clone()).collect()));
+    out.push(("OLD_FULL".into(),old.validation[3072..3136].to_vec(),dm[3072..3136].to_vec()));Ok(out)
+}
+fn fit_baseline(s:&Study)->Result<()> {
+    if !history(s)?.is_empty(){return Err(bad("FULL_FIT parent parity after training"));}
+    let f=s.full_fit.as_ref().unwrap();let old=load_study(&f.predecessor,false)?;let mut es=vec![];let mut expected=vec![];
+    for panel in event_panels(&old,true,false)?.into_iter().filter(|p|p.0=="FULL-word"||p.0=="citation"){
+        let(_,rows)=event_read_panel(&old,"F",64,&s.parent_content,&panel,panel.1.len())?;es.extend_from_slice(&panel.1[..8]);expected.extend_from_slice(&rows[..8]);}
+    if es.len()!=16{return Err(bad("FULL_FIT fixed parent16"));}
+    let b=binary::record!({"policy":digest(s)?,"native":s.parent_hash,"runtime":s.runtime,"cases":digest(&es)?,"planned":16,"call_protocol":1});
+    let(index,mut ctl)=start_observation(s,"baseline",&b)?;
+    let result=(||->Result<()>{let l=checkpoint::load(&s.parent,Backend::Metal0.open()?,false)?;
+        let rows=generated(&l,&s.root,"baseline",&es,&b,&mut ctl)?;
+        for(a,b)in rows.iter().zip(&expected){for field in ["raw_tokens","actual","finish_reason","error","generation_completed"]{if a[field]!=b[field]{return Err(bad("FULL_FIT parent16 parity mismatch"));}}}
+        ctl.seal_completed_no_call()?;Ok(())})();
+    finish_observation(s,"baseline",index,&mut ctl,&result,binary::record!({"parity":result.is_ok(),"planned":16}))?;result
+}
+fn fit_quality(r:&binary::Value,kind:&str)->bool{
+    let(total,full,pair,all4,component)=match kind{"value"|"citation"|"S1Q1"=>(512,488,232,116,508),"FULL-train"=>(1536,1524,756,372,0),_=>(192,183,88,44,190)};
+    let j=&r["joint"];let at_least=|k:&str,n:u64|j[k].as_u64().is_some_and(|v|v>=n);
+    j["total"]==total&&at_least("full",full)&&at_least("query_both",pair)&&at_least("swap_both",pair)&&at_least("all4",all4)&&j["errors"]==0
+        &&(kind=="value"||(r["valid_outside_id"]==0&&r["parse_failure_rows"]==0&&(component==0||r["value_correct"].as_u64().is_some_and(|v|v>=component)&&r["citation_support_correct"].as_u64().is_some_and(|v|v>=component))))
+}
+fn fit_development(scores:&BTreeMap<String,binary::Value>)->bool{
+    ["value","citation","S1Q1","FULL-word","FULL-renamed"].iter().all(|n|scores.get(*n).is_some_and(|r|fit_quality(r,n)))
+}
+fn fit_teacher(s:&Study,l:&checkpoint::Loaded,p:&Progress,ctl:&mut RunControl)->Result<()> {
+    let es=event_teacher_cases(s,0)?;let label=format!("teacher-{}-FULL",p.local);
+    let b=binary::record!({"policy":digest(s)?,"source":s.source,"runtime":s.runtime,"model":l.model.weights_content_id()?,"arm":"F","local":p.local,"mode":0,"cases":digest(&es)?,"planned":64,"call_protocol":1});
+    let rows=teacher_prefix(&s.root.join("F"),&label,&b,l,&es,ctl)?;
+    diagnosis::validate_teacher_forward(&s.runtime,s.config.seq_len,&es,&rows,&l.tokenizer)?;
+    let score=binary::record!({"binding":b,"train":diagnosis::teacher_scores(&es[..32],&rows[..32],&l.tokenizer)?,"dev":diagnosis::teacher_scores(&es[32..],&rows[32..],&l.tokenizer)?,"rows_digest":digest(&rows)?});
+    let path=s.root.join("F").join(format!("{label}-score.r3b"));if path.exists(){if read_confirmed::<binary::Value>(&path)?!=score{return Err(bad("FULL_FIT teacher score mismatch"));}}else{publish_confirmed(&path,&score)?;}Ok(())
+}
+fn fit_evaluate(s:&Study,l:&mut checkpoint::Loaded,p:&Progress,ending:bool,ctl:&mut RunControl)->Result<BTreeMap<String,binary::Value>>{
+    l.model.refresh_identity()?;let panels=fit_panels(s)?;let full=[1536,3072].contains(&p.local);let mut scores=BTreeMap::new();
+    for panel in &panels[..5]{let count=if full{panel.1.len()}else{64};
+        let r=event_panel_score(s,"F",p.local,l,panel,count,ctl)?;
+        if count>64&&["value","citation","S1Q1"].contains(&panel.0.as_str()){event_panel_score(s,"F",p.local,l,panel,64,ctl)?;}
+        scores.insert(panel.0.clone(),r);
+    }
+    let all_train=p.local==3072||p.local==1536&&fit_development(&scores);
+    if all_train||p.local==768||p.local==1536||ending{
+        let n=if all_train{1536}else{192};scores.insert("FULL-train".into(),event_panel_score(s,"F",p.local,l,&panels[5],n,ctl)?);
+    }
+    if full{fit_teacher(s,l,p,ctl)?;}
+    if ending{scores.insert("OLD_FULL".into(),event_panel_score(s,"F",p.local,l,&panels[6],64,ctl)?);}
+    Ok(scores)
+}
+fn fit_guard_value(s:&Study,step:usize,model:&str)->Result<binary::Value>{
+    let mut streak=[0usize;3];let mut previous=None;let dir=s.root.join("F");
+    for &at in s.full_fit.as_ref().unwrap().schedule.iter().filter(|&&at|at<step){
+        let path=dir.join(format!("decision-{at}.r3b"));let d:binary::Value=read_confirmed(&path)?;
+        if d["policy"]!=digest(s)?||d["local"]!=at||!d["stop"].is_null()||d["previous"]!=binary::record!(previous){return Err(bad("FULL_FIT previous guard invalid"));}
+        streak=binary::from_value(d["streak"].clone())?;previous=Some(file_hash(&path)?);
+    }
+    let before=streak;let mut stop=None;let mut panel_digests=BTreeMap::new();
+    for(i,panel)in fit_panels(s)?.into_iter().take(3).enumerate(){let(r,_)=event_read_panel(s,"F",step,model,&panel,64)?;let j=&r["joint"];
+        let (next,stopped)=fit_guard_panel(streak[i],j)?;streak[i]=next;
+        if stopped{stop=Some("RETENTION_STOP".to_owned());}
+        panel_digests.insert(panel.0,digest(&r)?);
+    }
+    Ok(binary::record!({"policy":digest(s)?,"local":step,"model":model,"previous":previous,"guard_before":before,"streak":streak,"panels":panel_digests,"stop":stop}))
+}
+fn fit_guard_panel(before:usize,j:&binary::Value)->Result<(usize,bool)>{
+    let full=j["full"].as_u64().ok_or_else(||bad("FULL_FIT guard full"))?;let all4=j["all4"].as_u64().ok_or_else(||bad("FULL_FIT guard all4"))?;let errors=j["errors"].as_u64().ok_or_else(||bad("FULL_FIT guard errors"))?;
+    if j["total"]!=64||full>64||all4>16||errors>64{return Err(bad("FULL_FIT guard denominator"));}
+    let next=if full<=56||all4<=12{before+1}else{0};Ok((next,full<=48||errors>=4||next>=2))
+}
+fn fit_decision(s:&Study,p:&Progress,model:&str)->Result<Option<String>>{
+    let d=fit_guard_value(s,p.local,model)?;let path=s.root.join("F").join(format!("decision-{}.r3b",p.local));
+    if path.exists(){if read_confirmed::<binary::Value>(&path)?!=d{return Err(bad("FULL_FIT guard decision changed"));}}else{publish_confirmed(&path,&d)?;}
+    Ok(binary::from_value(d["stop"].clone())?)
+}
+fn fit_train(s:&Study)->Result<()> {
+    if read_confirmed::<binary::Value>(&s.root.join("baseline-finished.r3b"))?["success"]!=true{return Err(bad("FULL_FIT parent parity incomplete"));}
+    let h=history(s)?;if h.last().is_some_and(|r|!r.resume){return Err(bad("FULL_FIT closed; no resume"));}
+    let index=h.len();let mut phase=h.last().map_or(0,|r|r.phase);
+    let mut p=h.last().map(|r|r.arms[0].clone()).unwrap_or(Progress{local:0,native:s.parent.clone(),physical:s.parent_hash.clone(),stop:None,evaluated:0,fit:false});
+    let saved=p.local;let previous=if index==0{None}else{Some(file_hash(&s.root.join(format!("segment-{:03}-finished.r3b",index-1)))?)};
+    let mut ctl=control(s,&h)?;
+    publish_confirmed(&s.root.join(format!("segment-{index:03}-started.r3b")),&binary::record!({"policy":digest(s)?,"previous":previous,"phase":phase,"arms":[p.clone()]}))?;
+    let device=Backend::Metal0.open()?;let(mut l,mut o)=load_arm(s,0,&p,&device)?;let mut entered=false;
+    let discarded=fit_discarded(s)?;
+    let result=(||->Result<()>{
+        if index==0&&(l.model.weights_content_id()?!=s.parent_content||optimizer_hash(&o.tensors)?!=s.parent_adam||o.protocol.local_step!=576){return Err(bad("FULL_FIT initial tensors/clock"));}
+        let samples=samples_with_framing(&event_inputs(s,0)?.train,&l.tokenizer,s.config.seq_len,neural::Framing::QuestionEvidence)?;
+        loop{
+            let schedule=&s.full_fit.as_ref().unwrap().schedule;
+            if p.stop.is_some()||phase>=schedule.len(){
+                if !p.fit{fit_evaluate(s,&mut l,&p,true,&mut ctl)?;p.fit=true;}break;
+            }
+            let end=if index==0{1}else{schedule[phase]};
+            if p.local>end{return Err(bad("FULL_FIT cursor past scheduled endpoint"));}
+            let mut trace=std::fs::OpenOptions::new().append(true).create(true).open(s.root.join("F").join(format!("updates-{index:03}.r3rows")))?;
+            while p.local<end{
+                ctl.check("full_fit_before_microbatch")?;guard_bytes(s,0)?;
+                if p.local+discarded[0]>=s.max_updates{return Err(bad("FULL_FIT backward budget exhausted"));}
+                // Do not begin a new update when the command is already at its
+                // cleanup boundary. A returned discarded backward still counts.
+                let b=batch(&samples,&s.tape[p.local],&device)?;device.synchronize()?;let start=Instant::now();
+                let entry=s.root.join("F").join(format!("step-{}-segment-{index:03}-entered.r3b",p.local+1));
+                publish_confirmed(&entry,&binary::record!({"policy":digest(s)?,"local":p.local+1,"rows":s.tape[p.local],"status":"MAY_ENTER"}))?;
+                let mut row=train_update(s,0,&mut l,&mut o,&mut p,&b,&mut ctl,&mut entered,&entry,start)?;
+                row["source_tape_index"]=binary::record!((s.full_fit.as_ref().unwrap().source_offset+p.local-1)%3072);append_row(&mut trace,&row)?;
+                if p.local==1||p.local%16==0{println!("FULL_FIT_UPDATE local={} model={} Adam={} source={} input={} target={} loss={} remaining={}",p.local,row["model_step"],row["optimizer_local"],row["source_tape_index"],row["input"],row["target"],row["answer_ce"],s.max_updates-p.local);}
+            }
+            if p.native==s.parent||!fit_saved_cursor(&p){save_arm(s,index,0,&mut l,&o,&mut p)?;}
+            if index==0{break;}
+            let scores=fit_evaluate(s,&mut l,&p,false,&mut ctl)?;
+            p.stop=fit_decision(s,&p,&l.model.weights_content_id()?)?;p.evaluated=p.local;phase+=1;
+            if p.stop.is_none()&&p.local==1536&&fit_development(&scores)&&scores.get("FULL-train").is_some_and(|r|fit_quality(r,"FULL-train")){phase=schedule.len();}
+        }
+        ctl.seal_completed_no_call()?;Ok(())
+    })();
+    if let Err(e)=&result{ctl.classify_error(e);}if entered{return result;}
+    if p.local>saved&&!fit_saved_cursor(&p){save_arm(s,index,0,&mut l,&o,&mut p)?;}
+    let pure_time=ctl.receipt()["observed_conditions"]==binary::record!(["TIME_BUDGET"]);
+    let seg=Segment{policy:digest(s)?,previous,phase,arms:vec![p.clone()],success:result.is_ok(),resume:!p.fit&&(result.is_ok()||pure_time),control:ctl.receipt(),error:result.as_ref().err().map(ToString::to_string)};
+    publish_confirmed(&s.root.join(format!("segment-{index:03}-finished.r3b")),&seg)?;
+    println!("FULL_FIT_SEGMENT index={index} cursor={} model={} Adam={} evaluated={} fit={} resume={} stop={:?} native={} hash={} active={} bytes={}",p.local,s.parent_step+p.local,s.clock(p.local),p.evaluated,p.fit,seg.resume,p.stop,p.native.display(),p.physical,seg.control["elapsed_seconds"],owned_bytes(&s.root)?);
+    if pure_time{Ok(())}else{result}
+}
+fn fit_saved_cursor(p:&Progress)->bool{p.native.file_name().is_some_and(|v|v.to_string_lossy().ends_with(&format!("-step-{}.r3m",p.local)))}
+fn fit_discarded(s:&Study)->Result<[usize;3]>{
+    let mut total=[0usize;3];for item in std::fs::read_dir(s.root.join("F"))?{let path=item?.path();
+        if path.file_name().is_some_and(|v|v.to_string_lossy().ends_with("-discarded.r3b")){
+            let r:binary::Value=read_confirmed(&path)?;
+            if r["forward_backward"]!=1||r["optimizer"]!=0{return Err(bad("FULL_FIT discarded usage UNKNOWN"));}
+            total[0]+=1;total[1]+=r["input"].as_u64().ok_or_else(||bad("discarded input UNKNOWN"))?as usize;total[2]+=r["target"].as_u64().ok_or_else(||bad("discarded target UNKNOWN"))?as usize;
+        }
+    }Ok(total)
+}
+fn fit_counts(step:usize,ending:bool,dev_pass:bool)->[usize;7]{
+    let full=[1536,3072].contains(&step);
+    let train=if step==3072||step==1536&&dev_pass{1536}else if ending||step==768||step==1536{192}else{0};
+    [if full{512}else{64},if full{512}else{64},if full{512}else{64},if full{192}else{64},if full{192}else{64},train,if ending{64}else{0}]
+}
+fn fit_read_endpoint(s:&Study,p:&Progress,ending:bool)->Result<BTreeMap<String,binary::Value>>{
+    let(m,_)=checkpoint::metadata(&p.native)?;let st=m.training.as_ref().ok_or_else(||bad("FULL_FIT endpoint state missing"))?;
+    let op=m.optimizer_protocol.as_ref().ok_or_else(||bad("FULL_FIT endpoint optimizer missing"))?;
+    op.validate(&m.architecture,st)?;
+    if st.step!=s.parent_step+p.local||st.sampler_state!=p.local as u64||op.local_step!=s.clock(p.local)||st.config!=s.config
+        ||st.resume_binding!=Some(bind(s,0,st,&scoring_tokenizer(s)?)?)||file_hash(&p.native)?!=p.physical{return Err(bad("FULL_FIT endpoint policy/clock/native"));}
+    let panels=fit_panels(s)?;let counts=fit_counts(p.local,ending,false);let mut scores=BTreeMap::new();
+    for (panel,&n) in panels[..5].iter().zip(&counts[..5]){let(r,_)=event_read_panel(s,"F",p.local,&m.model_content_digest,panel,n)?;scores.insert(panel.0.clone(),r);}
+    let counts=fit_counts(p.local,ending,fit_development(&scores));
+    for (panel,&n)in panels[5..].iter().zip(&counts[5..]){if n>0{let(r,_)=event_read_panel(s,"F",p.local,&m.model_content_digest,panel,n)?;scores.insert(panel.0.clone(),r);}}
+    Ok(scores)
+}
+fn fit_trace(s:&Study,h:&[Segment])->Result<binary::Value>{
+    let c=event_inputs(s,0)?;let tok=scoring_tokenizer(s)?;let ss=samples_with_framing(&c.train,&tok,256,neural::Framing::QuestionEvidence)?;
+    let(mut input,mut target,mut padding,mut count)=(0usize,0usize,0usize,0usize);let mut seen=vec![0usize;7680];
+    for index in 0..h.len(){let path=s.root.join("F").join(format!("updates-{index:03}.r3rows"));if !path.exists(){continue;}
+        for row in binary::read_value_records(&path)?{
+            let draw=s.tape.get(count).ok_or_else(||bad("FULL_FIT trace beyond budget"))?;count+=1;
+            let length=draw.iter().map(|&i|ss[i].tokens.len()-1).max().unwrap();let mut cost=[0usize;3];
+            for &i in draw{cost[0]+=ss[i].tokens.len()-1;cost[1]+=ss[i].tokens.len()-ss[i].response_start;cost[2]+=length-(ss[i].tokens.len()-1);seen[i]+=1;}
+            if row["local"]!=count||row["model_step"]!=s.parent_step+count||row["optimizer_local"]!=s.clock(count)||row["source_tape_index"]!=(576+count-1)%3072
+                ||row["rows"]!=binary::record!(draw)||row["lr"]!=s.config.lr||row["examples"]!=8||row["input"]!=cost[0]||row["target"]!=cost[1]||row["padding"]!=cost[2]
+                ||row["answer_ce"].as_f64().is_none_or(|v|!v.is_finite()){return Err(bad("FULL_FIT trace/cost/clock/input mismatch"));}
+            input+=cost[0];target+=cost[1];padding+=cost[2];
+        }
+    }
+    let discarded=fit_discarded(s)?;
+    if count!=h.last().ok_or_else(||bad("FULL_FIT trace absent"))?.arms[0].local||count+discarded[0]>3072||input+discarded[1]>8_000_000||target+discarded[2]>1_000_000{return Err(bad("FULL_FIT trace count/budget"));}
+    let f=s.full_fit.as_ref().unwrap();let mut histogram=BTreeMap::<String,usize>::new();
+    for i in 6144..7680{*histogram.entry(format!("new{}/prior-full{}/semantic-other{}",seen[i],f.prior_full_exposure[i],f.semantic_other_exposure[i])).or_default()+=1;}
+    Ok(binary::record!({"updates":count,"backward":count+discarded[0],"discarded":discarded,"examples":count*8,"input":input+discarded[1],"target":target+discarded[2],"padding":padding,"new_exact_exposure":seen,"word_exposure_histogram":histogram,"optimizer_clock":s.clock(count),"source_last_index":if count>0{Some((576+count-1)%3072)}else{None}}))
+}
+fn fit_report(s:&Study)->Result<()> {
+    let h=history(s)?;let end=h.last().ok_or_else(||bad("FULL_FIT NOT_RUN"))?;let p=&end.arms[0];
+    if !end.success||end.resume||!p.fit{return Err(bad("FULL_FIT incomplete; original partial preserved"));}
+    let mut final_scores=None;
+    for &step in s.full_fit.as_ref().unwrap().schedule.iter().filter(|&&n|n<=p.local){
+        let mut natives=std::fs::read_dir(s.root.join("F"))?.collect::<std::io::Result<Vec<_>>>()?.into_iter().map(|e|e.path()).filter(|path|path.file_name().is_some_and(|v|v.to_string_lossy().ends_with(&format!("-step-{step}.r3m")))).collect::<Vec<_>>();
+        if natives.len()!=1{return Err(bad("FULL_FIT scheduled checkpoint ambiguous/absent"));}let native=natives.remove(0);let model=checkpoint::metadata(&native)?.0.model_content_digest;
+        let mut probe=p.clone();probe.local=step;probe.native=native;probe.physical=file_hash(&probe.native)?;
+        let scores=fit_read_endpoint(s,&probe,step==p.local)?;
+        let d=fit_guard_value(s,step,&model)?;
+        if read_confirmed::<binary::Value>(&s.root.join("F").join(format!("decision-{step}.r3b")))?!=d||step<p.local&&!d["stop"].is_null()
+            ||step==p.local&&d["stop"]!=binary::record!(p.stop){return Err(bad("FULL_FIT raw/guard/terminal disagreement"));}
+        for(name,r)in &scores{println!("FULL_FIT_RESULT local={step} model={} {name} full={}/{} QB={} SB={} ALL4={} value={} support={} other={} outside={} malformed={} EOS={} errors={}",s.parent_step+step,r["joint"]["full"],r["joint"]["total"],r["joint"]["query_both"],r["joint"]["swap_both"],r["joint"]["all4"],r["value_correct"],r["citation_support_correct"],r["other_provided_id"],r["valid_outside_id"],r["parse_failure_rows"],r["joint"]["eos"],r["joint"]["errors"]);}
+        if [1536,3072].contains(&step){event_read_teachers(s,0,&probe,0)?;}
+        if step==p.local{final_scores=Some(scores);}
+    }
+    let scores=final_scores.ok_or_else(||bad("FULL_FIT final scheduled evaluation absent"))?;
+    let dev=fit_development(&scores);let fit=scores.get("FULL-train").is_some_and(|r|fit_quality(r,"FULL-train"));
+    let class=if p.stop.is_some(){"RETENTION_STOP"}else if dev&&fit{"FIT_AND_HELDOUT_DEVELOPMENT_PASS"}else if fit{"FIT_GAIN_NO_TRANSFER"}else{"TRAIN_FIT_INCOMPLETE"};
+    let trace=fit_trace(s,&h)?;let mut summary=trace.clone();summary["new_exact_exposure"]=binary::Value::Null;println!("FULL_FIT_TRACE {summary}");
+    // Compare only requests that were actually observed at the original F64.
+    let old=load_study(&s.full_fit.as_ref().unwrap().predecessor,false)?;let model=checkpoint::metadata(&p.native)?.0.model_content_digest;
+    for panel in event_panels(&old,true,false)?.into_iter().filter(|x|["value","citation","S1Q1","FULL-word","FULL-renamed","OLD_FULL"].contains(&x.0.as_str())){
+        let n=panel.1.len();let full_panel=fit_panels(s)?.into_iter().find(|x|x.0==panel.0).unwrap();
+        let Some(score)=scores.get(&panel.0)else{continue};let measured=score["joint"]["total"].as_u64().unwrap()as usize;let n=n.min(measured);
+        let(_,before)=event_read_panel(&old,"F",64,&s.parent_content,&panel,panel.1.len())?;
+        let(_,after)=event_read_panel(s,"F",p.local,&model,&full_panel,measured)?;
+        let mut pair=[0usize;4];for(a,b)in before.iter().zip(&after).take(n){pair[match(a["exact_match"]==true,b["exact_match"]==true){(true,true)=>0,(false,true)=>1,(true,false)=>2,_=>3}]+=1;}
+        println!("FULL_FIT_PARENT_PAIRED {} n={n} both/gain/loss/neither={pair:?}",panel.0);
+    }
+    let f=s.full_fit.as_ref().unwrap();let c=event_inputs(s,0)?;let(_,tm,_)=inputs(s)?;let train=scores.get("FULL-train").unwrap();
+    let raw=binary::read_value_records(&s.root.join("F").join(format!("eval-{}-FULL-train.r3rows",p.local)))?;let n=train["joint"]["total"].as_u64().unwrap()as usize;
+    let seen:Vec<usize>=binary::from_value(trace["new_exact_exposure"].clone())?;let mut groups=BTreeMap::<String,[usize;3]>::new();
+    for(&i,row)in f.train_order[..n].iter().zip(&raw[1..]){let value=c.train[i].answer.split_once("입니다.").ok_or_else(||bad("FULL_FIT train value"))?.0;
+        for key in [format!("word/{value}"),format!("pair-id/{}",tm[i].template),format!("exact-exposure/{}/{}",f.prior_full_exposure[i],seen[i])]{let x=groups.entry(key).or_default();x[0]+=1;x[1]+=usize::from(row["exact_match"]==true);x[2]+=usize::from(row["finish_reason"]=="stop"&&row["error"].is_null());}}
+    println!("FULL_FIT_TRAIN_GROUPS {groups:?}");
+    println!("FULL_FIT_CLOSED class={class} development={dev} full_train_fit={fit} step={} Adam={} cursor={} stop={:?} native={} hash={} usage={:?} bytes={} Goal1=false",s.parent_step+p.local,s.clock(p.local),p.local,p.stop,p.native.display(),p.physical,previous_usage(s,&h)?,owned_bytes(&s.root)?);Ok(())
+}
+fn fit_review(s:&Study)->Result<()> {
+    fit_report(s)?;
+    let h=history(s)?;let end=h.last().ok_or_else(||bad("FULL_FIT endpoint absent"))?;
+    if !end.success||end.resume||!end.arms[0].fit{return Err(bad("FULL_FIT B requires normal endpoint"));}let p=&end.arms[0];
+    let scores=fit_read_endpoint(s,p,true)?;let model=checkpoint::metadata(&p.native)?.0.model_content_digest;
+    let mut all=vec![];let mut raw=vec![];let mut normal=BTreeSet::new();let mut ranks:[Vec<usize>;5]=Default::default();
+    for (panel,take)in fit_panels(s)?.into_iter().take(5).zip([8,6,6,6,6]){
+        let n=scores[&panel.0]["joint"]["total"].as_u64().unwrap()as usize;let(_,rows)=event_read_panel(s,"F",p.local,&model,&panel,n)?;
+        for(i,(e,r))in panel.1.into_iter().zip(rows).enumerate(){let at=all.len();if i<take{normal.insert(at);}
+            if r["exact_match"]!=true{let found=identifiable::binding::citation::individually_valid_ids(r["actual"].as_str().unwrap_or(""));
+                let gold=identifiable::binding::citation::individually_valid_ids(&e.answer);
+                let rank=if r["error_class"]=="strict_utf8"{0}else if r["finish_reason"]!="stop"{1}else if found.iter().any(|id|e.request.evidence.items.iter().all(|v|v.event_id!=*id)){2}else if found.iter().any(|id|!gold.contains(id)){3}else{4};ranks[rank].push(at);}
+            all.push(e);raw.push(r);
+        }
+    }
+    let mut selected=normal.iter().copied().collect::<Vec<_>>();let mut seen=normal.clone();
+    for rank in &ranks{for &i in rank{for at in [i,i^1]{if selected.len()<64&&at<all.len()&&seen.insert(at){selected.push(at);}}}}
+    if normal.len()!=32||selected.iter().any(|i|!seen.contains(&(i^1))){return Err(bad("FULL_FIT B normal/mate coverage"));}
+    let es=selected.iter().map(|&i|all[i].clone()).collect::<Vec<_>>();let expected=selected.iter().map(|&i|raw[i].clone()).collect::<Vec<_>>();
+    let teacher=[1536,3072].contains(&p.local);let manifest=binary::record!({"policy":digest(s)?,"native":p.physical,"cases":digest(&es)?,"normal":normal,"selected":selected,"teacher_indices":if teacher{vec![0,1,16,17,32,33,60,61]}else{vec![]}});
+    let(index,mut ctl)=start_observation(s,"review-F",&manifest)?;
+    let result=(||->Result<()>{let l=checkpoint::load(&p.native,Backend::Metal0.open()?,false)?;
+        let binding=binary::record!({"policy":digest(s)?,"source":s.source,"runtime":s.runtime,"native":p.physical,"cases":digest(&es)?,"call_protocol":1});
+        let actual=generated(&l,&s.root,"review-F",&es,&binding,&mut ctl)?;
+        for(a,b)in actual.iter().zip(&expected){for field in ["raw_tokens","actual","finish_reason","error","generation_completed"]{if a[field]!=b[field]{return Err(bad("FULL_FIT B raw mismatch"));}}}
+        if teacher{let(cases,expected)=event_read_teachers(s,0,p,0)?;let fixed=[0usize,1,16,17,32,33,60,61];let es=fixed.iter().map(|&i|cases[i].clone()).collect::<Vec<_>>();
+            let binding=binary::record!({"policy":digest(s)?,"source":s.source,"runtime":s.runtime,"native":p.physical,"cases":digest(&es)?,"call_protocol":1});
+            let rows=teacher_prefix(&s.root,"review-F-teacher-0",&binding,&l,&es,&mut ctl)?;
+            diagnosis::validate_teacher_forward(&s.runtime,s.config.seq_len,&es,&rows,&l.tokenizer)?;
+            for(r,&i)in rows.iter().zip(&fixed){let a=&r["teacher"]["target_token_observation"];let b=&expected[i]["teacher"]["target_token_observation"];
+                if a["gold"]!=b["gold"]||a["argmax"]!=b["argmax"]{return Err(bad("FULL_FIT B teacher IDs mismatch"));}
+                let x:Vec<f64>=binary::from_value(a["nll"].clone())?;let y:Vec<f64>=binary::from_value(b["nll"].clone())?;
+                if x.len()!=y.len()||x.iter().zip(y).any(|(a,b)|(a-b).abs()>1e-5){return Err(bad("FULL_FIT B teacher NLL mismatch"));}}
+        }ctl.seal_completed_no_call()?;Ok(())})();
+    finish_observation(s,"review-F",index,&mut ctl,&result,binary::record!({"normal":32,"selected":es.len(),"teacher":if teacher{8}else{0},"teacher_scope":if teacher{"FINAL_SCHEDULED"}else{"NOT_RUN_NOT_SCHEDULED"}}))?;result
+}
 fn prepare(parent:&Path,word_root:&Path,output:&Path)->Result<()> {
     let parent=parent.canonicalize()?;let word_root=word_root.canonicalize()?;
     let p:Plan=read(&word_root.join("plan.r3b"))?;
@@ -414,7 +799,7 @@ fn prepare(parent:&Path,word_root:&Path,output:&Path)->Result<()> {
         costs:binary::record!({"input":input,"target":target,"padding":padding,"exposures":exposure,"samples":8192,
             "sample_content":digest(&c.train.iter().map(digest).collect::<Result<Vec<_>>>()?)?,
             "sample_tokens":digest(&ss.iter().map(|v|digest(&(&v.tokens,v.response_start))).collect::<Result<Vec<_>>>()?)?}),
-        baseline_hash:file_hash(&baseline_raw)?,baseline_raw,max_updates:1024,generation_cap:6400,teacher_cap:6400,active_cap:7200.,segment_cap:900.,bytes_cap:1610612736,event:None};
+        baseline_hash:file_hash(&baseline_raw)?,baseline_raw,max_updates:1024,generation_cap:6400,teacher_cap:6400,active_cap:7200.,segment_cap:900.,bytes_cap:1610612736,event:None,full_fit:None};
     for arm in ARMS {std::fs::create_dir(root.join(arm))?;}
     publish_confirmed(&root.join("plan.r3b"),&s)?;
     let roles=[OptimizerProtocol::new(&l.model.config,false,digest(&s.runtime)?,st.step)?,OptimizerProtocol::new(&l.model.config,true,digest(&s.runtime)?,st.step)?];
@@ -424,9 +809,10 @@ fn prepare(parent:&Path,word_root:&Path,output:&Path)->Result<()> {
 
 fn load_study(root:&Path,execute:bool)->Result<Study>{
     let s:Study=read_confirmed(&root.join("plan.r3b"))?;
-    if s.contract!=if s.event.is_some(){EVENT_CONTRACT}else{CONTRACT}||s.root!=root.canonicalize()?{return Err(bad("study root/contract binding"));}
+    if s.contract!=if s.full_fit.is_some(){FIT_CONTRACT}else if s.event.is_some(){EVENT_CONTRACT}else{CONTRACT}||s.root!=root.canonicalize()?{return Err(bad("study root/contract binding"));}
     inputs(&s)?;
-    if s.event.is_some(){event_inputs(&s,0)?;event_inputs(&s,1)?;}
+    if s.event.is_some(){for arm in 0..s.arms().len(){event_inputs(&s,arm)?;}}
+    if s.full_fit.is_some(){fit_verify_inputs(&s)?;}
     if execute {
         if s.source!=sources()?{return Err(bad("Muon frozen source changed"));}
         s.runtime.verify(&Backend::Metal0.open()?)?;
@@ -440,7 +826,8 @@ fn admit(root:&Path,review:&Path)->Result<()> {
     // The independent reviewer authors this typed receipt after real tests.
     if r["contract"]!=s.contract||r["source"]!=s.source||r["policy"]!=digest(&s)?||r["runtime"]!=binary::record!(s.runtime)
         ||r["verdict"]!="PASS"||(s.event.is_none()&&r["tests_passed"].as_u64().is_none_or(|n|n<6))
-        ||(s.event.is_some()&&r["boundaries"]!=binary::record!(["request_labels","strict_scorer_gate","tape_cost","inherited_native_process","actual_teacher_modes","final_no_call"]))
+        ||(s.full_fit.is_some()&&r["boundaries"]!=binary::record!(["full_input_lineage","rotated_tape_exposure","inherited_native_process","single_arm_guard","large_count_reader","final_no_call"]))
+        ||(s.full_fit.is_none()&&s.event.is_some()&&r["boundaries"]!=binary::record!(["request_labels","strict_scorer_gate","tape_cost","inherited_native_process","actual_teacher_modes","final_no_call"]))
         ||r["active_seconds"].as_f64().is_none_or(|v|!v.is_finite()||v<0.||v>=s.active_cap) {
         return Err(bad("independent A incomplete/mismatch"));
     }
@@ -450,7 +837,7 @@ fn admit(root:&Path,review:&Path)->Result<()> {
 #[derive(Clone,Serialize,Deserialize)]
 struct Progress { local:usize,native:PathBuf,physical:String,stop:Option<String>,evaluated:usize,fit:bool }
 #[derive(Clone,Serialize,Deserialize)]
-struct Segment { policy:String,previous:Option<String>,phase:usize,arms:[Progress;2],success:bool,resume:bool,control:binary::Value,error:Option<String> }
+struct Segment { policy:String,previous:Option<String>,phase:usize,arms:Vec<Progress>,success:bool,resume:bool,control:binary::Value,error:Option<String> }
 fn history(s:&Study)->Result<Vec<Segment>> {
     let mut out:Vec<Segment>=vec![];
     for index in 0..128 {
@@ -461,7 +848,7 @@ fn history(s:&Study)->Result<Vec<Segment>> {
         let seg:Segment=read_confirmed(&end).map_err(|_|bad("UNKNOWN/unfinished study segment; new work blocked"))?;
         let expected=if index==0{None}else{Some(file_hash(&s.root.join(format!("segment-{:03}-finished.r3b",index-1)))?)};
         if begun["policy"]!=digest(s)?||seg.policy!=digest(s)?||seg.previous!=expected||seg.phase>8
-            ||seg.arms.iter().any(|a|a.local>s.max_updates||a.evaluated>a.local) {return Err(bad("segment chain/policy/cursor"));}
+            ||seg.arms.len()!=s.arms().len()||seg.arms.iter().any(|a|a.local>s.max_updates||a.evaluated>a.local) {return Err(bad("segment chain/policy/cursor"));}
         for a in &seg.arms {if file_hash(&a.native)?!=a.physical{return Err(bad("durable native changed"));}}
         out.push(seg);
     }Ok(out)
@@ -469,8 +856,8 @@ fn history(s:&Study)->Result<Vec<Segment>> {
 fn previous_usage(s:&Study,h:&[Segment])->Result<(f64,usize,usize)> {
     let a:binary::Value=read_confirmed(&s.root.join("review-a.r3b"))?;
     let mut time=a["active_seconds"].as_f64().ok_or_else(||bad("A active usage unknown"))?;let(mut generations,mut teacher)=(0,0);
-    let labels=if s.event.is_some(){["baseline","review-F","review-I"]}else{["baseline","review-A","review-M"]};
-    let observations=labels.into_iter().map(|label|observation_history(s,label)).collect::<Result<Vec<_>>>()?;
+    let labels=std::iter::once("baseline".to_owned()).chain(s.arms().iter().map(|a|format!("review-{a}")));
+    let observations=labels.map(|label|observation_history(s,&label)).collect::<Result<Vec<_>>>()?;
     for c in h.iter().map(|h|h.control.clone()).chain(observations.into_iter().flatten().map(|v|v["control"].clone())) {
         time+=c["elapsed_seconds"].as_f64().filter(|v|v.is_finite()&&*v>=0.).ok_or_else(||bad("active time UNKNOWN"))?;
         generations+=c["generation_calls"].as_u64().ok_or_else(||bad("generation usage UNKNOWN"))? as usize;
@@ -610,6 +997,7 @@ fn generated_until(l:&checkpoint::Loaded,root:&Path,label:&str,es:&[Episode],bin
     }Ok(rows)
 }
 fn baseline(s:&Study)->Result<()> {
+    if s.full_fit.is_some(){return fit_baseline(s);}
     if s.event.is_some(){return event_baseline(s);}
     let h=history(s)?;if !h.is_empty(){return Err(bad("baseline after training forbidden"));}
     let (c,_,_)=inputs(s)?;let es=&c.validation[..16];
@@ -701,15 +1089,16 @@ fn train_update(s:&Study,arm:usize,l:&mut checkpoint::Loaded,o:&mut Optimizer,p:
     Ok(binary::record!({"local":p.local,"model_step":st.step,"optimizer_local":o.protocol.local_step,"rows":s.tape[p.local-1],"input":b.tokens,"target":targets,"padding":b.input.elem_count()-b.tokens,"examples":examples,"answer_ce":value,"lr":s.config.lr,"stats":stats,"forward_backward_seconds":fb,"optimizer_seconds":opt,"step_seconds":start.elapsed().as_secs_f64(),"arm":s.arms()[arm]}))
 }
 fn train(s:&Study)->Result<()> {
+    if s.full_fit.is_some(){return fit_train(s);}
     let baseline:binary::Value=read_confirmed(&s.root.join("baseline-finished.r3b"))?;if baseline["success"]!=true{return Err(bad("baseline not accepted"));}
     let h=history(s)?;if h.last().is_some_and(|s|!s.resume){return Err(bad("closed pair; no resume"));}
     if s.event.is_some()&&baseline["extra"]["id_sufficient"]==true{return Err(bad("BASELINE_ID_CONTRACT_SUFFICIENT; no learning"));}
     let mut ctl=control(s,&h)?;let index=h.len();
     let initial=Progress{local:0,native:s.parent.clone(),physical:s.parent_hash.clone(),stop:None,evaluated:0,fit:false};
-    let mut ps=h.last().map(|h|h.arms.clone()).unwrap_or([initial.clone(),initial]);let mut phase=h.last().map_or(0,|h|h.phase);
+    let mut ps=h.last().map(|h|h.arms.clone()).unwrap_or(vec![initial.clone(),initial]);let mut phase=h.last().map_or(0,|h|h.phase);
     let previous=if index==0{None}else{Some(file_hash(&s.root.join(format!("segment-{:03}-finished.r3b",index-1)))?)};
     publish_confirmed(&s.root.join(format!("segment-{index:03}-started.r3b")),&binary::record!({"policy":digest(s)?,"previous":previous,"phase":phase,"arms":ps}))?;
-    let device=Backend::Metal0.open()?;let mut models=vec![];let saved_local=ps.each_ref().map(|p|p.local);
+    let device=Backend::Metal0.open()?;let mut models=vec![];let saved_local=ps.iter().map(|p|p.local).collect::<Vec<_>>();
     let mut optimizer_entered=false;
     let result=(||->Result<()> {
         // Native load is not a model call. Complete RETURNED evaluation can be
@@ -765,11 +1154,12 @@ fn train(s:&Study)->Result<()> {
     let terminal=ps.iter().all(|p|p.fit);
     let seg=Segment{policy:digest(s)?,previous,phase,arms:ps,success:result.is_ok(),resume:!terminal&&(result.is_ok()||pure_time),control:ctl.receipt(),error:result.as_ref().err().map(ToString::to_string)};
     publish_confirmed(&s.root.join(format!("segment-{index:03}-finished.r3b")),&seg)?;
-    println!("MUON_SEGMENT index={index} phase={phase} local={:?} resume={} stop={:?} active={} new_bytes={}",seg.arms.each_ref().map(|p|p.local),seg.resume,seg.arms.each_ref().map(|p|&p.stop),seg.control["elapsed_seconds"],owned_bytes(&s.root)?);
+    println!("MUON_SEGMENT index={index} phase={phase} local={:?} resume={} stop={:?} active={} new_bytes={}",seg.arms.iter().map(|p|p.local).collect::<Vec<_>>(),seg.resume,seg.arms.iter().map(|p|&p.stop).collect::<Vec<_>>(),seg.control["elapsed_seconds"],owned_bytes(&s.root)?);
     if pure_time{Ok(())}else{result}
 }
 
 fn report(s:&Study)->Result<()> {
+    if s.full_fit.is_some(){return fit_report(s);}
     if s.event.is_some(){return event_report(s);}
     let h=history(s)?;let end=h.last().ok_or_else(||bad("NOT_RUN"))?;let tok=scoring_tokenizer(s)?;
     for arm in 0..2 {let p=&end.arms[arm];
@@ -825,6 +1215,7 @@ fn report(s:&Study)->Result<()> {
 }
 fn scoring_tokenizer(s:&Study)->Result<ByteBpe>{let tok=ByteBpe::load(&s.word_root.join("tokenizer.r3b"))?;if tok.semantic_id()!=s.tokenizer{return Err(bad("frozen scorer tokenizer changed"));}Ok(tok)}
 fn review(s:&Study,arm:usize)->Result<()> {
+    if s.full_fit.is_some(){return fit_review(s);}
     if s.event.is_some(){return event_review(s,arm);}
     let h=history(s)?;let end=h.last().ok_or_else(||bad("not run"))?;
     if end.resume||!end.success||!end.arms.iter().all(|p|p.fit){return Err(bad("B requires normally complete endpoint"));}
@@ -845,6 +1236,7 @@ fn review(s:&Study,arm:usize)->Result<()> {
 }
 pub fn run(a:Action)->Result<()> {
     match a {
+        Action::FullFitPrepare{prior_study,review_b,output}=>fit_prepare(&prior_study,&review_b,&output),
         Action::Diagnose{command}=>diagnosis::run(command),
         Action::EventPrepare{diagnosis,audit,output}=>event_prepare(&diagnosis,&audit,&output),
         Action::Prepare{parent,word_root,output}=>prepare(&parent,&word_root,&output),
@@ -945,8 +1337,19 @@ impl Optimizer {
 #[cfg(all(test,feature="metal"))]
 mod tests {
     use super::*;
+    #[test]
+    fn full_fit_guard_and_legacy_encoding()->Result<()> {
+        let mut j=binary::record!({"total":64,"full":64,"all4":16,"errors":0});assert_eq!(fit_guard_panel(1,&j)?,(0,false));
+        j["full"]=binary::record!(56);assert_eq!(fit_guard_panel(0,&j)?,(1,false));assert_eq!(fit_guard_panel(1,&j)?,(2,true));
+        j["full"]=binary::record!(48);assert!(fit_guard_panel(0,&j)?.1);j["full"]=binary::record!(64);j["errors"]=binary::record!(4);assert!(fit_guard_panel(0,&j)?.1);
+        j["errors"]=binary::record!(0);j["all4"]=binary::record!(12);assert_eq!(fit_guard_panel(0,&j)?,(1,false));j["total"]=binary::record!(63);assert!(fit_guard_panel(0,&j).is_err());
+        let p=Progress{local:64,native:"fixture.r3m".into(),physical:"a".repeat(64),stop:None,evaluated:64,fit:true};
+        assert_eq!(binary::to_vec(&[p.clone(),p.clone()])?,binary::to_vec(&vec![p.clone(),p])?);
+        assert_eq!(fit_counts(768,false,false),[64,64,64,64,64,192,0]);assert_eq!(fit_counts(1536,false,false),[512,512,512,192,192,192,0]);
+        assert_eq!(fit_counts(1536,false,true)[5],1536);assert_eq!(fit_counts(3072,true,false),[512,512,512,192,192,1536,64]);Ok(())
+    }
     fn event_fixture() -> Result<(Study,PathBuf)> {
-        let prepared=PathBuf::from(std::env::var("R3_EVENT_PREPARATION").map_err(|_|bad("explicit event preparation required"))?);
+        let prepared=PathBuf::from(std::env::var("R3_FULL_FIT_PREPARATION").or_else(|_|std::env::var("R3_EVENT_PREPARATION")).map_err(|_|bad("explicit event preparation required"))?);
         let mut s:Study=read_confirmed(&prepared.join("plan.r3b"))?;
         let root=std::env::temp_dir().join(format!("replica-event-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));std::fs::create_dir(&root)?;
         let tok=scoring_tokenizer(&s)?;let mut cfg=Config::tiny(tok.vocab_size());cfg.context=2048;cfg.profile="NATIVE_TRPP_EXPERIMENTAL_V1".into();
@@ -955,17 +1358,103 @@ mod tests {
         let mut op=Optimizer::fresh(&model.config,&model.vars,false,digest(&s.runtime)?,14336)?;
         // Explicit synthetic inherited nonzero moments; no hidden512 updates.
         for (name,t)in &mut op.tensors{*t=Tensor::full(if name.starts_with("adam.m."){0.0001f32}else{0.0002},t.dims(),t.device())?;}
-        op.protocol.local_step=512;
+        let fit=s.full_fit.is_some();op.protocol.local_step=if fit{576}else{512};
+        if fit{op.protocol.version=2;op.protocol.family="ADAMW-INHERITED-V1".into();op.protocol.study_start_step=Some(14848);}
         let mut manifest=checkpoint::initialized(&model,&tok,20260924,"e".repeat(64))?;
-        let mut config=s.config.clone();config.budget_start_step=14336;config.max_steps=15360;
-        let mut state=fixture_state(&config,&tok,14848);state.sampler_state=512;state.initial_weight_hash=manifest.initial_weight_hash.clone();state.consumed_tokens=config.budget_start_tokens;
+        let mut config=s.config.clone();config.budget_start_step=if fit{14848}else{14336};config.max_steps=15360;
+        let mut state=fixture_state(&config,&tok,s.parent_step);state.sampler_state=if fit{64}else{512};state.initial_weight_hash=manifest.initial_weight_hash.clone();state.consumed_tokens=config.budget_start_tokens;
         manifest.training=Some(state);manifest.optimizer_protocol=Some(op.protocol.clone());manifest.status="DIAGNOSTIC_COMPLETE".into();
         let path=root.join("tiny-parent.r3m");checkpoint::save(&path,&model,&tok,manifest,&op.tensors)?;
         s.parent=path;s.parent_hash=file_hash(&s.parent)?;s.parent_content=model.weights_content_id()?;s.parent_adam=optimizer_hash(&op.tensors)?;s.event.as_mut().unwrap().optimizer=op.protocol;
         Ok((s,root))
     }
+    #[test]
+    #[ignore="FULL single-arm inherited Metal TINY continuous2 vs1+process1; four optimizer/backward calls"]
+    fn full_fit_inherited_process()->Result<()> {
+        if let Ok(root)=std::env::var("R3_FIT_RESTART_CHILD"){
+            let s:Study=read_confirmed(&PathBuf::from(root).join("plan.r3b"))?;
+            let mut p:Progress=read_confirmed(&s.root.join("progress-F-1.r3b"))?;
+            assert_eq!(s.arms(),["F"]);assert_eq!(s.clock(1),577);event_tiny_steps(&s,0,&mut p,1,1)?;return Ok(());
+        }
+        let(s,root)=event_fixture()?;assert!(s.full_fit.is_some());
+        let continuous=event_test_root(&s,&root.join("continuous"))?;let split=event_test_root(&s,&root.join("split"))?;
+        let p=Progress{local:0,native:s.parent.clone(),physical:s.parent_hash.clone(),stop:None,evaluated:0,fit:false};
+        let mut a=p.clone();event_tiny_steps(&continuous,0,&mut a,2,0)?;
+        let mut b=p;event_tiny_steps(&split,0,&mut b,1,0)?;
+        let status=std::process::Command::new(std::env::current_exe()?).args(["--exact","training::fresh::muon::tests::full_fit_inherited_process","--ignored","--nocapture","--test-threads=1"]).env("R3_FIT_RESTART_CHILD",&split.root).status()?;assert!(status.success());
+        b=read_confirmed(&split.root.join("progress-F-2.r3b"))?;
+        let a=checkpoint::load(&a.native,Device::Cpu,true)?;let b=checkpoint::load(&b.native,Device::Cpu,true)?;
+        assert_eq!(a.model.weights_content_id()?,b.model.weights_content_id()?);assert_eq!(optimizer_hash(&a.optimizer)?,optimizer_hash(&b.optimizer)?);
+        assert_eq!(a.manifest.optimizer_protocol,b.manifest.optimizer_protocol);
+        let sa=a.manifest.training.as_ref().unwrap();let sb=b.manifest.training.as_ref().unwrap();
+        assert_eq!((sa.step,sa.sampler_state,sa.consumed_tokens,sa.target_tokens),(sb.step,sb.sampler_state,sb.consumed_tokens,sb.target_tokens));
+        assert_eq!((sa.step,sa.sampler_state,a.manifest.optimizer_protocol.as_ref().unwrap().local_step),(14914,2,578));
+        assert_eq!(file_hash(&s.parent)?,s.parent_hash);
+        println!("FULL_FIT_TINY exact weights/m/v/clock/cursor; updates4 backward4 generation0 teacher0 path={}",root.display());Ok(())
+    }
     fn event_test_root(s:&Study,root:&Path)->Result<Study>{let mut s=s.clone();std::fs::create_dir(root)?;s.root=root.canonicalize()?;
         for arm in s.arms(){std::fs::create_dir(s.root.join(arm))?;}publish_confirmed(&s.root.join("plan.r3b"),&s)?;Ok(s)}
+    #[test]
+    #[ignore="model-free FULL preparation,3072 trace,1536 panel,actual final-only process"]
+    fn full_fit_final_process_and_large_counts()->Result<()> {
+        if let Ok(root)=std::env::var("R3_FIT_FINAL_CHILD"){
+            let s:Study=read_confirmed(&PathBuf::from(root).join("plan.r3b"))?;train(&s)?;
+            let h=history(&s)?;let last=h.last().unwrap();let mode=std::env::var("R3_FIT_FINAL_MODE").unwrap();
+            if mode=="train-fail"{assert!(!last.success&&last.resume&&!last.arms[0].fit);assert_eq!(last.phase,3);}
+            else{assert!(last.success&&!last.resume&&last.arms[0].fit);}
+            assert_eq!(last.arms.len(),1);assert_eq!(last.control["generation_calls"],0);assert_eq!(last.control["teacher_calls"],0);
+            assert_eq!(h[0].arms[0].physical,last.arms[0].physical);
+            let scores=fit_read_endpoint(&s,&last.arms[0],mode!="train-fail")?;
+            if mode=="stop"{assert_eq!(last.arms[0].stop.as_deref(),Some("RETENTION_STOP"));assert_eq!(scores["FULL-train"]["joint"]["total"],192);assert!(!s.root.join("F/teacher-768-FULL-teachers.r3rows").exists());}
+            else{assert!(fit_development(&scores));assert_eq!(fit_quality(&scores["FULL-train"],"FULL-train"),mode!="train-fail");}return Ok(());
+        }
+        let prepared=PathBuf::from(std::env::var("R3_FULL_FIT_PREPARATION").map_err(|_|bad("FULL preparation required"))?);
+        let real:Study=read_confirmed(&prepared.join("plan.r3b"))?;fit_verify_inputs(&real)?;
+        let f=real.full_fit.as_ref().unwrap();assert_eq!(f.train_order.len(),1536);assert_eq!(f.train_order.iter().collect::<BTreeSet<_>>().len(),1536);
+        let source=fit_rotation(&real.tape,3072-576)?;assert_eq!(real.tape,fit_rotation(&source,576)?);assert!(fit_rotation(&source[..3071],576).is_err());
+        assert!(fit_exposure(&real.tape)?[6144..].iter().all(|&x|x==8));assert_eq!(real.clock(3072),3648);
+        let(template,root)=event_fixture()?;
+        for(mode,step,phase)in [("final",3072,4),("early",1536,2),("train-fail",1536,2),("stop",768,1)]{
+        let s=event_test_root(&template,&root.join(mode))?;
+        publish_confirmed(&s.root.join("review-a.r3b"),&binary::record!({"active_seconds":7200.,"synthetic_fixture":true}))?;
+        publish_confirmed(&s.root.join("baseline-finished.r3b"),&binary::record!({"success":true,"synthetic_fixture":true}))?;
+        let mut p=Progress{local:0,native:s.parent.clone(),physical:s.parent_hash.clone(),stop:None,evaluated:2304,fit:false};
+        let(mut l,mut o)=load_arm(&s,0,&p,&Device::Cpu)?;p.local=step;p.evaluated=FIT_STEPS[phase-1];o.protocol.local_step=s.clock(step);
+        let st=l.manifest.training.as_mut().unwrap();st.step=s.parent_step+step;st.sampler_state=step as u64;save_arm(&s,0,0,&mut l,&o,&mut p)?;
+        let mut previous:Option<String>=None;
+        for &prior in &FIT_STEPS[..phase]{let path=s.root.join("F").join(format!("decision-{prior}.r3b"));
+            publish_confirmed(&path,&binary::record!({"policy":digest(&s)?,"local":prior,"previous":previous,"streak":if mode=="stop"{[1,0,0]}else{[0,0,0]},"stop":null,"synthetic_fixture":true}))?;previous=Some(file_hash(&path)?);}
+        let mut hashes=BTreeMap::new();let dir=s.root.join("F");
+        let counts=fit_counts(step,mode!="train-fail",mode!="stop");
+        for(panel,&n)in fit_panels(&s)?.into_iter().zip(&counts){if n==0{continue;}let label=format!("eval-{step}-{}",panel.0);let b=event_binding(&s,"F",step,&l.model.weights_content_id()?,&panel)?;
+            let wrong=if mode=="stop"&&panel.0=="value"{0..8}else if mode=="train-fail"&&panel.0=="FULL-train"{1520..1536}else{0..0};
+            event_returned_fixture_faults(&s,&dir,&label,&b,&panel.1[..n],&l.tokenizer,false,wrong)?;let path=dir.join(format!("{label}.r3rows"));hashes.insert(path.clone(),file_hash(&path)?);
+            if panel.0=="FULL-train"{let mut zero=RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),std::time::Duration::ZERO,u64::MAX)?;
+                let r=event_panel_score(&s,"F",step,&l,&panel,192,&mut zero)?;assert_eq!(r["joint"]["total"],192);assert_eq!(zero.receipt()["generation_calls"],0);}
+        }
+        if mode!="stop"{let es=event_teacher_cases(&s,0)?;let label=format!("teacher-{step}-FULL");
+        let b=binary::record!({"policy":digest(&s)?,"source":s.source,"runtime":s.runtime,"model":l.model.weights_content_id()?,"arm":"F","local":step,"mode":0,"cases":digest(&es)?,"planned":64,"call_protocol":1});
+        event_returned_fixture(&s,&dir,&label,&b,&es,&l.tokenizer,true)?;}
+        let control=binary::record!({"elapsed_seconds":0.,"generation_calls":0,"teacher_calls":0,"observed_conditions":["TIME_BUDGET"]});
+        publish_confirmed(&s.root.join("segment-000-started.r3b"),&binary::record!({"policy":digest(&s)?}))?;
+        let seg=Segment{policy:digest(&s)?,previous:None,phase,arms:vec![p.clone()],success:false,resume:true,control,error:Some("TIME_BUDGET".into())};
+        publish_confirmed(&s.root.join("segment-000-finished.r3b"),&seg)?;
+        if mode=="final"{let c=event_inputs(&s,0)?;let ss=samples_with_framing(&c.train,&l.tokenizer,256,neural::Framing::QuestionEvidence)?;
+        let path=dir.join("updates-000.r3rows");let mut trace=std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+        for(n,draw)in s.tape.iter().enumerate(){let width=draw.iter().map(|&i|ss[i].tokens.len()-1).max().unwrap();let mut cost=[0;3];
+            for &i in draw{cost[0]+=ss[i].tokens.len()-1;cost[1]+=ss[i].tokens.len()-ss[i].response_start;cost[2]+=width-(ss[i].tokens.len()-1);}
+            append_row(&mut trace,&binary::record!({"local":n+1,"model_step":s.parent_step+n+1,"optimizer_local":s.clock(n+1),"source_tape_index":(576+n)%3072,"rows":draw,"lr":3e-5,"examples":8,"input":cost[0],"target":cost[1],"padding":cost[2],"answer_ce":0.12345678901234567f64}))?;
+        }
+        assert_eq!(fit_trace(&s,std::slice::from_ref(&seg))?["updates"],3072);
+        let mut short=seg.clone();short.arms[0].local=3071;assert!(fit_trace(&s,&[short]).is_err());}
+        let status=std::process::Command::new(std::env::current_exe()?).args(["--exact","training::fresh::muon::tests::full_fit_final_process_and_large_counts","--ignored","--nocapture","--test-threads=1"]).env("R3_FIT_FINAL_CHILD",&s.root).env("R3_FIT_FINAL_MODE",mode).status()?;assert!(status.success());
+        for(path,hash)in hashes{assert_eq!(file_hash(&path)?,hash);}let last=history(&s)?.last().unwrap().clone();
+        let panel=fit_panels(&s)?.remove(5);assert!(event_read_panel(&s,"F",step,&"0".repeat(64),&panel,1536).is_err());
+        assert!(event_read_panel(&s,"F",step,&l.model.weights_content_id()?,&panel,1537).is_err());
+        let decision=s.root.join("F").join(format!("decision-{step}.r3b"));let hash=file_hash(&decision)?;
+        assert_eq!(fit_decision(&s,&last.arms[0],&l.model.weights_content_id()?)?,last.arms[0].stop);assert_eq!(file_hash(&decision)?,hash);
+        println!("FULL_FIT_FINAL {mode} actual new-process at7200; prefix/guard/early/continuation; calls0 updates0; evidence={}",s.root.display());}Ok(())
+    }
     fn event_tiny_steps(s:&Study,arm:usize,p:&mut Progress,updates:usize,index:usize)->Result<()> {
         let device=Backend::Metal0.open()?;let(l,mut o)=load_arm(s,arm,p,&device)?;let mut l=l;
         let ss=samples_with_framing(&event_inputs(s,arm)?.train,&l.tokenizer,256,neural::Framing::QuestionEvidence)?;
@@ -974,7 +1463,7 @@ mod tests {
             let b=batch(&ss,&s.tape[p.local],&device)?;let entry=s.root.join(s.arms()[arm]).join(format!("fixture-{}-entered.r3b",p.local+1));
             publish_confirmed(&entry,&binary::record!({"fixture":true,"cursor":p.local,"tape":s.tape[p.local]}))?;
             let mut entered=false;let trace=train_update(s,arm,&mut l,&mut o,p,&b,&mut ctl,&mut entered,&entry,Instant::now())?;
-            assert!(!entered);assert_eq!(trace["optimizer_local"],512+p.local);assert_eq!(trace["model_step"],14848+p.local);assert!(o.protocol.roles.values().all(|v|!*v));
+            assert!(!entered);assert_eq!(trace["optimizer_local"],s.clock(p.local));assert_eq!(trace["model_step"],s.parent_step+p.local);assert!(o.protocol.roles.values().all(|v|!*v));
             publish_confirmed(&s.root.join(s.arms()[arm]).join(format!("fixture-trace-{}.r3b",p.local)),&trace)?;
         }
         save_arm(s,index,arm,&mut l,&o,p)?;publish_confirmed(&s.root.join(format!("progress-{}-{}.r3b",s.arms()[arm],p.local)),p)?;Ok(())
@@ -1025,7 +1514,7 @@ mod tests {
             let s:Study=read_confirmed(&PathBuf::from(root).join("plan.r3b"))?;train(&s)?;
             let h=history(&s)?;let last=h.last().unwrap();assert!(last.success&&!last.resume&&last.arms.iter().all(|p|p.fit));
             assert_eq!(last.control["generation_calls"],0);assert_eq!(last.control["teacher_calls"],0);
-            assert_eq!(h[0].arms.each_ref().map(|p|&p.physical),last.arms.each_ref().map(|p|&p.physical));return Ok(());
+            assert_eq!(h[0].arms.iter().map(|p|&p.physical).collect::<Vec<_>>(),last.arms.iter().map(|p|&p.physical).collect::<Vec<_>>());return Ok(());
         }
         let(s,root)=event_fixture()?;let s=event_test_root(&s,&root.join("final-only"))?;
         publish_confirmed(&s.root.join("review-a.r3b"),&binary::record!({"active_seconds":s.active_cap,"synthetic_fixture":true}))?;
@@ -1067,15 +1556,18 @@ mod tests {
         println!("EVENT_FINAL_ONLY PASS fresh_process budget3600 exhausted RETURNED preserved, native clock640 unchanged; optimizer0 generation0 teacher0 evidence={}",s.root.display());Ok(())
     }
     fn event_returned_fixture(s:&Study,dir:&Path,label:&str,b:&binary::Value,es:&[Episode],tok:&ByteBpe,teacher:bool)->Result<()> {
+        event_returned_fixture_faults(s,dir,label,b,es,tok,teacher,0..0)
+    }
+    fn event_returned_fixture_faults(s:&Study,dir:&Path,label:&str,b:&binary::Value,es:&[Episode],tok:&ByteBpe,teacher:bool,wrong:std::ops::Range<usize>)->Result<()> {
         let path=dir.join(format!("{label}{}.r3rows",if teacher{"-teachers"}else{""}));
         let mut f=std::fs::OpenOptions::new().write(true).create_new(true).open(path)?;append_row(&mut f,b)?;
         let ctl=RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),std::time::Duration::from_secs(30),u64::MAX)?;
         for(i,e)in es.iter().enumerate(){
             let attempt=prepare_call(dir,label,if teacher{"teacher"}else{"generation"},b,e,i)?;
-            let output=tok.encode(e.answer.as_bytes())?;let mut ids=output.clone();ids.push(EOS);
+            let actual=if wrong.contains(&i){"틀림"}else{&e.answer};let output=tok.encode(actual.as_bytes())?;let mut ids=output.clone();ids.push(EOS);
             let samples=samples_with_framing(std::slice::from_ref(e),tok,s.config.seq_len,neural::Framing::QuestionEvidence)?;let sample=&samples[0];let n=sample.response_start;
             let row=if teacher{binary::record!({"ordinal":i,"id":e.id,"case":digest(e)?,"teacher":{"mean_nll":1.,"target_tokens_including_eos":ids.len(),"training_prompt_matches_generation":true,"answer_tokenizer_roundtrip":true,"target_token_observation":{"gold":ids,"argmax":ids,"nll":vec![1.;ids.len()]},"native_forward":{"model_device":s.runtime.actual_device,"input_device":s.runtime.actual_device,"logits_device":s.runtime.actual_device,"input_dtype":"U32","logits_dtype":"F32","logits_finite":true,"input_shape":[1,sample.tokens.len()-1],"prompt_tokens":n,"prompt_digest":digest(&&sample.tokens[..n])?,"input_tokens_digest":digest(&&sample.tokens[..sample.tokens.len()-1])?,"logits_shape":[sample.tokens.len()-n,tok.vocab_size()]}},"attempt":attempt.file_name().unwrap().to_string_lossy()})}
-                else{binary::record!({"row_version":2,"id":e.id,"expected":e.answer,"question":e.request.input,"generated_evidence":e.request.evidence,"raw_tokens":ids,"actual":e.answer,"error":null,"finish_reason":"stop","generation_completed":true,"generation":{"tokens":output,"generated":ids.len(),"finish":"stop"},"exact_match":true,"attempt":attempt.file_name().unwrap().to_string_lossy()})};
+                else{binary::record!({"row_version":2,"id":e.id,"expected":e.answer,"question":e.request.input,"generated_evidence":e.request.evidence,"raw_tokens":ids,"actual":actual,"error":null,"finish_reason":"stop","generation_completed":true,"generation":{"tokens":output,"generated":ids.len(),"finish":"stop"},"exact_match":!wrong.contains(&i),"attempt":attempt.file_name().unwrap().to_string_lossy()})};
             append_row(&mut f,&row)?;resolve_call(&attempt,Some(&row),&ctl)?;
         }Ok(())
     }
@@ -1540,7 +2032,7 @@ fn event_review_strict_scorer_gate() -> Result<()> {
             train(&s)?;let h=history(&s)?;let last=h.last().unwrap();
             assert!(!last.resume&&last.success&&last.arms.iter().all(|p|p.fit));
             assert_eq!(last.control["generation_calls"],0);assert_eq!(last.control["teacher_calls"],0);
-            assert_eq!(h[0].arms.each_ref().map(|p|&p.physical),last.arms.each_ref().map(|p|&p.physical));return Ok(());
+            assert_eq!(h[0].arms.iter().map(|p|&p.physical).collect::<Vec<_>>(),last.arms.iter().map(|p|&p.physical).collect::<Vec<_>>());return Ok(());
         }
         let source=PathBuf::from(std::env::var("R3_MUON_PREPARATION").map_err(|_|bad("explicit prepared study path needed for caller fixture"))?);
         let mut s:Study=read_confirmed(&source.join("plan.r3b"))?;
@@ -1580,7 +2072,7 @@ fn event_review_strict_scorer_gate() -> Result<()> {
                 }
             }ps.push(p);
         }
-        let arms:[Progress;2]=ps.try_into().ok().unwrap();let control=binary::record!({"elapsed_seconds":0.,"generation_calls":0,"teacher_calls":0,"observed_conditions":["TIME_BUDGET"]});
+        let arms=ps;let control=binary::record!({"elapsed_seconds":0.,"generation_calls":0,"teacher_calls":0,"observed_conditions":["TIME_BUDGET"]});
         publish_confirmed(&s.root.join("segment-000-started.r3b"),&binary::record!({"policy":digest(&s)?}))?;
         publish_confirmed(&s.root.join("segment-000-finished.r3b"),&Segment{policy:digest(&s)?,previous:None,phase:8,arms,success:false,resume:true,control,error:Some("TIME_BUDGET".into())})?;
         let status=std::process::Command::new(std::env::current_exe()?).args(["--exact","training::fresh::muon::tests::final_evaluation_only_process","--ignored","--nocapture","--test-threads=1"]).env("R3_MUON_FINALIZE_CHILD",&s.root).status()?;assert!(status.success());

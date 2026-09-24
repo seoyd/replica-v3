@@ -1,5 +1,48 @@
 # 진단 및 구현 상태
 
+## 2026-09-25 Full response fit — prepared, independent A pending
+
+The new single F continuation references the original F64 native at
+`artifacts/selected-event-id-v11-20260924-study/F/segment-001-step-64.r3m`.
+Physical9ea752b455d0222cdbc414f799fd86e8a3aff1f31d3893f3571f7e215b4a3ca4,
+model14912/Adam576/origin14336; original cursor64 and closed F/I decisions
+are preserved. New cursor0 is a separate parent-bound policy. No SMALL update,
+generation or teacher has run for this study at preparation closure.
+
+Preparation: `artifacts/full-response-fit-20260925-study`.
+Policy403e9c50e054048f5967fb60ff5ea9731b8f987a019dc8c68794187c97322858;
+plan physical7bbca3a557b1aa3802c5dc516f44eb46884ca04271e1ceb8b315c287c34b0bbc.
+The original3072 rows rotate576..3071/0..575 exactly. Planned input4927488,
+target359424, padding798720, max shifted233. Each word row receives8 new exact
+exposures. Prior FULL exposure is0 for1280 rows and1 for256; semantic exposure
+under the earlier system is1 for1024 and2 for512, kept separate. Six review
+blocks receive2048/1536/1024/1024/2560/4096 exposures, not a uniform count.
+Independent preparation reader confirmed these values without model calls.
+
+Direct release/locked/offline/accelerate+metal tests each executed one named
+test and passed: `full_fit_guard_and_legacy_encoding`,
+`full_fit_inherited_process`, `full_fit_final_process_and_large_counts`.
+The inherited Metal TINY comparison consumed4 optimizer/backward calls,
+zero generation/teacher,5.34s including its child; continuous2 and1+process1
+matched weights, complete Adam, model14914/Adam578/cursor2 and token counters.
+The large-count process fixture took403.80s for durable file construction and
+checks, not model performance. Its3072 trace/1536 panel/f64 roundtrip and actual
+new-process final3072, early1536, train-fail1536 and retention-stop768 branches
+made zero model calls. Complete RETURNED finalized at the exhausted7200s limit;
+prefix reuse, raw/native preservation and repeat-decision idempotence passed.
+Synthetic labels here are test fixtures, never observed model quality.
+
+Executor/test evidence: `artifacts/full-response-fit-20260925-evidence`.
+Frozen executor SHA256f1aa135e0eb71bafdf9006c5de7f655cda84335b4661bd335ab67f7303fe7495;
+test SHA256390c049588468f240aba9f65eda8a7496fc3516437ad58e7dd337041a99e422e.
+Candidate source patchc4c5c22bf744381f6ebe2b3fd30e85214f02539a5d86094547eb2a60ea0254cd.
+The prepared eight-native reservation is913460736 bytes plus64MiB allowance;
+the referenced parent is114182592 bytes and was not copied into the study.
+Compiler intermediates used CARGO_INCREMENTAL=0; build peak is UNKNOWN.
+Independent A actual caller verification remains pending; no self-approval.
+CODE_DIRECT=PASS; CODE_A=PENDING; FULL_FIT_EXECUTION=NOT_RUN;
+MODEL_QUALITY=NOT_RUN; GOAL1_READY=false.
+
 ## 2026-09-25 Selected event ID protocol1.1 — execution accepted, quality failed
 
 ### Final closure

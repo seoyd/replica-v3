@@ -1,5 +1,56 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: full response fit
+
+`R3-FULL-RESPONSE-FIT-1.0` is a new single FULL continuation from the closed
+F64 native (model14912, Adam576, optimizer origin14336). The original F/I
+terminal, protected11264, original models, corpus and raw remain immutable.
+No ID_ONLY, Muon, reset, new corpus, QA640 or confirmation is authorized here.
+The inherited FULL requests, ANSWER mean CE, Metal F32, QE, tokenizer, batch8,
+review4/word4 and LR3e-5 are unchanged. One original3072-row word tape cycle is
+rotated as source576..3071 followed by0..575. New cursor1 means14913/577;
+maximum cursor3072 means17984/3648. The new plan references the original
+native/corpus rather than copying them.
+
+Exact tokenizer/framing/prompt-token/target-token identities and actual F64
+exposures are separate from A512 exposure under the earlier system. A complete
+new cycle gives each of1536 word examples8 exact exposures. Train192 is fixed
+before scores: six word pairs, four semantic groups per pair, two ID versions
+and all four views. It is a prefix of the1536 manifest so completed rows can be
+reused at the same checkpoint. Historical train128 is not this panel's baseline.
+
+Direct single-arm, inherited-state, rotated-tape, large-record and no-call
+finalization regressions and independent A precede parent16 parity and learning.
+Save after update1 and resume in a fresh process. Scheduled checkpoints are
+256 (five64-row panels),768 (same plus train192),1536 (V/VC/S1Q1 each512,
+word/renamed each192, train192 and teacher64),2304 (five64-row panels),3072
+(three512, two192, train1536 and teacher64). At1536 a passing development gate
+opens the remaining1344 train rows; passing fit freezes the candidate early.
+Normal final/quality-stop adds original-system OLD_FULL64 once. Quality-stop
+allows train192 and independent reproduction, never training resume or promotion.
+
+On the fixed V/VC/S1Q1 prefixes, full<=48 or error/non-EOS union>=4 stops;
+full<=56 or ALL4<=12 warns. Two consecutive scheduled warnings on the same
+panel stop. Immutable decisions reconcile each checkpoint exactly once. Runtime,
+cancel, nonfinite, I/O, binding and UNKNOWN failures remain blocking. Evaluation
+resumes without extra updates; complete RETURNED evidence can finalize with
+zero calls at exhausted time.
+
+Development requires each word192/renamed192 full183, QB/SB88, ALL444,
+value/support190, outside/malformed/errors0; V512 full488, QB/SB232, ALL4116,
+errors0; VC/S1Q1 additionally value/support508 and outside/malformed0. Full
+train1536 requires full1524, QB/SB756, ALL4372, outside/malformed/errors0.
+All must belong to one checkpoint. Train192 never substitutes for full fit.
+
+Caps are SMALL optimizer/backward3072 each, generation8448, teacher144,
+input8M/target1M tokens, model/numeric active7200s, segment900s, new immutable
+artifacts1GiB and shared build growth2GiB. Direct plus independent TINY caps
+are16 updates/backward and16 generation/teacher each. Failed/discarded work
+counts. Independent B recounts raw, clocks and exposure, reproduces normal32
+plus at most32 failures with query mates, and final scheduled teacher8 only.
+Execution acceptance, train fit, heldout development and Goal1 remain separate;
+S4/S5/S6 and GOAL1_READY are not accepted by this study.
+
 ## Closed: selected event ID protocol1.1
 
 Execution and independent A/B passed on source
