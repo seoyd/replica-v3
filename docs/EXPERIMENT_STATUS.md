@@ -1,5 +1,47 @@
 # 진단 및 구현 상태
 
+## 2026-09-25 Selected event ID protocol1.1 — prepared, independent A pending
+
+CONTRACT_VERSION=1.1. Starting report HEAD44c9016a87baa57c4b27c3ff2a4dcfb486feed20
+was not an execution candidate. The preserved three-file draft exactly matched
+the prior handoff hashes and patch10d9d33b32d04ccd0396a28a9e8b1c942f1c4db1574de8eba6d13c876d06e89a.
+Only the registered ID task's redundant last sentence was removed. The old1.0
+blocked study evidence is unchanged; no old study/terminal was manufactured.
+
+Prepared study: `artifacts/selected-event-id-v11-20260924-study/`.
+Policy `e0a8d176266d932a3a20a86e5c6d4b66ed03434abc776a5cd5b8652ed7ec0e7f`.
+A512 physicala549392f3f12ebdea95616d6d66043f9b88e1e56ce40ab74d6159304069a8da0,
+weights0b0e02f7a5872cc1a383d3a5ad2d9e8f4218ca86991d5b7be7e9fc7af8b6bec5,
+Adam084e54c09403afcd0d62f46da0b738c695e1cf770defc66d635fe6c8eaaf55d0.
+Native origin14336/model14848/Adam512, new study cursor0; both arms inherit
+the same tensors. Original tape512..640 is retained. No SMALL call yet.
+
+Measured all3840 transformed word inputs using the original tokenizer:
+FULL train1536/dev192/renamed192 each P218/G15/EOS1/total234;
+ID_ONLY same counts each P233/G8/EOS1/total242. Both provided2/excluded0,
+violations0, target roundtrip and generation/training prefix matched. Review
+rows and all records are unchanged. Six-group length table and per-mode tape
+input/target/padding/max-shifted-batch/exposure counts are in preparation.r3b.
+
+Direct tests4/4 PASS: request/clock boundaries; strict scorer-to-gate plus
+tokenized255/256/257 boundaries; event final-only fresh-process caller;
+actual inherited-Adam Metal F/I continuous2 versus1+new-process1.
+Final-only synthetic RETURNED test finished92.69s (child5.51s), zero calls,
+preserving native640 and rows at exhausted3600s budget. Synthetic perfect
+rows are test fixtures, not quality observations. The actual TINY test took
+9.98s, optimizer8/backward8/teacher2/generation0, exact resumed weights/moments,
+Adam513/514, moved-native acceptance and wrong arm/runtime rejection.
+Only directly affected tests ran. One initial u32/usize compile mismatch was
+corrected; its failed log is preserved and not counted as a test.
+
+Executor SHA25669e3fac7b7ab9d43e3eca5886c7c3738fc7aaef64b80fbd2ae03b3c175c22d30;
+test executable SHA256e2253e69cbe0c031bf6846537ff8db88c2a8fe55dcfdb2a1d9eb57d795133bd6.
+Rust1.98.1, release locked/offline accelerate+metal, incremental0, one compute
+thread. Evidence root `artifacts/selected-event-id-v11-20260924-evidence/`.
+Independent scratch `artifacts/selected-event-id-20260924-review-v11/`.
+At this checkpoint CODE_A=PENDING, E2/E3/E4/B=NOT_RUN, MODEL_QUALITY=NOT_MEASURED,
+GOAL1_READY=false. Closed Metal/teacher/old failures are reused unchanged.
+
 ## 2026-09-24 Selected event ID protocol — preparation blocked, no model calls
 
 `R3-SELECTED-EVENT-ID-PROTOCOL-1.0` stopped at E1 input preflight.

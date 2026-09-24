@@ -361,6 +361,8 @@ pub struct OptimizerProtocol {
     pub runtime_digest: String,
     pub parent_step: usize,
     pub local_step: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub study_start_step: Option<usize>,
 }
 impl OptimizerProtocol {
     pub fn roles(c: &Config, muon: bool) -> BTreeMap<String, bool> {
@@ -372,13 +374,19 @@ impl OptimizerProtocol {
         Ok(Self {version:1,family:if muon{"MUON-F32-SUM-NESTEROV-NS5-MATCHRMS-V1"}else{"ADAMW-FRESH-V1"}.into(),
             role_digest:super::hash(&crate::binary::to_vec(&roles)?),roles,momentum_bits:0.95f64.to_bits(),nesterov:true,
             ns_bits:[3.4445f64.to_bits(),(-4.7750f64).to_bits(),2.0315f64.to_bits()],ns_steps:5,norm_epsilon_bits:1e-7f64.to_bits(),
-            scale_bits:0.2f64.to_bits(),dtype:"F32".into(),runtime_digest,parent_step,local_step:0})
+            scale_bits:0.2f64.to_bits(),dtype:"F32".into(),runtime_digest,parent_step,local_step:0,study_start_step:None})
     }
     pub fn validate(&self,c:&Config,s:&TrainingState)->Result<()> {
-        let muon=match self.family.as_str(){"ADAMW-FRESH-V1"=>false,"MUON-F32-SUM-NESTEROV-NS5-MATCHRMS-V1"=>true,_=>return Err(Error::Corrupt("unsupported optimizer family".into()))};
+        let inherited=self.family=="ADAMW-INHERITED-V1";
+        let muon=match self.family.as_str(){"ADAMW-FRESH-V1"|"ADAMW-INHERITED-V1"=>false,"MUON-F32-SUM-NESTEROV-NS5-MATCHRMS-V1"=>true,_=>return Err(Error::Corrupt("unsupported optimizer family".into()))};
         let mut expected=Self::new(c,muon,self.runtime_digest.clone(),self.parent_step)?;expected.local_step=self.local_step;
+        let start=if inherited {
+            let start=self.study_start_step.filter(|&n|n>self.parent_step&&n<=s.step).ok_or_else(||Error::Corrupt("inherited optimizer study origin absent".into()))?;
+            expected.version=2;expected.family=self.family.clone();expected.study_start_step=Some(start);
+            if s.sampler_state!=(s.step-start)as u64{return Err(Error::Corrupt("inherited optimizer run cursor".into()));}start
+        }else{self.parent_step};
         if *self!=expected || self.runtime_digest.len()!=64 || !self.runtime_digest.bytes().all(|v|v.is_ascii_hexdigit())
-            || self.parent_step.checked_add(self.local_step)!=Some(s.step) || s.config.budget_start_step!=self.parent_step
+            || self.parent_step.checked_add(self.local_step)!=Some(s.step) || s.config.budget_start_step!=start
             || s.resume_binding.as_ref().is_none_or(|b|b.execution!=1||b.family!=ANSWER_MEAN_FAMILY) {
             return Err(Error::Corrupt("optimizer role/clock/runtime/objective mismatch".into()));
         } Ok(())

@@ -332,7 +332,12 @@ fn failure_pairs(rows:&[Value],normal:&BTreeSet<usize>,cap:usize)->Vec<usize>{
     for i in candidates{for index in [i,i^1]{if selected.len()<cap&&index<rows.len()&&seen.insert(index){selected.push(index);}}}
     selected
 }
-fn role_tokens(answer:&str,gold:&[u32],tok:&ByteBpe)->Result<Vec<String>> {
+pub(super) fn role_tokens(answer:&str,gold:&[u32],tok:&ByteBpe)->Result<Vec<String>> {
+    if answer.len()==8&&answer.bytes().all(|b|b.is_ascii_digit()) {
+        if gold.len()!=9||gold.last()!=Some(&EOS)||tok.decode_bytes(&gold[..8])?!=answer.as_bytes()
+            ||gold[..8].iter().any(|&t|tok.decode_bytes(&[t]).map_or(true,|v|v.len()!=1)){return Err(bad("ID_ONLY byte alignment"));}
+        return Ok((0..9).map(|i|if i==8{"EOS"}else{"ID"}.into()).collect());
+    }
     let (value,rest)=answer.split_once("입니다. [event:").ok_or_else(||bad("AMBIGUOUS_ALIGNMENT: answer grammar"))?;
     let id=rest.strip_suffix(']').ok_or_else(||bad("AMBIGUOUS_ALIGNMENT: closing grammar"))?;
     if value.is_empty()||id.len()!=8||!id.bytes().all(|b|b.is_ascii_digit())||gold.last()!=Some(&EOS)
@@ -345,7 +350,7 @@ fn role_tokens(answer:&str,gold:&[u32],tok:&ByteBpe)->Result<Vec<String>> {
         let a=at(offset);let b=at(offset+bytes.len()-1);out.push(if a==b{a}else{"MIXED"}.into());offset+=bytes.len();
     }if offset!=answer.len(){return Err(bad("AMBIGUOUS_ALIGNMENT: byte length"));}Ok(out)
 }
-fn teacher_scores(es:&[Episode],rows:&[Value],tok:&ByteBpe)->Result<Value> {
+pub(super) fn teacher_scores(es:&[Episode],rows:&[Value],tok:&ByteBpe)->Result<Value> {
     if es.len()!=rows.len(){return Err(bad("teacher incomplete"));}
     let mut totals=BTreeMap::<String,(usize,usize,f64)>::new();let mut details=vec![];
     let mut spans=BTreeMap::<String,[usize;3]>::new();
@@ -356,8 +361,8 @@ fn teacher_scores(es:&[Episode],rows:&[Value],tok:&ByteBpe)->Result<Value> {
             ||t["training_prompt_matches_generation"]!=true||t["answer_tokenizer_roundtrip"]!=true||r["case"]!=digest(e)?{return Err(bad("teacher shift/target/scalar mismatch"));}
         let roles=role_tokens(&e.answer,&gold,tok)?;
         for(i,role)in roles.iter().enumerate(){let x=totals.entry(role.clone()).or_default();x.0+=1;x.1+=usize::from(gold[i]==predicted[i]);x.2+=nll[i];}
-        let value_bytes=e.answer.split_once("입니다. [event:").unwrap().0.len();
-        for (role,expected_bytes) in [("VALUE",value_bytes),("FORMAT","입니다. [event:".len()),("ID",8)] {let x=spans.entry(role.into()).or_default();
+        let boundaries=if let Some((v,_))=e.answer.split_once("입니다. [event:"){vec![("VALUE",v.len()),("FORMAT","입니다. [event:".len()),("ID",8)]}else{vec![("ID",8)]};
+        for (role,expected_bytes) in boundaries {let x=spans.entry(role.into()).or_default();
             let mut covered=0;for(i,r)in roles.iter().enumerate(){if r==role{covered+=tok.decode_bytes(&[gold[i]])?.len();}}
             if covered!=expected_bytes{x[2]+=1;}else{x[0]+=1;x[1]+=usize::from(roles.iter().enumerate().filter(|(_,r)|r.as_str()==role).all(|(i,_)|gold[i]==predicted[i]));}}
         details.push(binary::record!({"id":e.id,"roles":roles,"first_argmax_difference":gold.iter().zip(&predicted).position(|(a,b)|a!=b),"target_tokens":gold.len()}));
@@ -366,10 +371,13 @@ fn teacher_scores(es:&[Episode],rows:&[Value],tok:&ByteBpe)->Result<Value> {
     Ok(binary::record!({"condition":"gold prefix; not free generation","examples":es.len(),"forward_invocations":rows.len(),"roles":totals,"mean_nll":means,"span_covered_correct_excluded":spans,"span_exclusion":"MIXED crossing this span boundary leaves incomplete byte coverage","cases":details}))
 }
 fn validate_forward(d:&Diagnostic,es:&[Episode],rows:&[Value],tok:&ByteBpe)->Result<()> {
+    validate_teacher_forward(&d.runtime,d.original.config.seq_len,es,rows,tok)
+}
+pub(super) fn validate_teacher_forward(runtime:&RuntimeProfile,seq_len:usize,es:&[Episode],rows:&[Value],tok:&ByteBpe)->Result<()> {
     teacher_scores(es,rows,tok)?;
-    let samples=samples_with_framing(es,tok,d.original.config.seq_len,neural::Framing::QuestionEvidence)?;
+    let samples=samples_with_framing(es,tok,seq_len,neural::Framing::QuestionEvidence)?;
     for(s,r)in samples.iter().zip(rows){let n=s.response_start;let f=&r["teacher"]["native_forward"];
-        if f["model_device"]!=d.runtime.actual_device||f["input_device"]!=d.runtime.actual_device||f["logits_device"]!=d.runtime.actual_device
+        if f["model_device"]!=runtime.actual_device||f["input_device"]!=runtime.actual_device||f["logits_device"]!=runtime.actual_device
             ||f["input_dtype"]!="U32"||f["logits_dtype"]!="F32"||f["logits_finite"]!=true
             ||f["input_shape"]!=binary::record!([1,s.tokens.len()-1])||f["prompt_tokens"]!=n
             ||f["prompt_digest"]!=digest(&&s.tokens[..n])?||f["input_tokens_digest"]!=digest(&&s.tokens[..s.tokens.len()-1])?
@@ -492,6 +500,20 @@ fn require_complete(d:&Diagnostic)->Result<()> {
         if r["success"]!=true||r["binding"]!=b{return Err(bad("required observation final absent/failed"));}
         new_rows(d,name,&es,&b,teacher)?;
     }Ok(())
+}
+// Reuse the already accepted closure by its exact native identities. This is
+// a read-only source link, not admission to the failed learning/diagnosis runs.
+pub(super) fn event_parent(root:&Path)->Result<(Study,Progress,Value,BTreeMap<PathBuf,String>)>{
+    let d:Diagnostic=read_confirmed(&root.join("diagnostic-plan.r3b"))?;
+    let v:Value=read_confirmed(&root.join("composite.r3b"))?;
+    if d.contract!=CLOSURE||d.root!=root.canonicalize()?||v["policy"]!=digest(&d)?
+        ||v["classification"]!="COMPOSITE_POSTHOC_SUCCESSOR"||v["original_study"]!="FAILED_UNCHANGED"
+        ||v["segments"]!=digest(&segments(&d)?)?||d.endpoints[0].local!=512{return Err(bad("completed teacher closure identity"));}
+    let mut refs=BTreeMap::new();
+    for p in [root.join("diagnostic-plan.r3b"),root.join("composite.r3b"),d.original.root.join("plan.r3b"),d.endpoints[0].native.clone()] {bind(&mut refs,&p)?;}
+    if digest(&read_confirmed::<Study>(&d.original.root.join("plan.r3b"))?)?!=digest(&d.original)?
+        ||file_hash(&d.endpoints[0].native)?!=d.endpoints[0].physical{return Err(bad("original A512 linkage"));}
+    Ok((d.original,d.endpoints[0].clone(),v,refs))
 }
 pub fn run(a:Action)->Result<()>{match a {
     Action::Successor{predecessor,executor,audit,output}=>successor(&predecessor,&executor,&audit,&output),

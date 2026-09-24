@@ -1,5 +1,39 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: selected event ID protocol1.1
+
+`R3-SELECTED-EVENT-ID-PROTOCOL-1.1` preserves the blocked1.0 evidence and
+continues the previously unexecuted comparison. Its only input intervention
+relative to that draft is the registered ID task:
+`유효한 현재 기록의 사건 번호만 8자리 숫자로 답하라.`
+The neutral system, FULL/review requests and answers, two records, tokenizer,
+QE, model context/window, training256 and generation32 remain unchanged.
+Preparation binds all six length groups and exact source/request/target hashes.
+Measured FULL P218+G15+EOS1=234; ID_ONLY P233+G8+EOS1=242 for each1920 rows,
+provided2/excluded0/violations0. This clears an input conflict, not model quality.
+
+Same A512 model14848/Adam512/optimizer origin14336 -> inherited native study
+cursor0. Both arms use AdamW, LR3e-5, ANSWER CE and original tape[512..640].
+First update is14849/513/1; final maximum14976/640/128. Direct regressions and
+independent actual-caller A precede parent768 generations. Strong ID-only on
+both192-row versions (FULL183/QB88/ALL444/outside0/malformed0/errors0) skips
+learning, otherwise save F1/I1 and restart for F64/I64/I128/F128.
+Each64 checkpoint checks320 outputs; final cross-mode panels contain1280 per
+arm with same-checkpoint RETURNED reuse. Parent-relative V64/VC63/S1Q154 loss
+>=12 or errors/nonEOS>=4 stops at the same peer endpoint; loss>=4 warns.
+Final teacher128/arm and independent generation<=64/arm plus teacher16/arm
+are distinct from actual free-generation scores.
+
+Unchanged total caps: SMALL256, generation4096, teacher288; TINY16 updates
+(direct8/independent8), TINY generation/teacher32 each; active3600s/segment900s;
+new immutable artifacts1GiB/build growth2GiB. Cancel/runtime/storage/UNKNOWN
+blocks later calls. Completed RETURNED can finalize at exhausted time without
+new calls; pure reports cannot create evidence. Old failures remain closed.
+Independent B covers recount, fixed normal32 plus bounded failures and teacher
+parity. I-vs-parent and I-vs-F FULL+16/QB+8 in both versions without severe loss
+is only a follow-up signal. No QA640, confirmation, S4/S5/S6, cleanup, automatic
+extension or Goal1 acceptance follows from this comparison.
+
 ## Blocked preparation: selected event ID output protocol
 
 `R3-SELECTED-EVENT-ID-PROTOCOL-1.0` forks the preserved A512 native at
