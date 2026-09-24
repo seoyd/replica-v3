@@ -400,6 +400,13 @@ mod metal_tests {
     }
 }
 impl Adam {
+    fn proposal(old:&Tensor,g:&Tensor,previous_m:&Tensor,previous_v:&Tensor,c:&TrainConfig,step:usize,lr:f64)->Result<(Tensor,Tensor,Tensor)> {
+        let m=((previous_m*c.beta1)?+(g*(1.-c.beta1))?)?;
+        let v=((previous_v*c.beta2)?+(g.sqr()?*(1.-c.beta2))?)?;
+        let update=((&m/(1.-c.beta1.powi(step as i32)))?/((&v/(1.-c.beta2.powi(step as i32)))?.sqrt()?+c.eps)?)?;
+        let next=((old*(1.-lr*c.weight_decay))?-(update*lr)?)?;
+        Ok((next.detach(),m.detach(),v.detach()))
+    }
     pub fn new(vars: &BTreeMap<String, Var>) -> Result<Self> {
         let mut moments = BTreeMap::new();
         for (name, var) in vars {
@@ -510,15 +517,8 @@ impl Adam {
         let mut delta2 = 0f64;
         for (name, var) in vars {
             let g = (&grads[name] * clip)?;
-            let m = ((&self.moments[&format!("adam.m.{name}")] * config.beta1)?
-                + (&g * (1. - config.beta1))?)?;
-            let v = ((&self.moments[&format!("adam.v.{name}")] * config.beta2)?
-                + (g.sqr()? * (1. - config.beta2))?)?;
-            let corrected_m = (&m / (1. - config.beta1.powi(step as i32)))?;
-            let corrected_v = (&v / (1. - config.beta2.powi(step as i32)))?;
-            let update = (corrected_m / (corrected_v.sqrt()? + config.eps)?)?;
             let old = var.as_detached_tensor();
-            let next = ((&old * (1. - lr * config.weight_decay))? - (update * lr)?)?;
+            let (next,m,v)=Self::proposal(&old,&g,&self.moments[&format!("adam.m.{name}")],&self.moments[&format!("adam.v.{name}")],config,step,lr)?;
             let delta = (&next - &old)?.sqr()?.sum_all()?.to_scalar::<f32>()? as f64;
             if !delta.is_finite() {
                 return Err(Error::Model("nonfinite optimizer update".into()));
@@ -1563,6 +1563,9 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
         loaded.tokenizer.id(),
         state.previous_corpora
     );
+    if loaded.manifest.optimizer_protocol.is_some() {
+        return Err(Error::Invalid("bound research optimizer requires its exact native execution policy".into()));
+    }
     let mut adam = if run.resume {
         Adam {
             moments: loaded.optimizer,

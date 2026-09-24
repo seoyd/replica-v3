@@ -319,6 +319,9 @@ pub struct LegacyIdentity {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
+    /// Explicit research optimizer; absent retains the historical Adam schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optimizer_protocol: Option<OptimizerProtocol>,
     pub version: u32,
     pub architecture: Config,
     pub tokenizer_sha256: String,
@@ -339,6 +342,47 @@ pub struct Manifest {
     pub legacy_identity: Option<LegacyIdentity>,
     #[serde(default)]
     pub model_content_digest: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OptimizerProtocol {
+    pub version: u8,
+    pub family: String,
+    pub roles: BTreeMap<String, bool>, // true: hidden Muon matrix, false: AdamW
+    pub role_digest: String,
+    pub momentum_bits: u64,
+    pub nesterov: bool,
+    pub ns_bits: [u64; 3],
+    pub ns_steps: usize,
+    pub norm_epsilon_bits: u64,
+    pub scale_bits: u64,
+    pub dtype: String,
+    pub runtime_digest: String,
+    pub parent_step: usize,
+    pub local_step: usize,
+}
+impl OptimizerProtocol {
+    pub fn roles(c: &Config, muon: bool) -> BTreeMap<String, bool> {
+        let hidden = (0..c.layers).flat_map(|i| ["q","k","v","o","gate","up","down"].map(move |n| format!("layer.{i}.{n}"))).collect::<std::collections::BTreeSet<_>>();
+        c.shapes().keys().map(|n| (n.clone(), muon && hidden.contains(n))).collect()
+    }
+    pub fn new(c:&Config, muon:bool, runtime_digest:String, parent_step:usize) -> Result<Self> {
+        let roles=Self::roles(c,muon);
+        Ok(Self {version:1,family:if muon{"MUON-F32-SUM-NESTEROV-NS5-MATCHRMS-V1"}else{"ADAMW-FRESH-V1"}.into(),
+            role_digest:super::hash(&crate::binary::to_vec(&roles)?),roles,momentum_bits:0.95f64.to_bits(),nesterov:true,
+            ns_bits:[3.4445f64.to_bits(),(-4.7750f64).to_bits(),2.0315f64.to_bits()],ns_steps:5,norm_epsilon_bits:1e-7f64.to_bits(),
+            scale_bits:0.2f64.to_bits(),dtype:"F32".into(),runtime_digest,parent_step,local_step:0})
+    }
+    pub fn validate(&self,c:&Config,s:&TrainingState)->Result<()> {
+        let muon=match self.family.as_str(){"ADAMW-FRESH-V1"=>false,"MUON-F32-SUM-NESTEROV-NS5-MATCHRMS-V1"=>true,_=>return Err(Error::Corrupt("unsupported optimizer family".into()))};
+        let mut expected=Self::new(c,muon,self.runtime_digest.clone(),self.parent_step)?;expected.local_step=self.local_step;
+        if *self!=expected || self.runtime_digest.len()!=64 || !self.runtime_digest.bytes().all(|v|v.is_ascii_hexdigit())
+            || self.parent_step.checked_add(self.local_step)!=Some(s.step) || s.config.budget_start_step!=self.parent_step
+            || s.resume_binding.as_ref().is_none_or(|b|b.execution!=1||b.family!=ANSWER_MEAN_FAMILY) {
+            return Err(Error::Corrupt("optimizer role/clock/runtime/objective mismatch".into()));
+        } Ok(())
+    }
 }
 pub struct Loaded {
     pub model: Transformer,
@@ -370,8 +414,12 @@ pub(super) fn expected(m: &Manifest) -> BTreeMap<String, Vec<usize>> {
     for (name, shape) in shapes {
         result.insert(format!("model.{name}"), shape.clone());
         if m.training.is_some() {
-            result.insert(format!("adam.m.{name}"), shape.clone());
-            result.insert(format!("adam.v.{name}"), shape);
+            if m.optimizer_protocol.as_ref().is_some_and(|p|p.roles.get(&name)==Some(&true)) {
+                result.insert(format!("muon.m.{name}"),shape);
+            } else {
+                result.insert(format!("adam.m.{name}"), shape.clone());
+                result.insert(format!("adam.v.{name}"), shape);
+            }
         }
     }
     result
@@ -403,6 +451,7 @@ pub fn validate_metadata(m: &Manifest, tok: &ByteBpe) -> Result<()> {
         ));
     }
     if let Some(s) = &m.training {
+        if let Some(p)=&m.optimizer_protocol {p.validate(&m.architecture,s)?;}
         s.config.validate(m.architecture.context)?;
         if let Some(binding) = &s.resume_binding {
             binding.validate(s, tok)?;
@@ -435,6 +484,7 @@ pub fn validate_metadata(m: &Manifest, tok: &ByteBpe) -> Result<()> {
             return Err(Error::Corrupt("checkpoint training state".into()));
         }
     }
+    if m.training.is_none() && m.optimizer_protocol.is_some() {return Err(Error::Corrupt("inference contains optimizer descriptor".into()));}
     Ok(())
 }
 // Retired input API: no text or safetensors fallback, including explicit imports.
@@ -451,6 +501,7 @@ pub fn initialized(
     source_id: String,
 ) -> Result<Manifest> {
     Ok(Manifest {
+        optimizer_protocol: None,
         version: 1,
         architecture: model.config.clone(),
         tokenizer_sha256: tok.id(),

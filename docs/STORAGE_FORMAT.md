@@ -178,6 +178,20 @@ role digest are transitive in the native policy. INFERENCE needs no optimizer po
 The observed default v1→v2 file grew320 bytes through header/alignment; F32 model
 and Adam contents did not shrink or change.
 
+## R3MODEL wire3 optimizer protocol
+
+Only explicit fresh-optimizer research checkpoints use wire3. Ordinary saves
+retain wire2. After the existing training state, a length-bounded typed R3BIN
+descriptor binds optimizer family, parameter-role map/digest, fixed Muon/NS5
+constants and F32/runtime identity, parent model step and optimizer-local step.
+Hidden matrices store one `muon.m.*` tensor; Adam parameters store `adam.m.*`
+and `adam.v.*`. Names, shapes, roles and clocks are validated against the model
+configuration before resume. No zero-filled substitute second moments are stored.
+The generic trainer rejects these protocol-bound resume files. The admitted
+study caller checks the exact policy, objective, runtime and native hash.
+Existing wire1/2 files are unchanged; old readers reject wire3. Inference export
+removes training state and the optimizer descriptor while retaining model weights.
+
 ## R3TOK v1 train derivative — original implementation, wire unchanged
 
 This immutable prototype is compiled from the verified R3ER owned train split,

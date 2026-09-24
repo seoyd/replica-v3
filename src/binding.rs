@@ -1675,13 +1675,13 @@ fn orbit_verify_plan(root:&Path,p:&Plan) -> Result<()> {
 }
 
 #[derive(Debug,Serialize,Deserialize,PartialEq)]
-struct OrbitScore {
+pub(in super::super) struct OrbitScore {
     total:usize, full:usize, query_both:usize, swap_both:usize, all4:usize,
     eos:usize, errors:usize, gold_foil_other_malformed:[usize;4],
     same_across_queries:usize, same_across_assignments:usize,
     exact:Vec<bool>,
 }
-fn orbit_score(es:&[Episode],ms:&[Meta],rows:&[binary::Value],tok:&ByteBpe) -> Result<OrbitScore> {
+pub(in super::super) fn orbit_score(es:&[Episode],ms:&[Meta],rows:&[binary::Value],tok:&ByteBpe) -> Result<OrbitScore> {
     if es.len()%4!=0 || rows.len()!=es.len() {return Err(bad("incomplete orbit scoring panel"));}
     let s=score(rows,es,ms)?;
     let mut out=OrbitScore{total:s.total,full:s.exact,query_both:0,swap_both:0,all4:0,eos:s.eos,errors:s.errors,

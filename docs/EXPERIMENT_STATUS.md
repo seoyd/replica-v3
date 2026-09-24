@@ -1,5 +1,39 @@
 # 진단 및 구현 상태
 
+## 2026-09-24 Metal F32 optimizer study — U0/U1 verified, independent A
+
+Initial HEAD52e718eab0ad01396faf85aa6a803c751e8b1330, source baselinecef33c7.
+U0 executed: existing five-file protection ledger all matched; vendor patch,
+patched source and Cargo.lock match the independently accepted Metal closure.
+Cargo graph resolves one vendored candle-core0.11.0; nn0.11.0 unchanged.
+Rust1.98.1 is installed. Initial target allocated size11,671,988KiB and volume
+free71GiB were observed without traversing old artifacts. No cleanup performed.
+Only user untracked `.DS_Store` existed before the new changes.
+
+New SMALL optimizer/generation0 before admission. Seven final-source direct tests
+executed independently, each1/1 PASS; independent f64 oracle12 fixtures passed on
+CPU and actual Metal. Actual TINY A/M native1+new-process1 equals continuous2 in
+weights/state/local clock/cursor. The real train caller also finalizes complete
+RETURNED work at7200s with optimizer/generation/teacher0; this latter fixture uses
+synthetic completed records and is not a model quality observation.
+Implementer TINY10/primitive43 and independent TINY10/primitive55 total20/98.
+Numerical/process elapsed11.44+27.57=39.01s, excluding build and read-only data audit.
+B and model quality remain NOT_RUN, Goal1 remains false.
+Current evidence root: `artifacts/muon-quality-20260924-evidence/`.
+The new optimizer study is a fresh-state comparison from trained14336 weights;
+it is not a repeat of historical inherited-Adam or LoRA fine-tuning.
+
+Prepared root: `artifacts/muon-quality-20260924-study/`; independent review evidence:
+`artifacts/muon-quality-20260924-review-a/`. The exact1024-update prefix per arm
+contains8192 exposures, input1,512,064/target119,808/padding138,368 tokens.
+Source digest `2bed8a035ab609350fc8b8db4ea4d8406665b705ecad97f18a96145f3f7415d2`;
+trainer SHA256 `1efbb40511e7f19f2b448e582d17f5b9b77d9b852f787cd28f2a686a4adccfc7`;
+test binary SHA256 `48bf5733c1ddbaf0b684e80a833b88ffbb1667e01223e07da215e23aa4f5fe58`.
+Policy digest `6133bfd80aebf586b409fc67e6f4f78a8444df98d50c6e10685c83250d871399`;
+parent native SHA256 `15015900a3c91a6b8ed87e9c2ecb8f7faf124849e5dcf8f40203cddf267e30d9`.
+Failed preparation before any model invocation is preserved separately; its
+oversized aggregate hash encoding was replaced by ordered per-row digests.
+
 ## 2026-09-24 Metal runtime — G4/G5 execution
 
 Runtime A remains accepted for the G2/G3 numerical boundary. G4's frozen

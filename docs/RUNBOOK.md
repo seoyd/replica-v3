@@ -1,5 +1,18 @@
 # Replica v3 B0 runbook
 
+## Fixed Metal optimizer comparison
+
+Use the frozen release `replica-train fresh muon` executable with locked/offline
+accelerate+metal, incremental off and one compute thread. `prepare` references the
+original14336 and existing word corpus; `admit` consumes the independent reviewer's
+typed receipt. Only then run `baseline` once and `train`. The first train process
+saves both +1 states; subsequent processes resume those exact native files and
+follow the registered same-step order. Each process is limited to900s within the
+cumulative7200s budget. Resume only a recorded clean time stop, never pending,
+UNKNOWN, cancellation or an execution failure. `report` is read-only; `review`
+performs the bounded independent endpoint reproduction. Closed quality failures
+are preserved and never reopened. No additional QA or confirmation is authorized.
+
 ## Bounded Metal F32 runtime validation
 
 CPU remains default. The Metal Sum repair uses the single vendored Candle

@@ -19,8 +19,12 @@ const SYSTEM: &str = "제공된 기록과 질문만으로 답하세요. 요구�
 mod identifiable;
 #[path = "metal_runtime.rs"]
 mod metal_runtime;
+#[path = "muon.rs"]
+mod muon;
 #[derive(Subcommand)]
 pub enum Command {
+    /// Fixed parent/data Metal F32 optimizer comparison.
+    Muon { #[command(subcommand)] action: muon::Action },
     /// Bounded, explicitly registered backend validation; no quality learning.
     MetalRuntime { #[command(subcommand)] action: metal_runtime::Action },
     /// Same sealed citation data/tape, TOKEN reference and answer-mean CE fork.
@@ -1772,6 +1776,7 @@ fn source_digest() -> Result<String> {
 pub fn execute(command: Command) -> Result<()> {
     match command {
         Command::MetalRuntime {action} => metal_runtime::run(action),
+        Command::Muon {action} => muon::run(action),
         Command::AnswerMeanPrepare { previous,output } => identifiable::binding::citation::mean_prepare(&previous,&output,false),
         Command::CitationContinuePrepare { previous,output } => identifiable::binding::citation::continuation_prepare(&previous,&output,false),
         Command::CitationFidelityPrepare { previous,output,parent_review } => identifiable::binding::citation::fidelity_prepare(&previous,&output,&parent_review,false),

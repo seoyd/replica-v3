@@ -1,6 +1,47 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: bounded Metal F32 reduction repair
+## Active: fixed Metal F32 fresh optimizer comparison
+
+`R3-METAL-F32-MUON-QUALITY-1.0`: original14336 weights, original word-value
+train7680/dev3456, exact first1024 batch8 draws (review4/word4), ANSWER CE,
+QE, F32 and constant LR3e-5. Both arms reset optimizer states only. A uses
+AdamW; M uses sum-momentum0.95/Nesterov and NS5 (3.4445,-4.7750,2.0315,
+Frobenius eps1e-7), transposing tall matrices, scale0.2sqrt(max(m,n)) on
+hidden q/k/v/o/gate/up/down only. Embedding and all norms use the same AdamW
+equation as A. Original config betas/eps/clip/decay are inherited as policy
+values. Bias correction starts at local1, model lineage at14337. Native v3
+explicitly binds optimizer roles, constants, local clock and runtime; v1/v2
+retain their original meaning. The polynomial is not an exact polar factor.
+
+U0 preservation/preparation -> U1 six direct numerical/native boundaries ->
+independent A -> U2 same-step learning -> independent B -> U4 closure.
+No SMALL training before actual A. Existing Metal/LegacyB/FP4 evidence is
+reused by identity, not rerun. CPU default and generic Metal optimizer block stay.
+
+Both arms save step1 and resume in a new process. Scheduled order:
+A32/M32, M128/A128, A512/M512, M1024/A1024. First three evaluations use
+V/VC/S1Q1/word/renamed64 each. Final uses512/512/512/192/192; endpoint
+word train128 is fixed first16 semantic bases across both ID versions/four
+views, with seen/unseen exposure recorded. Full strings, support, outside IDs,
+parse, EOS, FULL/QB/SB/ALL4 are separate. Severe retention FULL<=48/64 or
+non-EOS/error>=4 stops that arm; FULL<60 or ALL4<12 warns, two distinct
+consecutive scheduled warnings stop. Peer proceeds only to the same endpoint.
+Execution error/cancel/UNKNOWN blocks the pair. Word0 alone does not stop.
+
+At1024 retained V/VC/S1Q1 FULL>=488/512, QB/SB>=232, ALL4>=116; citation
+value/support>=508 and outside/parse/error0. Word/renamed FULL>=183/192,
+QB/SB>=88, ALL4>=44, value/support>=190, outside/parse/error0. These are
+development criteria only. QA640/confirmation/S4/S5/S6/Goal1 are not authorized.
+
+Caps: SMALL2048 updates,6400 generation,6400 teacher,8 diagnostic backward;
+TINY32 updates/64 generation/64 teacher;128 primitive fixtures; active7200s,
+segment900s, new immutable evidence1.5GiB/build growth8GiB. One heavy process,
+same locked release accelerate+metal build, incremental off. No data/seed/LR
+search or automatic extension. Independent B recounts raw and reproduces
+fixed normal32 plus at most32 failures per arm, unique union<=64. Original
+models/Adam/raw/user changes remain untouched; no artifact cleanup.
+
+## Closed: bounded Metal F32 reduction repair
 
 `R3-METAL-REDUCTION-REPAIR-1.0` starts from source
 `f4ae62b647ffecfb89129e775d687c218f410ab3` and closure `cdabcc64`.

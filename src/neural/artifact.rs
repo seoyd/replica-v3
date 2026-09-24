@@ -500,6 +500,10 @@ fn header_encode(
     if let Some(s) = &m.training {
         state_encode(&mut b, s);
     }
+    if let Some(p)=&m.optimizer_protocol {
+        let bytes=crate::binary::to_vec(p)?;
+        put_varint(&mut b,bytes.len() as u64);b.extend(bytes);
+    }
     put_varint(&mut b, entries.len() as u64);
     for e in entries {
         text(&mut b, &e.name);
@@ -528,7 +532,7 @@ fn read_header(file: &mut File) -> Result<Header> {
     file.read_exact(&mut prefix)?;
     let wire = u16::from_le_bytes(prefix[8..10].try_into().expect("fixed"));
     if &prefix[..8] != MAGIC
-        || ![1, WIRE_VERSION].contains(&wire)
+        || ![1, WIRE_VERSION, 3].contains(&wire)
         || prefix[11] != 0
         || prefix[56..].iter().any(|&b| b != 0)
     {
@@ -587,6 +591,10 @@ fn read_header(file: &mut File) -> Result<Header> {
         return Err(bad("legacy tokenizer migration binding"));
     }
     let training = r.opt(|r| state_decode(r, wire))?;
+    let optimizer_protocol = if wire==3 {
+        let n=number(&mut r,MAX_HEADER)?;
+        Some(crate::binary::from_slice(r.take(n)?)?)
+    } else {None};
     if (kind == ArtifactKind::Resume) != training.is_some()
         || training
             .as_ref()
@@ -595,6 +603,7 @@ fn read_header(file: &mut File) -> Result<Header> {
         return Err(bad("artifact kind/step/purpose"));
     }
     let mut manifest = Manifest {
+        optimizer_protocol,
         version: 1,
         architecture: config,
         tokenizer_sha256: tokenizer.id(),
@@ -874,7 +883,7 @@ pub fn save_with_stats(
     }
     let mut prefix = [0u8; PREFIX];
     prefix[..8].copy_from_slice(MAGIC);
-    prefix[8..10].copy_from_slice(&WIRE_VERSION.to_le_bytes());
+    prefix[8..10].copy_from_slice(&if manifest.optimizer_protocol.is_some(){3u16}else{WIRE_VERSION}.to_le_bytes());
     prefix[10] = kind.tag();
     prefix[12..16].copy_from_slice(&(header.len() as u32).to_le_bytes());
     prefix[16..24].copy_from_slice(&total.to_le_bytes());
@@ -921,6 +930,7 @@ pub fn export_inference(path: &Path, loaded: &Loaded) -> Result<Manifest> {
         .map_or(manifest.trained_steps, |s| s.step);
     manifest.diagnostic_only |= manifest.training.as_ref().is_some_and(|s| s.contrast16);
     manifest.training = None;
+    manifest.optimizer_protocol = None;
     save(
         path,
         &loaded.model,

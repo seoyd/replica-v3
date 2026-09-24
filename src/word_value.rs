@@ -229,7 +229,7 @@ pub(super) fn verify(root:&Path,p:&Plan)->Result<()> {
         ||digest(&(&tm,&dm,&dm))?!=digest(&(&am,&ad,&ax))?||audit!=s["audit"] {return Err(bad("word frozen owned data/policy/tape mismatch"));}
     Ok(())
 }
-fn rows_score(es:&[Episode],ms:&[Meta],rows:&[binary::Value],tok:&ByteBpe)->Result<binary::Value> {
+pub(in super::super::super::super) fn rows_score(es:&[Episode],ms:&[Meta],rows:&[binary::Value],tok:&ByteBpe)->Result<binary::Value> {
     if es.is_empty()||es.len()%4!=0||es.len()!=rows.len()||es.len()!=ms.len(){return Err(bad("word complete four-view panel"));}
     let full=score(rows,es,ms)?;
     let mut j=OrbitScore{total:es.len(),full:full.exact,eos:full.eos,errors:full.errors,query_both:0,swap_both:0,all4:0,
