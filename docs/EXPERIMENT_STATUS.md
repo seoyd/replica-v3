@@ -13300,7 +13300,83 @@ train 앞128은0회64/1회48/2회8/3회8, 각각 정답9/18/2/2다. saved sample
 | u2-20000-exposure.txt | e73209cd51127694cd16be0c55456b3874c1eb934feef785a762cad076835147 |
 
 parent checkpoint, P1/U1, U2 start/probe/final은 덮어쓰거나 삭제하지 않았다.
-# Muon preserved-endpoint diagnosis — D0/D1, 2026-09-24
+# Muon endpoint diagnosis — closed partial at D3, 2026-09-24
+
+`R3-MUON-ENDPOINT-DIAGNOSIS-1.0`: D2 generation completed, D3 stopped on
+a confirmed diagnostic input-device defect. No second plan or model retry was
+started. Original A/B acceptances and original study failure are unchanged.
+Actual diagnostic execution source `4850195a1b5cb1d51f7f49fccae14ed194243f56`,
+executor SHA256 `bb149a438d8aefad8a119048c026868502073ea14a2c9acf38a4ef0a1c04bb68`.
+Independent A-delta report commit `ca954acee3e894032171f7f056043bbfe9a31429`
+was pushed and its full remote SHA matched before model observations began.
+
+New generation310: M renamed missing54 + A train128 + M train128. Historical
+RETURNED586 were read unchanged; the endpoint table now has640 observations.
+M renamed is64/64 posthoc, not a repaired original command. New teacher entry1
+returned an error before model tensor operations; completed teacher examples0.
+New optimizer/backward0. Four observation segments consumed57.566452876s
+(including loads/finalization), separately from compilation/file readers/tests.
+
+| Panel | A FULL | M FULL | A value / support | M value / support |
+|---|---:|---:|---:|---:|
+| V64 |64|64|n/a|n/a|
+| VC64 |63|64|63 /64|64 /64|
+| S1Q1-64 |54|40|64 /54|64 /40|
+| word64 |0|0|14 /0|0 /0|
+| renamed64 |0|0|15 /0|0 /0|
+| word train128 |0|0|50 /0|0 /2|
+
+All train128 rows were actually exposed:42 once,86 twice,214 total exposures
+per arm in the original first512 updates. There are no unseen rows in this
+fixed train sample. Train QB/SB/ALL4 are0 for both arms. A train EOS128,
+outside-ID128, parse0; M train EOS115, outside-ID64, parse66, length13.
+M renamed has outside-ID18, parse48, strict UTF-8 failures2 and length12;
+these error categories may overlap. Word/renamed share semantic bases.
+Independent recount status is recorded in the new scoped B report; the product
+pure reader prints the same D2 results and exits1 at incomplete teacher input.
+No successful final composite or missing teacher evidence was manufactured.
+
+The actual error was `native input shape/dtype/device/context/cache identity`.
+The reused teacher helper allocated U32 IDs on CPU while native Metal forward
+requires the input on the model device. This is a newly exposed diagnostic
+connection defect, not evidence of a Muon equation or checkpoint defect.
+The failed attempt/raw/terminal remain in `run/observation-003-finished.r3b`
+with no resume. Seven A tests covered shift/roles/no-call boundaries but did
+not exercise a real Metal teacher forward; their acceptance was insufficient
+for that connection. The original report remains preserved.
+
+A minimal subsequent fix makes the full-answer input on the actual model device.
+Its CPU/Metal input/shift/boundary regression failed before and passed after,
+with model/teacher/optimizer/backward calls0. This fix has not been used for a
+new endpoint observation. Actual diagnostic source above and subsequent repair
+source must not be described as one execution. See `teacher-input-red.log` and
+`teacher-input-green.log` under the diagnosis evidence root.
+
+Interpretation: the exposed train sample itself has no complete word+support
+answers; unseen-binding failure alone cannot explain the observed result.
+A learned some complete word values and valid syntax but none of the correct
+train supports. M's word-value and format failures remain more extensive.
+Gold-prefix VALUE/FORMAT/ID/EOS/MIXED metrics, parent comparison, and fresh
+normal/failure parity remain BLOCKED_RUNTIME, so prefix dependence versus
+intrinsic ID prediction is UNRESOLVED. Next single proposed observation is to
+complete the fixed gold-prefix diagnosis under a separately valid execution
+decision; no learning or LR increase is proposed or executed here.
+
+ORIGINAL_STUDY_STATE=FAILED_UNCHANGED; ORIGINAL_B_FULL=BLOCKED_AS_RECORDED;
+POSTHOC_EVIDENCE_COMPLETE=false; MODEL_QUALITY=FAIL; MUON_ADOPTION=NO;
+GENERATIVE_PARITY=NOT_RUN; GOAL1_READY=false. QA640, confirmation, FP4,
+S4/S5/S6 and artifact cleanup were not run. Independent B is a partial raw
+recount, not full endpoint reproduction acceptance.
+
+Allowed local evidence: `artifacts/muon-endpoint-20260924-diagnosis/` (frozen
+executor, build/tests, original recount, plan, new raw and failed teacher row),
+`artifacts/muon-endpoint-20260924-review-a/`, and
+`artifacts/muon-endpoint-20260924-review-b/`. The original native/corpus/raw
+paths remain those in the preserved original B report and new binary plan;
+no model, Adam, corpus or vendor copy was made. No unused call budget is
+implicitly authorized after this execution error.
+
+## Earlier D0/D1 record
 
 `R3-MUON-ENDPOINT-DIAGNOSIS-1.0`: separate evaluation-only connection;
 original A512/M512 failure and old B blocked remain unchanged. Existing

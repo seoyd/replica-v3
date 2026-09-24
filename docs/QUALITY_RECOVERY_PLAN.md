@@ -1,6 +1,6 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: preserved Muon endpoints, evaluation only
+## Closed partial: preserved Muon endpoints, evaluation only
 
 `R3-MUON-ENDPOINT-DIAGNOSIS-1.0` observes the existing A512/M512 at
 absolute14848. Original failure, INTEGRITY_FAIL, resume=false, original B blocked,
@@ -26,6 +26,13 @@ RETURNED work can finalize without new calls after time exhaustion. Read/report
 does not create missing evidence. No QA640, confirmation, cleanup or training.
 Independent A precedes execution; independent B is new posthoc acceptance only.
 No new model-quality or Goal1 acceptance is granted by diagnostic completion.
+
+Execution closed after generation310 and teacher entry1: D2 completed; the
+first D3 teacher used CPU IDs against a Metal model and failed native input
+validation. No model retry, second plan or D4 model calls were started.
+The narrow input-placement correction has only a no-model CPU/Metal primitive
+regression; it does not reopen the failed plan. Remaining teacher/normal/failure
+reproduction needs a separately valid execution decision. No training is granted.
 
 ## Closed execution: fixed Metal F32 fresh optimizer comparison
 

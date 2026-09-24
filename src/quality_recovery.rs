@@ -1417,12 +1417,7 @@ fn teacher_observation(
     control.check("teacher_started")?;
     let mut gold = l.tokenizer.encode(e.answer.as_bytes())?;
     gold.push(EOS);
-    let mut sequence = prompt.to_vec();
-    sequence.extend(&gold);
-    if sequence.len() > l.model.config.context {
-        return Err(Error::ContextTooSmall);
-    }
-    let input = Tensor::new(&sequence[..sequence.len() - 1], &Device::Cpu)?.unsqueeze(0)?;
+    let input = teacher_forward_input(prompt, &gold, l.model.config.context, &l.model.device)?;
     control.check("teacher_forward")?;
     control.begin_teacher()?;
     *entered = true;
@@ -1540,6 +1535,13 @@ fn teacher_observation(
         "first_difference":difference,"first_byte_difference":byte_difference,"first_difference_field":byte_difference.map(|p|field_at(&e.answer,p)),"field_token_accuracy":field_accuracy,"training_prompt_matches_generation":framed[0].tokens[..framed[0].response_start]==*prompt,
         "answer_tokenizer_roundtrip":l.tokenizer.decode(&gold[..gold.len()-1])?==e.answer}),
     )
+}
+// The same full-answer shift used by the diagnostic forward. Device placement
+// is part of native input validity, not a CPU fallback or a new teacher policy.
+fn teacher_forward_input(prompt:&[u32],gold:&[u32],context:usize,device:&Device)->Result<Tensor> {
+    if prompt.is_empty()||gold.is_empty()||prompt.len().checked_add(gold.len()).is_none_or(|n|n>context){return Err(Error::ContextTooSmall);}
+    let mut sequence=prompt.to_vec();sequence.extend(gold);
+    Ok(Tensor::new(&sequence[..sequence.len()-1],device)?.unsqueeze(0)?)
 }
 fn field_at(answer: &str, byte: usize) -> &'static str {
     if byte >= answer.len() {
@@ -8283,6 +8285,23 @@ fn arm_run(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature="metal")]
+    #[test]
+    #[ignore="explicit Metal input allocation only; model/teacher/backward/optimizer calls0"]
+    fn teacher_input_uses_native_device_and_response_shift()->Result<()> {
+        let metal=replica_v3::neural::Backend::Metal0.open()?;
+        for device in [&Device::Cpu,&metal] {
+            let prompt=[8u32,9];let gold=[10u32,11,EOS];
+            let input=teacher_forward_input(&prompt,&gold,5,device)?;
+            assert!(input.device().same_device(device),"teacher input must share native device");
+            assert_eq!(input.dtype(),DType::U32);assert_eq!(input.dims(),&[1,4]);
+            assert_eq!(input.to_vec2::<u32>()?,vec![vec![8,9,10,11]]);
+            assert!(teacher_forward_input(&prompt,&gold,4,device).is_err());
+            assert!(teacher_forward_input(&[],&gold,5,device).is_err());
+            assert!(teacher_forward_input(&prompt,&[],5,device).is_err());
+        }
+        metal.synchronize()?;println!("teacher input CPU/Metal U32 full target shift; model_calls0 teacher0 backward0 optimizer0");Ok(())
+    }
     use super::*;
     #[test]
     fn citation_fidelity_inference_budget() {
