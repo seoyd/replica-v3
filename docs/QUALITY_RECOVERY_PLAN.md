@@ -1,6 +1,19 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: selected event ID protocol1.1
+## Closed: selected event ID protocol1.1
+
+Execution and independent A/B passed on source
+2e98f6a834ffe440ce2f20dec4361dee8818ef29. Both arms ended at their registered
+common64 quality-stop endpoint (model14912/Adam576), total128 updates.
+I S1Q1 had four length-ended responses, so neither arm continued to128.
+Final cross-mode dev/renamed/train and OLD_FULL exact scores were all zero;
+NEXT_SIGNAL=NO_CLEAR_SIGNAL, model quality failed, GOAL1_READY=false.
+Generation3456 and teacher288 including independent replay are complete.
+No calls or learning remain authorized by this closed study. Original failures,
+protected models and user changes are preserved. Detailed scores, evidence,
+limited-exposure interpretation and one unexecuted follow-up hypothesis are in
+EXPERIMENT_STATUS and the separate independent review. The original plan below
+records the fixed conditions and limits, not renewed execution permission.
 
 `R3-SELECTED-EVENT-ID-PROTOCOL-1.1` preserves the blocked1.0 evidence and
 continues the previously unexecuted comparison. Its only input intervention

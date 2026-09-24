@@ -1,6 +1,113 @@
 # 진단 및 구현 상태
 
-## 2026-09-25 Selected event ID protocol1.1 — common64 endpoint complete, B pending
+## 2026-09-25 Selected event ID protocol1.1 — execution accepted, quality failed
+
+### Final closure
+
+CODE_A=PASS; EXECUTION_COMPLETE=true; B_RECOUNT_PARITY=PASS;
+F_I_ENDPOINT=64/64; CLOCK_MODEL_ADAM_CURSOR=14912/576/64 for both;
+EXPOSURE_PARITY=PASS; TARGET_COST_DIFFERENCE=I input+2048/target-1792/padding+2048
+at the actual64 updates; NEXT_SIGNAL=NO_CLEAR_SIGNAL; MODEL_QUALITY=FAIL;
+GOAL1_READY=false. Both endpoints are closed with resume=false. No remaining
+budget was reused after I's registered retention stop. No QA640, confirmation,
+S4/S5/S6, new model, optimizer, corpus, LR or loss search was performed.
+
+SOURCE_BASE=1344ae3b4e2f359db81d889e1c2c24b2356e7b17;
+CANDIDATE_SOURCE_SHA=2e98f6a834ffe440ce2f20dec4361dee8818ef29.
+WORKTREE_DIGEST_BEFORE is the preserved three-file handoff plus historical
+patch10d9d33b32d04ccd0396a28a9e8b1c942f1c4db1574de8eba6d13c876d06e89a,
+not report HEAD44c9016. The published source diff touches only src/muon.rs,
+src/muon_diagnosis.rs and src/neural/checkpoint.rs (811 insertions/64 deletions
+including the existing draft). Local frozen candidate.patch SHA256 is
+b80bdd16def4e0c0683945a6407ea6aeb0e6012652a753629d5037a3ac37ebba.
+INPUT_AUDIT_SOURCE is the frozen preparer and the separate Rust prepare_reader
+in the independent scratch below. TOKENIZER_HASH=
+ec945ee5f3cbd87992bdfa13f199de2a671b94b64337dff04d85e01d982ab9ef;
+FULL_LENGTH_MIN_MAX=234/234; ID_ONLY_LENGTH_MIN_MAX=242/242;
+LENGTH_VIOLATIONS=0; REQUEST_TARGET_PARITY=PASS; REVIEW_ROWS_UNCHANGED=PASS.
+
+Independent B freshly reproduced128 outputs (fixed normal32 + failure32 per
+arm) with exact raw token/text/EOS/decode/error parity, including the actual
+wrong and length-ended responses. Teacher32 independently reproduced gold,
+argmax and roles; maximum NLL difference0 within1e-5. Both commands exited0.
+Separate readers verified endpoint/raw/call bindings, all stored summaries,
+clocks, token costs, guard decisions, main teacher256 and independent teacher32.
+The final pure report exited0 after B, made no model calls, and reported the
+same NO_CLEAR_SIGNAL. Repeated reader checks do not increase model call counts.
+
+NEW_USAGE: SMALL optimizer128/backward128, generation3456/4096,
+teacher288/288. Generation output tokens46948 including EOS, of which B is
+128 calls/1975 tokens. Training input211712/target13184/padding30976 across
+1024 examples (each arm review256/word256). Teacher target observations3600;
+teacher prefixes are gold conditions, not generated answers. TINY remains
+optimizer16/backward16/teacher4/generation0. Independent diagnostic backward0;
+discarded updates0; runtime failures0/UNKNOWN0. I's four length-ended S1Q1
+answers are returned quality failures and remain in the denominator/raw.
+Charged model/numeric active656.538534833s includes32s A; segment001491.040029875s.
+The training wall times and teacher/free-generation conditions are not conflated.
+
+| Final FULL response component | F value / support / malformed / outside | I value / support / malformed / outside |
+|---|---|---|
+| word192 | 40 / 0 / 0 / 192 | 0 / 0 / 192 / 0 |
+| renamed192 | 50 / 0 / 0 / 192 | 0 / 2 / 188 / 0 |
+| train128 | 51 / 0 / 0 / 128 | 0 / 0 / 128 / 0 |
+| original OLD_FULL64 | 5 / 0 / 0 / 64 | 0 / 2 / 57 / 5 |
+
+FULL/ID_ONLY exact and all joint counts remain0 in every new word panel.
+I renamed has two other-provided-ID rows in FULL mode. ID_ONLY word/renamed
+for parent, F and I contain no valid eight-digit-only answer. Outside0 on that
+mode is therefore not correct support: malformed192/192. I examples contain
+digits plus bracket suffixes or Korean text. All these panels reach EOS; that
+does not make their content or requested format correct. Paired I-vs-parent
+and I-vs-F counts on either ID version are both0/gain0/loss0/neither192.
+
+| Gold-prefix teacher, correct/denominator, train then dev | F | I |
+|---|---|---|
+| FULL ID tokens | 54/256; 46/256 | 48/256; 48/256 |
+| FULL FORMAT tokens | 160/160; 160/160 | 127/160; 134/160 |
+| FULL CLOSE tokens | 32/32; 30/32 | 28/32; 26/32 |
+| FULL EOS | 32/32; 32/32 | 32/32; 32/32 |
+| FULL MIXED tokens | 11/32; 6/32 | 0/32; 0/32 |
+| ID_ONLY ID tokens | 4/256; 2/256 | 10/256; 29/256 |
+| ID_ONLY EOS | 0/32; 0/32 | 0/32; 0/32 |
+
+Complete ID spans are0/32 throughout. VALUE-only token denominator is absent;
+MIXED spans prevent a separate whole-VALUE teacher assertion. ID_ONLY has no
+VALUE/FORMAT/CLOSE roles. Its ID token accuracy improved relative to F under
+gold prefixes, but whole-ID/EOS/free generation did not. This is limited-budget
+fit failure, not proof that the architecture cannot learn or that more steps
+would succeed. Changed instructions, targets and ANSWER coefficients make this
+a protocol comparison rather than an isolated target-length causal experiment.
+
+One next hypothesis, not executed or authorized here: in a separately approved
+F/I protocol comparison from the same A512/Adam512, change only LR3e-5 to1e-5,
+keeping inputs, tape, objective and retention checks fixed. Test whether it can
+preserve S1Q1 termination while learning the new format. Current evidence does
+not establish LR as the cause. Continued retention failure or no heldout exact-ID
+improvement would reject this proposal; this run is not reopened or extended.
+
+ARTIFACT_BYTES: immutable study474782053 bytes/7713 files after B. The independent
+scoped snapshot of this study, executor evidence, reviewer scratch and two
+direct-test temp roots was548945643 bytes/13540 files, below1GiB. This is an
+observed snapshot, not a peak estimate; subsequent small closure receipts/logs
+are separate. No global inventory, deletion, movement or old-artifact copy was
+performed. Scoped managed-build allocated growth observed64KiB from this1.1
+start (peak UNKNOWN), below2GiB. Final checkpoint hashes are below; original
+parent/corpus/tokenizer/predecessor composite/historical patch hashes matched
+again after learning. Original failures and user .DS_Store remain unchanged.
+
+Review: `docs/SELECTED_EVENT_ID_V11_REVIEW_2026-09-25.md`. Independent A/B report
+SHA `25ee8b5867d1e37d263ce0f294753ccbb3b6bdaa` was normally pushed and matched
+the actual full remote SHA. B native receipt SHA256 is
+`df20736d138c4ceb85371097fdbdab6b19cdb0ea0bd2f94a23e6fd83ff9ea99c`.
+Its reviewed source is the candidate above; report-only commits are separate.
+E3/E4 status publication
+b1747f1f8a4dd090dd6980f58c3721f71a160636 matched the actual remote. The final
+report SHA and remote match are recorded after publication, not used as runtime
+source identity. Prepared study, executor/raw/test evidence and independent
+reader/replay evidence use the three local roots listed in the checkpoints below.
+All requested requirements were compared to implementation/execution evidence;
+the bounded study is closed, with model-quality failure preserved.
 
 ### Actual bounded comparison completed
 
