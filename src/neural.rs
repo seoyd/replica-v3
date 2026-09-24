@@ -65,6 +65,38 @@ pub fn cpu_backend() -> &'static str {
     }
 }
 
+/// Execution choice, deliberately excluded from architecture/weight identity.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+pub enum Backend {
+    #[default]
+    Cpu,
+    #[value(name = "metal:0")]
+    Metal0,
+}
+impl Backend {
+    pub fn id(self) -> &'static str {
+        match self { Self::Cpu => "cpu", Self::Metal0 => "metal:0" }
+    }
+    pub fn open(self) -> Result<candle_core::Device> {
+        let device = match self {
+            Self::Cpu => candle_core::Device::Cpu,
+            Self::Metal0 => candle_core::Device::new_metal(0)
+                .map_err(|e| Error::Model(format!("BEFORE_MODEL_CALL: requested metal:0 unavailable: {e}")))?,
+        };
+        self.verify(&device)?;
+        Ok(device)
+    }
+    pub fn verify(self, device: &candle_core::Device) -> Result<()> {
+        if (self == Self::Cpu && device.is_cpu()) || (self == Self::Metal0 && device.is_metal()) {
+            Ok(())
+        } else { Err(Error::Model("BACKEND_MISMATCH; CPU fallback forbidden".into())) }
+    }
+    pub fn runtime_revision(self) -> String {
+        format!("replica-native-trpp-v1;candle-0.11.0;{};greedy;native-role-bytes-v1",
+            match self { Self::Cpu => cpu_backend(), Self::Metal0 => "Metal:0/F32" })
+    }
+}
+
 /// Shared byte framing: tokenizer training may learn only the train split's headers.
 pub fn evidence_text(e: &Evidence) -> String {
     format!(

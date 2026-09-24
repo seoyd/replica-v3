@@ -146,6 +146,7 @@ fn missing_model_and_commit_failure_keep_input_without_success() {
     let mut missing = LocalModel {
         config: ModelConfig {
             checkpoint: d.path().join("absent-native-checkpoint"),
+            device: replica_v3::neural::Backend::Cpu,
         },
     };
     assert!(

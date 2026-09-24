@@ -808,6 +808,8 @@ pub fn save_with_stats(
     mut manifest: Manifest,
     optimizer: &BTreeMap<String, Tensor>,
 ) -> Result<(Manifest, SaveStats)> {
+    // Publication must not certify merely enqueued device work.
+    model.device.synchronize()?;
     if model.adapter().is_some(){return save_delta(path,model,tokenizer,manifest,optimizer);}
     let start = Instant::now();
     let mut stats = SaveStats::default();

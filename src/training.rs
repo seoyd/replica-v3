@@ -28,6 +28,208 @@ use std::{
 pub struct Adam {
     pub moments: BTreeMap<String, Tensor>,
 }
+
+#[cfg(all(test, feature = "metal"))]
+mod metal_tests {
+    use super::*;
+    use neural::transformer::{Config, Kernel};
+
+    // Registered before device execution, not fitted to observed errors.
+    fn close(name:&str, reference:&Tensor, actual:&Tensor, abs:f64, rel:f64)->Result<()> {
+        assert_eq!(reference.dims(),actual.dims(),"{name} shape");
+        assert_eq!(reference.dtype(),actual.dtype(),"{name} dtype");
+        let a=reference.flatten_all()?.to_vec1::<f32>()?;
+        let b=actual.flatten_all()?.to_vec1::<f32>()?;
+        let mut errors:Vec<f64>=a.iter().zip(&b).map(|(&x,&y)|(x as f64-y as f64).abs()).collect();
+        let bad=a.iter().zip(&b).position(|(&x,&y)|!x.is_finite()||!y.is_finite()||(x as f64-y as f64).abs()>abs+rel*(x as f64).abs());
+        errors.sort_by(f64::total_cmp);
+        println!("NUMERIC {name} shape={:?} max={} p99={} rms={} first_bad={bad:?}",reference.dims(),errors.last().unwrap(),errors[(errors.len()-1)*99/100],(errors.iter().map(|x|x*x).sum::<f64>()/errors.len()as f64).sqrt());
+        assert!(bad.is_none(),"{name}: registered pointwise tolerance exceeded");Ok(())
+    }
+    fn vector(name:&str, reference:&Tensor, actual:&Tensor, limit:f64, zero_abs:f64, cosine:bool)->Result<()> {
+        assert_eq!(reference.dims(),actual.dims());
+        let a=reference.flatten_all()?.to_vec1::<f32>()?;
+        let b=actual.flatten_all()?.to_vec1::<f32>()?;
+        assert!(a.iter().chain(&b).all(|x|x.is_finite()),"{name} finite");
+        let norm=a.iter().map(|&x|(x as f64).powi(2)).sum::<f64>().sqrt();
+        let other=b.iter().map(|&x|(x as f64).powi(2)).sum::<f64>().sqrt();
+        let floor=1e-6*(a.len() as f64).sqrt();
+        let err=a.iter().zip(&b).map(|(&x,&y)|(x as f64-y as f64).powi(2)).sum::<f64>().sqrt();
+        let max=a.iter().zip(&b).map(|(&x,&y)|(x as f64-y as f64).abs()).fold(0f64,f64::max);
+        let cos=if norm>floor && other>floor {Some(a.iter().zip(&b).map(|(&x,&y)|x as f64*y as f64).sum::<f64>()/(norm*other))}else{None};
+        println!("VECTOR {name} shape={:?} norm={norm} nrmse={} max={max} cosine={cos:?}",reference.dims(),err/norm.max(floor));
+        if norm<=floor {assert!(max<=zero_abs,"{name}: near-zero absolute error");}
+        else {assert!(err/norm<=limit,"{name}: NRMSE");if cosine {assert!(cos.is_some_and(|v|v>=0.999),"{name}: cosine");}}
+        Ok(())
+    }
+    #[test]
+    #[ignore = "bounded primitive localization after the recorded Metal gradient failure"]
+    fn metal_f32_backward_boundary()->Result<()> {
+        let gpu=neural::Backend::Metal0.open()?;
+        let mut ss=vec![];
+        for row in 0..8 {ss.push(Sample{tokens:(0..12-row%3).map(|n|8+(n+row)%32).chain([EOS]).collect(),response_start:7,curriculum:false});}
+        let mut outcomes=vec![];
+        for device in [&Device::Cpu,&gpu] {
+            let b=batch(&ss,&(0..8).collect::<Vec<_>>(),device)?;
+            let values:Vec<f32>=(0..8*12*264).map(|n|((n%73)as f32-36.)/31.).collect();
+            let x=Var::from_vec(values,(8,12,264),device)?;
+            let (ce,answer,_,_)=response_objective(&x,&b,1.,true)?;
+            let token_grad=ce.backward()?.get(&x).unwrap().detach();
+            let answer_grad=answer.backward()?.get(&x).unwrap().detach();
+            let w=Var::from_vec((0..264*32).map(|n|(n%29)as f32/30.).collect::<Vec<_>>(),(264,32),device)?;
+            let y=w.index_select(&b.input.flatten_all()?,0)?;
+            let embedding_grad=y.sqr()?.mean_all()?.backward()?.get(&w).unwrap().detach();
+            device.synchronize()?;
+            outcomes.push((token_grad,answer_grad,embedding_grad));
+        }
+        println!("PRIMITIVE backward6 optimizer0 native_forward0 generation0 teacher0");
+        vector("TOKEN-loss-logit-gradient",&outcomes[0].0,&outcomes[1].0,1e-2,1e-6,true)?;
+        vector("ANSWER-loss-logit-gradient",&outcomes[0].1,&outcomes[1].1,1e-2,1e-6,true)?;
+        vector("repeated-index-embedding-gradient",&outcomes[0].2,&outcomes[1].2,1e-2,1e-6,true)?;
+        Ok(())
+    }
+    #[test]
+    #[ignore = "bounded attention primitive localization, no model generation/update"]
+    fn metal_f32_attention_backward_boundary()->Result<()> {
+        use neural::transformer::{rms_norm,rotary,repeat_kv,gqa_attention,attention_mask,linear};
+        let gpu=neural::Backend::Metal0.open()?;
+        for op in ["rms","rotary","repeat-kv","gqa","linear","silu"] {
+            let mut outcomes=vec![];
+            for device in [&Device::Cpu,&gpu] {
+                let shape=(8,4,12,8);
+                let x=Var::from_vec((0..8*4*12*8).map(|i|((i%67)as f32-33.)/51.).collect::<Vec<_>>(),shape,device)?;
+                let y=match op {
+                    "rms"=>rms_norm(&x,&Tensor::ones((4,1,8),DType::F32,device)?,1e-6)?,
+                    "rotary"=>rotary(&x,0,10000.)?,
+                    "repeat-kv"=>repeat_kv(&x,8)?,
+                    "gqa"=>{
+                        let k=Tensor::from_vec((0..8*2*12*8).map(|i|((i%31)as f32-15.)/22.).collect::<Vec<_>>(),(8,2,12,8),device)?;
+                        let v=(&k*0.7)?;
+                        let mask=attention_mask(0..12,0..12,Some(8),None,8,device)?;
+                        gqa_attention(&x,&k,&v,&mask)?
+                    },
+                    "linear"=>linear(&x,&Tensor::from_vec((0..8*16).map(|i|((i%17)as f32-8.)/13.).collect::<Vec<_>>(),(16,8),device)?)?,
+                    "silu"=>candle_nn::ops::silu(&x)?,
+                    _=>unreachable!(),
+                };
+                let upstream=Tensor::from_vec((0..y.elem_count()).map(|i|((i%41)as f32-20.)/32.).collect::<Vec<_>>(),y.shape(),device)?;
+                let loss=(&y*&upstream)?.sum_all()?;
+                let g=loss.backward()?.get(&x).unwrap().detach();device.synchronize()?;
+                outcomes.push((y,g));
+            }
+            println!("PRIMITIVE {op} completed backward2 optimizer0 generation0 teacher0");
+            close(&format!("{op}/forward"),&outcomes[0].0,&outcomes[1].0,1e-4,1e-3)?;
+            vector(&format!("{op}/gradient"),&outcomes[0].1,&outcomes[1].1,1e-2,1e-6,true)?;
+        }Ok(())
+    }
+    #[test]
+    #[ignore = "scalar-oracle localization of the observed Metal non-last-axis reduction error"]
+    fn metal_f32_middle_axis_sum_oracle()->Result<()> {
+        let gpu=neural::Backend::Metal0.open()?;
+        let values:Vec<f32>=(0..8*4*2*12*8).map(|i|((i%41)as f32-20.)/32.).collect();
+        let mut oracle=Vec::new();
+        for b in 0..8 {for h in 0..4 {for t in 0..12 {for d in 0..8 {
+            oracle.push(values[(((b*4+h)*2)*12+t)*8+d]+values[(((b*4+h)*2+1)*12+t)*8+d]);
+        }}}}
+        let expected=Tensor::from_vec(oracle,(8,4,1,12,8),&Device::Cpu)?;
+        for device in [&Device::Cpu,&gpu] {
+            let input=Tensor::from_vec(values.clone(),(8,4,2,12,8),device)?;
+            let result=input.sum_keepdim(2)?;device.synchronize()?;
+            let actual=result.flatten_all()?.to_vec1::<f32>()?;
+            let gold=expected.flatten_all()?.to_vec1::<f32>()?;
+            let first=gold.iter().zip(&actual).position(|(x,y)|x!=y);
+            println!("SUM_ORACLE device={:?} shape={:?} stride={:?} axis2 first={:?} expected_actual={:?} native_calls0 backward0 optimizer0",
+                device.location(),input.dims(),input.stride(),first,first.map(|i|(gold[i],actual[i])));
+            close("middle-axis-sum/scalar-oracle",&expected,&result,1e-4,1e-3)?;
+        }Ok(())
+    }
+    #[test]
+    #[ignore = "actual device/cache/optimizer admission boundary, model calls zero"]
+    fn metal_f32_admission_is_fail_closed()->Result<()> {
+        let gpu=neural::Backend::Metal0.open()?;
+        assert!(neural::Backend::Cpu.verify(&gpu).is_err());
+        assert!(neural::Backend::Metal0.verify(&Device::Cpu).is_err());
+        let cpu=Transformer::init(Config::tiny(264),20260924,Device::Cpu)?;
+        let tensors=cpu.vars.iter().map(|(n,v)|Ok((n.clone(),v.as_detached_tensor().to_device(&gpu)?))).collect::<Result<BTreeMap<_,_>>>()?;
+        let mut metal=Transformer::from_tensors(cpu.config.clone(),tensors,gpu.clone())?;
+        let ids=Tensor::new(&[[8u32]],&gpu)?;
+        let mut foreign=cpu.cache("scope");
+        assert!(metal.forward_cached(&ids,&mut foreign,"scope").is_err());
+        metal.set_kernel(Kernel::RustDecodeGemv);
+        assert!(metal.forward(&ids,None).is_err());
+        assert_eq!(metal.capabilities().device,"Metal");
+        assert!(!metal.capabilities().decode);
+        metal.set_kernel(Kernel::Reference);
+        assert!(metal.capabilities().decode);assert!(!metal.capabilities().training);
+        let before=metal.weights_content_id()?;
+        let mut adam=Adam::new(&metal.vars)?;
+        assert!(adam.moments.values().all(|t|t.device().same_device(&gpu)));
+        let failure=adam.step_constant(&metal.vars,&BTreeMap::new(),&TrainConfig::default(),1,3e-5).unwrap_err().to_string();
+        assert!(failure.contains("METAL_F32_TRAINING_NOT_ACCEPTED"));
+        assert_eq!(metal.weights_content_id()?,before);
+        for t in adam.moments.values(){assert!(t.flatten_all()?.to_vec1::<f32>()?.iter().all(|&x|x==0.));}
+        println!("METAL_ADMISSION device/cache/kernel/rejected-Adam PASS; forward0 backward0 optimizer0 generation0 teacher0");Ok(())
+    }
+    #[test]
+    #[ignore = "explicit actual Metal F32 numerical gate; two TINY optimizer calls maximum"]
+    fn metal_f32_tiny_forward_gradient_update()->Result<()> {
+        let gpu=neural::Backend::Metal0.open()?;
+        assert!(gpu.is_metal());
+        println!("ACTUAL_DEVICE {:?} dtype=F32 fallback=0 Candle=0.11.0",gpu.location());
+        let cpu=Transformer::init(Config::tiny(264),20260924,Device::Cpu)?;
+        let tensors=cpu.vars.iter().map(|(n,v)|Ok((n.clone(),v.as_detached_tensor().to_device(&gpu)?))).collect::<Result<BTreeMap<_,_>>>()?;
+        let mut metal=Transformer::from_tensors(cpu.config.clone(),tensors,gpu.clone())?;
+        assert_eq!(cpu.weights_content_id()?,metal.weights_content_id()?);
+        assert_eq!(cpu.config.semantic_id()?,metal.config.semantic_id()?);
+        let mut ss=vec![];
+        for row in 0..8 {ss.push(Sample{tokens:(0..12-row%3).map(|n|8+(n+row)%32).chain([EOS]).collect(),response_start:7,curriculum:false});}
+        let indices:Vec<_>=(0..8).collect();
+        let cb=batch(&ss,&indices,&Device::Cpu)?;let mb=batch(&ss,&indices,&gpu)?;
+        assert_eq!(cb.valid,mb.valid);assert_eq!(cb.tokens,mb.tokens);
+        assert_eq!(cb.input.to_vec2::<u32>()?,mb.input.to_vec2::<u32>()?);
+        assert_eq!(cb.mask.to_vec2::<f32>()?,mb.mask.to_vec2::<f32>()?);
+        let cl=cpu.forward(&cb.input,Some(&cb.valid))?;
+        let ml=metal.forward(&mb.input,Some(&mb.valid))?;gpu.synchronize()?;
+        close("padded-forward8x12x264",&cl,&ml,1e-4,1e-3)?;
+        let (cce,co,ct,cn)=response_objective(&cl,&cb,1.,true)?;
+        let (mce,mo,mt,mn)=response_objective(&ml,&mb,1.,true)?;
+        assert_eq!((ct,cn),(mt,mn));assert_eq!(cn,8);
+        close("TOKEN-CE",&cce,&mce,1e-5,1e-3)?;
+        close("ANSWER-CE",&co,&mo,1e-5,1e-3)?;
+        println!("BACKWARD entering CPU/TINY1 and Metal/TINY1; optimizer0 generation0 teacher0");
+        let cg=co.backward()?;let mg=mo.backward()?;gpu.synchronize()?;
+        let mut cgmap=BTreeMap::new();let mut mgmap=BTreeMap::new();
+        for(n,v)in &cpu.vars {
+            let c=cg.get(v).expect("connected CPU leaf").detach();
+            let m=mg.get(&metal.vars[n]).expect("connected Metal leaf").detach();
+            assert!(m.device().same_device(&gpu));
+            vector(&format!("gradient/{n}"),&c,&m,1e-2,1e-6,true)?;
+            cgmap.insert(n.clone(),c);mgmap.insert(n.clone(),m);
+        }
+        let mut foreign=cpu.cache("gate");
+        let ids=mb.input.narrow(0,0,1)?;
+        assert!(metal.forward_cached(&ids,&mut foreign,"gate").is_err());
+        metal.set_kernel(Kernel::RustDecodeGemv);
+        assert!(metal.forward(&ids,None).is_err());metal.set_kernel(Kernel::Reference);
+        let mut cache=metal.cache("gate");let full=metal.forward(&ids,None)?;
+        for pos in 0..ids.dim(1)? {
+            let got=metal.forward_cached(&ids.narrow(1,pos,1)?,&mut cache,"gate")?;
+            close(&format!("token-cache/{pos}"),&full.narrow(1,pos,1)?,&got,1e-4,1e-3)?;
+        }
+        let original=cpu.vars.iter().map(|(n,v)|Ok((n.clone(),v.as_detached_tensor().copy()?))).collect::<Result<BTreeMap<_,_>>>()?;
+        let cfg=TrainConfig{lr:3e-5,..Default::default()};
+        let mut ca=Adam::new(&cpu.vars)?;let mut ma=Adam::new(&metal.vars)?;
+        println!("UPDATE entering CPU/TINY1 and Metal/TINY1; generation0 teacher0");
+        let cstats=ca.step_constant(&cpu.vars,&cgmap,&cfg,1,3e-5)?;
+        let mstats=ma.step_constant(&metal.vars,&mgmap,&cfg,1,3e-5)?;gpu.synchronize()?;
+        println!("UPDATE CPU={cstats:?} Metal={mstats:?} committed=2");
+        for(n,v)in &cpu.vars {
+            vector(&format!("delta/{n}"),&(v.as_tensor()-&original[n])?,&(&metal.vars[n].to_device(&Device::Cpu)?-&original[n])?,2e-2,1e-7,false)?;
+        }
+        for(n,v)in &ca.moments {vector(n,v,&ma.moments[n],1e-2,1e-6,false)?;assert!(ma.moments[n].device().same_device(&gpu));}
+        println!("METAL_TINY_NUMERIC_PASS tiny_optimizer2 tiny_backward2 generation0 teacher0");Ok(())
+    }
+}
 impl Adam {
     pub fn new(vars: &BTreeMap<String, Var>) -> Result<Self> {
         let mut moments = BTreeMap::new();
@@ -104,6 +306,9 @@ impl Adam {
     ) -> Result<(f64, f64)> {
         if !lr.is_finite() || lr <= 0. || lr > 0.1 || step == 0 || step > i32::MAX as usize {
             return Err(Error::Invalid("optimizer rate/clock".into()));
+        }
+        if vars.values().any(|v|v.device().is_metal()) {
+            return Err(Error::Unsupported("METAL_F32_TRAINING_NOT_ACCEPTED: Candle0.11.0 middle-axis reduction fails the registered gradient gate; optimizer_calls=0".into()));
         }
         let mut norm2 = 0f64;
         for name in vars.keys() {

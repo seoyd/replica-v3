@@ -54,6 +54,9 @@ pub trait Model {
 pub struct ModelConfig {
     #[arg(long)]
     pub checkpoint: PathBuf,
+    /// Opt-in experimental Metal F32 inference; CPU remains the accepted default.
+    #[arg(long, value_enum, default_value = "cpu")]
+    pub device: crate::neural::Backend,
 }
 pub struct LocalModel {
     pub config: ModelConfig,
@@ -83,12 +86,16 @@ impl Model for LocalModel {
         )?;
         let mut cmd = Command::new(std::env::current_exe()?);
         cmd.arg("__model-worker")
+            .arg("--device").arg(self.config.device.id())
             .arg("--checkpoint")
             .arg(&self.config.checkpoint);
         let response = run_worker(cmd, request, cancel, LOAD_TIMEOUT)?;
         verify_prepared(request, &prepared, &response)?;
         if response.generation.model_revision != native_revision(&manifest, &tokenizer)? {
             return Err(model_error("worker checkpoint identity mismatch"));
+        }
+        if response.generation.runtime_revision != self.config.device.runtime_revision() {
+            return Err(model_error("worker execution backend mismatch"));
         }
         Ok(response)
     }
@@ -283,9 +290,12 @@ pub fn verify_prepared(
 // Same Rust executable, one load and one finite generation; no sockets, Python,
 // shell, external API, downloader, tool dispatch, or database access in the worker.
 pub fn worker(config: ModelConfig) -> Result<()> {
-    use crate::neural::{checkpoint, cpu_backend};
+    use crate::neural::checkpoint;
     let load_start = Instant::now();
-    let loaded = checkpoint::load(&config.checkpoint, candle_core::Device::Cpu, false)?;
+    let device = config.device.open()?;
+    let loaded = checkpoint::load(&config.checkpoint, device, false)?;
+    config.device.verify(&loaded.model.device)?;
+    loaded.model.device.synchronize()?;
     loaded.manifest.require_default_framing()?;
     if loaded.manifest.trained_steps == 0 {
         return Err(model_error(
@@ -332,10 +342,7 @@ pub fn worker(config: ModelConfig) -> Result<()> {
         generation: GenerationInfo {
             model_id: loaded.model.config.profile.clone(),
             model_revision: native_revision(&loaded.manifest, &loaded.tokenizer)?,
-            runtime_revision: format!(
-                "replica-native-trpp-v1;candle-0.11.0;{};greedy;native-role-bytes-v1",
-                cpu_backend()
-            ),
+            runtime_revision: config.device.runtime_revision(),
             quantization: "F32".into(),
             license: "PROJECT_TRAINED; corpus permissions recorded separately".into(),
             finish_reason: generated.finish,

@@ -468,6 +468,7 @@ pub struct Cache {
     layers: Vec<Option<LayerCache>>,
     pub position: usize,
     identity: String,
+    device: Device,
     scope: String,
     history: sha2::Sha256,
     pub max_attention_bytes: usize,
@@ -681,10 +682,21 @@ impl Transformer {
             layers: vec![None; self.config.layers],
             position: 0,
             identity: self.identity.clone(),
+            device: self.device.clone(),
             scope: scope.into(),
             history: Default::default(),
             max_attention_bytes: 0,
         }
+    }
+    /// Device-aware execution claims; the historical kernel profile is CPU-only.
+    /// Metal inference is opt-in, and the measured gradient failure blocks training.
+    pub fn capabilities(&self) -> Capabilities {
+        let mut c=self.kernel.capabilities(self.config.context);
+        if self.device.is_metal() {
+            c.device="Metal";c.training=false;c.backward=false;
+            if self.kernel!=Kernel::Reference {c.prefill=false;c.decode=false;c.cache=false;}
+        }
+        c
     }
     pub fn forward(&self, ids: &Tensor, padding: Option<&[bool]>) -> Result<Tensor> {
         self.forward_inner(ids, padding, None, "", None, None)
@@ -719,6 +731,9 @@ impl Transformer {
         mut observe: Option<&mut AttentionObserver<'_>>,
     ) -> Result<Tensor> {
         let (batch, len) = ids.dims2()?;
+        if self.kernel == Kernel::RustDecodeGemv && !self.device.is_cpu() {
+            return Err(Error::Unsupported("RustDecodeGemv requires CPU; select Reference explicitly".into()));
+        }
         // A forward used for training always retains the reference autograd graph.
         let kernel = if cache.is_some() && len == 1 {
             self.kernel
@@ -736,7 +751,7 @@ impl Transformer {
             || padding.is_some_and(|p| p.len() != batch * len)
             || cache
                 .as_ref()
-                .is_some_and(|k| k.identity != self.identity || k.scope != scope || batch != 1)
+                .is_some_and(|k| k.identity != self.identity || !k.device.same_device(&self.device) || k.scope != scope || batch != 1)
         {
             return Err(Error::Invalid(
                 "native input shape/dtype/device/context/cache identity".into(),

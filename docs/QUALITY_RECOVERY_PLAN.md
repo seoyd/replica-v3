@@ -2,6 +2,16 @@
 
 ## Active: CPU reference preservation and opt-in Metal F32
 
+Execution closure: M1 is independently `B_COVERAGE_COMPLETE` (16 new,42 reused
+physical observations; fixed normal32/failure32 overlap6). M2 reached actual
+Metal F32 but failed the preregistered gradient tolerance. Scalar-oracle
+middle-axis sum and GQA repeat backward reproduced the mismatch; independent
+Runtime A is NOT_ACCEPTED. The shared Adam entry rejects Metal before mutation.
+M3~M5 remain NOT_RUN, optimizer budget used0. This is a bounded negative outcome,
+not an accepted Metal runtime or permission to substitute a backend/kernel.
+The planned requirements below are preserved; unfinished descriptors/resume and
+quality/performance tests are explicitly listed in EXPERIMENT_STATUS.
+
 `R3-METAL-F32-BASELINE-1.0` preserves source849d8bb, accepted11264,
 base14336, the failed adapter14464, all prior raw and immutable reviews.
 Latest closure a9ae778 retains A and the42 replay/raw evidence but rejects

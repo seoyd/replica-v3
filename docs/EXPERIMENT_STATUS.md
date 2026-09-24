@@ -13,7 +13,9 @@ V/VC/S1Q1/word/renamed에서 정오와 무관한 첫 query pair8/6/6/6/6행이�
 새로 실행했다. 실제 CLI exit0, normal32/failure32, 중복6, 고유 호출58이다.
 원 raw와 producer 신원을 덮어쓰지 않고 study-root 등록과 별도 supplement를
 연결했다. 이번 SMALL optimizer0/teacher0; adapter 품질 FAIL과 resume=false는
-유지한다. 독립 LegacyB 무호출 검산은 아래 별도 보고서로 종결한다.
+유지한다. [독립 LegacyB](METAL_F32_LEGACY_B_REVIEW_2026-09-24.md)는 PASS로
+종결했다. M1 source/report commit `da1987d3a5a6ba74c1d25eec121fb483c97d24f9`를
+정상 push하고 실제 remote 전체 SHA 일치를 확인했다.
 
 직접 테스트 `adapter_normal_completion_boundaries`는 실제 보존 panel을 읽는
 명시적 ignored regression으로 1/1 PASS(exit0,67.10초), 모델 호출0이다.
@@ -28,8 +30,95 @@ source patch `020208ad8b7979961b72d2b50e3f69a3af2f09825c5edbe92b06b951cf936583`.
 실행 제한 이탈: 위 무호출 regression과 production compile이 약27초 겹쳤다.
 모델 실행/성능 측정은 없었으며 해당 구간을 backend benchmark로 사용하지 않는다.
 후속 빌드와 모델 실행은 순차 수행한다. 기존 파일 삭제/이동/재압축0.
-M2~M5 및 Runtime A/B는 아직 NOT_RUN; 코드·수치·보호품질·속도는 별도 판정하며
-GENERAL_QA_IMPROVED=NOT_ESTABLISHED, GOAL1_READY=false다.
+M2의 수치 오류와 미완료 범위는 바로 아래에 기록한다.
+
+### M2 실제 Metal F32: forward 일부 통과, gradient FAIL로 후속 차단
+
+`--features accelerate,metal`과 제품/worker `--device cpu|metal:0`을 연결했다.
+기본 CPU와 기존 runtime string/model semantic/hash는 보존한다. Metal 요청은
+실제 Device 생성에 실패하면 BEFORE_MODEL_CALL 오류이며 CPU 대체 경로가 없다.
+빈 cache도 원 Device에 묶어 backend 혼용을 거부하고 RustDecodeGemv를 Metal에서
+거부한다. native publication 앞에 synchronize를 연결했다. 이 opt-in 연결의
+완전 수용이나 실제 SMALL GPU 학습 성공을 주장하지 않는다.
+
+Offline 첫 확인은 `candle-metal-kernels` cache 부재로 exit101이었다. 허용된
+registry 의존성만 취득했고 기존 package version/checksum 변경 없이40개 lock
+entry를 추가했다(일부 optional/transitive 포함, 설치/실행 모델이 아님).
+core/nn/metal-kernels 모두0.11.0이다. 이후 빌드/테스트는 locked/offline,
+release, CARGO_INCREMENTAL=0, Accelerate/Rayon thread1로 실행했다.
+현재 lock SHA256 `52f4672ddd7d140e4fad7f55cf7a42c11c0224ec03b5ead8a208924d4bf95e6d`.
+
+같은 CPU 초기 tensor bytes를 M4 Metal(gpu registry id4294968525)에 적재했다.
+실제 batch8의 padding/token/mask/weight-content/semantic 일치를 먼저 검사했다.
+
+|실제 직접 시험|관측|판정|
+|---|---|---|
+|TINY F32 logits `[8,12,264]`|max1.78814e-7, p995.96046e-8, RMS2.05302e-8|등록 수치 PASS|
+|TOKEN / ANSWER CE|차이0 /9.53674e-7|등록 수치 PASS|
+|TINY embedding gradient `[264,32]`|NRMSE0.479273607, cosine0.878980045|FAIL; optimizer 진입0|
+|loss-logit TOKEN / ANSWER gradient|NRMSE2.10858e-7 /1.80913e-7|primitive PASS|
+|중복 index_select embedding gradient|NRMSE0|primitive PASS|
+|RMSNorm / RoPE gradient|NRMSE1.57435e-7 /0|primitive PASS|
+|repeat_kv gradient `[8,4,12,8]`|NRMSE1.488532391, cosine-0.00710949|FAIL|
+|`sum_keepdim(2)`, `[8,4,2,12,8]`|CPU scalar oracle 일치; Metal 첫 원소 -0.3125, 정답 -0.8125|FAIL|
+
+마지막 연산의 stride는 `[768,192,96,8,1]`, max error1.65625,
+p991.53125, RMS0.626995208이다. 등록 abs/relative 범위를 바꾸지 않았다.
+GQA repeat의 Broadcast 역전파가 이 middle-axis sum을 사용한다는 source 연결과
+실제 연산 실패를 확인했다. Metal compute의 이 경계는 현재 비교에서 잘못됐지만,
+과거 CPU 모델의 품질 실패 원인이라고 소급 해석하지 않는다. 전체 upstream
+kernel 문제의 범위까지 확정한 것도 아니다. 새 kernel/다른 backend/CPU fallback으로
+우회하지 않고 `BLOCKED_NUMERICAL_MISMATCH`로 닫는다.
+
+공통 Adam 진입은 Metal Var에 대해 moment/weight 변경 전에
+`METAL_F32_TRAINING_NOT_ACCEPTED`로 실패한다. 해당 guard·backend/cache 혼용·CPU
+전용 kernel 거부의 실제 직접 시험은1/1 PASS다. CPU의 KV chunk/rollover/identity,
+native roundtrip/corruption, missing-model/commit-failure 회귀도 각각1/1 PASS다.
+0-test를 통과로 세지 않았다. 새 SMALL/TINY optimizer0, M2 generation0/teacher0,
+TINY native forward2/backward2(batch별8문항), 추가 primitive backward12다.
+기존 CPU cache 회귀의 forward 호출은 학습·generation·teacher 호출로 합산하지 않는다.
+
+구현자 직접 테스트는 M1 포함 총9개: PASS6/FAIL3. FAIL은 위 수치 gate3개이며
+발견을 성공으로 바꿔 세지 않았다. 별도 [독립 Runtime A](METAL_F32_RUNTIME_A_2026-09-24.md)는
+같은 sum primitive를1회 실행해 exit101로 재현했다(추가 모델/backward/학습0).
+Runtime A NOT_ACCEPTED, Runtime B NOT_RUN이다. 작은 localization 시험의 첫
+compile은 mask 함수 인자 오류로 실패했으며 수정 후 compile/실행했다. 실패 로그도 보존한다.
+
+M2 최종 소스는 M1 commit에 `m2-candidate.diff`를 더한 것으로 patch SHA256
+`94a967e91410548bc8788c4ad8647607409efb9a148891357d817ca80c91a5a7`이다.
+동결 `replica-train-m2-tests`는
+`3bd26da935b4c55df7c771a28fa9add80ace9c3719781955f3ff0df41c567544`,
+최초 수치 실패 binary는
+`47452e4820d7734a49133f34212f1050e69b917b634f3da22af25910cb07f719`로 따로 보존한다.
+실제 product binary `replica-v3-m2`는
+`d48dcce4ea2c6953213bd89db49e04e3fc18c0f5433c8750e88c56fd8cdf226c`이다.
+모든 command/build/test/raw 경로는 로컬 `artifacts/metal-f32-20260924-evidence/`,
+독립 재현 로그는 `artifacts/metal-f32-20260924-runtime-a/`다. M1 raw 경로는 위와 같다.
+
+**실행하지 않은 필수 후속:** 완전한 runtime descriptor, backend에 묶인 신규
+trainer plan/resume, Metal native 새-process restart, protected P128/C64 parity,
+긴 cache 경계, 실제 worker4+4, SMALL CPU16/Metal16/Metal1+15, endpoint48,
+동기화 benchmark64 및 Runtime B. M2 선행 수치 조건이 실패했으므로 M3~M5는
+NOT_RUN이고 미구현 부분도 완료로 세지 않는다. 모델48 updates 예산은 사용0이며
+품질 학습/추가 GPU 실험으로 전용하지 않는다.
+
+최초 TINY 시험의 process wall9.53초에는 첫 shader 준비가 포함되고 RSS peak
+66,420,736B / OS peak footprint106,250,936B였다. 이는 동기화 M4 성능 벤치가
+아니다. PREFILL/DECODE/TTFT/SPEEDUP/GPU allocator peak는 NOT_MEASURED;
+fast-math compile policy는 UNKNOWN이다. CPU 전체 고정 출력 보존과 GPU protected
+품질은 NOT_RUN; 코드상의 CPU 기본값 보존·위 직접 회귀와 분리한다.
+
+새 소유 evidence root3개만 측정한 시점은84파일/93,849,672B였다(후속 작은
+보고서/로그 증가와 별개). 기존 cache 기준치가 없어 NEW_BUILD_NET=UNKNOWN이며
+build8GiB 한도 준수를 exact net 수치로 증명하지 않는다. filesystem free의
+M0 대비 순감소는 약1.23GiB로, 다른 작업 영향도 포함하므로 build 증가량이 아니다.
+원11264/14336/adapter14464와 original42 raw/finished의 실제 SHA를 다시 대조해
+모두 일치했다. 새 모델 파일0, 원본 삭제/이동/재압축0, 전수 inventory0이다.
+SOURCE/DIFF/REPORT는 분리 보존한다. 마지막 학습 endpoint는 기존 실패14464로
+변경되지 않았다. GENERAL_QA_IMPROVED=NOT_ESTABLISHED, GOAL1_READY=false.
+최종 재측정 시점의 새 evidence3개 root는86파일/93,850,356B이며 별도 독립
+Runtime A 로그1파일/1,092B를 더하면87파일/93,851,448B다. 이 값은 측정 후
+자신의 작은 size receipt가 기록되는 비용과 게시 문서 bytes를 제외한 시점값이다.
 
 ## 2026-09-24 보호 기반 adapter 실행 종료 / FP4 F32 reference
 

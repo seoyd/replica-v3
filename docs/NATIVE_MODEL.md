@@ -1,5 +1,29 @@
 # Native model implementation
 
+2026-09-24 Metal F32 opt-in: build with `--features accelerate,metal`, and use
+`--device metal:0` on the product model/worker CLI. CPU remains the default.
+Actual Metal creation is mandatory; unavailability fails before model load.
+Runtime device naming is distinct from unchanged R3MODEL content/semantic IDs.
+Cache binds its Device, CPU-only decode GEMV is refused, and publication waits
+for device synchronization. This connection is experimental, not runtime acceptance.
+The direct TINY gradient gate failed, independently reproduced as middle-axis
+sum error in Candle0.11.0 Metal. Shared Adam therefore rejects Metal before
+weight/moment mutation; device-bound training/restart and SMALL quality/speed
+validation are not implemented/accepted. See the current status for exact scope.
+
+|Precision|Available source capability|Current evidence/limit|
+|---|---|---|
+|F32 CPU|Native tensors, norms/loss/Adam and Accelerate|Existing accepted reference; unchanged default|
+|F32 Metal|Candle0.11.0 forward/backward kernels, actual M4 Device|TINY forward/CE pass; gradient fails; optimizer admission closed|
+|F16|Metal kernel dtype branches exist|SOURCE_READ only; no reduced-precision model/update tested|
+|BF16|Candle Device::supports_bf16 returns true for Metal; dtype branches exist|Capability flag is not full operator/backward acceptance; NOT_RUN|
+
+Any future mixed precision work must explicitly preserve F32 master weights,
+Adam, norm/softmax/loss accumulation and validate casts/overflow; this is a future
+design boundary, not implemented mixed precision. Current F32-only native schema
+is unchanged. Earlier FP4 evidence is reused without re-quantization or generation;
+its fully dequantized CPU execution is neither packed GPU FP4 nor S6 acceptance.
+
 The2026-09-24 protected adaptation profile adds only q/v rank8 updates to the
 existing F32 model: `xWᵀ + (8/8)(xAᵀ)Bᵀ`. It keeps base tensors constant and
 registers only A/B for gradients and Adam. All input types share that adapter,
