@@ -2,6 +2,39 @@
 
 ## 2026-09-25 First-decision evaluation-only preparation
 
+Post-main source now restricts the reader to the six scheduled panels and fixes
+B teacher parity to inspect `teacher.target_token_observation` gold/argmax/NLL.
+Actual saved-main reader and malformed parity test passed1/1 (26.85s); actual
+six-panel report and both B preflight manifest test passed1/1 (42.84s). These
+checks made0 model calls. The main report now exists, SHA256
+bfd866c7eb8bb4798739443d884dc96fd8569d4c03a15454bd03f7414870908d,
+with prior+main active1004.282171584s, generation2176 and teacher192.
+Its retention guard passes; this is not model-quality acceptance.
+
+Post-main revision SHA256
+6de8c7fce5fc692c60bc7ffe6b877fce3bd686d5d5f15b5ad94b9b711aefa1db
+binds the completed observation7fa82d8157971f1de2b90265b9087a4f727d6ee27866b749e944cc5cb6fcd95b
+and38 C/W raw/receipt references to the corrected executor while preserving old
+preparation, admission and observation identities. Source file SHA256 is
+7ef0f892ab82b6be9072b1f75ad41a73e1efc5809ca297cfce5549d29751e99d;
+executable SHA256 is3f8cfa8237b602f94dfe3e5c3a774741554403e17ee7ae4d4437a1742afa9bb9.
+The main d28bc14f executable is preserved as
+`artifacts/first-decision-20260925-evidence/replica-train-main-observed-frozen`.
+Observed task scope861638453bytes is below1GiB; build growth/peak remain UNKNOWN.
+Independent B must bind this revision before its remaining64 generation and16
+teacher reproductions; they remain NOT_RUN at this source checkpoint.
+
+The first admitted observation completed768 new generation and192 teacher calls
+in122.298989708 active seconds, with success=true and no observed conditions in
+its confirmed terminal. Process exit1 occurred afterwards in pure report assembly:
+the reader requested the unplanned seventh `OLD_FULL` panel, while this study's
+producer correctly generated its six contracted panels. Complete raw and the
+successful observation receipt remain preserved; no model retry occurred.
+Current cumulative calls are2176 generation and192 teacher. Independent B's
+remaining maxima are64 generation and16 teacher. W's observed final FULL is
+word28/192, renamed34/192, train61/192, ALL4=0; the final independent recount and
+report remain pending. This report failure is separate from generation quality.
+
 The authorized successor is prepared at
 `artifacts/first-decision-20260925-eval-only-01`. It references both saved256
 natives and completed C raw without copying or changing the failed v7 study.

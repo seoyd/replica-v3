@@ -20,6 +20,8 @@ pub enum Action {
     FirstPrepare { #[arg(long)] original:PathBuf, #[arg(long)] output:PathBuf },
     FirstEvalPrepare { #[arg(long)] original:PathBuf, #[arg(long)] output:PathBuf },
     FirstEvalRevise { #[arg(long)] root:PathBuf },
+    FirstEvalPostMainRevise { #[arg(long)] root:PathBuf },
+    FirstEvalPostMainAdmit { #[arg(long)] root:PathBuf, #[arg(long)] review:PathBuf },
     FirstEvalAdmit { #[arg(long)] root:PathBuf, #[arg(long)] review:PathBuf },
     FirstEval { #[arg(long)] root:PathBuf, #[arg(long,value_parser=["evaluate","report","review-c","review-w"])] phase:String },
     FullFitPosthocPrepare { #[arg(long)] original:PathBuf, #[arg(long)] output:PathBuf },
@@ -774,14 +776,22 @@ fn first_eval_load(root:&Path,execute:bool)->Result<(FirstEvalOnly,Study,Study)>
         ||d.original_bytes!=owned_bytes(&s.root)?{return Err(bad("first-eval original evidence changed"));}
     for(path,hash)in &d.refs{if file_hash(path)?!=*hash||pending_path(path).exists(){return Err(bad("first-eval original raw/native changed"));}}
     let (executor_source,executor_runtime,executor_hash)=first_eval_executor(&d)?;
-    if execute{if executor_source!=sources()?{return Err(bad("first-eval frozen executor source changed"));}
-        executor_runtime.verify(&Backend::Metal0.open()?)?;
-        let a:binary::Value=read_confirmed(&root.join("eval-only-admission.r3b"))?;
-        let path=Path::new(a["report"].as_str().ok_or_else(||bad("first-eval independent B absent"))?);
-        if a["policy"]!=digest(&d)?||a["executor_hash"]!=binary::record!(executor_hash)
-            ||a["report_hash"]!=file_hash(path)?||a["accepted"]!=true{return Err(bad("first-eval independent B changed"));}
-    }
     let mut view=s.clone();view.root=d.root.clone();view.source=executor_source;view.runtime=executor_runtime;
+    if execute{
+        let a:binary::Value=read_confirmed(&root.join("eval-only-admission.r3b"))?;
+        let path=Path::new(a["report"].as_str().ok_or_else(||bad("first-eval original admission absent"))?);
+        if a["policy"]!=digest(&d)?||a["executor_hash"]!=binary::record!(executor_hash)
+            ||a["report_hash"]!=file_hash(path)?||a["accepted"]!=true{return Err(bad("first-eval original admission changed"));}
+        let(source,runtime,post_hash)=first_eval_post_main(&d,&s,&view)?;
+        if source!=sources()?{return Err(bad("first-eval post-main source changed"));}
+        runtime.verify(&Backend::Metal0.open()?)?;
+        let admitted:binary::Value=read_confirmed(&root.join("eval-only-post-main-admission.r3b"))?;
+        let receipt=Path::new(admitted["report"].as_str().ok_or_else(||bad("first-eval post-main independent B absent"))?);
+        if admitted["policy"]!=digest(&d)?||admitted["post_main_executor_hash"]!=post_hash
+            ||admitted["report_hash"]!=file_hash(receipt)?||admitted["accepted"]!=true{
+            return Err(bad("first-eval post-main B admission changed"));
+        }
+    }
     Ok((d,s,view))
 }
 fn first_eval_executor(d:&FirstEvalOnly)->Result<(String,RuntimeProfile,Option<String>)>{
@@ -843,8 +853,17 @@ fn first_eval_usage_labels(d:&FirstEvalOnly,s:&Study,labels:&[&str])->Result<(f6
 fn first_eval_usage(d:&FirstEvalOnly,s:&Study)->Result<(f64,usize,usize)>{
     first_eval_usage_labels(d,s,&["eval-only","review-C","review-W"])
 }
-fn first_eval_start(d:&FirstEvalOnly,s:&Study,label:&str,b:&binary::Value)->Result<(usize,RunControl)>{
-    let(time,g,t)=first_eval_usage(d,s)?;guard_bytes(s,8*1024*1024)?;
+fn first_eval_split_usage(d:&FirstEvalOnly,main:&Study,review:&Study)->Result<(f64,usize,usize)>{
+    let m=first_eval_usage_labels(d,main,&["eval-only"])?;
+    let b=first_eval_usage_labels(d,review,&["review-C","review-W"])?;
+    let usage=(m.0+(b.0-d.prior_usage.0),m.1+b.1-d.prior_usage.1,m.2+b.2-d.prior_usage.2);
+    if usage.0>main.active_cap||usage.1>main.generation_cap||usage.2>main.teacher_cap{
+        return Err(bad("first-eval aggregate post-main cap"));
+    }
+    Ok(usage)
+}
+fn first_eval_start(d:&FirstEvalOnly,main:&Study,s:&Study,label:&str,b:&binary::Value)->Result<(usize,RunControl)>{
+    let(time,g,t)=first_eval_split_usage(d,main,s)?;guard_bytes(s,8*1024*1024)?;
     let cancel=std::sync::Arc::new(AtomicBool::new(false));let signal=cancel.clone();
     ctrlc::set_handler(move||signal.store(true,Ordering::Relaxed)).map_err(|e|bad(&e.to_string()))?;
     let mut ctl=RunControl::new(cancel,std::time::Duration::from_secs_f64((s.active_cap-time).max(0.).min(s.segment_cap)),12*1024*1024)?;
@@ -870,43 +889,110 @@ fn first_eval_teacher_read(s:&Study,arm:usize,p:&Progress)->Result<Vec<binary::V
     }
     Ok(raw[1..].to_vec())
 }
+fn first_eval_main_refs(d:&FirstEvalOnly,original:&Study,main:&Study)->Result<BTreeMap<PathBuf,String>>{
+    let h=observation_history(main,"eval-only")?;
+    if h.len()!=1||h[0]["success"]!=true||h[0]["resume"]!=false
+        ||h[0]["control"]["observed_conditions"]!=binary::record!([])
+        ||h[0]["control"]["generation_calls"]!=768||h[0]["control"]["teacher_calls"]!=192{
+        return Err(bad("first-eval exact completed main observation"));
+    }
+    let mut refs=BTreeMap::new();
+    for name in ["eval-only-started.r3b","eval-only-segment-000-started.r3b","eval-only-segment-000-finished.r3b","eval-only-finished.r3b"]{
+        let path=main.root.join(name);refs.insert(path.clone(),file_hash(&path)?);
+    }
+    for arm in 0..2{let src=if arm==0{original}else{main};let p=&d.endpoints[arm];
+        let model=checkpoint::metadata(&p.native)?.0.model_content_digest;
+        for panel in fit_panels(main)?.into_iter().take(6){let full=["FULL-word","FULL-renamed","FULL-train"].contains(&panel.0.as_str());
+            event_read_panel(src,src.arms()[arm],256,&model,&panel,if full{192}else{64})?;
+            if full{event_read_panel(src,src.arms()[arm],256,&model,&panel,64)?;}
+            let dir=src.root.join(src.arms()[arm]);let stem=format!("eval-256-{}",panel.0);
+            for suffix in if full{vec![".r3rows","-score-64.r3b","-score-192.r3b"]}else{vec![".r3rows","-score-64.r3b"]}{
+                let path=dir.join(format!("{stem}{suffix}"));refs.insert(path.clone(),file_hash(&path)?);
+            }
+        }
+        first_eval_teacher_read(main,arm,p)?;
+        for suffix in ["-teachers.r3rows","-score.r3b"]{
+            let path=main.root.join(main.arms()[arm]).join(format!("teacher-256-FULL{suffix}"));
+            refs.insert(path.clone(),file_hash(&path)?);
+        }
+    }
+    if main.root.join("W/eval-256-OLD_FULL.r3rows").exists(){return Err(bad("first-eval unscheduled OLD_FULL"));}
+    Ok(refs)
+}
+fn first_eval_post_main(d:&FirstEvalOnly,original:&Study,main:&Study)->Result<(String,RuntimeProfile,String)>{
+    let path=d.root.join("eval-only-post-main-executor.r3b");let e:binary::Value=read_confirmed(&path)?;
+    let source=e["source"].as_str().ok_or_else(||bad("first-eval post-main source"))?.to_owned();
+    let runtime:RuntimeProfile=binary::from_value(e["runtime"].clone())?;
+    let old_hash=first_eval_executor(d)?.2.ok_or_else(||bad("first-eval main executor absent"))?;
+    let refs=first_eval_main_refs(d,original,main)?;
+    let mut old=main.runtime.clone();old.binary=runtime.binary.clone();
+    if e["contract"]!=FIRST_EVAL_ONLY||e["mode"]!="EVAL_ONLY"||e["policy"]!=digest(d)?
+        ||e["main_executor_hash"]!=old_hash||e["main_source"]!=main.source||e["main_runtime"]!=binary::record!(main.runtime)
+        ||e["main_finished_hash"]!=file_hash(&main.root.join("eval-only-finished.r3b"))?
+        ||e["main_refs"]!=binary::record!(refs)||e["source"]!=source||e["runtime"]!=binary::record!(runtime)
+        ||e["reason"]!="six-scheduled-panels-and-nested-teacher-parity"||e["new_optimizer"]!=0
+        ||e["new_model_calls"]!=0||source==main.source||runtime!=old{
+        return Err(bad("first-eval post-main revision identity/raw/runtime"));
+    }
+    Ok((source,runtime,file_hash(&path)?))
+}
+fn first_eval_post_main_revise(root:&Path)->Result<()> {
+    let(d,original,main)=first_eval_load(root,false)?;
+    if d.root.join("eval-only-post-main-executor.r3b").exists()||d.root.join("eval-only-post-main-admission.r3b").exists()
+        ||d.root.join("review-C-started.r3b").exists()||d.root.join("review-W-started.r3b").exists()
+        ||sources()?==main.source{return Err(bad("first-eval post-main revision unavailable"));}
+    let old:binary::Value=read_confirmed(&root.join("eval-only-admission.r3b"))?;
+    let old_hash=first_eval_executor(&d)?.2.ok_or_else(||bad("first-eval main executor absent"))?;
+    let old_report=Path::new(old["report"].as_str().ok_or_else(||bad("first-eval old B receipt path"))?);
+    if old["policy"]!=digest(&d)?||old["executor_hash"]!=old_hash||old["report_hash"]!=file_hash(old_report)?
+        ||old["accepted"]!=true{return Err(bad("first-eval original admission changed"));}
+    let refs=first_eval_main_refs(&d,&original,&main)?;
+    let runtime=RuntimeProfile::capture(Backend::Metal0,&Backend::Metal0.open()?)?;
+    let mut expected=main.runtime.clone();expected.binary=runtime.binary.clone();
+    if runtime!=expected{return Err(bad("first-eval post-main runtime changed beyond executable"));}
+    publish_confirmed(&root.join("eval-only-post-main-executor.r3b"),&binary::record!({"contract":FIRST_EVAL_ONLY,
+        "mode":"EVAL_ONLY","policy":digest(&d)?,"main_executor_hash":old_hash,"main_source":main.source,
+        "main_runtime":main.runtime,"main_finished_hash":file_hash(&root.join("eval-only-finished.r3b"))?,
+        "main_refs":refs,"source":sources()?,"runtime":runtime,
+        "reason":"six-scheduled-panels-and-nested-teacher-parity","new_optimizer":0,"new_model_calls":0}))?;
+    println!("FIRST_EVAL_POST_MAIN_REVISED policy={} executor={} calls0",digest(&d)?,file_hash(&root.join("eval-only-post-main-executor.r3b"))?);Ok(())
+}
+fn first_eval_post_main_admit(root:&Path,review:&Path)->Result<()> {
+    if review!=root.join("eval-only-post-main-boundary-review.r3b")||pending_path(review).exists(){
+        return Err(bad("first-eval post-main independent B immutable receipt path"));
+    }
+    let(d,original,main)=first_eval_load(root,false)?;
+    let(source,runtime,post_hash)=first_eval_post_main(&d,&original,&main)?;
+    let r:binary::Value=read(review)?;
+    if r["contract"]!=FIRST_EVAL_ONLY||r["policy"]!=digest(&d)?||r["source"]!=source
+        ||r["runtime"]!=binary::record!(runtime)||r["post_main_executor_hash"]!=post_hash
+        ||r["verdict"]!="PASS"||r["boundaries"]!=binary::record!(["immutable_failed_origin","zero_optimizer",
+            "split_raw","aggregate_budget","returned_resume","dedup_B","completed_main_raw","nested_teacher_parity"]){
+        return Err(bad("first-eval post-main independent B incomplete"));
+    }
+    publish_confirmed(&root.join("eval-only-post-main-admission.r3b"),&binary::record!({"policy":digest(&d)?,
+        "post_main_executor_hash":post_hash,"report":review.canonicalize()?,"report_hash":file_hash(review)?,"accepted":true}))?;Ok(())
+}
 fn first_eval_run(root:&Path,phase:&str)->Result<()> {
     let(d,original,view)=first_eval_load(root,true)?;
+    let(source,runtime,_post_hash)=first_eval_post_main(&d,&original,&view)?;
+    let mut review=view.clone();review.source=source;review.runtime=runtime;
     match phase {
-        "evaluate"=>{
-            let b=binary::record!({"contract":FIRST_EVAL_ONLY,"policy":digest(&d)?,"source":view.source,
-                "executor_hash":first_eval_executor(&d)?.2,"original_failed":d.terminal_hash,
-                "native":[d.endpoints[0].physical,d.endpoints[1].physical],"C_reused_generation":768,"W_new_generation":768,
-                "C_new_teacher":96,"W_new_teacher":96,"new_optimizer":0});
-            let(index,mut ctl)=first_eval_start(&d,&view,"eval-only",&b)?;
-            let result=(||->Result<()>{
-                let train=first_teacher_cases(&view,true)?;let dev=first_teacher_cases(&view,false)?;
-                first_review_teacher_positions(&train,&dev)?;
-                let device=Backend::Metal0.open()?;
-                let mut w=checkpoint::load(&d.endpoints[1].native,device.clone(),false)?;
-                first_evaluate(&view,1,&mut w,&d.endpoints[1],true,&mut ctl)?;
-                let mut c=checkpoint::load(&d.endpoints[0].native,device,false)?;
-                first_teacher_collect(&view,0,&mut c,&d.endpoints[0],&train,&dev,&mut ctl)?;
-                ctl.seal_completed_no_call()?;Ok(())
-            })();
-            finish_observation(&view,"eval-only",index,&mut ctl,&result,binary::record!({"C_original_final_generation":768,
-                "W_successor_final_generation":768,"successor_main_teacher":192,"optimizer":0}))?;
-            if result.is_ok(){first_eval_report(&d,&original,&view)?;}result
-        }
-        "report"=>first_eval_report(&d,&original,&view),
-        "review-c"=>first_eval_review(&d,&original,&view,0),
-        "review-w"=>first_eval_review(&d,&original,&view,1),
+        "evaluate"=>Err(bad("first-eval completed main observation cannot restart")),
+        "report"=>first_eval_report(&d,&original,&view,&review),
+        "review-c"=>first_eval_review(&d,&original,&view,&review,0),
+        "review-w"=>first_eval_review(&d,&original,&view,&review,1),
         _=>Err(bad("first-eval phase")),
     }
 }
-fn first_eval_report(d:&FirstEvalOnly,original:&Study,view:&Study)->Result<()> {
+fn first_eval_report(d:&FirstEvalOnly,original:&Study,view:&Study,review:&Study)->Result<()> {
     let h=observation_history(view,"eval-only")?;
     if h.last().is_none_or(|r|r["success"]!=true){return Err(bad("first-eval main observation incomplete"));}
     let mut scores=vec![];let panels=fit_panels(view)?;
     for arm in 0..2{let src=if arm==0{original}else{view};let p=&d.endpoints[arm];
         let model=checkpoint::metadata(&p.native)?.0.model_content_digest;
         let mut scored=BTreeMap::new();
-        for panel in &panels{let n=if ["FULL-word","FULL-renamed","FULL-train"].contains(&panel.0.as_str()){192}else{64};
+        for panel in panels.iter().take(6){let n=if ["FULL-word","FULL-renamed","FULL-train"].contains(&panel.0.as_str()){192}else{64};
             let(r,_)=event_read_panel(src,src.arms()[arm],p.local,&model,panel,n)?;scored.insert(panel.0.clone(),r);
         }
         first_eval_teacher_read(view,arm,p)?;scores.push(scored);
@@ -931,10 +1017,10 @@ fn first_eval_report(d:&FirstEvalOnly,original:&Study,view:&Study)->Result<()> {
         quality.push(binary::record!({"arm":original.arms()[arm],"quality_stop":stop,"severe":severe,
             "persistent":persistent,"prior_decision_hash":file_hash(&original.root.join(original.arms()[arm]).join("decision-128.r3b"))?}));
     }
-    first_eval_usage(d,view)?;
+    first_eval_split_usage(d,view,review)?;
     let usage=first_eval_usage_labels(d,view,&["eval-only"])?;
-    let report=binary::record!({"contract":FIRST_EVAL_ONLY,"policy":digest(d)?,"source":view.source,
-        "executor_hash":first_eval_executor(d)?.2,"original_failed":true,
+    let report=binary::record!({"contract":FIRST_EVAL_ONLY,"policy":digest(d)?,"source":review.source,
+        "main_observation_source":view.source,"post_main_executor_hash":first_eval_post_main(d,original,view)?.2,"original_failed":true,
         "original_terminal":d.terminal_hash,"original_success":false,"training_commits":[256,256],"new_optimizer":0,
         "native":[d.endpoints[0].physical,d.endpoints[1].physical],"C_generation_source":original.root,
         "W_generation_source":view.root,"teacher_source":view.root,"scores":scores,"quality":quality,
@@ -945,8 +1031,8 @@ fn first_eval_report(d:&FirstEvalOnly,original:&Study,view:&Study)->Result<()> {
     else{publish_confirmed(&path,&report)?;}
     println!("FIRST_EVAL_REPORT retention_guard_pass={} usage={usage:?} original_failed=true Goal1=false",report["retention_guard_pass"]);Ok(())
 }
-fn first_eval_review(d:&FirstEvalOnly,original:&Study,view:&Study,arm:usize)->Result<()> {
-    first_eval_report(d,original,view)?;
+fn first_eval_review(d:&FirstEvalOnly,original:&Study,view:&Study,review:&Study,arm:usize)->Result<()> {
+    first_eval_report(d,original,view,review)?;
     let src=if arm==0{original}else{view};let p=&d.endpoints[arm];
     let(cases,expected,selection)=first_review_cases(src,arm,p)?;
     let train=first_teacher_cases(view,true)?;let dev=first_teacher_cases(view,false)?;
@@ -955,28 +1041,38 @@ fn first_eval_review(d:&FirstEvalOnly,original:&Study,view:&Study,arm:usize)->Re
     let teacher=positions.iter().map(|&i|es[i].clone()).collect::<Vec<_>>();
     let origin=first_eval_teacher_read(view,arm,p)?;
     let selected=positions.iter().map(|&i|origin[i].clone()).collect::<Vec<_>>();
-    let label=format!("review-{}",view.arms()[arm]);
-    let b=binary::record!({"contract":FIRST_EVAL_ONLY,"policy":digest(d)?,"source":view.source,
-        "executor_hash":first_eval_executor(d)?.2,"native":p.physical,
+    let label=format!("review-{}",review.arms()[arm]);
+    let b=binary::record!({"contract":FIRST_EVAL_ONLY,"policy":digest(d)?,"source":review.source,
+        "post_main_executor_hash":first_eval_post_main(d,original,view)?.2,"native":p.physical,
         "original_raw":arm==0,"selection":selection,"expected":digest(&expected)?,"teacher_cases":digest(&teacher)?,
         "teacher_expected":digest(&selected)?,"planned_generation":cases.len(),"planned_teacher":8});
-    let(index,mut ctl)=first_eval_start(d,view,&label,&b)?;
+    let(index,mut ctl)=first_eval_start(d,view,review,&label,&b)?;
     let result=(||->Result<()>{let l=checkpoint::load(&p.native,Backend::Metal0.open()?,false)?;
         let model=l.model.weights_content_id()?;
-        let binding=binary::record!({"policy":digest(view)?,"model":model,"cases":digest(&cases)?,"planned":cases.len(),"call_protocol":1});
-        let rows=generated(&l,&view.root,&label,&cases,&binding,&mut ctl)?;
+        let binding=binary::record!({"policy":digest(review)?,"model":model,"cases":digest(&cases)?,"planned":cases.len(),"call_protocol":1});
+        let rows=generated(&l,&review.root,&label,&cases,&binding,&mut ctl)?;
         for(a,b)in rows.iter().zip(&expected){for field in ["raw_tokens","actual","finish_reason","error","generation_completed"]{
             if a[field]!=b[field]{return Err(bad("first-eval B generation mismatch"));}
         }}
-        let tbind=binary::record!({"policy":digest(view)?,"model":model,"cases":digest(&teacher)?,"planned":8,"call_protocol":1});
-        let replay=teacher_prefix(&view.root,&label,&tbind,&l,&teacher,&mut ctl)?;
-        for(a,b)in replay.iter().zip(&selected){if a["gold"]!=b["gold"]||a["argmax"]!=b["argmax"]{return Err(bad("first-eval B teacher IDs"));}
-            let x:Vec<f64>=binary::from_value(a["nll"].clone())?;let y:Vec<f64>=binary::from_value(b["nll"].clone())?;
-            if x.len()!=y.len()||x.iter().zip(y).any(|(x,y)|(x-y).abs()>1e-5){return Err(bad("first-eval B teacher NLL"));}}
+        let tbind=binary::record!({"policy":digest(review)?,"model":model,"cases":digest(&teacher)?,"planned":8,"call_protocol":1});
+        let replay=teacher_prefix(&review.root,&label,&tbind,&l,&teacher,&mut ctl)?;
+        diagnosis::validate_teacher_forward(&review.runtime,review.config.seq_len,&teacher,&replay,&l.tokenizer)?;
+        first_eval_teacher_parity(&teacher,&replay,&selected,&l.tokenizer)?;
         ctl.seal_completed_no_call()?;Ok(())})();
-    finish_observation(view,&label,index,&mut ctl,&result,binary::record!({"normal":16,"generation":cases.len(),
+    finish_observation(review,&label,index,&mut ctl,&result,binary::record!({"normal":16,"generation":cases.len(),
         "teacher":8,"native":p.physical,"selection":selection}))?;
     result
+}
+fn first_eval_teacher_parity(es:&[Episode],replay:&[binary::Value],main:&[binary::Value],tok:&ByteBpe)->Result<()> {
+    if replay.len()!=8||main.len()!=8||es.len()!=8{return Err(bad("first-eval B teacher8 count"));}
+    diagnosis::teacher_scores(es,replay,tok)?;diagnosis::teacher_scores(es,main,tok)?;
+    for(a,b)in replay.iter().zip(main){let a=&a["teacher"]["target_token_observation"];
+        let b=&b["teacher"]["target_token_observation"];
+        if a["gold"]!=b["gold"]||a["argmax"]!=b["argmax"]{return Err(bad("first-eval B teacher IDs"));}
+        let x:Vec<f64>=binary::from_value(a["nll"].clone())?;let y:Vec<f64>=binary::from_value(b["nll"].clone())?;
+        if x.len()!=y.len()||x.iter().zip(y).any(|(x,y)|(x-y).abs()>1e-5){return Err(bad("first-eval B teacher NLL"));}
+    }
+    Ok(())
 }
 fn first_parent_scores(s:&Study)->Result<BTreeMap<String,binary::Value>>{
     if first_fixture(s){return Ok(["value","citation","S1Q1","FULL-word","FULL-renamed"].into_iter()
@@ -2325,6 +2421,8 @@ pub fn run(a:Action)->Result<()> {
         Action::FirstPrepare{original,output}=>first_prepare(&original,&output),
         Action::FirstEvalPrepare{original,output}=>first_eval_prepare(&original,&output),
         Action::FirstEvalRevise{root}=>first_eval_revise(&root),
+        Action::FirstEvalPostMainRevise{root}=>first_eval_post_main_revise(&root),
+        Action::FirstEvalPostMainAdmit{root,review}=>first_eval_post_main_admit(&root,&review),
         Action::FirstEvalAdmit{root,review}=>first_eval_admit(&root,&review),
         Action::FirstEval{root,phase}=>first_eval_run(&root,&phase),
         Action::FullFitPosthocPrepare{original,output}=>fit_posthoc_prepare(&original,&output),
@@ -2471,6 +2569,51 @@ mod tests {
         assert_eq!((cumulative.1,cumulative.2),(2240,208));
         assert_eq!((main.unwrap().1,main.unwrap().2),(2176,192));
         println!("FIRST_EVAL_STICKY main={:?} after_B={cumulative:?} fixture={} model_calls=0",main.unwrap(),fixture.display());Ok(())
+    }
+    #[test]
+    #[ignore="read-only real completed main panels/teacher and malformed nested parity; zero model calls"]
+    fn first_eval_only_completed_main_reader()->Result<()> {
+        let root=PathBuf::from(std::env::var("R3_FIRST_EVAL_ROOT").map_err(|_|bad("explicit completed eval-only root"))?);
+        let(d,original,main)=first_eval_load(&root,false)?;
+        let refs=first_eval_main_refs(&d,&original,&main)?;
+        let train=first_teacher_cases(&main,true)?;let dev=first_teacher_cases(&main,false)?;
+        let positions=first_review_teacher_positions(&train,&dev)?;
+        let es=train.into_iter().chain(dev).collect::<Vec<_>>();let tok=scoring_tokenizer(&main)?;
+        for arm in 0..2{
+            let raw=first_eval_teacher_read(&main,arm,&d.endpoints[arm])?;
+            let teacher=positions.iter().map(|&i|es[i].clone()).collect::<Vec<_>>();
+            let selected=positions.iter().map(|&i|raw[i].clone()).collect::<Vec<_>>();
+            first_eval_teacher_parity(&teacher,&selected,&selected,&tok)?;
+            for key in ["gold","argmax","nll"]{
+                let mut bad=selected.clone();let value=&mut bad[0]["teacher"]["target_token_observation"][key];
+                let mut parts=value.as_array().ok_or_else(||super::bad("nested teacher array"))?.to_vec();
+                parts[0]=if key=="nll"{binary::record!(parts[0].as_f64().unwrap()+1.)}else{binary::record!(999999u32)};
+                *value=binary::record!(parts);
+                assert!(first_eval_teacher_parity(&teacher,&bad,&selected,&tok).is_err(),"{key} mismatch must fail");
+            }
+        }
+        println!("FIRST_EVAL_MAIN_READER refs={} teacher96x2 nested_negative6 model_calls=0",refs.len());Ok(())
+    }
+    #[test]
+    #[ignore="actual saved six-panel report and both B preflight manifests; zero model calls"]
+    fn first_eval_only_post_main_report_reader()->Result<()> {
+        let root=PathBuf::from(std::env::var("R3_FIRST_EVAL_ROOT").map_err(|_|bad("explicit completed eval-only root"))?);
+        let(d,original,main)=first_eval_load(&root,false)?;
+        let(source,runtime,_)=first_eval_post_main(&d,&original,&main)?;
+        let mut review=main.clone();review.source=source;review.runtime=runtime;
+        first_eval_report(&d,&original,&main,&review)?;
+        let report:binary::Value=read_confirmed(&root.join("eval-only-report.r3b"))?;
+        assert_eq!(report["scores"].as_array().unwrap().len(),2);
+        for arm in 0..2{
+            assert_eq!(report["scores"][arm].as_object().unwrap().len(),6);
+            assert!(report["scores"][arm]["OLD_FULL"].is_null());
+            let src=if arm==0{&original}else{&main};
+            let(cases,_,selection)=first_review_cases(src,arm,&d.endpoints[arm])?;
+            assert!(cases.len()>=16&&cases.len()<=32);
+            assert_eq!(selection["ids"].as_array().unwrap().len(),cases.len());
+        }
+        assert_eq!(report["usage"][1],2176);assert_eq!(report["usage"][2],192);
+        println!("FIRST_EVAL_REPORT_READER six_panels_two_arms B_preflight_two_arms model_calls=0");Ok(())
     }
     fn first_tiny_fixture()->Result<(Study,PathBuf)>{
         let(mut original,root)=event_fixture()?;
