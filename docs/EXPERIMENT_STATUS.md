@@ -1,5 +1,59 @@
 # 진단 및 구현 상태
 
+## 2026-09-25 First-decision final result — NO_CLEAR_SIGNAL
+
+The authorized evaluation-only completion and independent B reproductions are
+finished. No optimizer or TINY call was added after the original C/W learning.
+Both arms remain at256 commits/model18237/Adam3901; each consumed2048 examples,
+input411360/target29952/padding65824, with zero discarded backward calls.
+
+| Final FULL | C | W |
+| --- | ---: | ---: |
+| Value | 64/64 | 64/64 |
+| Citation | 64/64 | 64/64 |
+| S1Q1 | 61/64 | 62/64 |
+| Word | 29/192 | 28/192 |
+| Renamed | 35/192 | 34/192 |
+| Sampled train | 62/192 | 61/192 |
+
+Word/renamed/train ALL4 is0 for both arms. Renamed support is C154/W146;
+outside-ID rows38/46. W fails both the FULL-gain and support-retention screening
+conditions: FOLLOWUP_SIGNAL=false, NO_CLEAR_SIGNAL,
+VALUE_ASSIGNMENT_NOT_ESTABLISHED. No new learning or quality promotion follows.
+The old parent full-train485/1536 is a different denominator from sampled192.
+
+Main teacher train48/dev48 covers all four words and six word pairs per arm.
+Gold-prefix MIXED is train16/48 and dev12/48 for both; ID spans48/48 and36/48.
+Teacher results are not free-generation scores. Independent B reproduced32
+distinct generation requests and8 teacher examples per arm; both commands
+exited0, with exact generation parity and teacher NLL tolerance1e-5. Its same
+report records detailed component counts, teacher statistics and exposure.
+Parent17981 fixed16 IDs/full case digests match prior B normal32 requests;
+those verified historical reproductions were reused with0 new parent calls.
+
+Final charged usage is1016.125782834s, generation2240/2560 and teacher208/208.
+Latest B task-scope measurement866163654bytes is below1GiB (its earlier
+readback snapshot was864709878bytes). Shared-build growth and whole
+build/system peak remain UNKNOWN, so this is not a blanket total-cost PASS.
+Observed maximum process RSS5200642048bytes and peak footprint5381772376bytes
+are separate measurements. Source, original observations and failed CLI records
+remain preserved: original v7 EXECUTION FAIL; completed main observations and B
+EXECUTION PASS; current verified CODE/RAW_INTEGRITY PASS; model QUALITY FAIL.
+QA640, confirmation and S4/S5/S6 were not executed; GOAL1 remains NOT_ACCEPTED.
+
+Candidate source is32bb3562c9b0c05f283097570290b4ee141f8b1e; training source is
+295ecfbec741cc62d385b1aefdfd49a9ecf5ace7. Preparation/main/B evidence lives in
+`artifacts/first-decision-20260925-eval-only-01`; original C/W natives and raw
+remain in `artifacts/first-decision-20260925-study-v7`. Execution and test logs
+are in `artifacts/first-decision-20260925-evidence`. Independent details:
+`docs/FIRST_DECISION_REVIEW_B_2026-09-25.md`.
+That final independent report is immutable, SHA256
+a7bbd2fda63f8704fb768d5b01011cc314954172beafe6ce7246b82ccd00a5de;
+`eval-only-final-b.r3b` binds it, SHA256
+1b136c8353d0000fdd49aa2b9f0b03714043fe7cec4bd3c8c96e9551bc586375.
+All scheduled model observations and B checks are closed; no extra closure
+review or model call follows this result.
+
 ## 2026-09-25 First-decision evaluation-only preparation
 
 Post-main source now restricts the reader to the six scheduled panels and fixes

@@ -1,6 +1,15 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: cost-bounded first-decision comparison
+## Closed: cost-bounded first-decision comparison
+
+C/W completed256 committed updates each and the separate authorized endpoint
+evaluation and independent B are complete. W word28/192 and renamed34/192 do
+not exceed C29/192 and35/192; both have ALL4=0. The registered outcome is
+NO_CLEAR_SIGNAL / VALUE_ASSIGNMENT_NOT_ESTABLISHED, without model promotion.
+Cumulative generation2240/2560 and teacher208/208 include B; no further model
+calls or optimizer updates are authorized by this closed plan. Original failed
+terminals remain unchanged. Shared-build growth remains UNKNOWN. General QA,
+confirmation, S4/S5/S6 and Goal1 are not accepted by this comparison.
 
 Both arms completed256 commits/model18237/Adam3901, but original finalization
 failed before teacher and W final panels because of a metadata-selection error.
