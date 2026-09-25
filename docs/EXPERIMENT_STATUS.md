@@ -28,9 +28,14 @@ src/muon.rs SHA256 is da031a5d268e6d2fa7b64b6c85e1431e8c22d0ac8d6f00063a85c811ff
 The original e0ef2170 executable is preserved at
 `artifacts/first-decision-20260925-evidence/replica-train-v7-frozen`
 (23158176bytes). Observed task scope832547003bytes includes task executables;
-unmeasured shared-build growth and peak remain UNKNOWN. Independent B boundary
-admission and new model observations are NOT_RUN; original execution FAIL and
-model-quality nonacceptance remain unchanged.
+unmeasured shared-build growth and peak remain UNKNOWN. Independent B accepted
+the evaluation-only boundary on source798054d3d0b002cf58c2c8fa036170d0af0f375d
+without model calls. Its immutable boundary receipt SHA256 is
+c4a4ea9b465a7348ff72540f025f41f36a6e1514ae219c67f250be7f2c780256;
+admission SHA256 is357e12636ec62e829911269007d5d6a9a7f8fad8c5fa022bc7dfb20a0632a54c.
+New model observations and final B remain NOT_RUN; original execution FAIL and
+model-quality nonacceptance remain unchanged. Parent17981 fixed16 reuse request
+identity remains NOT_VERIFIED; no new parent parity calls are claimed.
 
 ## 2026-09-25 Cost-bounded first decision — P2 learning complete, evaluation blocked
 
