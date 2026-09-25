@@ -30,7 +30,8 @@ After direct input and small actual reader/finalizer regressions, independent A
 checks the new boundary. Execute O parity8, then U/S train48/dev48 (192 new
 generations), then report and independent B<=16 distinct reproductions. Total
 new generations<=216, generated tokens<=6912, active<=900s, segment<=300s.
-New immutable evidence including executables<=128MiB; observe limited shared
+New immutable evidence including executables<=160MiB (explicit user amendment
+after the preserved128MiB storage stop; all files retained); observe limited shared
 build net growth<=512MiB separately, reporting unmeasured costs as UNKNOWN.
 Do not copy original models/corpus or clean/inventory unrelated artifacts.
 

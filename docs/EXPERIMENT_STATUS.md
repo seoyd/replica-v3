@@ -2,7 +2,31 @@
 
 ## 2026-09-25 Value-reading isolation — preparation
 
-Current closure: **A FAIL / BLOCKED_STORAGE / B NOT_RUN**. Prepared source
+User authorization after the recorded storage stop increases this task's immutable
+cap to160MiB, preserving every existing file. The216 generation,6912 token,
+900s active/300s segment limits and zero teacher/optimizer/backward remain fixed.
+The same preparation repair and independent A continue; no old run is reopened.
+
+Repair direct validation now passes on source file SHA256
+1d6fcc81fdde7718203c13b2aaef4a5827625de1cc069a161c7dac6b5ab24c4a.
+The actual CLI reports200 calls/325s for the preserved TIME fixture; repeated
+report creates zero files. Nine negative cases reject missing/corrupt parity,
+missing resolution/start, UNKNOWN, cancellation, undercount, marker mismatch
+and pending publication. No model calls were used. Evidence:
+`artifacts/value-reading-20260925-main/independent-repair-cli.txt`, SHA256
+834fb90ab63bbe768ecf9bae6c4dbeac4eaad486c72ab83a7dc2c9aa54af4eb2.
+The immutable v2 preparation is `value-reading-plan-v2.r3b` under the same root,
+SHA2566809d89ee31f05262e187849feff9488e0f960f5f2e5a2af41f9708469479723;
+it binds the unchanged v1 plan and authorized160MiB cap. Final executable
+`replica-train-value-v2-small` SHA256
+bbedb487c576e6c614cffaa2944f52c236d4de56407e320ec18d76b2b40cafb8,
+15054160 bytes, was rebuilt in75s without dependency/profile changes using
+bin-only size optimization. Its runtime binary identity matches. Other runtime,
+model, tokenizer, inputs and limits are unchanged. At preparation, all scoped
+files plus the three external used executables total154282857 bytes.
+Independent A issuance follows source freeze; main observations and B have not run.
+
+Previous checkpoint: **A FAIL / BLOCKED_STORAGE / B NOT_RUN**. Prepared source
 `b0a68b60d40017ed2ec1216011542c0f415257ce` was pushed and its full remote SHA
 matched. Independent input checks passed all288 cases, but the actual report CLI
 accepted synthetic TIME history with200 calls/325s while reporting184 calls/25s.

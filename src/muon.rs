@@ -28,6 +28,7 @@ pub enum Action {
     /// No-learning, C-only input isolation. Preparation makes no model call.
     ValueReadingPrepare { #[arg(long)] evaluation:PathBuf, #[arg(long)] output:PathBuf,
         #[arg(long)] prior_executable:PathBuf, #[arg(long)] test_executable:PathBuf },
+    ValueReadingRevise { #[arg(long)] root:PathBuf },
     ValueReading { #[arg(long)] root:PathBuf, #[arg(long,value_parser=["parity","u-train","u-dev","s-train","s-dev","report","review"])] phase:String },
     FullFitPosthocPrepare { #[arg(long)] original:PathBuf, #[arg(long)] output:PathBuf },
     FullFitPosthocAdmit { #[arg(long)] root:PathBuf, #[arg(long)] review:PathBuf },
@@ -2406,6 +2407,8 @@ fn scoring_tokenizer(s:&Study)->Result<ByteBpe>{let tok=ByteBpe::load(&s.word_ro
 #[serde(deny_unknown_fields)]
 struct ValueReading {
     contract:String, root:PathBuf, evaluation:PathBuf, evaluation_hash:String,
+    #[serde(default)] predecessor_plan_hash:String,
+    #[serde(default)] revision_authority:String,
     original:PathBuf, original_hash:String, native:PathBuf, physical:String,
     model:String, tokenizer:PathBuf, tokenizer_hash:String, source:String,runtime:RuntimeProfile,
     executable:PathBuf,executable_hash:String,prior_executable:PathBuf,prior_executable_hash:String,
@@ -2588,7 +2591,7 @@ fn value_prepare(evaluation:&Path,output:&Path,prior_executable:&Path,test_execu
         +std::fs::metadata(&test_executable)?.len();
     if executable_bytes+4*1024*1024>128*1024*1024{return Err(bad("value reading executable/storage reserve exceeds128MiB"));}
     std::fs::create_dir(output)?;let root=output.canonicalize()?;
-    let plan=ValueReading{contract:VALUE_READING.into(),root:root.clone(),evaluation:prior.root.clone(),evaluation_hash:file_hash(&prior.root.join("eval-only-plan.r3b"))?,
+    let plan=ValueReading{contract:VALUE_READING.into(),root:root.clone(),evaluation:prior.root.clone(),evaluation_hash:file_hash(&prior.root.join("eval-only-plan.r3b"))?,predecessor_plan_hash:String::new(),revision_authority:String::new(),
         original:original.root.clone(),original_hash:file_hash(&original.root.join("plan.r3b"))?,native:endpoint.native.clone(),physical:endpoint.physical.clone(),
         model:m.model_content_digest,tokenizer:tokenizer.clone(),tokenizer_hash:file_hash(&tokenizer)?,source:sources()?,runtime,
         executable:executable.clone(),executable_hash:file_hash(&executable)?,prior_executable:prior_executable.clone(),prior_executable_hash,
@@ -2600,12 +2603,52 @@ fn value_prepare(evaluation:&Path,output:&Path,prior_executable:&Path,test_execu
     println!("VALUE_READING_PREPARED policy={} O96 U96 S96 C={} lengths={:?} exposure={:?} semantic_other={:?} calls0 optimizer0 backward0 teacher0",digest(&plan)?,plan.physical,plan.lengths,plan.exposure,plan.semantic_other_exposure);
     Ok(())
 }
+fn value_revise(root:&Path)->Result<()> {
+    let old_path=root.join("value-reading-plan.r3b");
+    let mut p:ValueReading=read_confirmed(&old_path)?;
+    if p.contract!=VALUE_READING||p.root!=root.canonicalize()?||!p.predecessor_plan_hash.is_empty()
+        ||!p.revision_authority.is_empty()||p.bytes_cap!=128*1024*1024
+        ||root.join("value-reading-plan-v2.r3b").exists()
+        ||file_hash(&p.executable)?!=p.executable_hash
+        ||file_hash(&p.prior_executable)?!=p.prior_executable_hash
+        ||file_hash(&p.test_executable)?!=p.test_executable_hash{
+        return Err(bad("value reading v1 revision identity"));
+    }
+    for entry in std::fs::read_dir(root)?{
+        let name=entry?.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".r3rows")||name.contains("-segment-")||name.ends_with("-finished.r3b")
+            ||name=="value-reading-report.r3b"||name=="review-a.r3b"{
+            return Err(bad("value reading v1 already observed"));
+        }
+    }
+    let old_executable_hash=p.executable_hash.clone();
+    p.predecessor_plan_hash=file_hash(&old_path)?;
+    p.revision_authority="user-approved-20260925-160MiB-immutable-scope".into();
+    p.bytes_cap=160*1024*1024;
+    p.source=sources()?;
+    p.executable=std::env::current_exe()?.canonicalize()?;
+    p.executable_hash=file_hash(&p.executable)?;
+    let device=Backend::Metal0.open()?;
+    let runtime=RuntimeProfile::capture(Backend::Metal0,&device)?;
+    let mut expected=p.runtime.clone();expected.binary=runtime.binary.clone();
+    if expected!=runtime||runtime.binary!=p.executable_hash{return Err(bad("value reading v2 runtime drift"));}
+    p.runtime=runtime;
+    if p.executable==p.prior_executable||p.executable==p.test_executable||p.executable_hash==old_executable_hash{
+        return Err(bad("value reading v2 executable identity"));
+    }
+    if value_owned_bytes(&p)?>p.bytes_cap{return Err(bad("value reading v2 immutable byte cap"));}
+    publish_confirmed(&root.join("value-reading-plan-v2.r3b"),&p)?;
+    println!("VALUE_READING_REVISED policy={} predecessor={} calls0",digest(&p)?,p.predecessor_plan_hash);
+    Ok(())
+}
 fn value_load(root:&Path)->Result<ValueReading>{
-    let p:ValueReading=read_confirmed(&root.join("value-reading-plan.r3b"))?;
+    let p:ValueReading=read_confirmed(&root.join("value-reading-plan-v2.r3b"))?;
     if p.contract!=VALUE_READING||p.root!=root.canonicalize()?||p.panels.len()!=6
+        ||p.predecessor_plan_hash!=file_hash(&root.join("value-reading-plan.r3b"))?
+        ||p.revision_authority!="user-approved-20260925-160MiB-immutable-scope"
         ||p.panels.iter().map(|x|x.0.as_str()).collect::<Vec<_>>()!=["O-train","O-dev","U-train","U-dev","S-train","S-dev"]
         ||p.panels.iter().any(|x|x.1.len()!=48||x.2.len()!=48)
-        ||p.generation_cap!=216||p.token_cap!=6912||p.active_cap!=900.||p.segment_cap!=300.||p.bytes_cap!=128*1024*1024
+        ||p.generation_cap!=216||p.token_cap!=6912||p.active_cap!=900.||p.segment_cap!=300.||p.bytes_cap!=160*1024*1024
         ||p.source!=sources()?||p.physical!="1f5656d5c033a5cba3d271c3939aed66aaa14f4a00b11cc30f8081af5db28a90"
         ||file_hash(&p.evaluation.join("eval-only-plan.r3b"))?!=p.evaluation_hash
         ||file_hash(&p.original.join("plan.r3b"))?!=p.original_hash
@@ -2618,13 +2661,45 @@ fn value_load(root:&Path)->Result<ValueReading>{
     Ok(p)
 }
 fn value_owned_bytes(p:&ValueReading)->Result<u64>{
-    Ok(owned_bytes(&p.root)?+std::fs::metadata(&p.executable)?.len()+std::fs::metadata(&p.prior_executable)?.len()
-        +std::fs::metadata(&p.test_executable)?.len())
+    let old:ValueReading=read_confirmed(&p.root.join("value-reading-plan.r3b"))?;
+    let mut paths=BTreeSet::new();
+    for path in [&p.executable,&p.prior_executable,&p.test_executable,&old.executable]{
+        if !path.starts_with(&p.root){paths.insert(path);}
+    }
+    Ok(owned_bytes(&p.root)?+paths.into_iter().map(|x|std::fs::metadata(x).map(|m|m.len())).collect::<std::io::Result<Vec<_>>>()?.into_iter().sum::<u64>())
 }
 fn value_binding(p:&ValueReading,panel:&Panel)->Result<binary::Value>{
     Ok(binary::record!({"contract":VALUE_READING,"policy":digest(p)?,"source":p.source,"native":p.physical,
         "model":p.model,"review_a":file_hash(&p.root.join("review-a.r3b"))?,"panel":panel.0,
         "cases":digest(&panel.1)?,"metadata":digest(&panel.2)?,"planned":panel.1.len(),"call_protocol":1}))
+}
+fn value_aux_binding(p:&ValueReading,label:&str,cases:&[Episode])->Result<binary::Value>{
+    Ok(binary::record!({"contract":VALUE_READING,"policy":digest(p)?,"source":p.source,"native":p.physical,
+        "review_a":file_hash(&p.root.join("review-a.r3b"))?,"label":label,"cases":digest(&cases)?,"planned":cases.len(),"call_protocol":1}))
+}
+fn value_parity_cases(p:&ValueReading)->Result<(Vec<Episode>,Vec<binary::Value>)>{
+    let mut positions=vec![];let mut words=BTreeMap::<String,usize>::new();
+    for (panel_index,panel) in p.panels[..2].iter().enumerate(){for (i,e) in panel.1.iter().enumerate(){
+        let word=event_label(&e.request,false)?.0;let n=words.entry(word).or_default();
+        if *n<2{positions.push((panel_index,i));*n+=1;}
+    }}
+    if positions.len()!=8||words.values().any(|&n|n!=2){return Err(bad("value reading parity four words"));}
+    let originals=[value_rows(p,0,true)?,value_rows(p,1,true)?];
+    Ok((positions.iter().map(|&(j,i)|p.panels[j].1[i].clone()).collect(),
+        positions.iter().map(|&(j,i)|originals[j][i].clone()).collect()))
+}
+fn value_parity_rows(p:&ValueReading)->Result<()> {
+    let(cases,expected)=value_parity_cases(p)?;
+    let binding=value_aux_binding(p,"parity",&cases)?;
+    let raw=binary::read_value_records(&p.root.join("value-parity.r3rows"))?;
+    if raw.len()!=9||raw[0]!=binding{return Err(bad("value reading parity RETURNED count/binding"));}
+    for(i,((e,a),b))in cases.iter().zip(&raw[1..]).zip(expected.iter()).enumerate(){
+        call_attempt(&p.root,"value-parity","generation",&binding,e,i,Some(a))?;
+        for key in ["raw_tokens","actual","finish_reason","error","generation_completed"]{
+            if a[key]!=b[key]{return Err(bad("value reading O parity mismatch"));}
+        }
+    }
+    Ok(())
 }
 fn value_rows(p:&ValueReading,index:usize,strict_attempts:bool)->Result<Vec<binary::Value>>{
     let panel=&p.panels[index];let tok=ByteBpe::load(&p.tokenizer)?;let m=checkpoint::metadata(&p.native)?.0;
@@ -2690,18 +2765,55 @@ fn value_score(p:&ValueReading,index:usize,rows:&[binary::Value])->Result<binary
         "original_foil_word":foil,"other_word":other_word,"exact":exact,"whole":wholes,
         "by_word":words,"by_pair":pairs,"by_semantic_base":semantic}))
 }
+fn value_history(p:&ValueReading)->Result<(f64,usize,f64,usize,[usize;6])>{
+    let mut elapsed=0.;let mut calls=0usize;let mut main_elapsed=0.;let mut main_calls=0usize;let mut next=[0usize;6];
+    for (lane_index,lane) in ["parity","u-train","u-dev","s-train","s-dev","review"].iter().enumerate(){
+        let mut last=None;let mut gap=false;
+        for i in 0..16{
+            let start=p.root.join(format!("{lane}-segment-{i:03}-started.r3b"));
+            let finish=p.root.join(format!("{lane}-segment-{i:03}-finished.r3b"));
+            if !start.exists(){gap=true;if finish.exists(){return Err(bad("value reading orphan segment finish"));}continue;}
+            if gap{return Err(bad("value reading segment gap"));}
+            let end:binary::Value=read_confirmed(&finish)?;
+            if end["start"]!=file_hash(&start)?||end["success"]!=true&&end["resume"]!=true
+                ||end["success"]==true&&end["resume"]==true{
+                return Err(bad("value reading segment identity/status"));
+            }
+            let conditions=end["control"]["observed_conditions"].as_array().ok_or_else(||bad("value reading conditions UNKNOWN"))?;
+            if end["success"]==true&& !conditions.is_empty()
+                ||end["resume"]==true&&conditions.as_slice()!=[binary::Value::String("TIME_BUDGET".into())]{
+                return Err(bad("value reading segment UNKNOWN/cancel"));
+            }
+            let segment_elapsed=end["control"]["elapsed_seconds"].as_f64().filter(|v|v.is_finite()&&*v>=0.).ok_or_else(||bad("value reading elapsed UNKNOWN"))?;
+            let segment_calls=end["control"]["generation_calls"].as_u64().ok_or_else(||bad("value reading calls UNKNOWN"))?as usize;
+            elapsed+=segment_elapsed;calls+=segment_calls;
+            if lane_index<5{main_elapsed+=segment_elapsed;main_calls+=segment_calls;}
+            if end["control"]["teacher_calls"]!=0{return Err(bad("value reading teacher forbidden"));}
+            last=Some(end);next[lane_index]=i+1;
+        }
+        let marker=p.root.join(format!("{lane}-finished.r3b"));
+        if marker.exists(){
+            let end=last.ok_or_else(||bad("value reading lane marker without segment"))?;
+            if end["success"]!=true||read_confirmed::<binary::Value>(&marker)?!=end{
+                return Err(bad("value reading lane marker not final verified segment"));
+            }
+        }else if last.as_ref().is_some_and(|x|x["success"]==true){
+            return Err(bad("value reading successful segment missing lane marker"));
+        }
+    }
+    if !elapsed.is_finite()||elapsed>p.active_cap||calls>p.generation_cap{return Err(bad("value reading aggregate usage cap"));}
+    Ok((elapsed,calls,main_elapsed,main_calls,next))
+}
 fn value_report(p:&ValueReading)->Result<binary::Value>{
+    value_parity_rows(p)?;
     let mut scores=BTreeMap::new();
     for(i,panel)in p.panels.iter().enumerate(){let rows=value_rows(p,i,true)?;scores.insert(panel.0.clone(),value_score(p,i,&rows)?);}
-    let(mut active,mut calls)=(0f64,0usize);
+    let(_,_,active,calls,_)=value_history(p)?;
     for label in ["parity","u-train","u-dev","s-train","s-dev"]{
         let done:binary::Value=read_confirmed(&p.root.join(format!("{label}-finished.r3b")))?;
-        if done["success"]!=true||done["control"]["observed_conditions"]!=binary::record!([]){return Err(bad("value reading unfinished/UNKNOWN lane"));}
-        active+=done["control"]["elapsed_seconds"].as_f64().filter(|v|v.is_finite()&&*v>=0.).ok_or_else(||bad("value reading active time UNKNOWN"))?;
-        calls+=done["control"]["generation_calls"].as_u64().ok_or_else(||bad("value reading generation usage UNKNOWN"))?as usize;
-        if done["control"]["teacher_calls"]!=0{return Err(bad("value reading teacher usage"));}
+        if done["success"]!=true{return Err(bad("value reading unfinished lane"));}
     }
-    if !active.is_finite()||active>p.active_cap||calls>p.generation_cap{return Err(bad("value reading aggregate usage cap"));}
+    if calls!=200{return Err(bad("value reading 200 RETURNED generation denominator"));}
     let mut paired=BTreeMap::new();let mut paired_whole=BTreeMap::new();
     for split in ["train","dev"]{for kind in ["U","S"]{
         let a=&scores[&format!("O-{split}")];let b=&scores[&format!("{kind}-{split}")];
@@ -2763,14 +2875,7 @@ fn value_run(root:&Path,phase:&str)->Result<()> {
         return Err(bad("value reading loaded native/tokenizer mismatch"));
     }
     let (cases,expected,panel_index): (Vec<Episode>,Option<Vec<binary::Value>>,Option<usize>)=if phase=="parity"{
-        let mut positions=vec![];let mut words=BTreeMap::<String,usize>::new();
-        for (panel_index,panel) in p.panels[..2].iter().enumerate(){for (i,e) in panel.1.iter().enumerate(){
-            let word=event_label(&e.request,false)?.0;let n=words.entry(word).or_default();
-            if *n<2{positions.push((panel_index,i));*n+=1;}
-        }}
-        if positions.len()!=8||words.values().any(|&n|n!=2){return Err(bad("value reading parity four words"));}
-        let originals=[value_rows(&p,0,true)?,value_rows(&p,1,true)?];
-        (positions.iter().map(|&(j,i)|p.panels[j].1[i].clone()).collect(),Some(positions.iter().map(|&(j,i)|originals[j][i].clone()).collect()),None)
+        let(cases,expected)=value_parity_cases(&p)?;(cases,Some(expected),None)
     }else if phase=="review"{
         if read_confirmed::<binary::Value>(&root.join("value-reading-report.r3b"))?!=value_report(&p)?{
             return Err(bad("value reading B requires pure report"));
@@ -2783,26 +2888,12 @@ fn value_run(root:&Path,phase:&str)->Result<()> {
         for earlier in &names[..at]{if !p.root.join(format!("{earlier}-finished.r3b")).exists(){return Err(bad("value reading ordered panels"));}}
         (p.panels[at+2].1.clone(),None,Some(at+2))
     };
-    let mut elapsed=0.;let mut calls=0usize;let mut segment=0usize;
-    for lane in ["parity","u-train","u-dev","s-train","s-dev","review"]{
-        for i in 0..16{let start=p.root.join(format!("{lane}-segment-{i:03}-started.r3b"));
-            if !start.exists(){break;}
-            let end:binary::Value=read_confirmed(&p.root.join(format!("{lane}-segment-{i:03}-finished.r3b")))?;
-            if end["start"]!=file_hash(&start)?||end["success"]!=true&&end["resume"]!=true
-                ||end["control"]["observed_conditions"].as_array().is_none_or(|a|a.iter().any(|v|v!="TIME_BUDGET")){
-                return Err(bad("value reading prior segment UNKNOWN/error"));
-            }
-            elapsed+=end["control"]["elapsed_seconds"].as_f64().filter(|v|v.is_finite()&&*v>=0.).ok_or_else(||bad("value reading elapsed UNKNOWN"))?;
-            calls+=end["control"]["generation_calls"].as_u64().ok_or_else(||bad("value reading calls UNKNOWN"))?as usize;
-            if end["control"]["teacher_calls"]!=0{return Err(bad("value reading teacher forbidden"));}
-            if lane==phase{segment+=1;}
-        }
-    }
+    let(elapsed,calls,_,_,next)=value_history(&p)?;
+    let segment=["parity","u-train","u-dev","s-train","s-dev","review"].iter().position(|&x|x==phase).map(|i|next[i]).ok_or_else(||bad("value reading phase"))?;
     if calls>=p.generation_cap||elapsed>=p.active_cap||value_owned_bytes(&p)?>p.bytes_cap{return Err(bad("value reading budget/storage exhausted"));}
     let label=phase.to_owned();
     if p.root.join(format!("{label}-finished.r3b")).exists(){return Err(bad("value reading lane already complete"));}
-    let binding=if let Some(i)=panel_index{value_binding(&p,&p.panels[i])?}else{binary::record!({"contract":VALUE_READING,"policy":digest(&p)?,"source":p.source,"native":p.physical,
-        "review_a":file_hash(&root.join("review-a.r3b"))?,"label":label,"cases":digest(&cases)?,"planned":cases.len(),"call_protocol":1})};
+    let binding=if let Some(i)=panel_index{value_binding(&p,&p.panels[i])?}else{value_aux_binding(&p,&label,&cases)?};
     let started=p.root.join(format!("{label}-segment-{segment:03}-started.r3b"));
     publish_confirmed(&started,&binding)?;
     let cancel=std::sync::Arc::new(AtomicBool::new(false));let signal=cancel.clone();
@@ -2854,6 +2945,7 @@ pub fn run(a:Action)->Result<()> {
         Action::FirstEvalAdmit{root,review}=>first_eval_admit(&root,&review),
         Action::FirstEval{root,phase}=>first_eval_run(&root,&phase),
         Action::ValueReadingPrepare{evaluation,output,prior_executable,test_executable}=>value_prepare(&evaluation,&output,&prior_executable,&test_executable),
+        Action::ValueReadingRevise{root}=>value_revise(&root),
         Action::ValueReading{root,phase}=>value_run(&root,&phase),
         Action::FullFitPosthocPrepare{original,output}=>fit_posthoc_prepare(&original,&output),
         Action::FullFitPosthocAdmit{root,review}=>fit_posthoc_admit(&root,&review),
@@ -2982,8 +3074,21 @@ mod tests {
                     &binary::record!({"prepared":file_hash(&attempt)?,"state":"RETURNED","row":digest(&r)?,"calls":1,"resumable":false,"control":{"generation_calls":1}}))?;
             }
         }
-        for lane in ["parity","u-train","u-dev","s-train","s-dev"]{publish_confirmed(&p.root.join(format!("{lane}-finished.r3b")),
-            &binary::record!({"success":true,"control":{"observed_conditions":[],"elapsed_seconds":0.0,"generation_calls":0,"teacher_calls":0}}))?;}
+        let(cases,expected)=value_parity_cases(&p)?;let binding=value_aux_binding(&p,"parity",&cases)?;
+        let mut f=std::fs::File::create(p.root.join("value-parity.r3rows"))?;append_row(&mut f,&binding)?;
+        for(i,(e,original))in cases.iter().zip(expected).enumerate(){let mut r=original;
+            let attempt=prepare_call(&p.root,"value-parity","generation",&binding,e,i)?;
+            r["attempt"]=binary::record!(attempt.file_name().unwrap().to_string_lossy().to_string());append_row(&mut f,&r)?;
+            publish_confirmed(&attempt.with_file_name(attempt.file_name().unwrap().to_string_lossy().replace("-prepared","-resolved")),
+                &binary::record!({"prepared":file_hash(&attempt)?,"state":"RETURNED","row":digest(&r)?,"calls":1,"resumable":false,"control":{"generation_calls":1}}))?;
+        }
+        for(lane,calls)in [("parity",8),("u-train",48),("u-dev",48),("s-train",48),("s-dev",48)]{
+            let start=p.root.join(format!("{lane}-segment-000-started.r3b"));publish_confirmed(&start,&binding)?;
+            let end=binary::record!({"start":file_hash(&start)?,"success":true,"resume":false,
+                "control":{"observed_conditions":[],"elapsed_seconds":0.0,"generation_calls":calls,"teacher_calls":0}});
+            publish_confirmed(&p.root.join(format!("{lane}-segment-000-finished.r3b")),&end)?;
+            publish_confirmed(&p.root.join(format!("{lane}-finished.r3b")),&end)?;
+        }
         let report=value_report(&p)?;assert_eq!(report["scores"].as_object().unwrap().len(),6);
         assert_eq!(report["scores"]["S-dev"]["total"],48);
         let(cases,expected)=value_review_cases(&p)?;assert_eq!(cases.len(),16);assert_eq!(expected.len(),16);
@@ -3025,7 +3130,7 @@ mod tests {
         assert!(value_variant(&ambiguous,true).is_err());
         let root=std::env::temp_dir().join(format!("value-reading-20260925-fixture-{}",std::process::id()));
         std::fs::create_dir(&root)?;let root=root.canonicalize()?;
-        let p=ValueReading{contract:VALUE_READING.into(),root:root.clone(),evaluation:eval.clone(),evaluation_hash:file_hash(&eval.join("eval-only-plan.r3b"))?,
+        let p=ValueReading{contract:VALUE_READING.into(),root:root.clone(),evaluation:eval.clone(),evaluation_hash:file_hash(&eval.join("eval-only-plan.r3b"))?,predecessor_plan_hash:String::new(),revision_authority:String::new(),
             original:s.root.clone(),original_hash:file_hash(&s.root.join("plan.r3b"))?,native:d.endpoints[0].native.clone(),physical:d.endpoints[0].physical.clone(),
             model:m.model_content_digest.clone(),tokenizer:s.word_root.join("tokenizer.r3b"),tokenizer_hash:file_hash(&s.word_root.join("tokenizer.r3b"))?,
             source:sources()?,runtime:s.runtime.clone(),executable:std::env::current_exe()?,executable_hash:String::new(),
