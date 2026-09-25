@@ -3936,7 +3936,7 @@ fn qa_variant(es:&[Episode],ms:&[Meta])->Result<(Vec<Episode>,Vec<Meta>)> {
 }
 // Only the bounded bridge accepts this existing train alias. This resolver is
 // a training/evaluation label check, never part of product generation.
-fn bridge_resolve(request:&ModelRequest)->Result<String> {
+pub(in super::super::super) fn bridge_resolve(request:&ModelRequest)->Result<String> {
     let(entity,context,intent)=question_intent(&request.input)?;
     let clause=request.input.splitn(3,' ').nth(2).ok_or_else(||bad("bridge task clause"))?;
     if intent!=Intent::Current || ![CITATION_QUERY,phrases(Intent::Current)[0]].contains(&clause) {

@@ -1,5 +1,27 @@
 # 진단 및 구현 상태
 
+## 2026-09-26 TR++ binding recovery — prepared and diagnosed, quality pending
+
+The separate parent-bound C/T study preserves the completed fresh TR++3072
+native (`f58e6564134fccf7926df1f2d077396fe08aac67cf84ad8bbb88324872a7440f`),
+GRU, protected11264 and prior failures. The frozen 512-update tape gives each
+arm 753,536 input and 59,904 supervised target tokens; all 1,536 FULL-word
+train rows have a provided-record value/support competitor. A separate 32-orbit
+confirmation set is sealed before model evaluation. No old endpoint was reopened.
+
+Independent A passed for prepared plan `artifacts/trpp-binding-recovery-20260926-prep-v5/`
+after preserved failed reviews identified budget, scoring and runtime binding
+issues. The fixed parent diagnostic reused the old greedy raw and completed
+256 local gold-prefix examples, new generations0, optimizer0. The observed
+wrong-greedy/foil-above-gold count is 89/128 on fixed train64+word64; cached
+versus full logits differ at most 0.000015736 over fixed16, below 0.0005.
+This supports testing the prespecified loss; it does not prove the failure's
+cause or any quality improvement. Four TINY optimizer updates were used for
+continuous2 versus restarted1+1 parity. Their time is conservatively charged
+20 seconds, and an earlier runtime-rejected diagnosis is charged 90 seconds.
+The successful diagnostic took 145.241 seconds. C/T SMALL updates and new
+greedy generations remain0 at this stage. Product routing is unchanged.
+
 ## 2026-09-26 Fresh TR++ / Full GRU — PARTIAL, no quality acceptance
 
 The recovered reset-after specification was implemented as a separate Rust core;

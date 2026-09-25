@@ -6,8 +6,12 @@ use std::{sync::Arc,time::Duration};
 const CONTRACT:&str="R3-QUALITY-GRU-EXECUTION-1.0";
 const ARMS:[&str;2]=["TRPP","GRU"];
 const SEED:u64=20260925;
+#[path = "core_binding_recovery.rs"]
+mod binding_recovery;
 #[derive(Subcommand)]
 pub enum Action {
+    /// Parent-bound TR++ contrast study; original core comparison stays closed.
+    BindingRecovery { #[command(subcommand)] action:binding_recovery::Action },
     Prepare {#[arg(long)] word_root:PathBuf,#[arg(long)] output:PathBuf,#[arg(long)] audit_only:bool},
     Revise {#[arg(long)] previous:PathBuf,#[arg(long)] output:PathBuf,#[arg(long)] failed_review:PathBuf},
     Admit {#[arg(long)] root:PathBuf,#[arg(long)] review:PathBuf},
@@ -436,6 +440,7 @@ fn report(s:&Study)->Result<()> {
     println!("{result}");Ok(())
 }
 pub fn run(action:Action)->Result<()>{match action{
+    Action::BindingRecovery{action}=>binding_recovery::run(action),
     Action::Prepare{word_root,output,audit_only}=>prepare(&word_root,&output,audit_only),Action::Admit{root,review}=>admit(&root,&review),
     Action::Revise{previous,output,failed_review}=>revise(&previous,&output,&failed_review),
     Action::Execute{root,core,phase,until}=>{let s=study(&root,true)?;let arm=ARMS.iter().position(|v|*v==core).ok_or_else(||bad("core"))?;if phase=="finalize"{finalize(&s,arm)}else{execute(&s,arm,&phase,until)}},

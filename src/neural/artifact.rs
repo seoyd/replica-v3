@@ -1455,7 +1455,9 @@ impl ComparisonState {
         self.core.shapes()?;
         let context=match &self.core{ComparisonCore::Trpp(c)=>c.context,ComparisonCore::Gru(c)=>c.context};
         self.config.validate(context)?;
-        if self.schema!=1||self.objective!=checkpoint::ANSWER_MEAN_FAMILY||self.optimizer!="FRESH_ADAMW_ALL_V1"
+        // 8 is the explicit training-only answer/branch objective. Its exact
+        // coefficient, negative rule and row roles are bound by policy.
+        if self.schema!=1||![checkpoint::ANSWER_MEAN_FAMILY,8].contains(&self.objective)||self.optimizer!="FRESH_ADAMW_ALL_V1"
             ||self.committed!=self.adam_clock||self.committed>self.config.max_steps||self.target_tokens>self.input_tokens
             ||self.framing!=super::Framing::QuestionEvidence.digest()
             ||[&self.policy,&self.tokenizer].iter().any(|v|v.len()!=64||!v.bytes().all(|c|c.is_ascii_hexdigit())) {

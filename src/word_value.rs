@@ -39,6 +39,26 @@ fn groups() -> Result<(Vec<Group>, Vec<Group>)> {
     }}
     Ok((train,dev))
 }
+// Training-study confirmation only: select semantic key/word groups excluded
+// from both frozen train and development groups, before looking at outputs.
+pub(in super::super::super::super) fn sealed_confirmation(used_ids:&BTreeSet<i64>) -> Result<(Vec<Episode>,Vec<Meta>)> {
+    let(train,dev)=groups()?;
+    let seen=train.into_iter().chain(dev).collect::<BTreeSet<_>>();
+    let mut choices=Vec::new();
+    for w0 in 0..4 {for w1 in w0+1..4 {
+        let mut pair=Vec::new();
+        for k0 in 0..11 {for k1 in k0+1..11 {let group=(k0,k1,w0,w1);
+            if !seen.contains(&group){pair.push(group);}
+        }}choices.push(pair);
+    }}
+    let mut held=Vec::new();
+    for rank in 0..6 {for pair in &choices {if held.len()<32 {held.push(pair[rank]);}}}
+    if held.len()!=32||held.iter().any(|g|seen.contains(g)){return Err(bad("confirmation semantic split"));}
+    let mut reserved=used_ids.clone();
+    let result=generated("binding-confirm",&held,1,&mut reserved)?;
+    if result.0.len()!=128||result.1.len()!=128{return Err(bad("confirmation thirty-two orbits"));}
+    Ok(result)
+}
 fn generated(split: &str, gs: &[Group], versions: usize, used: &mut BTreeSet<i64>) -> Result<(Vec<Episode>,Vec<Meta>)> {
     let mut ids = stream(20260924, &format!("{CONTRACT}/{split}/independent-event-ids"));
     let mut out = vec![]; let mut ms = vec![];
