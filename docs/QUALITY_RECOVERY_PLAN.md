@@ -1,6 +1,23 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: fixture readiness and supplied Commit Kernel candidate
+## Current boundary: Commit Kernel concurrency protocol inputs
+
+The narrow fixture repair and independent changed-boundary review are closed.
+The supplied Commit Kernel candidate has passed v1.3A exact vectors, direct
+negatives and semantic mutations on Rust. v1.3B has passed R3BIN disk-only
+restart and seven actual SIGKILL boundaries. Product/model integration is not
+enabled. See `COMMIT_KERNEL_RUST_EXECUTION_2026-09-25.md` for scoped evidence.
+
+Before implementing the later concurrency protocol, obtain the original
+v1.2E/F source/vectors or an explicit rule for advancing object/predicate versions
+on commits. The supplied v1.2B `two_valid_operations` accepts two operations
+against the same version and leaves both versions unchanged; it is not a
+write-skew/same-object conflict protocol. Do not silently redefine these frozen
+semantics or claim C/D/E from serialized process tests. Exact inputs have been
+requested. No new model learning or product-memory routing is authorized by a
+successful core/process test alone.
+
+## Closed preparation: fixture readiness and supplied Commit Kernel candidate
 
 Close the stale value-reading regression without weakening production checks:
 the small fixture covers only reader/scorer behavior; full report coverage uses

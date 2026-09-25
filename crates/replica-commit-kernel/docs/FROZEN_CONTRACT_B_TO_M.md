@@ -1,7 +1,9 @@
 # Replica commit-kernel frozen contract map (v1.2B → v1.2M)
 
-This crate **implements only the v1.2B 32-vector core boundary in v1.3A**.
-The following later contracts remain frozen inputs for subsequent Rust gates; they are not silently claimed as implemented here.
+The supplied v1.3A archive implemented only the v1.2B 32-vector core boundary.
+The local port additionally verifies the v1.3B single-writer R3BIN disk/process
+boundary. The following map preserves the later research requirements; it is
+not a claim that all research stages have been implemented or accepted in Rust.
 
 ## v1.2B — production boundary core
 - Kernel computes the actual effect digest from the effect payload.

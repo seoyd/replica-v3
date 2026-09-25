@@ -10,7 +10,10 @@ concurrency, natural-language quality or product integration acceptance.
 
 ## Scope
 
-v1.3A intentionally ports only the frozen **v1.2B 32-vector core commit boundary**. Later v1.2C–M contracts are listed in `docs/FROZEN_CONTRACT_B_TO_M.md` and remain future Rust gates.
+v1.3A ports the frozen **v1.2B 32-vector core commit boundary**. v1.3B adds
+the R3BIN single-writer disk/process boundary described below. Concurrency,
+correction and external-effect contracts in `docs/FROZEN_CONTRACT_B_TO_M.md`
+remain future Rust gates.
 
 ## First target-machine gate
 

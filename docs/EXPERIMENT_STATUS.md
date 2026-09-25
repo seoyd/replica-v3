@@ -38,7 +38,13 @@ cd5f0533762fe68da3c3da01410c87a240a224db33350c52f3d4c339984c0323;
 the actual fixture hash matches. The unmodified source compiled and executed
 32/32 vectors in debug and release, exit0; its two integration tests passed in
 both profiles. Zero-test library/doc targets are not counted as tests. Direct
-negative and mutation checks remain pending, so Gate A is not yet accepted.
+negative checks then exposed and reproduced manifest-label trust and
+malformed-event panic. Both were fixed without changing the frozen fixture.
+Gate v1.3A execution:32/32 vectors in each profile,10 direct negative test
+functions in each profile,11/11 compiled semantic mutants detected. v1.3B also
+passes disk-only prefix/restart and seven actual SIGKILL boundaries using the
+existing R3BIN codec; no product/model call occurred. Exact source, hashes,
+commands, logs and limitations are in `COMMIT_KERNEL_RUST_EXECUTION_2026-09-25.md`.
 No A-to-E integration or
 canonical-memory routing is claimed. The handoff's historical BLOCKED_TOOLCHAIN
 describes its separate research environment, not this Mac.
@@ -52,6 +58,16 @@ Before the scoped test build, volume available20082372KiB and allocated
 `target/debug`10648564KiB were measured. A single test executable and small
 fixtures are conservatively planned within512MiB additional free space; the new
 scope/build-growth caps are2GiB each. No existing data is deleted or copied.
+
+After the additional kernel gates, allocated shared `target/debug` is11395836KiB:
+growth747272KiB from the initial baseline. Kernel evidence/build scope contains
+1925 files,402780231 logical bytes /399092KiB allocated, including preserved
+executables, native test snapshots and local build targets. Separate R0 evidence
+is125912KiB allocated. Measurements are scoped to this new work; no global
+inventory or cleanup occurred. Final observed volume availability18391848KiB.
+Peak transient usage is unknown. Kernel generation/teacher/optimizer/backward
+counts are all0. The later concurrency version-update protocol input is pending;
+the original fixture and A/B source commits remain frozen.
 
 ### Application versus experimental evidence
 
