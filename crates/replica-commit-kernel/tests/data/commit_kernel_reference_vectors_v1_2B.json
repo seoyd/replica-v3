@@ -1,0 +1,2652 @@
+{
+  "date": "2026-09-24",
+  "directed_vectors": [
+    {
+      "events": [
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        },
+        {
+          "type": "REPLY_LOST"
+        },
+        {
+          "type": "CRASH"
+        },
+        {
+          "type": "RESTART"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [
+          {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "value_after": 5
+          }
+        ],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [
+          11
+        ],
+        "value": 5
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "outcome": "COMMIT",
+            "value_after": 5
+          },
+          "value_after": 5
+        },
+        {
+          "outcome": "OK",
+          "value_after": 5
+        },
+        {
+          "outcome": "OK",
+          "value_after": 5
+        },
+        {
+          "outcome": "OK",
+          "value_after": 5
+        },
+        {
+          "outcome": "REPLAY",
+          "receipt": {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "outcome": "COMMIT",
+            "value_after": 5
+          },
+          "value_after": 5
+        }
+      ],
+      "expected_state_sha256_v1_2b": "76fa220c4b8eb7e904d29efc5db7b6fb40ecf6eb913840fdbd163ea847ed8eba",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "commit_retry_replay"
+    },
+    {
+      "events": [
+        {
+          "type": "CANCEL"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": false,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "OK",
+          "value_after": 0
+        },
+        {
+          "outcome": "REJECT_PARENT",
+          "value_after": 0
+        }
+      ],
+      "expected_state_sha256_v1_2b": "2ef7fa45f9ee145046e4999a6ffe71be1bc543a85bcc25c4eacd87e03967d133",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "cancel_before_commit"
+    },
+    {
+      "events": [
+        {
+          "type": "PARENT_REUSE"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 1,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "OK",
+          "value_after": 0
+        },
+        {
+          "outcome": "REJECT_PARENT",
+          "value_after": 0
+        }
+      ],
+      "expected_state_sha256_v1_2b": "0c9fe1161b6a82aa2cadb8bc8be455d850ff020b895c97f005f44d2941b14ef6",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "parent_reuse_generation"
+    },
+    {
+      "events": [
+        {
+          "type": "REVOKE"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 1,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "OK",
+          "value_after": 0
+        },
+        {
+          "outcome": "REJECT_CAPABILITY",
+          "value_after": 0
+        }
+      ],
+      "expected_state_sha256_v1_2b": "027fecec3ace5266584de22f9462c85d7e7dbffa6d630609fcc0578a2a5b0a49",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "capability_revoke"
+    },
+    {
+      "events": [
+        {
+          "type": "POLICY_UPDATE"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 1,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "OK",
+          "value_after": 0
+        },
+        {
+          "outcome": "REJECT_POLICY",
+          "value_after": 0
+        }
+      ],
+      "expected_state_sha256_v1_2b": "1ee9a678295b8c756e3e797f9cc99621e92331fd6a6b3f798247302031b79e77",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "policy_epoch_change"
+    },
+    {
+      "events": [
+        {
+          "type": "OBJECT_CHANGE"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 1,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "OK",
+          "value_after": 0
+        },
+        {
+          "outcome": "REJECT_OBJECT_DEP",
+          "value_after": 0
+        }
+      ],
+      "expected_state_sha256_v1_2b": "9c46e5501a238219c48ab727f46626872b5aa63a56d9cb52a80aaf7063830fb6",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "object_stale"
+    },
+    {
+      "events": [
+        {
+          "type": "PREDICATE_CHANGE"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 1,
+        "used_nonces": [],
+        "value": 0
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "OK",
+          "value_after": 0
+        },
+        {
+          "outcome": "REJECT_PREDICATE_DEP",
+          "value_after": 0
+        }
+      ],
+      "expected_state_sha256_v1_2b": "ae80e89e7d527e87627a0451a29fac2fece1909dca793c25c1d688ad3e1c73c6",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "predicate_phantom"
+    },
+    {
+      "events": [
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 500,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "REJECT_EFFECT_DIGEST",
+          "value_after": 0
+        }
+      ],
+      "expected_state_sha256_v1_2b": "0ab6a3a46af516e1de614c385bdbc71d196ca9e9b4f057bb7226986ef0c1b1ce",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "effect_changed_after_review"
+    },
+    {
+      "events": [
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 2,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "REJECT_CAPABILITY",
+          "value_after": 0
+        }
+      ],
+      "expected_state_sha256_v1_2b": "0ab6a3a46af516e1de614c385bdbc71d196ca9e9b4f057bb7226986ef0c1b1ce",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "scope_violation"
+    },
+    {
+      "events": [
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 7,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 2,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "beee8e84b9fdf42ece4c4eba29b6a21891a1032f18443b683583fb1e778ba51c"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [
+          {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "value_after": 5
+          }
+        ],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [
+          11
+        ],
+        "value": 5
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "outcome": "COMMIT",
+            "value_after": 5
+          },
+          "value_after": 5
+        },
+        {
+          "outcome": "REJECT_NONCE",
+          "value_after": 5
+        }
+      ],
+      "expected_state_sha256_v1_2b": "76fa220c4b8eb7e904d29efc5db7b6fb40ecf6eb913840fdbd163ea847ed8eba",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "nonce_reuse_different_operation"
+    },
+    {
+      "events": [
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 9,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 12,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "e99d1dcc5da5d2cc666a0def71c4da55132c0cafbcba293ef97425fad634bca5"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [
+          {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "value_after": 5
+          }
+        ],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [
+          11
+        ],
+        "value": 5
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "outcome": "COMMIT",
+            "value_after": 5
+          },
+          "value_after": 5
+        },
+        {
+          "outcome": "REJECT_OP_MISMATCH",
+          "value_after": 5
+        }
+      ],
+      "expected_state_sha256_v1_2b": "76fa220c4b8eb7e904d29efc5db7b6fb40ecf6eb913840fdbd163ea847ed8eba",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "same_operation_different_effect"
+    },
+    {
+      "events": [
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 2,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 13,
+            "object_version": 0,
+            "operation_id": 3,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "72d06b384e3bf66576b4b5261ccb6a9e20ad2da1861c866724f4d0d386d073bc"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [
+          {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "value_after": 5
+          },
+          {
+            "effect_digest": "72d06b384e3bf66576b4b5261ccb6a9e20ad2da1861c866724f4d0d386d073bc",
+            "operation_id": 3,
+            "value_after": 7
+          }
+        ],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [
+          11,
+          13
+        ],
+        "value": 7
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "outcome": "COMMIT",
+            "value_after": 5
+          },
+          "value_after": 5
+        },
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "72d06b384e3bf66576b4b5261ccb6a9e20ad2da1861c866724f4d0d386d073bc",
+            "operation_id": 3,
+            "outcome": "COMMIT",
+            "value_after": 7
+          },
+          "value_after": 7
+        }
+      ],
+      "expected_state_sha256_v1_2b": "1164523caa511e6d11b50e4a8cffdc7902d647ba5e239d27391f93150f962772",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "two_valid_operations"
+    },
+    {
+      "events": [
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 99,
+            "object_version": 0,
+            "operation_id": 9,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 2,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 2,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "72d06b384e3bf66576b4b5261ccb6a9e20ad2da1861c866724f4d0d386d073bc"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [
+          {
+            "effect_digest": "72d06b384e3bf66576b4b5261ccb6a9e20ad2da1861c866724f4d0d386d073bc",
+            "operation_id": 2,
+            "value_after": 7
+          },
+          {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 9,
+            "value_after": 5
+          }
+        ],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [
+          11,
+          99
+        ],
+        "value": 7
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 9,
+            "outcome": "COMMIT",
+            "value_after": 5
+          },
+          "value_after": 5
+        },
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "72d06b384e3bf66576b4b5261ccb6a9e20ad2da1861c866724f4d0d386d073bc",
+            "operation_id": 2,
+            "outcome": "COMMIT",
+            "value_after": 7
+          },
+          "value_after": 7
+        }
+      ],
+      "expected_state_sha256_v1_2b": "40f29b3705f4ed8de1576b035e2b4f0ba5a6abb6e565a8a8ac6319ba51e428b4",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "reverse_ids_and_nonces"
+    },
+    {
+      "events": [
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 2,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 13,
+            "object_version": 0,
+            "operation_id": 3,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "72d06b384e3bf66576b4b5261ccb6a9e20ad2da1861c866724f4d0d386d073bc"
+          },
+          "type": "ATTEMPT"
+        },
+        {
+          "env": {
+            "attempt_id": 99,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [
+          {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "value_after": 5
+          },
+          {
+            "effect_digest": "72d06b384e3bf66576b4b5261ccb6a9e20ad2da1861c866724f4d0d386d073bc",
+            "operation_id": 3,
+            "value_after": 7
+          }
+        ],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [
+          11,
+          13
+        ],
+        "value": 7
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "outcome": "COMMIT",
+            "value_after": 5
+          },
+          "value_after": 5
+        },
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "72d06b384e3bf66576b4b5261ccb6a9e20ad2da1861c866724f4d0d386d073bc",
+            "operation_id": 3,
+            "outcome": "COMMIT",
+            "value_after": 7
+          },
+          "value_after": 7
+        },
+        {
+          "outcome": "REPLAY",
+          "receipt": {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "outcome": "COMMIT",
+            "value_after": 5
+          },
+          "value_after": 7
+        }
+      ],
+      "expected_state_sha256_v1_2b": "1164523caa511e6d11b50e4a8cffdc7902d647ba5e239d27391f93150f962772",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "replay_after_later_commit"
+    },
+    {
+      "events": [
+        {
+          "type": "PARENT_REUSE"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 1,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [
+          {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "value_after": 5
+          }
+        ],
+        "parent_active": true,
+        "parent_generation": 1,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [
+          11
+        ],
+        "value": 5
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "OK",
+          "value_after": 0
+        },
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "outcome": "COMMIT",
+            "value_after": 5
+          },
+          "value_after": 5
+        }
+      ],
+      "expected_state_sha256_v1_2b": "584ff4d2284beaa2b78159d64ebf96564402ebf83eeee711fd8c8c7abed77d25",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "current_version_after_parent_reuse"
+    },
+    {
+      "events": [
+        {
+          "type": "REVOKE"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 1,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 1,
+        "object_version": 0,
+        "operation_ledger": [
+          {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "value_after": 5
+          }
+        ],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [
+          11
+        ],
+        "value": 5
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "OK",
+          "value_after": 0
+        },
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "outcome": "COMMIT",
+            "value_after": 5
+          },
+          "value_after": 5
+        }
+      ],
+      "expected_state_sha256_v1_2b": "bd355dd5dff26c417a86cf944d121af506e15a3f56278f4c461ba84f3d052a0a",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "current_version_after_revoke"
+    },
+    {
+      "events": [
+        {
+          "type": "POLICY_UPDATE"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 1,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [
+          {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "value_after": 5
+          }
+        ],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 1,
+        "predicate_version": 0,
+        "used_nonces": [
+          11
+        ],
+        "value": 5
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "OK",
+          "value_after": 0
+        },
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "outcome": "COMMIT",
+            "value_after": 5
+          },
+          "value_after": 5
+        }
+      ],
+      "expected_state_sha256_v1_2b": "56509165964f8fc3fea5032637cc2f4b440f5006f9920e514ae6fbe8094b05c1",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "current_version_after_policy_update"
+    },
+    {
+      "events": [
+        {
+          "type": "OBJECT_CHANGE"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 1,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 1,
+        "operation_ledger": [
+          {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "value_after": 5
+          }
+        ],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [
+          11
+        ],
+        "value": 5
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "OK",
+          "value_after": 0
+        },
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "outcome": "COMMIT",
+            "value_after": 5
+          },
+          "value_after": 5
+        }
+      ],
+      "expected_state_sha256_v1_2b": "17ebb8c060bff4e01b9eec04ecb7d734774e38363221188325f8f287359f369d",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "current_version_after_object_change"
+    },
+    {
+      "events": [
+        {
+          "type": "PREDICATE_CHANGE"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 1,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [
+          {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "value_after": 5
+          }
+        ],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 1,
+        "used_nonces": [
+          11
+        ],
+        "value": 5
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "OK",
+          "value_after": 0
+        },
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "outcome": "COMMIT",
+            "value_after": 5
+          },
+          "value_after": 5
+        }
+      ],
+      "expected_state_sha256_v1_2b": "8d7af79751b195f9a2f235b6fb8c38408338b14833cfdd9aaf9604c22e244f8d",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "current_version_after_predicate_change"
+    },
+    {
+      "events": [
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        },
+        {
+          "type": "CANCEL"
+        },
+        {
+          "type": "REVOKE"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 2,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 1,
+        "object_version": 0,
+        "operation_ledger": [
+          {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "value_after": 5
+          }
+        ],
+        "parent_active": false,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [
+          11
+        ],
+        "value": 5
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "outcome": "COMMIT",
+            "value_after": 5
+          },
+          "value_after": 5
+        },
+        {
+          "outcome": "OK",
+          "value_after": 5
+        },
+        {
+          "outcome": "OK",
+          "value_after": 5
+        },
+        {
+          "outcome": "REPLAY",
+          "receipt": {
+            "effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c",
+            "operation_id": 1,
+            "outcome": "COMMIT",
+            "value_after": 5
+          },
+          "value_after": 5
+        }
+      ],
+      "expected_state_sha256_v1_2b": "4d616f58baec6f7bf8365005ad4ee9de79ca9a9a459bb48ee0be570181cdb7b7",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "replay_after_cancel_revoke"
+    },
+    {
+      "events": [
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 2,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "f5460ac234e8f01e529ae2eab98a58276ff895073c92a7780c04c2048a6d2510"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "REJECT_CAPABILITY",
+          "value_after": 0
+        }
+      ],
+      "expected_state_sha256_v1_2b": "0ab6a3a46af516e1de614c385bdbc71d196ca9e9b4f057bb7226986ef0c1b1ce",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "capability_precedes_effect_rejection"
+    },
+    {
+      "events": [
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": -5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 11,
+            "object_version": 0,
+            "operation_id": 1,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "d4fc41c39e33ed3afe02cc1513e46fc849b198a90aae828ec4407db26fdde291"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [
+          {
+            "effect_digest": "d4fc41c39e33ed3afe02cc1513e46fc849b198a90aae828ec4407db26fdde291",
+            "operation_id": 1,
+            "value_after": -5
+          }
+        ],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [
+          11
+        ],
+        "value": -5
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "d4fc41c39e33ed3afe02cc1513e46fc849b198a90aae828ec4407db26fdde291",
+            "operation_id": 1,
+            "outcome": "COMMIT",
+            "value_after": -5
+          },
+          "value_after": -5
+        }
+      ],
+      "expected_state_sha256_v1_2b": "14b7c569800b26bf85e9e25e888a3412063d5cbff08d155b761a2a2b1cb590ce",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "negative_delta"
+    },
+    {
+      "events": [
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 500,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 201,
+            "object_version": 0,
+            "operation_id": 101,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "REJECT_EFFECT_DIGEST",
+          "value_after": 0
+        }
+      ],
+      "expected_state_sha256_v1_2b": "0ab6a3a46af516e1de614c385bdbc71d196ca9e9b4f057bb7226986ef0c1b1ce",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "effect_payload_tamper_after_review"
+    },
+    {
+      "events": [
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 999,
+            "effect": {
+              "delta": 5,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 202,
+            "object_version": 0,
+            "operation_id": 102,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "7e0fb09b82693325581480ee400dae08c8080e9ecd7fa9a69ac69c277bbc379c"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "REJECT_CAPABILITY",
+          "value_after": 0
+        }
+      ],
+      "expected_state_sha256_v1_2b": "0ab6a3a46af516e1de614c385bdbc71d196ca9e9b4f057bb7226986ef0c1b1ce",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "unauthorized_capability_id"
+    },
+    {
+      "events": [
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 9223372036854775807,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 203,
+            "object_version": 0,
+            "operation_id": 103,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "f73eccd21576c654e5b33cf883ab9aa97a33101ff6e79be559bf8d469865da68"
+          },
+          "type": "ATTEMPT"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 1,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 204,
+            "object_version": 0,
+            "operation_id": 104,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "df9fa444ba157dbcf1724475fa94fb4d7f5db713d2136b0c8761a070628ba7a8"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [
+          {
+            "effect_digest": "f73eccd21576c654e5b33cf883ab9aa97a33101ff6e79be559bf8d469865da68",
+            "operation_id": 103,
+            "value_after": 9223372036854775807
+          }
+        ],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [
+          203
+        ],
+        "value": 9223372036854775807
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "f73eccd21576c654e5b33cf883ab9aa97a33101ff6e79be559bf8d469865da68",
+            "operation_id": 103,
+            "outcome": "COMMIT",
+            "value_after": 9223372036854775807
+          },
+          "value_after": 9223372036854775807
+        },
+        {
+          "outcome": "REJECT_OVERFLOW",
+          "value_after": 9223372036854775807
+        }
+      ],
+      "expected_state_sha256_v1_2b": "7ee1752350e099d064eb7dac6bba70c2ead201be42baa5afdfc4b2c7f92375f5",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "positive_value_overflow"
+    },
+    {
+      "events": [
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": -9223372036854775808,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 205,
+            "object_version": 0,
+            "operation_id": 105,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "d333576e0c8698db839ddeeaa1f4c98e8cfa72880fce131370400f55bdda6aa3"
+          },
+          "type": "ATTEMPT"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": -1,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 206,
+            "object_version": 0,
+            "operation_id": 106,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "2797eba231de9bce10fa4b09ddbfcf455d7c3d4b76499575571ac3570ffe12ba"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [
+          {
+            "effect_digest": "d333576e0c8698db839ddeeaa1f4c98e8cfa72880fce131370400f55bdda6aa3",
+            "operation_id": 105,
+            "value_after": -9223372036854775808
+          }
+        ],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [
+          205
+        ],
+        "value": -9223372036854775808
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "d333576e0c8698db839ddeeaa1f4c98e8cfa72880fce131370400f55bdda6aa3",
+            "operation_id": 105,
+            "outcome": "COMMIT",
+            "value_after": -9223372036854775808
+          },
+          "value_after": -9223372036854775808
+        },
+        {
+          "outcome": "REJECT_OVERFLOW",
+          "value_after": -9223372036854775808
+        }
+      ],
+      "expected_state_sha256_v1_2b": "63f5a8c8b938645d7f8bc602b01c626473285c8008769d56a91f7115ae8a7c7d",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "negative_value_overflow"
+    },
+    {
+      "events": [
+        {
+          "type": "PARENT_REUSE"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 18446744073709551615,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "REJECT_OVERFLOW",
+          "value_after": 0
+        }
+      ],
+      "expected_state_sha256_v1_2b": "ea1341635318280ffefa4b4a08a8fefbfd55e49dac73c0733537054ceb4ad6d1",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 18446744073709551615,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "parent_generation_overflow"
+    },
+    {
+      "events": [
+        {
+          "type": "POLICY_UPDATE"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 18446744073709551615,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "REJECT_OVERFLOW",
+          "value_after": 0
+        }
+      ],
+      "expected_state_sha256_v1_2b": "83ac9db2c996a28f7254cca7f82056b324ca9b3135c96fb37bfe5d75e48e64e7",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 18446744073709551615,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "policy_epoch_overflow"
+    },
+    {
+      "events": [
+        {
+          "type": "REVOKE"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 18446744073709551615,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "REJECT_OVERFLOW",
+          "value_after": 0
+        }
+      ],
+      "expected_state_sha256_v1_2b": "c1228eb190bacedb893cac77ec26f860da9ea8da9dda9f2e91c91462f1979351",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 18446744073709551615,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "capability_epoch_overflow"
+    },
+    {
+      "events": [
+        {
+          "type": "OBJECT_CHANGE"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 18446744073709551615,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "REJECT_OVERFLOW",
+          "value_after": 0
+        }
+      ],
+      "expected_state_sha256_v1_2b": "db16a0f86d690565837a2316b9a039737ec4d0b79fd4d24239a00b7beb483fe3",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 18446744073709551615,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "object_version_overflow"
+    },
+    {
+      "events": [
+        {
+          "type": "PREDICATE_CHANGE"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 18446744073709551615,
+        "used_nonces": [],
+        "value": 0
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "REJECT_OVERFLOW",
+          "value_after": 0
+        }
+      ],
+      "expected_state_sha256_v1_2b": "24b0fe7c7b389177c0e07b320852f59523b1de5bf24292d28bf4280ba5ede303",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 18446744073709551615,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "predicate_version_overflow"
+    },
+    {
+      "events": [
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 9223372036854775807,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 301,
+            "object_version": 0,
+            "operation_id": 201,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "f73eccd21576c654e5b33cf883ab9aa97a33101ff6e79be559bf8d469865da68"
+          },
+          "type": "ATTEMPT"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 1,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 302,
+            "object_version": 0,
+            "operation_id": 202,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "df9fa444ba157dbcf1724475fa94fb4d7f5db713d2136b0c8761a070628ba7a8"
+          },
+          "type": "ATTEMPT"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": -1,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 303,
+            "object_version": 0,
+            "operation_id": 203,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "2797eba231de9bce10fa4b09ddbfcf455d7c3d4b76499575571ac3570ffe12ba"
+          },
+          "type": "ATTEMPT"
+        },
+        {
+          "env": {
+            "attempt_id": 1,
+            "capability_epoch": 0,
+            "capability_id": 1,
+            "effect": {
+              "delta": 1,
+              "kind": "add",
+              "target": "value"
+            },
+            "nonce": 302,
+            "object_version": 0,
+            "operation_id": 202,
+            "parent_generation": 0,
+            "policy_epoch": 0,
+            "predicate_version": 0,
+            "reviewed_effect_digest": "df9fa444ba157dbcf1724475fa94fb4d7f5db713d2136b0c8761a070628ba7a8"
+          },
+          "type": "ATTEMPT"
+        }
+      ],
+      "expected_final_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [
+          {
+            "effect_digest": "f73eccd21576c654e5b33cf883ab9aa97a33101ff6e79be559bf8d469865da68",
+            "operation_id": 201,
+            "value_after": 9223372036854775807
+          },
+          {
+            "effect_digest": "df9fa444ba157dbcf1724475fa94fb4d7f5db713d2136b0c8761a070628ba7a8",
+            "operation_id": 202,
+            "value_after": 9223372036854775807
+          },
+          {
+            "effect_digest": "2797eba231de9bce10fa4b09ddbfcf455d7c3d4b76499575571ac3570ffe12ba",
+            "operation_id": 203,
+            "value_after": 9223372036854775806
+          }
+        ],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [
+          301,
+          302,
+          303
+        ],
+        "value": 9223372036854775807
+      },
+      "expected_journal_v1_2b": [
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "f73eccd21576c654e5b33cf883ab9aa97a33101ff6e79be559bf8d469865da68",
+            "operation_id": 201,
+            "outcome": "COMMIT",
+            "value_after": 9223372036854775807
+          },
+          "value_after": 9223372036854775807
+        },
+        {
+          "outcome": "REJECT_OVERFLOW",
+          "value_after": 9223372036854775807
+        },
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "2797eba231de9bce10fa4b09ddbfcf455d7c3d4b76499575571ac3570ffe12ba",
+            "operation_id": 203,
+            "outcome": "COMMIT",
+            "value_after": 9223372036854775806
+          },
+          "value_after": 9223372036854775806
+        },
+        {
+          "outcome": "COMMIT",
+          "receipt": {
+            "effect_digest": "df9fa444ba157dbcf1724475fa94fb4d7f5db713d2136b0c8761a070628ba7a8",
+            "operation_id": 202,
+            "outcome": "COMMIT",
+            "value_after": 9223372036854775807
+          },
+          "value_after": 9223372036854775807
+        }
+      ],
+      "expected_state_sha256_v1_2b": "443a694eb7b32871c3142e58a728193f32f333181b671a8a8c99912ddf72cf18",
+      "initial_state_v1_2b": {
+        "authorized_capability_ids": [
+          1
+        ],
+        "capability_epoch": 0,
+        "object_version": 0,
+        "operation_ledger": [],
+        "parent_active": true,
+        "parent_generation": 0,
+        "policy_epoch": 0,
+        "predicate_version": 0,
+        "used_nonces": [],
+        "value": 0
+      },
+      "name": "overflow_reject_is_side_effect_free"
+    }
+  ],
+  "format": "replica.commit-kernel.reference-vectors",
+  "manifest": {
+    "base_vector_count": 22,
+    "hardening_vector_count": 10,
+    "required_vector_names": [
+      "cancel_before_commit",
+      "capability_epoch_overflow",
+      "capability_precedes_effect_rejection",
+      "capability_revoke",
+      "commit_retry_replay",
+      "current_version_after_object_change",
+      "current_version_after_parent_reuse",
+      "current_version_after_policy_update",
+      "current_version_after_predicate_change",
+      "current_version_after_revoke",
+      "effect_changed_after_review",
+      "effect_payload_tamper_after_review",
+      "negative_delta",
+      "negative_value_overflow",
+      "nonce_reuse_different_operation",
+      "object_stale",
+      "object_version_overflow",
+      "overflow_reject_is_side_effect_free",
+      "parent_generation_overflow",
+      "parent_reuse_generation",
+      "policy_epoch_change",
+      "policy_epoch_overflow",
+      "positive_value_overflow",
+      "predicate_phantom",
+      "predicate_version_overflow",
+      "replay_after_cancel_revoke",
+      "replay_after_later_commit",
+      "reverse_ids_and_nonces",
+      "same_operation_different_effect",
+      "scope_violation",
+      "two_valid_operations",
+      "unauthorized_capability_id"
+    ],
+    "required_vector_names_sha256": "c200d5187070bb9484eca455b340c20283ea156b3be3603eb8134562cf936614",
+    "source_v1_2a_sha256": "2a6d7fbb28b4299c0065652c7604bf51971b8f0a8093f7f026b9f6c130f701d2",
+    "vector_count": 32
+  },
+  "profile": {
+    "arithmetic": {
+      "i64_add": "checked; overflow => REJECT_OVERFLOW with no mutation/ledger/nonce",
+      "u64_epoch_increment": "checked; overflow => REJECT_OVERFLOW with no state change"
+    },
+    "authorization": {
+      "proposal_boolean_authorization": "forbidden",
+      "source": "kernel trusted state authorized_capability_ids + capability_epoch"
+    },
+    "canonical_state": {
+      "authorized_capability_ids_order": "numeric ascending",
+      "encoding": "UTF-8",
+      "json": "compact",
+      "object_keys": "lexicographically sorted recursively",
+      "operation_ledger_order": "operation_id ascending",
+      "sha256_input": "exact UTF-8 bytes of canonical state JSON",
+      "strings_in_hashed_state": "ASCII only; effect_digest lower-hex SHA-256",
+      "used_nonces_order": "numeric ascending"
+    },
+    "duplicate_object_keys": "reject",
+    "effect": {
+      "allowed_kind": "add",
+      "allowed_target": "value",
+      "canonical_json": "{\"delta\":<i64>,\"kind\":\"add\",\"target\":\"value\"}",
+      "digest": "sha256(lowercase hex) computed inside kernel from actual effect"
+    },
+    "floats": "forbidden",
+    "integers": {
+      "signed": [
+        "effect.delta",
+        "state.value",
+        "receipt.value_after"
+      ],
+      "signed_range": "i64",
+      "unsigned": "all epoch/id/nonce/capability-id fields",
+      "unsigned_range": "u64"
+    },
+    "name": "replica.commit-kernel.production-boundary-json-v1",
+    "null": "forbidden in schema fields",
+    "unknown_fields": "reject"
+  },
+  "semantics_note": "v1.2B hardens effect binding, authorization boundary, and checked arithmetic; v1.2A remains immutable history.",
+  "suite_id": "commit-kernel-production-boundary-v1.2B",
+  "version": "1.2B"
+}
