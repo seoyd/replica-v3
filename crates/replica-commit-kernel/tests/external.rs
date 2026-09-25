@@ -942,3 +942,97 @@ fn evidence_child_counts() {
     write_new(&base.join("actual-child-counts.txt"), report.as_bytes());
     println!("{report}");
 }
+
+#[test]
+#[ignore = "same PID pre/post rename failures, actual native recovery and child replay"]
+fn temp_recovery_receiver() {
+    for point in [
+        "temp-open",
+        "write",
+        "file-sync",
+        "close",
+        "rename",
+        "directory-sync",
+        "reply",
+    ] {
+        let base = root(&format!("temp-recovery-{point}"));
+        setup(&base, true, false);
+        let path = base.join("receiver");
+        let canonical = path.join("external.state.r3b");
+        let old = fs::read(&canonical).unwrap();
+        let e = effect("recovered-effect", 7);
+        let mut r = open(&path);
+        assert!(Endpoint::open(&path, Native).is_err());
+        assert!(r
+            .apply(&e, &mut |at| if at == point {
+                Err(io::Error::from(io::ErrorKind::AlreadyExists))
+            } else {
+                Ok(())
+            })
+            .is_err());
+        assert!(r.snapshot().is_err());
+        drop(r);
+        let pre = ["temp-open", "write", "file-sync", "close"].contains(&point);
+        let stale = path.join(format!("external.{}.1.tmp", std::process::id()));
+        let stale_bytes = pre.then(|| fs::read(&stale).unwrap());
+        if pre {
+            assert_eq!(fs::read(&canonical).unwrap(), old);
+        }
+        // A valid native snapshot and arbitrary bytes are both ignored as authority.
+        let valid_stale = path.join(format!("external.{}.2.tmp", std::process::id()));
+        let invalid_stale = path.join(format!("external.{}.3.tmp", std::process::id()));
+        write_new(&valid_stale, &old);
+        write_new(&invalid_stale, b"not-a-snapshot");
+        let mut r = open(&path);
+        assert_eq!(r.receiver().unwrap().value, if pre { 0 } else { 7 });
+        let d = r.apply(&e, &mut |_| Ok(())).unwrap();
+        assert_eq!(
+            d.kind,
+            if pre {
+                DeliveryKind::Commit
+            } else {
+                DeliveryKind::Replay
+            }
+        );
+        assert_eq!(d.receipt.effect, e);
+        assert_eq!(d.receipt.sequence, 1);
+        assert_eq!(d.receipt.value_after, 7);
+        drop(r);
+        let mut r = open(&path);
+        assert_eq!(r.receiver().unwrap().ledger.len(), 1);
+        let replay = r.apply(&e, &mut |_| Ok(())).unwrap();
+        assert_eq!(replay.kind, DeliveryKind::Replay);
+        assert_eq!(replay.receipt, d.receipt);
+        drop(r);
+        let second = effect("independent-second-effect", 11);
+        let d2 = open(&path).apply(&second, &mut |_| Ok(())).unwrap();
+        assert_eq!(d2.receipt.sequence, 2);
+        assert_eq!(open(&path).receiver().unwrap().value, 18);
+        assert_eq!(fs::read(&valid_stale).unwrap(), old);
+        assert_eq!(fs::read(&invalid_stale).unwrap(), b"not-a-snapshot");
+        if let Some(bytes) = stale_bytes {
+            assert_eq!(fs::read(&stale).unwrap(), bytes);
+            println!(
+                "stale={} bytes={} sha256={}",
+                stale.display(),
+                bytes.len(),
+                hex::encode(Sha256::digest(&bytes))
+            );
+        }
+        // Existing worker performs disk-only open and verifies saved receipt by replay.
+        let child = rpc(&base, &base.join("readback"), &e, "").unwrap();
+        assert_eq!(child.kind, DeliveryKind::Replay);
+        assert_eq!(child.receipt, d.receipt);
+        let third = effect("child-new-effect", -3);
+        assert_eq!(
+            rpc(&base, &base.join("child-save"), &third, "")
+                .unwrap()
+                .receipt
+                .value_after,
+            15
+        );
+        assert_eq!(open(&path).receiver().unwrap().ledger.len(), 3);
+        assert_eq!(open(&path).receiver().unwrap().value, 15);
+        println!("boundary={point} same-PID reopen/save/readback PASS; child replay+save PASS");
+    }
+}

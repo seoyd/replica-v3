@@ -10,6 +10,7 @@ use std::{
 
 const MAX_SNAPSHOT: u64 = 8 * 1024 * 1024;
 const MAX_EVENTS: usize = 100_000;
+const MAX_TEMP_ATTEMPTS: usize = 1024;
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
@@ -183,14 +184,7 @@ pub(crate) fn persist_bytes(
     if bytes.len() as u64 > max {
         return Err(invalid("snapshot size limit"));
     }
-    *serial = serial
-        .checked_add(1)
-        .ok_or_else(|| invalid("snapshot serial overflow"))?;
-    let temp = root.join(format!("{name}.{}.{serial}.tmp", std::process::id()));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp)?;
+    let (temp, mut file) = allocate_temp(root, name, serial)?;
     hook("temp-open")?;
     file.write_all(bytes)?;
     hook("write")?;
@@ -203,4 +197,135 @@ pub(crate) fn persist_bytes(
     File::open(root)?.sync_all()?;
     hook("directory-sync")?;
     Ok(())
+}
+
+fn allocate_temp(root: &Path, name: &str, serial: &mut u64) -> io::Result<(PathBuf, File)> {
+    for _ in 0..MAX_TEMP_ATTEMPTS {
+        *serial = serial
+            .checked_add(1)
+            .ok_or_else(|| invalid("snapshot serial overflow"))?;
+        let temp = root.join(format!("{name}.{}.{serial}.tmp", std::process::id()));
+        match OpenOptions::new().write(true).create_new(true).open(&temp) {
+            Ok(file) => return Ok((temp, file)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "snapshot temp allocation attempts exhausted",
+    ))
+}
+
+#[cfg(test)]
+mod temp_recovery_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "explicit isolated evidence root; real filesystem allocation boundaries"]
+    fn allocation_boundaries() {
+        let base = PathBuf::from(std::env::var_os("R3_TEMP_EVIDENCE").unwrap());
+        let root = base.join("allocation");
+        fs::create_dir(&root).unwrap();
+        let canonical = root.join("probe.state.r3b");
+        fs::write(&canonical, b"old").unwrap();
+        let candidate = |n| root.join(format!("probe.{}.{n}.tmp", std::process::id()));
+        for n in 1..=MAX_TEMP_ATTEMPTS {
+            fs::write(candidate(n), b"stale").unwrap();
+        }
+        let mut serial = 0;
+        let mut calls = Vec::new();
+        let error = persist_bytes(&root, "probe", &mut serial, b"new", 3, &mut |at| {
+            calls.push(at.to_owned());
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert!(error.to_string().contains("attempts exhausted"));
+        assert_eq!(serial, 1024);
+        assert!(calls.is_empty());
+        assert!(!candidate(1025).exists());
+        assert_eq!(fs::read(&canonical).unwrap(), b"old");
+        for n in 1..=MAX_TEMP_ATTEMPTS {
+            assert_eq!(fs::read(candidate(n)).unwrap(), b"stale");
+        }
+        // Overflow and size validation cannot create or publish anything.
+        serial = u64::MAX;
+        assert!(
+            persist_bytes(&root, "probe", &mut serial, b"new", 3, &mut |_| panic!(
+                "hook"
+            ))
+            .unwrap_err()
+            .to_string()
+            .contains("overflow")
+        );
+        assert_eq!(serial, u64::MAX);
+        serial = 0;
+        assert!(
+            persist_bytes(&root, "probe", &mut serial, b"large", 3, &mut |_| panic!(
+                "hook"
+            ))
+            .is_err()
+        );
+        assert_eq!(serial, 0);
+        // Missing directory gives an actual OS open error, forwarded without retry.
+        let absent = root.join("absent");
+        let expected = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(absent.join("x"))
+            .unwrap_err();
+        let error = persist_bytes(&absent, "probe", &mut serial, b"new", 3, &mut |_| {
+            panic!("hook")
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), expected.kind());
+        assert_eq!(error.raw_os_error(), expected.raw_os_error());
+        assert_eq!(serial, 1);
+        // A free candidate is used once. AlreadyExists AFTER open is not retried.
+        serial = 1024;
+        let mut count = 0;
+        let error = persist_bytes(&root, "probe", &mut serial, b"new", 3, &mut |_| {
+            count += 1;
+            Err(io::Error::from(io::ErrorKind::AlreadyExists))
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(count, 1);
+        assert_eq!(serial, 1025);
+        assert!(!candidate(1026).exists());
+        assert_eq!(fs::read(&canonical).unwrap(), b"old");
+        calls.clear();
+        persist_bytes(&root, "probe", &mut serial, b"new", 3, &mut |at| {
+            calls.push(at.to_owned());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            calls,
+            [
+                "temp-open",
+                "write",
+                "file-sync",
+                "close",
+                "rename",
+                "directory-sync"
+            ]
+        );
+        assert_eq!(fs::read(&canonical).unwrap(), b"new");
+        #[cfg(unix)]
+        {
+            let link = root.join("symlink");
+            fs::create_dir(&link).unwrap();
+            let target = link.join("missing-target");
+            let temp = link.join(format!("probe.{}.1.tmp", std::process::id()));
+            std::os::unix::fs::symlink(&target, &temp).unwrap();
+            serial = 0;
+            persist_bytes(&link, "probe", &mut serial, b"new", 3, &mut |_| Ok(())).unwrap();
+            assert_eq!(serial, 2);
+            assert_eq!(fs::read_link(temp).unwrap(), target);
+            assert!(!target.exists());
+        }
+        println!("allocation: limit=1024 overflow/size/OS-open/hook-AlreadyExists/symlink PASS");
+    }
 }

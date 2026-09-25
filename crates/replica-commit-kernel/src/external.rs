@@ -805,3 +805,158 @@ impl<C: NativeCodec> Endpoint<C> {
         )
     }
 }
+
+#[cfg(test)]
+mod temp_recovery_tests {
+    use super::*;
+    struct Native;
+    impl NativeCodec for Native {
+        fn encode(&self, s: &Snapshot) -> io::Result<Vec<u8>> {
+            replica_v3::binary::to_vec(s).map_err(io::Error::other)
+        }
+        fn decode(&self, b: &[u8]) -> io::Result<Snapshot> {
+            replica_v3::binary::from_canonical_slice(b).map_err(io::Error::other)
+        }
+    }
+    #[test]
+    #[ignore = "child disk-only sender and receipt readback"]
+    fn sender_readback() {
+        let base = PathBuf::from(std::env::var_os("R3_TEMP_SENDER_CHILD").unwrap());
+        let s = Endpoint::open(&base.join("sender"), Native).unwrap();
+        let r = Endpoint::open(&base.join("receiver"), Native).unwrap();
+        let t = &s.sender().unwrap().tasks["transfer"];
+        assert_eq!(t.status, TaskStatus::Acked);
+        assert_eq!(t.attempts, 1);
+        assert_eq!(
+            t.receipt.as_ref().unwrap(),
+            &r.receiver().unwrap().ledger["transfer"]
+        );
+        assert_eq!(r.receiver().unwrap().value, 9);
+        println!("child sender ACK / receiver receipt / value=9 PASS");
+    }
+    #[test]
+    #[ignore = "native sender begin/ACK private transaction seam; no public API expansion"]
+    fn sender_begin_ack_recovery() {
+        let base =
+            PathBuf::from(std::env::var_os("R3_TEMP_EVIDENCE").unwrap()).join("sender-recovery");
+        fs::create_dir(&base).unwrap();
+        let path = base.join("sender");
+        let rpath = base.join("receiver");
+        let e = Effect {
+            receiver: "local".into(),
+            id: "transfer".into(),
+            delta: 9,
+        };
+        let mut s = Endpoint::create(
+            &path,
+            State::Sender(Sender::new("local", true, None)),
+            Native,
+        )
+        .unwrap();
+        s.prepare(e.clone()).unwrap();
+        drop(s);
+        let old = fs::read(path.join("external.state.r3b")).unwrap();
+        let mut s = Endpoint::open(&path, Native).unwrap();
+        let mut fail = |at: &str| {
+            if at == "write" {
+                Err(io::Error::other("injected write hook"))
+            } else {
+                Ok(())
+            }
+        };
+        assert!(s.begin_send(&e.id, &mut fail).is_err());
+        assert!(s.sender().is_err());
+        drop(s);
+        assert_eq!(fs::read(path.join("external.state.r3b")).unwrap(), old);
+        let stale1 = path.join(format!("external.{}.1.tmp", std::process::id()));
+        let bytes1 = fs::read(&stale1).unwrap();
+        let mut s = Endpoint::open(&path, Native).unwrap();
+        assert_eq!(
+            s.sender().unwrap().tasks[&e.id].status,
+            TaskStatus::Prepared
+        );
+        assert_eq!(s.sender().unwrap().tasks[&e.id].attempts, 0);
+        assert_eq!(
+            s.begin_send(&e.id, &mut |_| Ok(())).unwrap(),
+            Some(e.clone())
+        );
+        drop(s);
+        let mut r = Endpoint::create(
+            &rpath,
+            State::Receiver(Receiver::new("local", 0, true)),
+            Native,
+        )
+        .unwrap();
+        let d = r.apply(&e, &mut |_| Ok(())).unwrap();
+        drop(r);
+        let before_ack = fs::read(path.join("external.state.r3b")).unwrap();
+        let mut s = Endpoint::open(&path, Native).unwrap();
+        // Exercise the same private transaction called by complete_send, with a fault.
+        assert!(s
+            .transaction(
+                |state| match state {
+                    State::Sender(s) => s.complete(&e.id, Some(d.clone())),
+                    _ => unreachable!(),
+                },
+                &mut fail
+            )
+            .is_err());
+        assert!(s.snapshot().is_err());
+        drop(s);
+        let stale2 = path.join(format!("external.{}.2.tmp", std::process::id()));
+        let bytes2 = fs::read(&stale2).unwrap();
+        assert_eq!(
+            fs::read(path.join("external.state.r3b")).unwrap(),
+            before_ack
+        );
+        let mut s = Endpoint::open(&path, Native).unwrap();
+        assert_eq!(
+            s.sender().unwrap().tasks[&e.id].status,
+            TaskStatus::InFlight
+        );
+        assert!(s.sender().unwrap().tasks[&e.id].receipt.is_none());
+        s.complete_send(&e.id, Some(d.clone())).unwrap();
+        drop(s);
+        let s = Endpoint::open(&path, Native).unwrap();
+        assert_eq!(
+            s.sender().unwrap().tasks[&e.id].receipt.as_ref(),
+            Some(&d.receipt)
+        );
+        assert_eq!(fs::read(&stale1).unwrap(), bytes1);
+        assert_eq!(fs::read(&stale2).unwrap(), bytes2);
+        drop(s);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "external::temp_recovery_tests::sender_readback",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("R3_TEMP_SENDER_CHILD", &base)
+            .output()
+            .unwrap();
+        fs::write(base.join("child.stdout"), &output.stdout).unwrap();
+        fs::write(base.join("child.stderr"), &output.stderr).unwrap();
+        assert!(output.status.success());
+        // Non-idempotent ambiguity remains durable and cannot expose another Effect.
+        let unknown_path = base.join("non-idempotent");
+        let mut s = Endpoint::create(
+            &unknown_path,
+            State::Sender(Sender::new("local", false, None)),
+            Native,
+        )
+        .unwrap();
+        s.prepare(e.clone()).unwrap();
+        s.begin_send(&e.id, &mut |_| Ok(())).unwrap();
+        s.complete_send(&e.id, None).unwrap();
+        drop(s);
+        let mut s = Endpoint::open(&unknown_path, Native).unwrap();
+        assert_eq!(
+            s.sender().unwrap().tasks[&e.id].status,
+            TaskStatus::UnknownEffect
+        );
+        assert!(s.begin_send(&e.id, &mut |_| Ok(())).unwrap().is_none());
+        assert_eq!(s.sender().unwrap().tasks[&e.id].attempts, 1);
+        println!("sender begin/ACK same-PID recovery + native child readback + UNKNOWN block PASS");
+    }
+}

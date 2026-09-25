@@ -260,3 +260,56 @@ fn corruption_and_save_failures_fail_closed() {
         &valid
     );
 }
+
+#[test]
+#[ignore = "same PID shared allocator recovery with native codec"]
+fn temp_recovery_kernel() {
+    let b = fixture();
+    let v = b
+        .directed_vectors
+        .iter()
+        .find(|v| v.name == "two_valid_operations")
+        .unwrap();
+    let event = v.events.iter().find(|e| e.kind == "ATTEMPT").unwrap();
+    let path = root("temp-recovery-kernel");
+    drop(DurableKernel::create(&path, v.initial_state_v1_2b.clone(), Native).unwrap());
+    let canonical = path.join("kernel.state.r3b");
+    let old = fs::read(&canonical).unwrap();
+    let mut k = DurableKernel::open(&path, Native).unwrap();
+    assert!(k
+        .apply_with_hook(event, &mut |at| if at == "write" {
+            Err(io::Error::other("injected write hook"))
+        } else {
+            Ok(())
+        })
+        .is_err());
+    assert!(k.snapshot().is_err());
+    drop(k);
+    let stale = path.join(format!("kernel.{}.1.tmp", std::process::id()));
+    let bytes = fs::read(&stale).unwrap();
+    assert_eq!(fs::read(&canonical).unwrap(), old);
+    let mut k = DurableKernel::open(&path, Native).unwrap();
+    assert_eq!(k.snapshot().unwrap().state, v.initial_state_v1_2b);
+    assert_eq!(k.apply(event).unwrap().outcome, "COMMIT");
+    drop(k);
+    let mut k = DurableKernel::open(&path, Native).unwrap();
+    assert_eq!(k.snapshot().unwrap().state.operation_ledger.len(), 1);
+    assert_eq!(k.apply(event).unwrap().outcome, "REPLAY");
+    assert_eq!(fs::read(&stale).unwrap(), bytes);
+    drop(k);
+    let result = child(&path, "retry", 1, None).output().unwrap();
+    fs::write(path.join("readback.stdout"), &result.stdout).unwrap();
+    fs::write(path.join("readback.stderr"), &result.stderr).unwrap();
+    assert!(result.status.success());
+    assert_eq!(
+        DurableKernel::open(&path, Native)
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .state
+            .operation_ledger
+            .len(),
+        1
+    );
+    println!("kernel same-PID recovery COMMIT/REPLAY + child readback PASS");
+}
