@@ -32,9 +32,9 @@ Main evaluation plans3520 generations and64 teacher examples. B adds normal32
 plus at most32 failure/query-mate cases and8 teacher examples; aggregate
 maximum6864 generations/136 teacher includes original3280/64, within8448/144.
 Prior active3035.100428542s is charged to the same7200s limit, segments900s.
-The actual new collector has not run at this boundary checkpoint; independent
-A admission precedes it. Results will be POST_HOC_DIAGNOSTIC, never a normal
-3072 result or candidate promotion. Original execution closure follows below.
+The new collector completed after independent A admission. Results are
+POST_HOC_DIAGNOSTIC, never a normal3072 result or candidate promotion.
+Original execution closure follows below and is not rewritten by this result.
 
 Preparation exited0 with calls0 at
 `artifacts/full-response-fit-posthoc-20260925-study/posthoc-plan.r3b`;
@@ -48,8 +48,107 @@ New sourceaf8ad53bf52e592f531b2f29ea84670ac201e618 was normally pushed and
 matched the full remote SHA. Independent posthoc A passed with receipt
 3d52de63ae888bd9a1a5cc5a06c101cdab406d73e8dc7d22a86841b69466d2c6;
 four actual negative CLI processes preserved all checked original/new records.
-The admission command exited0. Main evaluation is now running on the frozen
-executor, using normal Metal F32 generation and no optimizer/backward.
+The admission command exited0. Main evaluation exited0 on the frozen executor,
+using normal Metal F32 generation and no optimizer/backward. Actual new calls
+are3520 generation and64 teacher; all planned main rows completed in one
+segment. Stored RunControl elapsed554.91381525s (the later console snapshot
+was554.946385583s), command wall565.59s, maximum
+RSS1914093568bytes and peak memory footprint2032912616bytes are separate
+measurements. The pure report also exited0 without model calls. Main cumulative
+usage is6800 generation,128 teacher and3590.014243792 active seconds, before B.
+
+| Final-native posthoc panel | FULL | QUERY_BOTH | SWAP_BOTH | ALL4 | Outside ID |
+|---|---:|---:|---:|---:|---:|
+| V |512/512|256/256|256/256|128/128|N/A|
+| VC |510/512|254/256|254/256|126/128|2|
+| S1Q1 |478/512|222/256|231/256|103/128|33|
+| FULL word |29/192|0/96|0/96|0/48|52|
+| FULL renamed |45/192|4/96|0/96|0/48|38|
+| FULL train |485/1536|32/768|1/768|0/384|28|
+| OLD_FULL |1/64|0/32|0/32|0/16|62|
+
+All3520 main generations ended with EOS and no generation error; parsed
+citation panels have malformed0. Word/renamed use the same48 heldout semantic
+groups with different event IDs, not96 independent groups. Exact scores and
+joint counts stay separate. VC outside2 and S1Q1 outside33 reject retention
+even though value512 is perfect. Train fit and heldout development both fail;
+the original-system OLD_FULL64 is a separate diagnostic, not QA640. Current
+classification is TRAIN_FIT_INCOMPLETE with no joint development acceptance.
+The almost-complete tape has3069 committed updates; its missing three updates
+are not silently counted as eight exposures of every row.
+
+The reproducible main commands use the frozen executable above:
+
+```text
+replica-train fresh muon full-fit-posthoc --root artifacts/full-response-fit-posthoc-20260925-study --phase evaluate
+replica-train fresh muon full-fit-posthoc --root artifacts/full-response-fit-posthoc-20260925-study --phase report
+```
+
+These are recorded commands, not instructions to repeat a completed observation.
+Main log is `artifacts/full-response-fit-posthoc-20260925-evidence/evaluate-000.log`;
+the pure readback is `posthoc-main-report.log` in the same directory. Canonical
+panels/teacher/controls remain in the new study root; final native is referenced
+from the original root without copying weights or Adam.
+
+Independent B completed with64/64 raw-token/text/EOS/error matches and8/8
+teacher matches. Its normal32 quota is8/6/6/6/6 across the first five panels;
+the additional32 are16 outside-ID failures and their16 query mates. The mates
+are correct rows, not32 independent wrong outputs. Fixed teacher gold/argmax/
+roles matched and maximum absolute NLL difference was0 (limit1e-5). B command
+exited0 in25.46s wall, stored active12.489815s, maximum RSS1734836224bytes.
+No new optimizer/backward or numerical-regression model calls were added.
+
+| Actual call usage | Generation | Generated tokens | Teacher examples |
+|---|---:|---:|---:|
+| Main posthoc |3520|50176|64|
+| Independent B |64|956|8|
+| New posthoc total |3584|51132|72|
+| Original run plus posthoc |6864|95162|136|
+
+Stored new active is567.40363025s; cumulative active3602.504058792s remains
+within7200s. The main binary readback and independent readback add no model
+calls. All final observations use the same3069 native. The original3069
+updates/3072 backwards and TINY8 updates/backwards are unchanged.
+
+Teacher train32/dev32 on the fixed sample had ID token accuracy256/256 and
+248/256, complete eight-digit IDs32/32 and24/32, MIXED token accuracy6/32
+and4/32. FORMAT160/160, CLOSE32/32 and EOS32/32 were correct in both splits.
+The train sample contains only left/right words16 each with8 new exact FULL
+exposures and0 earlier exact FULL exposures; it is not all-four-word coverage.
+VALUE-only is N/A because the first token crosses the value/format boundary.
+First failures were MIXED26 (train), MIXED28 plus ID1 (dev), with fully correct
+teacher sequences6 and3. Gold-prefix suffix accuracy is not free-generation
+accuracy and does not repair any outside-ID raw answer.
+
+One unexecuted follow-up hypothesis is first-target weight1 to2, retaining
+the same parent/data/optimizer conditions and retention gates in a separately
+registered comparison. The low first MIXED accuracy with stronger suffix
+accuracy motivates testing relative learning signal at that decision. It does
+not identify a pure VALUE token or prove that weighting will solve selection.
+No new loss, data, LR, seed or additional learning was executed here.
+
+Independent closure details, per-word/pair/ID-version fit and identical-request
+parent gain/loss are in `docs/FULL_RESPONSE_FIT_REVIEW_2026-09-25.md`.
+Local B receipt is
+`artifacts/full-response-fit-20260925-review/posthoc-review-b.r3b`,
+SHA2560c4f06fb30d8224b9f3ad13019cd7a65b172c1e8446e5d1057423be68dbda27f.
+It binds the actual replay log, independent raw/teacher readbacks and frozen
+source/runtime. All checked original/native/protected hashes remain unchanged.
+Only source/status/review documents are published; private evidence is local.
+
+The scoped snapshot at epoch1790296419 measured the posthoc study at7388 files/
+16402911 logical bytes and its evidence at23 files/42931565bytes. Current
+review-root107 files/31038067bytes includes prior review material. Original
+study plus posthoc study plus registration is1061310924bytes. This scoped
+model/raw total is below1GiB, but the already recorded broader historical
+three-root1106603756bytes exceeded1GiB. Whole-scope artifact budget is not
+reported PASS; later report/receipt growth and build peak remain separate
+(peak UNKNOWN). Nothing was deleted, moved, recompressed or fully inventoried.
+
+POSTHOC_EXECUTION=PASS; POSTHOC_B_INTEGRITY=PASS;
+TRAIN_FIT=FAIL; HELDOUT_DEVELOPMENT=FAIL; RETENTION_GATE=FAIL;
+ORIGINAL_EXECUTION=INCOMPLETE_BUDGET; ORIGINAL_RESUME=false;
+CANDIDATE_ELIGIBLE=false; S4/S5/S6=NOT_ACCEPTED; GOAL1_READY=false.
 
 ## 2026-09-25 Full response fit — backward cap reached before final evaluation
 

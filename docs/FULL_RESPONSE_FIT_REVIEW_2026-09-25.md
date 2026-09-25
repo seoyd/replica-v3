@@ -1,5 +1,118 @@
 # FULL response fit — independent review
 
+## Final authorized posthoc B
+
+**Posthoc A/B execution and parity PASS; model development and full-train fit FAIL.**
+Source `af8ad53bf52e592f531b2f29ea84670ac201e618` and executor
+`052c9a7d150b97f5a0b16ac2f7968a721cc529688946163e0e72de06403f54d4`
+remained frozen. The original bounded run remains incomplete at committed3069,
+discarded3/backward3072, model17981/Adam3645/cursor3069. Its original
+INTEGRITY_FAIL, success=false/resume=false/fit=false terminal is unchanged.
+The separately authorized diagnostic evaluation completed all seven panels and
+teacher64; independent B completed64 generations and teacher8, optimizer/backward0.
+This neither completes3072 training nor grants candidate/S4/Goal1 acceptance.
+
+The independent Rust reader verified all3520 main raw rows, strict UTF-8, actual
+EOS, full/value/support/outside/malformed metrics, QB/SB/ALL4, request/evidence,
+native/tokenizer/source binding and each RETURNED resolution. All stored scores
+agree. B's fixed normal32 quota8/6/6/6/6 and extra16 outside-ID failures plus16
+query mates total64; all raw tokens/text/EOS/error outcomes reproduce exactly.
+Those mates are correctly answered rows, not32 additional errors. B scores are
+not added to accuracy denominators. Teacher gold/argmax/roles match and maximum
+absolute NLL reproduction difference is0.
+
+| Final3069 panel | FULL | QB / SB / ALL4 | Whole value / support | Outside |
+|---|---:|---:|---:|---:|
+| Value | 512/512 | 256 /256 /128 | N/A | 0 |
+| Citation | 510/512 | 254 /254 /126 | 512 /510 | 2 |
+| S1Q1 | 478/512 | 222 /231 /103 | 511 /479 | 33 |
+| FULL word | 29/192 | 0 /0 /0 | 38 /140 | 52 |
+| FULL renamed | 45/192 | 4 /0 /0 | 55 /154 | 38 |
+| FULL train | 485/1536 | 32 /1 /0 | 494 /1508 | 28 |
+| OLD_FULL | 1/64 | 0 /0 /0 | 12 /2 | 62 |
+
+Every row has actual EOS; malformed, other-provided-ID and generation errors
+are0 throughout these final panels. Value retention passes; citation fails its
+outside-ID condition and S1Q1 fails retention. Development and full-train gates
+fail. OLD_FULL measures the original system separately. Dev/renamed share48
+semantic groups; they are not384 independent groups.
+
+Full train by value: 왼쪽79/384, 오른쪽166/384, 직진146/384, 대기94/384.
+The six pair totals and two ID versions are:
+
+| Pair | Total /256 | ID0 /128 | ID1 /128 |
+|---|---:|---:|---:|
+| 0–1 | 86 | 41 | 45 |
+| 0–2 | 64 | 34 | 30 |
+| 0–3 | 69 | 35 | 34 |
+| 1–2 | 103 | 53 | 50 |
+| 1–3 | 79 | 39 | 40 |
+| 2–3 | 84 | 41 | 43 |
+
+ID-version totals are243/768 and242/768. Exact exposure strata are prior0/new8:
+396/1280, prior1/new7:5/12, prior1/new8:84/244. The committed/discarded and
+different-system semantic exposures remain separate as recorded below. Original
+train128 has different coverage and is not this1536 panel's paired baseline.
+Against identical original F64 requests, gain/loss is word29/0 and renamed45/0
+on192 each, OLD_FULL1/0 on64, S1Q10/3 on the common64, value/citation0/0 on64.
+
+Final teacher train/dev ID tokens are256/256 and248/256, while whole8-digit IDs
+are32/32 and24/32. Clean FORMAT160/160, CLOSE32/32 and EOS32/32 pass in each
+split. MIXED is6/32 and4/32; VALUE-only has no denominator (N/A), and whole
+FORMAT span coverage is excluded because of that crossing token. ID NLL sums
+are1.0303948453/24.2042868587; MIXED sums44.3223524094/45.3629331589.
+The sample contains only 왼쪽/오른쪽16 each per split, and all train32 have
+new exactFULL8/priorFULL0. First teacher errors are trainMIXED26/NONE6 and
+devMIXED28/ID1/NONE3. Free-generation first differences in word/renamed/train
+are MIXED154/137/1042, ID9/10/9, exact29/45/485. Gold-prefix suffix accuracy
+does not correct a wrong generated value. Valid text lengths are33 or36 bytes:
+word136/56 rows, renamed126/66, train1002/534, respectively.
+
+Posthoc main+B usage is3584generation/72teacher,51132 generated tokens.
+Combined with the preserved original run:6864generation/136teacher,95162
+generated tokens and2176 teacher targets. Optimizer3069/backward3072 and
+TINY8/8 remain unchanged. Stored main554.91381525s plus B12.489815s adds
+567.40363025s to prior3035.100428542s: **3602.504058792s total active**.
+The later console main snapshot554.946385583s differs by32.570333ms; it is not
+the immutable accounting value. Independent B process exited0, wall25.46s,
+maxRSS1734836224bytes/footprint1912686800bytes. Pure main/B/teacher readbacks
+exited0 in2.06/0.81/0.47s and made no model calls.
+
+Last durable native physical SHA256 remains
+`f61db3b873859f2aac5083ace36385067f8cbb4d250cdd4d364d0eea289ea55c`.
+Eleven original consumed refs and five posthoc origin/descriptor refs match their
+before hashes. Scoped snapshot epoch1790296419: posthoc study7388files/
+16402911 logical bytes, posthoc evidence23/42931565, current review107/31038067.
+Allocated bytes respectively40218624/42995712/31297536. Original study plus
+posthoc study and registration total1061310924 logical bytes, within the
+implementation's scoped model/raw allowance. **The broader historical three-root
+footprint1106603756 already exceeded1GiB; this is not a whole-scope storage PASS.**
+Executables and other test fixtures remain preserved, later report/receipt growth
+is excluded, and build peak is UNKNOWN. No whole inventory or cleanup occurred.
+
+One unexecuted next hypothesis: in a newly registered controlled study, change
+only first-target weight1→2 to test whether more relative weight on the first
+MIXED value/format decision improves FULL train and paired heldout scores.
+This is neither a pure VALUE-only signal nor a confirmed cause/fix. Lack of
+preregistered heldout/paired improvement or worse retention would falsify the
+proposal. No new learning is authorized or executed here.
+
+Evidence under `artifacts/full-response-fit-20260925-review/`:
+`posthoc-main-readback.r3b`, `posthoc-b-readback.r3b`,
+`posthoc-teacher-readback.r3b`, `posthoc-details.r3b`, their named logs,
+`posthoc-b-phase.md` and `posthoc-review-b.r3b`.
+Receipt SHA256 is `0c4f06fb30d8224b9f3ad13019cd7a65b172c1e8446e5d1057423be68dbda27f`.
+The actual B command was
+`replica-train fresh muon full-fit-posthoc --root artifacts/full-response-fit-posthoc-20260925-study --phase review`
+using the frozen posthoc executable and VECLIB/OMP/RAYON thread limits1.
+Exact commands and source/binary/log hashes are bound by the B receipt; old
+partial sources and receipts retain their original hashes. Reviewed source and
+the subsequent report-only publication commit remain distinct.
+
+**CODE_A=PASS; FULL_FIT_EXECUTION=original incomplete/posthoc complete;
+B_RECOUNT_PARITY=PASS; CANDIDATE_DEVELOPMENT=NOT_ACCEPTED;
+ORIGINAL_RUNS_UNCHANGED=verified; GOAL1_READY=false.**
+
 ## Separately authorized posthoc A
 
 The user subsequently authorized no-learning final-native evaluation and B,
@@ -54,7 +167,7 @@ Independent isolated metadata fixtures invoked the actual dispatcher for UNKNOWN
 
 Evidence is under `artifacts/full-response-fit-20260925-review/`: immutable `phase-a.md`, `preparation-readback.r3b`, `tiny-readback.r3b`, `blocked-dispatch/readback.r3b`, actual logs and native A receipt. Matching direct evidence is under `artifacts/full-response-fit-20260925-evidence/`. Frozen executor SHA256: `f1aa135e0eb71bafdf9006c5de7f655cda84335b4661bd335ab67f7303fe7495`; tests: `390c049588468f240aba9f65eda8a7496fc3516437ad58e7dd337041a99e422e`. Original corpus, native states, terminal decisions, failures and prior reports were read-only.
 
-## Independent partial closure — final B incomplete
+## Historical original-cap closure — before posthoc authorization
 
 The same independent reviewer subsequently read the actual bounded run, using
 standalone Rust readers and the existing locked dependencies. Product source

@@ -1,6 +1,17 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: separately authorized final-native posthoc evaluation
+## Closed: separately authorized final-native posthoc evaluation
+
+The authorized final-native diagnosis completed on source
+af8ad53bf52e592f531b2f29ea84670ac201e618 with independent A/B acceptance of
+its execution and evidence. New3520 main plus64 B generations and64 main plus8
+B teacher examples completed; new optimizer/backward0. Cumulative generation
+6864, teacher136 and stored active3602.504058792s remain within the original
+call/time caps. Train485/1536, word29/192, renamed45/192 and all three ALL4=0
+fail the quality gates; VC outside2 and S1Q1 outside33 also fail retention.
+There is no candidate or renewed learning permission. The original3069-update
+run's backward cap3072, failure and resume=false remain unchanged. S4/S5/S6
+and Goal1 remain unaccepted. The authorization below is historical and closed.
 
 The user authorized a no-learning final evaluation and B verification while
 retaining the original limits and failed run. The actual endpoint is3069
