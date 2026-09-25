@@ -1,3 +1,4 @@
+pub mod durable;
 pub mod kernel;
 pub mod vectors;
 

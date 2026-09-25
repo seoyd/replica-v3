@@ -67,9 +67,11 @@ pub struct State {
     pub value: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Event {
+    #[serde(rename = "type")]
     pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<Envelope>,
 }
 

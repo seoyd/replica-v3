@@ -42,6 +42,17 @@ reference-protocol inputs, not a persistent user-memory format. The main project
 Cargo manifest/lock, model paths and binary storage are unchanged. A separate lock
 was generated offline because the supplied archive had no lockfile; retain it.
 
+Gate v1.3B adds a single-writer durable snapshot with a host-supplied native codec.
+Tests use the existing `replica_v3::binary` R3BIN codec through a dev-only
+dependency; no model is constructed. The snapshot atomically contains initial
+state, event history, journal/receipts and final state/ledger/nonces. Restore
+replays and verifies the full state. Save errors poison the live handle until
+disk-only reopen. Temps/backups are not recovery authority. Actual SIGKILL tests
+cover seven save/reply boundaries; this is not a power-loss proof.
+
+Run these tests with a new `R3_KERNEL_PROCESS_ROOT` directory:
+`cargo test --locked --offline --test durable_process -- --ignored --skip process_worker --test-threads=1`.
+
 For mutations, set `R3_KERNEL_MUTATION_ROOT` to a new scratch directory and run
 `cargo test --locked --offline --test mutations -- --ignored --exact guards_are_killed_by_frozen_vectors`.
 The test preserves the original source/fixture and requires a compiled CLI exit1

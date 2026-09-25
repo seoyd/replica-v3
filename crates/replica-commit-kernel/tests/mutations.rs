@@ -12,14 +12,23 @@ fn guards_are_killed_by_frozen_vectors() {
     fs::create_dir(&scratch).expect("scratch must not exist");
     fs::create_dir(scratch.join("src")).unwrap();
     for path in [
-        "Cargo.toml",
         "Cargo.lock",
         "src/lib.rs",
         "src/vectors.rs",
         "src/main.rs",
+        "src/durable.rs",
     ] {
         fs::copy(root.join(path), scratch.join(path)).unwrap();
     }
+    let repo = root.join("../..").canonicalize().unwrap();
+    let manifest = fs::read_to_string(root.join("Cargo.toml"))
+        .unwrap()
+        .replace("\"../..\"", &serde_json::to_string(&repo).unwrap())
+        .replace(
+            "\"../../vendor/candle-core-0.11.0\"",
+            &serde_json::to_string(&repo.join("vendor/candle-core-0.11.0")).unwrap(),
+        );
+    fs::write(scratch.join("Cargo.toml"), manifest).unwrap();
     let source = fs::read_to_string(root.join("src/kernel.rs")).unwrap();
     let fixture = root.join("tests/data/commit_kernel_reference_vectors_v1_2B.json");
     let mutations = [
