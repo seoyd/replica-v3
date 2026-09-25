@@ -1,5 +1,38 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: separately authorized final-native posthoc evaluation
+
+The user authorized a no-learning final evaluation and B verification while
+retaining the original limits and failed run. The actual endpoint is3069
+(model17981/Adam3645), not the3070 estimate at the time of the question:
+three deadline-discarded backwards left3069 committed updates. The original
+3072 plan, terminal INTEGRITY_FAIL/resume=false and all earlier raw remain
+unchanged. A new typed posthoc plan is not a training Study and cannot be used
+by the training command. It binds the original plan/terminal/trace, native
+physical hash, source/runtime and prior usage. No optimizer/native rewrite,
+candidate promotion or planned3072 acceptance is authorized.
+An immutable sibling registration binds one output root to this predecessor;
+changing the output path cannot obtain a second fresh call allowance.
+
+One final main observation covers V/VC/S1Q1 each512, word/renamed each192,
+FULL train1536, OLD_FULL64 and the same teacher64. B reuses normal32 plus at
+most32 failure/query-mate cases and teacher8. This adds at most3584 generation
+and72 teacher calls to prior3280/64; cumulative caps remain8448/144 and7200s
+(prior active3035.100428542s). All new optimizer/backward counts are0. The
+same FULL requests, strict raw scorer, normal greedy and Metal F32 apply.
+RETURNED is reused across time segments, including wrong answers; missing,
+UNKNOWN, cancel, mixed failure and changed native/policy remain blocking.
+
+Original-study logical1044907746bytes plus new posthoc model/raw stay within
+the existing1GiB owned-artifact cap; preparation reserves26738688bytes and
+collection rechecks remaining headroom. Executables/build/test evidence are
+reported separately, without claiming the aggregate three-root footprint
+previously measured at1106603756bytes was within1GiB. No model/corpus copy,
+cleanup, move or full inventory is part of this authorization. Relevant
+zero-call boundary regressions and independent review precede collection.
+Final scores are POST_HOC_DIAGNOSTIC, with original budget closure and
+GOAL1_READY=false retained even if some development thresholds pass.
+
 ## Closed by backward budget: full response fit
 
 The frozen source80ec58a37bf50d41a919a0ddfed86b4c969fd4b8 executed3,069

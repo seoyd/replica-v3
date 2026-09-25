@@ -7,6 +7,7 @@ const CONTRACT:&str="R3-METAL-F32-MUON-QUALITY-1.0";
 const ARMS:[&str;2]=["A","M"];
 const EVENT_CONTRACT:&str="R3-SELECTED-EVENT-ID-PROTOCOL-1.1";
 const FIT_CONTRACT:&str="R3-FULL-RESPONSE-FIT-1.0";
+const FIT_POSTHOC:&str="R3-FULL-RESPONSE-FIT-POSTHOC-1.0";
 const FIT_STEPS:[usize;5]=[256,768,1536,2304,3072];
 const EVENT_SYSTEM:&str="제공된 기록과 질문만으로 답하세요. 질문에서 지정한 출력 형식만 사용하세요. 기록에 없는 정보를 만들지 마세요. 근거가 없거나 모호하면 구별해서 유보하세요. 순서만으로 원인을 단정하지 마세요.";
 const EVENT_TASK:&str="유효한 현재 기록의 사건 번호만 8자리 숫자로 답하라.";
@@ -14,6 +15,9 @@ const EVENT_TASK:&str="유효한 현재 기록의 사건 번호만 8자리 숫�
 mod diagnosis;
 #[derive(Subcommand)]
 pub enum Action {
+    FullFitPosthocPrepare { #[arg(long)] original:PathBuf, #[arg(long)] output:PathBuf },
+    FullFitPosthocAdmit { #[arg(long)] root:PathBuf, #[arg(long)] review:PathBuf },
+    FullFitPosthoc { #[arg(long)] root:PathBuf, #[arg(long,value_parser=["evaluate","report","review"])] phase:String },
     FullFitPrepare { #[arg(long)] prior_study:PathBuf, #[arg(long)] review_b:PathBuf, #[arg(long)] output:PathBuf },
     EventPrepare { #[arg(long)] diagnosis:PathBuf, #[arg(long)] audit:PathBuf, #[arg(long)] output:PathBuf },
     /// Separately authorized, read-only endpoint observations; never resumes training.
@@ -47,6 +51,14 @@ struct FullFit {
     source_tape_hash:String, source_offset:usize, train_order:Vec<usize>,
     prior_full_exposure:Vec<usize>, semantic_other_exposure:Vec<usize>,
     exact_identities:Vec<String>, schedule:Vec<usize>,
+}
+/// Evaluation authority only. Deliberately not a Study/training plan.
+#[derive(Clone,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FitPosthoc {
+    contract:String,root:PathBuf,original:PathBuf,plan_hash:String,terminal_hash:String,
+    endpoint:Progress,trace_hash:String,prior_usage:(f64,usize,usize),original_bytes:u64,
+    source:String,runtime:RuntimeProfile,
 }
 #[derive(Clone,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -727,11 +739,153 @@ fn fit_report(s:&Study)->Result<()> {
     println!("FULL_FIT_TRAIN_GROUPS {groups:?}");
     println!("FULL_FIT_CLOSED class={class} development={dev} full_train_fit={fit} step={} Adam={} cursor={} stop={:?} native={} hash={} usage={:?} bytes={} Goal1=false",s.parent_step+p.local,s.clock(p.local),p.local,p.stop,p.native.display(),p.physical,previous_usage(s,&h)?,owned_bytes(&s.root)?);Ok(())
 }
+fn fit_posthoc_origin(root:&Path)->Result<(Study,Progress,binary::Value,(f64,usize,usize))>{
+    let s=load_study(root,false)?;let h=history(&s)?;
+    let end=h.last().ok_or_else(||bad("posthoc original terminal missing"))?;
+    let trace=fit_trace(&s,&h)?;
+    fit_posthoc_stop(&s,end,&trace)?;
+    let p=end.arms[0].clone();let (m,_)=checkpoint::metadata(&p.native)?;
+    let st=m.training.as_ref().ok_or_else(||bad("posthoc native state missing"))?;
+    let op=m.optimizer_protocol.as_ref().ok_or_else(||bad("posthoc Adam identity missing"))?;
+    op.validate(&m.architecture,st)?;
+    if st.step!=s.parent_step+p.local||st.sampler_state!=p.local as u64||st.config!=s.config
+        ||op.local_step!=s.clock(p.local)||st.resume_binding!=Some(bind(&s,0,st,&scoring_tokenizer(&s)?)?){return Err(bad("posthoc native/clock/policy mismatch"));}
+    let a:binary::Value=read_confirmed(&s.root.join("review-a.r3b"))?;
+    let mut usage=(a["active_seconds"].as_f64().filter(|n|n.is_finite()&&*n>=0.).ok_or_else(||bad("posthoc A usage UNKNOWN"))?,0usize,0usize);
+    let mut controls=h.iter().map(|r|r.control.clone()).collect::<Vec<_>>();
+    for label in ["baseline","review-F"]{controls.extend(observation_history(&s,label)?.into_iter().map(|r|r["control"].clone()));}
+    for (i,c) in controls.iter().enumerate(){
+        if i!=h.len()-1&&c["observed_conditions"].as_array().is_none_or(|v|v.iter().any(|x|x!="TIME_BUDGET")){return Err(bad("posthoc mixed original failure"));}
+        usage.0+=c["elapsed_seconds"].as_f64().filter(|n|n.is_finite()&&*n>=0.).ok_or_else(||bad("posthoc elapsed UNKNOWN"))?;
+        usage.1+=c["generation_calls"].as_u64().ok_or_else(||bad("posthoc generation UNKNOWN"))?as usize;
+        usage.2+=c["teacher_calls"].as_u64().ok_or_else(||bad("posthoc teacher UNKNOWN"))?as usize;
+    }
+    if usage.1>s.generation_cap||usage.2>s.teacher_cap{return Err(bad("posthoc original call cap"));}
+    Ok((s,p,trace,usage))
+}
+fn fit_posthoc_stop(s:&Study,end:&Segment,trace:&binary::Value)->Result<()> {
+    if s.full_fit.is_none()||end.arms.len()!=1||end.success||end.resume||end.arms[0].fit||end.arms[0].stop.is_some()
+        ||end.error.as_deref()!=Some(bad("FULL_FIT backward budget exhausted").to_string().as_str())
+        ||end.control["observed_conditions"]!=binary::record!(["INTEGRITY_FAIL"])
+        ||trace["backward"]!=s.max_updates||trace["updates"]!=end.arms[0].local||end.arms[0].local>=s.max_updates {
+        return Err(bad("posthoc scope requires only the verified backward-cap endpoint"));
+    }Ok(())
+}
+fn fit_posthoc_output(original:&Path,output:&Path)->Result<PathBuf>{
+    let requested=output.parent().ok_or_else(||bad("posthoc output parent"))?.canonicalize()?.join(output.file_name().ok_or_else(||bad("posthoc output name"))?);
+    if requested.starts_with(original)||requested.try_exists()?{return Err(bad("posthoc output must be new and outside the original"));}Ok(requested)
+}
+fn fit_posthoc_register(original:&Path,value:&binary::Value)->Result<()> {
+    let path=original.with_extension("full-fit-posthoc.r3b");
+    if path.try_exists()?||pending_path(&path).try_exists()?{return Err(bad("posthoc scope already registered or pending"));}
+    publish_confirmed(&path,value)
+}
+fn fit_posthoc_prepare(original:&Path,output:&Path)->Result<()> {
+    let(s,p,trace,usage)=fit_posthoc_origin(original)?;
+    let requested=fit_posthoc_output(&s.root,output)?;
+    if usage.1+3584>s.generation_cap||usage.2+72>s.teacher_cap||usage.0>=s.active_cap{return Err(bad("posthoc remaining original budget insufficient"));}
+    // Scoped model/raw cap; retained build executables are reported separately.
+    let original_bytes=owned_bytes(&s.root)?;
+    if original_bytes.saturating_add(3584*7*1024+1024*1024)>s.bytes_cap{return Err(bad("posthoc model/raw headroom insufficient"));}
+    let device=Backend::Metal0.open()?;let runtime=RuntimeProfile::capture(Backend::Metal0,&device)?;
+    let mut old=s.runtime.clone();old.binary=runtime.binary.clone();if old!=runtime{return Err(bad("posthoc runtime changed beyond executable"));}
+    // One explicit observation scope per predecessor, outside the read-only run.
+    // A second output directory cannot reset its inherited call allowance.
+    fit_posthoc_register(&s.root,&binary::record!({"contract":FIT_POSTHOC,"original_plan":file_hash(&s.root.join("plan.r3b"))?,"output":requested}))?;
+    std::fs::create_dir(output)?;let root=output.canonicalize()?;std::fs::create_dir(root.join("F"))?;
+    let d=FitPosthoc{contract:FIT_POSTHOC.into(),root:root.clone(),original:s.root.clone(),plan_hash:file_hash(&s.root.join("plan.r3b"))?,
+        terminal_hash:file_hash(&s.root.join(format!("segment-{:03}-finished.r3b",history(&s)?.len()-1)))?,endpoint:p,
+        trace_hash:digest(&trace)?,prior_usage:usage,original_bytes,source:sources()?,runtime};
+    publish_confirmed(&root.join("posthoc-plan.r3b"),&d)?;
+    println!("FULL_FIT_POSTHOC_PREPARED policy={} original={} cursor={} model={} Adam={} prior={:?} original_bytes={} new_model_copies=0 calls0 A_PENDING",digest(&d)?,d.plan_hash,d.endpoint.local,s.parent_step+d.endpoint.local,s.clock(d.endpoint.local),usage,original_bytes);Ok(())
+}
+fn fit_posthoc_load(root:&Path,execute:bool)->Result<(FitPosthoc,Study)>{
+    let d:FitPosthoc=read_confirmed(&root.join("posthoc-plan.r3b"))?;
+    if d.contract!=FIT_POSTHOC||d.root!=root.canonicalize()?||d.root==d.original{return Err(bad("posthoc root/contract"));}
+    let(s,p,trace,usage)=fit_posthoc_origin(&d.original)?;
+    let registration=d.original.with_extension("full-fit-posthoc.r3b");
+    let registered:binary::Value=read_confirmed(&registration)?;
+    if registered!=binary::record!({"contract":FIT_POSTHOC,"original_plan":d.plan_hash,"output":d.root}){return Err(bad("posthoc scope registration mismatch"));}
+    let terminal=s.root.join(format!("segment-{:03}-finished.r3b",history(&s)?.len()-1));
+    if d.plan_hash!=file_hash(&s.root.join("plan.r3b"))?||d.terminal_hash!=file_hash(&terminal)?||digest(&p)?!=digest(&d.endpoint)?
+        ||d.trace_hash!=digest(&trace)?||d.prior_usage!=usage||d.original_bytes!=owned_bytes(&s.root)?{return Err(bad("posthoc original changed"));}
+    if execute{
+        if d.source!=sources()?{return Err(bad("posthoc frozen source changed"));}d.runtime.verify(&Backend::Metal0.open()?)?;
+        let a:binary::Value=read_confirmed(&root.join("posthoc-admission.r3b"))?;
+        let path=Path::new(a["report"].as_str().ok_or_else(||bad("posthoc independent A absent"))?);
+        if a["policy"]!=digest(&d)?||a["report_hash"]!=file_hash(path)?||a["accepted"]!=true{return Err(bad("posthoc independent A changed"));}
+    }
+    // Collector view only; never serialize this as a Study or alter native state.
+    let mut view=s;view.root=d.root.clone();view.source=d.source.clone();view.runtime=d.runtime.clone();
+    view.costs["posthoc_policy"]=binary::record!(digest(&d)?);
+    view.bytes_cap=view.bytes_cap.checked_sub(d.original_bytes+std::fs::metadata(&registration)?.len()).ok_or_else(||bad("posthoc byte budget exhausted"))?;
+    Ok((d,view))
+}
+fn fit_posthoc_admit(root:&Path,review:&Path)->Result<()> {
+    let(d,_)=fit_posthoc_load(root,false)?;let r:binary::Value=read(review)?;
+    if r["contract"]!=FIT_POSTHOC||r["policy"]!=digest(&d)?||r["source"]!=d.source||r["runtime"]!=binary::record!(d.runtime)
+        ||r["verdict"]!="PASS"||r["boundaries"]!=binary::record!(["immutable_origin","zero_update","aggregate_budget","returned_resume"]){return Err(bad("posthoc independent A incomplete"));}
+    publish_confirmed(&root.join("posthoc-admission.r3b"),&binary::record!({"policy":digest(&d)?,"report":review.canonicalize()?,"report_hash":file_hash(review)?,"accepted":true}))?;Ok(())
+}
+fn fit_posthoc_usage(d:&FitPosthoc,s:&Study)->Result<(f64,usize,usize)>{
+    let mut usage=d.prior_usage;
+    for label in ["posthoc","review-F"]{for r in observation_history(s,label)?{let c=&r["control"];
+        if c["observed_conditions"].as_array().is_none_or(|v|v.iter().any(|x|x!="TIME_BUDGET")){return Err(bad("posthoc sticky failure"));}
+        usage.0+=c["elapsed_seconds"].as_f64().filter(|n|n.is_finite()&&*n>=0.).ok_or_else(||bad("posthoc time UNKNOWN"))?;
+        usage.1+=c["generation_calls"].as_u64().ok_or_else(||bad("posthoc calls UNKNOWN"))?as usize;
+        usage.2+=c["teacher_calls"].as_u64().ok_or_else(||bad("posthoc teacher UNKNOWN"))?as usize;
+    }}
+    if usage.1>s.generation_cap||usage.2>s.teacher_cap{return Err(bad("posthoc aggregate call cap"));}Ok(usage)
+}
+fn fit_posthoc_start(d:&FitPosthoc,s:&Study,label:&str,b:&binary::Value)->Result<(usize,RunControl)>{
+    let(time,g,t)=fit_posthoc_usage(d,s)?;guard_bytes(s,1024*1024)?;
+    let cancel=std::sync::Arc::new(AtomicBool::new(false));let signal=cancel.clone();
+    ctrlc::set_handler(move||signal.store(true,Ordering::Relaxed)).map_err(|e|bad(&e.to_string()))?;
+    let mut ctl=RunControl::new(cancel,std::time::Duration::from_secs_f64((s.active_cap-time).max(0.).min(s.segment_cap)),12*1024*1024)?;
+    ctl.set_call_limits(s.generation_cap-g,s.teacher_cap-t);
+    start_observation_control(s,label,b,ctl)
+}
+fn fit_posthoc_scores(s:&Study,p:&Progress)->Result<BTreeMap<String,binary::Value>>{
+    let model=checkpoint::metadata(&p.native)?.0.model_content_digest;let mut scores=BTreeMap::new();
+    for panel in fit_panels(s)?{let(r,_)=event_read_panel(s,"F",p.local,&model,&panel,panel.1.len())?;scores.insert(panel.0,r);}
+    event_read_teachers(s,0,p,0)?;Ok(scores)
+}
+fn fit_posthoc_collect(s:&Study,p:&Progress,l:&checkpoint::Loaded,panel:&Panel,ctl:&mut RunControl)->Result<()> {
+    for begin in (0..panel.1.len()).step_by(64){
+        guard_bytes(s,1024*1024)?;
+        event_panel_score(s,"F",p.local,l,panel,(begin+64).min(panel.1.len()),ctl)?;
+    }Ok(())
+}
+fn fit_posthoc_run(root:&Path,phase:&str)->Result<()> {
+    let(d,s)=fit_posthoc_load(root,phase!="report")?;let p=&d.endpoint;
+    match phase{
+        "evaluate"=>{
+            let b=binary::record!({"posthoc":digest(&d)?,"native":p.physical,"panels":[512,512,512,192,192,1536,64],"teacher":64,"optimizer":0,"backward":0});
+            let(i,mut ctl)=fit_posthoc_start(&d,&s,"posthoc",&b)?;
+            let result=(||->Result<()>{let l=checkpoint::load(&p.native,Backend::Metal0.open()?,false)?;
+                for panel in fit_panels(&s)?{fit_posthoc_collect(&s,p,&l,&panel,&mut ctl)?;}
+                guard_bytes(&s,1024*1024)?;fit_teacher(&s,&l,p,&mut ctl)?;
+                fit_posthoc_scores(&s,p)?;ctl.seal_completed_no_call()?;Ok(())})();
+            finish_observation(&s,"posthoc",i,&mut ctl,&result,binary::record!({"scope":"POST_HOC_DIAGNOSTIC","model_step":s.parent_step+p.local,"cursor":p.local,"planned_3072_completed":false,"candidate_eligible":false,"optimizer":0,"backward":0}))?;
+            println!("POSTHOC_SEGMENT index={i} cursor={} control={} result={:?}",p.local,ctl.receipt(),result.as_ref().err().map(ToString::to_string));result
+        },
+        "report"|"review"=>{
+            let h=observation_history(&s,"posthoc")?;if h.last().is_none_or(|r|r["success"]!=true){return Err(bad("posthoc final incomplete"));}
+            let scores=fit_posthoc_scores(&s,p)?;let usage=fit_posthoc_usage(&d,&s)?;
+            for(name,r)in &scores{println!("POSTHOC_RESULT cursor={} {name} {}",p.local,r);}
+            println!("POSTHOC_ONLY model={} Adam={} cursor={} dev_gate={} train_gate={} usage={usage:?} original_resume=false candidate_eligible=false Goal1=false bytes={}",s.parent_step+p.local,s.clock(p.local),p.local,fit_development(&scores),fit_quality(&scores["FULL-train"],"FULL-train"),owned_bytes(&s.root)?);
+            if phase=="review"{fit_replay(&s,p,scores,Some(&d))?;}Ok(())
+        },_=>Err(bad("unknown posthoc phase"))
+    }
+}
 fn fit_review(s:&Study)->Result<()> {
     fit_report(s)?;
     let h=history(s)?;let end=h.last().ok_or_else(||bad("FULL_FIT endpoint absent"))?;
     if !end.success||end.resume||!end.arms[0].fit{return Err(bad("FULL_FIT B requires normal endpoint"));}let p=&end.arms[0];
-    let scores=fit_read_endpoint(s,p,true)?;let model=checkpoint::metadata(&p.native)?.0.model_content_digest;
+    let scores=fit_read_endpoint(s,p,true)?;fit_replay(s,p,scores,None)
+}
+fn fit_replay(s:&Study,p:&Progress,scores:BTreeMap<String,binary::Value>,posthoc:Option<&FitPosthoc>)->Result<()> {
+    let model=checkpoint::metadata(&p.native)?.0.model_content_digest;
     let mut all=vec![];let mut raw=vec![];let mut normal=BTreeSet::new();let mut ranks:[Vec<usize>;5]=Default::default();
     for (panel,take)in fit_panels(s)?.into_iter().take(5).zip([8,6,6,6,6]){
         let n=scores[&panel.0]["joint"]["total"].as_u64().unwrap()as usize;let(_,rows)=event_read_panel(s,"F",p.local,&model,&panel,n)?;
@@ -746,8 +900,8 @@ fn fit_review(s:&Study)->Result<()> {
     for rank in &ranks{for &i in rank{for at in [i,i^1]{if selected.len()<64&&at<all.len()&&seen.insert(at){selected.push(at);}}}}
     if normal.len()!=32||selected.iter().any(|i|!seen.contains(&(i^1))){return Err(bad("FULL_FIT B normal/mate coverage"));}
     let es=selected.iter().map(|&i|all[i].clone()).collect::<Vec<_>>();let expected=selected.iter().map(|&i|raw[i].clone()).collect::<Vec<_>>();
-    let teacher=[1536,3072].contains(&p.local);let manifest=binary::record!({"policy":digest(s)?,"native":p.physical,"cases":digest(&es)?,"normal":normal,"selected":selected,"teacher_indices":if teacher{vec![0,1,16,17,32,33,60,61]}else{vec![]}});
-    let(index,mut ctl)=start_observation(s,"review-F",&manifest)?;
+    let teacher=posthoc.is_some()||[1536,3072].contains(&p.local);let manifest=binary::record!({"policy":digest(s)?,"native":p.physical,"cases":digest(&es)?,"normal":normal,"selected":selected,"teacher_indices":if teacher{vec![0,1,16,17,32,33,60,61]}else{vec![]}});
+    let(index,mut ctl)=if let Some(d)=posthoc{fit_posthoc_start(d,s,"review-F",&manifest)?}else{start_observation(s,"review-F",&manifest)?};
     let result=(||->Result<()>{let l=checkpoint::load(&p.native,Backend::Metal0.open()?,false)?;
         let binding=binary::record!({"policy":digest(s)?,"source":s.source,"runtime":s.runtime,"native":p.physical,"cases":digest(&es)?,"call_protocol":1});
         let actual=generated(&l,&s.root,"review-F",&es,&binding,&mut ctl)?;
@@ -879,9 +1033,12 @@ fn observation_history(s:&Study,label:&str)->Result<Vec<binary::Value>>{
     }Ok(records)
 }
 fn start_observation(s:&Study,label:&str,binding:&binary::Value)->Result<(usize,RunControl)>{
+    let h=history(s)?;let c=control(s,&h)?;start_observation_control(s,label,binding,c)
+}
+fn start_observation_control(s:&Study,label:&str,binding:&binary::Value,c:RunControl)->Result<(usize,RunControl)>{
     let previous=observation_history(s,label)?;
     if previous.last().is_some_and(|r|r["success"]==true){return Err(bad("observation already complete; pure report only"));}
-    let h=history(s)?;let c=control(s,&h)?;let i=previous.len();
+    let i=previous.len();
     let fixed=s.root.join(format!("{label}-started.r3b"));
     if fixed.exists(){if read_confirmed::<binary::Value>(&fixed)?!=*binding{return Err(bad("observation binding changed"));}}else{publish_confirmed(&fixed,binding)?;}
     publish_confirmed(&s.root.join(format!("{label}-segment-{i:03}-started.r3b")),&binary::record!({"policy":digest(s)?,"binding":file_hash(&fixed)?,"segment":i}))?;Ok((i,c))
@@ -1236,6 +1393,9 @@ fn review(s:&Study,arm:usize)->Result<()> {
 }
 pub fn run(a:Action)->Result<()> {
     match a {
+        Action::FullFitPosthocPrepare{original,output}=>fit_posthoc_prepare(&original,&output),
+        Action::FullFitPosthocAdmit{root,review}=>fit_posthoc_admit(&root,&review),
+        Action::FullFitPosthoc{root,phase}=>fit_posthoc_run(&root,&phase),
         Action::FullFitPrepare{prior_study,review_b,output}=>fit_prepare(&prior_study,&review_b,&output),
         Action::Diagnose{command}=>diagnosis::run(command),
         Action::EventPrepare{diagnosis,audit,output}=>event_prepare(&diagnosis,&audit,&output),
@@ -1337,6 +1497,62 @@ impl Optimizer {
 #[cfg(all(test,feature="metal"))]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore="read-only real budget endpoint; no optimizer/backward/generation/teacher"]
+    fn full_fit_posthoc_scope()->Result<()> {
+        let root=PathBuf::from(std::env::var("R3_FULL_FIT_PREPARATION").map_err(|_|bad("explicit completed fit root"))?);
+        let(s,p,trace,usage)=fit_posthoc_origin(&root)?;let h=history(&s)?;let end=h.last().unwrap();
+        assert!(fit_posthoc_output(&s.root,&s.root).is_err());assert!(fit_posthoc_output(&s.root,&s.root.join("posthoc-forbidden")).is_err());
+        assert!(fit_posthoc_output(&s.root,&s.root.with_extension("new-posthoc-fixture")).is_ok());
+        let scratch=std::env::temp_dir().join(format!("replica-posthoc-registration-{}",std::process::id()));std::fs::create_dir(&scratch)?;
+        let original=scratch.join("original");let value=binary::record!({"explicit_test_spec":true});fit_posthoc_register(&original,&value)?;
+        let registered=original.with_extension("full-fit-posthoc.r3b");let before=file_hash(&registered)?;
+        assert!(fit_posthoc_register(&original,&value).is_err());assert_eq!(before,file_hash(&registered)?);assert!(!pending_path(&registered).exists());
+        assert_eq!(p.local,3069);assert_eq!(trace["backward"],3072);assert_eq!(usage.1,3280);assert_eq!(usage.2,64);
+        for mode in 0..5{let mut wrong=end.clone();match mode{0=>wrong.resume=true,1=>wrong.success=true,2=>wrong.arms[0].fit=true,
+            3=>wrong.control["observed_conditions"]=binary::record!(["INTEGRITY_FAIL","CANCELLED"]),_=>wrong.error=Some("UNKNOWN".into())};assert!(fit_posthoc_stop(&s,&wrong,&trace).is_err());}
+        let mut wrong=trace.clone();wrong["backward"]=binary::record!(3071);assert!(fit_posthoc_stop(&s,end,&wrong).is_err());
+        assert!(previous_usage(&s,&h).is_err(),"original sticky failure must remain blocked");
+        println!("POSTHOC_SCOPE budget-only endpoint; old failure unchanged; all model calls0");Ok(())
+    }
+    #[test]
+    #[ignore="new-process four-row explicit fixture on production collector, all model calls0"]
+    fn full_fit_posthoc_returned_process()->Result<()> {
+        if let Ok(root)=std::env::var("R3_POSTHOC_RETURNED_CHILD"){
+            let root=PathBuf::from(root);let s:Study=read_confirmed(&root.join("fixture-view.r3b"))?;
+            let p:Progress=read_confirmed(&root.join("fixture-endpoint.r3b"))?;
+            let mut panel=fit_panels(&s)?.remove(3);panel.1.truncate(4);panel.2.truncate(4);
+            let mut ctl=RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),std::time::Duration::ZERO,u64::MAX)?;ctl.set_call_limits(0,0);
+            let b=event_binding(&s,"F",p.local,&checkpoint::metadata(&p.native)?.0.model_content_digest,&panel)?;
+            let(i,mut ctl)=start_observation_control(&s,"posthoc",&b,ctl)?;
+            let l=checkpoint::load(&p.native,Device::Cpu,false)?;
+            fit_posthoc_collect(&s,&p,&l,&panel,&mut ctl)?;ctl.seal_completed_no_call()?;
+            finish_observation(&s,"posthoc",i,&mut ctl,&Ok(()),binary::record!({"test_spec_count":4,"optimizer":0,"backward":0}))?;
+            assert_eq!(ctl.receipt()["generation_calls"],0);assert_eq!(ctl.receipt()["teacher_calls"],0);
+            assert_eq!(observation_history(&s,"posthoc")?.last().unwrap()["success"],true);
+            assert!(start_observation_control(&s,"posthoc",&b,ctl).is_err(),"complete observations are read-only");
+            return Ok(());
+        }
+        let original=PathBuf::from(std::env::var("R3_FULL_FIT_PREPARATION").map_err(|_|bad("explicit completed fit root"))?);
+        let(mut s,p,_,_)=fit_posthoc_origin(&original)?;let original_terminal=file_hash(&original.join("segment-004-finished.r3b"))?;
+        let root=std::env::temp_dir().join(format!("replica-fit-posthoc-{}",std::process::id()));std::fs::create_dir(&root)?;std::fs::create_dir(root.join("F"))?;
+        s.root=root.clone();let l=checkpoint::load(&p.native,Device::Cpu,false)?;
+        let mut panel=fit_panels(&s)?.remove(3);panel.1.truncate(4);panel.2.truncate(4);
+        let b=event_binding(&s,"F",p.local,&l.model.weights_content_id()?,&panel)?;let label=format!("eval-{}-{}",p.local,panel.0);
+        event_returned_fixture_faults(&s,&root.join("F"),&label,&b,&panel.1,&l.tokenizer,false,0..2)?;
+        let path=root.join("F").join(format!("{label}.r3rows"));let before=file_hash(&path)?;
+        publish_confirmed(&root.join("fixture-view.r3b"),&s)?;publish_confirmed(&root.join("fixture-endpoint.r3b"),&p)?;
+        let status=std::process::Command::new(std::env::current_exe()?).args(["--exact","training::fresh::muon::tests::full_fit_posthoc_returned_process","--ignored","--nocapture","--test-threads=1"]).env("R3_POSTHOC_RETURNED_CHILD",&root).status()?;
+        assert!(status.success());assert_eq!(before,file_hash(&path)?);assert_eq!(original_terminal,file_hash(&original.join("segment-004-finished.r3b"))?);
+        let(r,_)=event_read_panel(&s,"F",p.local,&l.model.weights_content_id()?,&panel,4)?;assert_eq!(r["joint"]["full"],2);
+        // Missing rows at exhausted time are never generated or called complete.
+        let missing="fixture-missing";let zero=RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),std::time::Duration::ZERO,u64::MAX)?;
+        let(i,mut zero)=start_observation_control(&s,missing,&b,zero)?;
+        let result=generated_until(&l,&root,missing,&panel.1,&b,&mut zero,4).map(|_|());assert!(result.is_err());
+        finish_observation(&s,missing,i,&mut zero,&result,binary::record!({"test_spec_count":4}))?;
+        assert!(!root.join(format!("{missing}-finished.r3b")).exists());assert_eq!(zero.receipt()["generation_calls"],0);
+        println!("POSTHOC_RETURNED fixture={} complete wrong rows preserved; new-process/final/missing calls0",root.display());Ok(())
+    }
     #[test]
     fn full_fit_guard_and_legacy_encoding()->Result<()> {
         let mut j=binary::record!({"total":64,"full":64,"all4":16,"errors":0});assert_eq!(fit_guard_panel(1,&j)?,(0,false));

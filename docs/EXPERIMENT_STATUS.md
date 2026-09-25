@@ -1,5 +1,50 @@
 # 진단 및 구현 상태
 
+## 2026-09-25 Full response fit — separately authorized final-native diagnosis
+
+The user authorized final-native no-learning evaluation and B verification
+without extending the original limits. Actual final native is3069/model17981/
+Adam3645; the earlier question's3070 estimate preceded the third discarded
+backward. Original backward3072, terminal INTEGRITY_FAIL/resume=false, raw,
+models and protected11264 remain unchanged. New optimizer/backward are0.
+
+The existing muon CLI now has full-fit-posthoc-prepare, full-fit-posthoc-admit,
+and full-fit-posthoc --phase evaluate/report/review. A separate typed native
+plan binds the original plan/terminal/trace, same native and remaining usage.
+It cannot be loaded as a training Study. One sibling registration prevents
+fresh budgets through another output root; identical/internal/existing output
+is rejected before writes, and duplicate registration cannot poison a valid
+registration with a pending marker. Existing observer, panel/teacher/scorer,
+RunControl and B reproduction code are shared. No model/corpus copy or new
+module/framework was added. Only the executable runtime identity changes.
+
+Final-source direct tests full_fit_posthoc_scope and
+full_fit_posthoc_returned_process each executed one test and passed in6.57s
+and8.00s. The second includes a fresh child process. A four-row explicit
+fixture preserves two wrong RETURNED rows and finalizes at zero call/time
+allowance; missing rows remain incomplete. All test optimizer/backward/
+generation/teacher calls are0. Earlier compile/error logs remain in
+`artifacts/full-response-fit-posthoc-20260925-evidence`; initial missing
+delimiter was fixed, and unchanged vendor/dead-code warnings were not cleaned
+up. Original source/Metal/scorer acceptance was not repeated.
+
+Main evaluation plans3520 generations and64 teacher examples. B adds normal32
+plus at most32 failure/query-mate cases and8 teacher examples; aggregate
+maximum6864 generations/136 teacher includes original3280/64, within8448/144.
+Prior active3035.100428542s is charged to the same7200s limit, segments900s.
+The actual new collector has not run at this boundary checkpoint; independent
+A admission precedes it. Results will be POST_HOC_DIAGNOSTIC, never a normal
+3072 result or candidate promotion. Original execution closure follows below.
+
+Preparation exited0 with calls0 at
+`artifacts/full-response-fit-posthoc-20260925-study/posthoc-plan.r3b`;
+policy/physicalb8b3e02a3464632b108d5710ff7815e979c99a82a9aa19e39f8a5ebb866057b1.
+Executor SHA256052c9a7d150b97f5a0b16ac2f7968a721cc529688946163e0e72de06403f54d4;
+testsc6268c9bd3e67d8e2cf689805e353bcf22f614047e089292698a5e09ab209e18.
+Only these two required executables were retained in the new evidence root;
+source patchac36455fd9e1a0eaf42e1494c8ecaa53f1210c967036e265fed37705f745251b.
+Original source for training remains80ec58a37bf50d41a919a0ddfed86b4c969fd4b8.
+
 ## 2026-09-25 Full response fit — backward cap reached before final evaluation
 
 Frozen-source learning ended with3,069 committed optimizer updates and three
