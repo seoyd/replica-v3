@@ -21,8 +21,12 @@ mod identifiable;
 mod metal_runtime;
 #[path = "muon.rs"]
 mod muon;
+#[path = "core_comparison.rs"]
+mod core_comparison;
 #[derive(Subcommand)]
 pub enum Command {
+    /// Fresh independent TR++/dense reset-after GRU on the frozen FULL tape.
+    CoreComparison { #[command(subcommand)] action:core_comparison::Action },
     /// Fixed parent/data Metal F32 optimizer comparison.
     Muon { #[command(subcommand)] action: muon::Action },
     /// Bounded, explicitly registered backend validation; no quality learning.
@@ -1775,6 +1779,7 @@ fn source_digest() -> Result<String> {
 }
 pub fn execute(command: Command) -> Result<()> {
     match command {
+        Command::CoreComparison {action} => core_comparison::run(action),
         Command::MetalRuntime {action} => metal_runtime::run(action),
         Command::Muon {action} => muon::run(action),
         Command::AnswerMeanPrepare { previous,output } => identifiable::binding::citation::mean_prepare(&previous,&output,false),

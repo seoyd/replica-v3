@@ -6,7 +6,7 @@ use replica_v3::event::GenerationLimits;
 use sha2::{Digest as _, Sha256};
 use std::io::{Read, Seek, SeekFrom};
 #[path = "token_cache.rs"]
-mod token_cache;
+pub(in crate::training) mod token_cache;
 
 type Hash = [u8; 32];
 const HEADER: usize = 48;

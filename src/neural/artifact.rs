@@ -1418,3 +1418,97 @@ mod tests {
         }));
     }
 }
+
+/// Explicit opt-in core-comparison container. Existing TR v2/v3 files are unchanged.
+/// Version 4 carries typed core metadata and the existing R3BIN byte payloads.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub enum ComparisonCore {
+    Trpp(Config),
+    Gru(super::gru::Config),
+}
+impl ComparisonCore {
+    pub fn shapes(&self)->Result<BTreeMap<String,Vec<usize>>> {
+        match self {Self::Trpp(c)=>{c.validate()?;Ok(c.shapes())},Self::Gru(c)=>{c.validate()?;Ok(c.shapes())}}
+    }
+    pub fn id(&self)->Result<String>{Ok(super::hash(&crate::binary::to_vec(self)?))}
+}
+#[derive(Clone,Debug,Serialize,Deserialize,PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ComparisonState {
+    pub schema:u32,
+    pub core:ComparisonCore,
+    pub policy:String,
+    pub tokenizer:String,
+    pub framing:[u8;32],
+    pub runtime:super::RuntimeProfile,
+    pub objective:u8,
+    pub optimizer:String,
+    pub config:TrainConfig,
+    pub committed:usize,
+    pub adam_clock:usize,
+    pub input_tokens:u64,
+    pub target_tokens:u64,
+}
+impl ComparisonState {
+    fn validate(&self)->Result<()> {
+        self.core.shapes()?;
+        let context=match &self.core{ComparisonCore::Trpp(c)=>c.context,ComparisonCore::Gru(c)=>c.context};
+        self.config.validate(context)?;
+        if self.schema!=1||self.objective!=checkpoint::ANSWER_MEAN_FAMILY||self.optimizer!="FRESH_ADAMW_ALL_V1"
+            ||self.committed!=self.adam_clock||self.committed>self.config.max_steps||self.target_tokens>self.input_tokens
+            ||self.framing!=super::Framing::QuestionEvidence.digest()
+            ||[&self.policy,&self.tokenizer].iter().any(|v|v.len()!=64||!v.bytes().all(|c|c.is_ascii_hexdigit())) {
+            return Err(bad("comparison core/policy/objective/clock"));
+        }Ok(())
+    }
+}
+#[derive(Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ComparisonArchive {state:ComparisonState, tensors:BTreeMap<String,crate::binary::Value>}
+fn comparison_tensors(a:&ComparisonArchive,device:&Device)->Result<(TensorMap,TensorMap)> {
+    a.state.validate()?;
+    let shapes=a.state.core.shapes()?;
+    if a.tensors.len()!=shapes.len()*3{return Err(bad("comparison model/Adam count"));}
+    let mut model=TensorMap::new();let mut adam=TensorMap::new();
+    for(name,shape)in shapes {
+        for prefix in ["model.","adam.m.","adam.v."]{
+            let key=format!("{prefix}{name}");
+            let Some(crate::binary::Value::Bytes(bytes))=a.tensors.get(&key) else{return Err(bad("comparison missing tensor bytes"))};
+            if bytes.len()!=shape.iter().product::<usize>()*4{return Err(bad("comparison tensor shape bytes"));}
+            let values=bytes.chunks_exact(4).map(|b|f32::from_le_bytes(b.try_into().unwrap())).collect::<Vec<_>>();
+            if values.iter().any(|v|!v.is_finite() || prefix=="adam.v."&&*v<0.)
+                || a.state.committed==0 && prefix!="model." && values.iter().any(|v|*v!=0.) {return Err(bad("comparison nonfinite/moment state"));}
+            let tensor=Tensor::from_vec(values,shape.clone(),device)?;
+            if prefix=="model."{model.insert(name.clone(),tensor);}else{adam.insert(key,tensor);}
+        }
+    }Ok((model,adam))
+}
+pub fn save_comparison(path:&Path,state:ComparisonState,vars:&BTreeMap<String,candle_core::Var>,adam:&TensorMap)->Result<()> {
+    state.validate()?;
+    let mut tensors=BTreeMap::new();
+    for(n,v)in vars {v.device().synchronize()?;tensors.insert(format!("model.{n}"),crate::binary::Value::Bytes(tensor_bytes(v)?));}
+    for(n,t)in adam{if tensors.insert(n.clone(),crate::binary::Value::Bytes(tensor_bytes(t)?)).is_some(){return Err(bad("comparison duplicate tensor"));}}
+    let archive=ComparisonArchive{state,tensors};
+    let _=comparison_tensors(&archive,&Device::Cpu)?;
+    let payload=crate::binary::to_vec(&archive)?;
+    let mut prefix=[0u8;PREFIX];prefix[..8].copy_from_slice(MAGIC);prefix[8..10].copy_from_slice(&4u16.to_le_bytes());prefix[10]=ArtifactKind::Resume.tag();
+    prefix[16..24].copy_from_slice(&((PREFIX+payload.len())as u64).to_le_bytes());prefix[24..56].copy_from_slice(&Sha256::digest(&payload));
+    publish_new_measured(path,|f,_|{f.write_all(&prefix)?;f.write_all(&payload)?;f.seek(SeekFrom::Start(0))?;
+        let decoded=read_comparison(f)?;if decoded.state!=archive.state||decoded.tensors!=archive.tensors{return Err(bad("comparison readback"));}Ok(())})?;Ok(())
+}
+fn read_comparison(file:&mut File)->Result<ComparisonArchive>{
+    let size=file.metadata()?.len();if !(PREFIX as u64..=MAX_FILE).contains(&size){return Err(bad("comparison native size"));}
+    let mut prefix=[0u8;PREFIX];file.read_exact(&mut prefix)?;
+    if &prefix[..8]!=MAGIC||u16::from_le_bytes(prefix[8..10].try_into().unwrap())!=4||prefix[10]!=2
+        ||prefix[11..16].iter().chain(&prefix[56..]).any(|&b|b!=0)
+        ||u64::from_le_bytes(prefix[16..24].try_into().unwrap())!=size{return Err(bad("comparison native header/core version"));}
+    let mut payload=vec![0;size as usize-PREFIX];file.read_exact(&mut payload)?;
+    if Sha256::digest(&payload)[..]!=prefix[24..56]{return Err(bad("comparison checksum"));}
+    Ok(crate::binary::from_canonical_slice(&payload)?)
+}
+pub fn load_comparison(path:&Path,expected:&ComparisonState,device:&Device)->Result<(ComparisonState,TensorMap,TensorMap)> {
+    let archive=read_comparison(&mut File::open(path)?)?;
+    if &archive.state!=expected{return Err(bad("comparison native policy/core/clock/runtime binding"));}
+    let(model,adam)=comparison_tensors(&archive,device)?;Ok((archive.state,model,adam))
+}

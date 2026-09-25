@@ -4355,7 +4355,7 @@ pub(in super::super::super) fn bridge_review(study:&Path,errors:bool)->Result<()
     observed(&study,name,&p,&end.checkpoint_hash,&es,true)?;
     println!("QA_BRIDGE_REVIEW errors={errors} matched={} generation={} teacher0 optimizer0",es.len(),es.len());Ok(())
 }
-fn bridge_old_qa(s:&binary::Value,transfer:bool)->Result<Panel> {
+pub(in crate::training::fresh) fn bridge_old_qa(s:&binary::Value,transfer:bool)->Result<Panel> {
     let path=Path::new(s["old_qa"].as_str().ok_or_else(||bad("bridge original QA path"))?);let name=if transfer{"transfer.r3cor"}else{"corpus.r3cor"};
     let c=verified_corpus(&path.join(name),s["old_qa_hashes"][name].as_str().ok_or_else(||bad("bridge original QA hash"))?)?;
     let bytes=std::fs::read(path.join("metadata.r3b"))?;if s["old_qa_hashes"]["metadata.r3b"]!=neural::hash(&bytes){return Err(bad("bridge original QA metadata"));}
@@ -4671,7 +4671,7 @@ fn qa_score(root:&Path,p:&Plan,step:usize,panel:&Panel)->Result<binary::Value> {
     let raw=binary::read_value_records(&root.join(format!("eval-{step:04}-{name}.r3rows")))?;
     qa_rows_score(panel,&raw[1..],&tok,p.tiny,&summary.model,&summary.raw_hash)
 }
-fn qa_rows_score(panel:&Panel,rows:&[binary::Value],tok:&ByteBpe,tiny:bool,model:&str,raw_hash:&str)->Result<binary::Value> {
+pub(in crate::training::fresh) fn qa_rows_score(panel:&Panel,rows:&[binary::Value],tok:&ByteBpe,tiny:bool,model:&str,raw_hash:&str)->Result<binary::Value> {
     let(name,es,ms)=panel;
     if rows.len()!=es.len()||ms.len()!=es.len(){return Err(bad("QA score complete panel"));}
     for ((e,m),r)in es.iter().zip(ms).zip(rows){if m.id!=e.id||r["id"]!=e.id||r["expected"]!=e.answer{return Err(bad("QA score content binding"));}verify_generated(r,tok)?;}

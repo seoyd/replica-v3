@@ -873,26 +873,42 @@ impl Transformer {
     #[allow(clippy::too_many_arguments)]
     fn generate_inner(
         &self,prompt:&[u32],max_new:usize,timeout_ms:u64,cancel:&AtomicBool,scope:&str,
-        mut observe:impl FnMut(u32),measured:bool,
+        observe:impl FnMut(u32),measured:bool,
     )->Result<Generated>{
+        let mut cache = self.cache(scope);
+        let mut result = greedy_generate(prompt,max_new,timeout_ms,cancel,self.config.context,
+            &self.device,observe,measured,self.config.hidden==32&&self.config.layers==2,
+            |ids| self.forward_cached(&Tensor::new(ids,&self.device)?.unsqueeze(0)?,&mut cache,scope))?;
+        result.cache_bytes=cache.bytes();
+        result.retained=cache.retained_tokens();
+        result.attention_workspace_bytes=cache.max_attention_bytes;
+        Ok(result)
+    }
+}
+/// Shared unrestricted decoder; only the core's state transition differs.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn greedy_generate(
+    prompt:&[u32],max_new:usize,timeout_ms:u64,cancel:&AtomicBool,context:usize,
+    device:&Device,mut observe:impl FnMut(u32),measured:bool,_tiny_fixture:bool,
+    mut forward:impl FnMut(&[u32])->Result<Tensor>,
+)->Result<Generated>{
         if prompt.is_empty()
             || max_new == 0
             || max_new > 512
             || prompt
                 .len()
                 .checked_add(max_new)
-                .is_none_or(|n| n > self.config.context)
+                .is_none_or(|n| n > context)
         {
             return Err(Error::ContextTooSmall);
         }
         let start = Instant::now();
-        let mut cache = self.cache(scope);
         let mut logits = None;
         #[cfg(feature = "test-support")]
         let timeout_after = FIXTURE_TIMEOUT.with(|clock| clock.take());
         #[cfg(feature = "test-support")]
         if timeout_after.is_some() {
-            assert_eq!((self.config.hidden, self.config.layers), (32, 2));
+            assert!(_tiny_fixture);
         }
         #[cfg(feature = "test-support")]
         let observed_tokens = std::cell::Cell::new(0usize);
@@ -914,11 +930,10 @@ impl Transformer {
         };
         for chunk in prompt.chunks(128) {
             check()?;
-            let input = Tensor::new(chunk, &self.device)?.unsqueeze(0)?;
-            logits = Some(self.forward_cached(&input, &mut cache, scope)?);
+            logits = Some(forward(chunk)?);
         }
         let mut logits = logits.expect("nonempty prompt");
-        if measured {self.device.synchronize()?;}
+        if measured {device.synchronize()?;}
         let prefill_ms=start.elapsed().as_millis()as u64;let decode_start=Instant::now();
         let mut tokens = Vec::new();
         let mut first_token_ms = None;
@@ -946,14 +961,10 @@ impl Transformer {
             }
             tokens.push(id);
             if n + 1 < max_new {
-                logits = self.forward_cached(
-                    &Tensor::new(&[id], &self.device)?.unsqueeze(0)?,
-                    &mut cache,
-                    scope,
-                )?;
+                logits = forward(&[id])?;
             }
         }
-        if measured {self.device.synchronize()?;}
+        if measured {device.synchronize()?;}
         Ok(Generated {
             synchronized_phases_ms:measured.then(||(prefill_ms,decode_start.elapsed().as_millis()as u64)),
             tokens,
@@ -961,11 +972,10 @@ impl Transformer {
             finish: finish.into(),
             first_token_ms: first_token_ms.unwrap_or(0),
             generation_ms: start.elapsed().as_millis() as u64,
-            cache_bytes: cache.bytes(),
-            retained: cache.retained_tokens(),
-            attention_workspace_bytes: cache.max_attention_bytes,
+            cache_bytes: 0,
+            retained: vec![],
+            attention_workspace_bytes: 0,
         })
-    }
 }
 #[derive(Debug, Serialize)]
 pub struct Generated {

@@ -3,6 +3,21 @@ use super::*;
 const TOK_HEADER: usize = 320;
 const MAGIC: &[u8; 8] = b"R3TOK\0\0\0";
 
+// The fresh core comparison shares this existing packed format without creating
+// a synthetic experiment-record parent or target-role objective.
+pub(in crate::training) fn comparison_cache(path:&Path, hashes:[[u8;32];6], seq:usize,vocab:usize,
+    samples:&[Sample],create:bool)->Result<Vec<Sample>> {
+    let key=Key {hashes,ordinals:(0..samples.len() as u32).collect(),seq,vocab};
+    let annotations=samples.iter().map(|_|target_loss::Annotation {spans:vec![],fractions:vec![],roles:vec![],supported:false}).collect::<Vec<_>>();
+    if create {
+        let bytes=encode(&key,samples,&annotations)?;
+        publish_new(path,|f,_|{f.write_all(&bytes)?;Ok(())})?;
+    }
+    let packed=decode(neural::read_bounded(path,MAX_FILE)?,&key)?;
+    parity(&packed,samples,&annotations)?;
+    (0..samples.len()).map(|i|packed.sample(i)).collect()
+}
+
 #[derive(Clone)]
 struct Key {
     hashes: [Hash; 6],

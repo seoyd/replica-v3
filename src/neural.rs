@@ -583,3 +583,4 @@ impl ByteBpe {
 pub mod artifact;
 pub mod checkpoint;
 pub mod transformer;
+pub mod gru;

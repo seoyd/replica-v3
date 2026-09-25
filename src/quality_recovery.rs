@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use replica_v3::binary::{Value, record};
 use std::{collections::BTreeSet, io::Write, path::PathBuf, sync::Arc, time::Duration};
 #[path = "experiment_record.rs"]
-mod experiment_record;
+pub(super) mod experiment_record;
 pub(super) fn reject_unbound_objective_resume(path: &Path) -> Result<()> {
     experiment_record::reject_unbound_objective_resume(path)
 }
@@ -1172,6 +1172,23 @@ pub(super) fn observe_generation_profiled(loaded:&Loaded,e:&Episode,request:&Mod
     observe_generation_mode(loaded,e,request,control,false,true)
 }
 fn observe_generation_mode(loaded:&Loaded,e:&Episode,request:&ModelRequest,control:&mut RunControl,automatic_teacher:bool,measured:bool)->ObservedCall<Value> {
+    observe_core_generation(&loaded.tokenizer, loaded.manifest.framing().unwrap_or(neural::Framing::QuestionEvidence),
+        loaded.model.config.context, &loaded.model.config.id().unwrap_or_default(), e, request, control,
+        Some((loaded,automatic_teacher)), false, |prompt,max_new,timeout,cancel,scope,observe| {
+            if measured {loaded.model.generate_profiled(prompt,max_new,timeout,cancel,scope,observe)}
+            else {loaded.model.generate_observed(prompt,max_new,timeout,cancel,scope,observe)}
+        })
+}
+/// Shared normal-generation collector for explicit non-TR comparison cores.
+/// Fresh control-token mistakes are quality failures; all execution failures remain blocking.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn observe_core_generation(
+    tokenizer:&ByteBpe, framing:neural::Framing, context:usize, config_id:&str,
+    e:&Episode,request:&ModelRequest,control:&mut RunControl,
+    legacy:Option<(&Loaded,bool)>, fresh:bool,
+    generate:impl FnOnce(&[u32],usize,u64,&AtomicBool,&str,&mut dyn FnMut(u32))->Result<neural::transformer::Generated>,
+)->ObservedCall<Value> {
+    let automatic_teacher=legacy.is_some_and(|(_,enabled)|enabled);
     let mut entered = false;
     let mut row = record!({"id":e.id,"scene":scene(e),"category":e.category,"family":e.family,"question":e.request.input,"generated_question":request.input,
         "evidence":e.request.evidence,"generated_evidence":request.evidence,"expected":e.answer,"exact_match":false,"actual":null,"error":null,"generation_started":false,"generation_completed":false,"interruption":null});
@@ -1181,11 +1198,12 @@ fn observe_generation_mode(loaded:&Loaded,e:&Episode,request:&ModelRequest,contr
     let result = (|| -> Result<()> {
         control.check("case_started")?;
         control.attempted_case_count += 1;
-        let prompt = loaded.tokenizer.prepare_with_framing(
+        if let Some((loaded,_))=legacy {loaded.manifest.framing()?;loaded.model.config.id()?;}
+        let prompt = tokenizer.prepare_with_framing(
             request,
-            loaded.manifest.framing()?,
-            loaded.model.config.context as u32,
-            &loaded.model.config.id()?,
+            framing,
+            context as u32,
+            config_id,
         )?;
         control.check("prompt_prepared")?;
         let effective_timeout = control.effective_timeout(request.limits.timeout_ms)?;
@@ -1202,11 +1220,11 @@ fn observe_generation_mode(loaded:&Loaded,e:&Episode,request:&ModelRequest,contr
         if let Some(hook) = &mut control.hook {
             hook("native_generation_entered", &cancel);
         }
-        let observe = |id| {
+        let mut observe = |id| {
                 raw.push(id);
                 #[cfg(feature = "test-support")]
-                if loaded.model.config.hidden == 32
-                    && loaded.model.config.layers == 2
+                if legacy.is_some_and(|(loaded,_)|loaded.model.config.hidden == 32
+                    && loaded.model.config.layers == 2)
                     && std::env::var("R3_FRESH_KILL_ENTERED").as_deref() == Ok("generation")
                 {
                     std::process::exit(86);
@@ -1216,11 +1234,7 @@ fn observe_generation_mode(loaded:&Loaded,e:&Episode,request:&ModelRequest,contr
                     hook("token_generated", &cancel);
                 }
             };
-        let result = if measured {
-            loaded.model.generate_profiled(&prompt.token_ids,request.limits.max_tokens as usize,effective_timeout,&cancel,&e.id,observe)
-        }else{
-            loaded.model.generate_observed(&prompt.token_ids,request.limits.max_tokens as usize,effective_timeout,&cancel,&e.id,observe)
-        };
+        let result = generate(&prompt.token_ids,request.limits.max_tokens as usize,effective_timeout,&cancel,&e.id,&mut observe);
         if let Err(error) = &result {
             if matches!(error, Error::Cancelled) {
                 control.observe(StopReason::Cancelled);
@@ -1233,28 +1247,29 @@ fn observe_generation_mode(loaded:&Loaded,e:&Episode,request:&ModelRequest,contr
                 } else {
                     StopReason::IntegrityFail
                 });
-            } else if !automatic_teacher || error.to_string().contains("nonfinite") {
+            } else if (!automatic_teacher || error.to_string().contains("nonfinite"))
+                && !(fresh && matches!(error,Error::Model(message) if message.contains("control token"))) {
                 // Preserve the existing non-timeout diagnostic/quality policy.
                 control.observe(StopReason::IntegrityFail);
             }
         }
         let returned = result.is_ok();
         let after_generation = control.check("generation_returned");
-        let (text, generated, error) = decode_generated(&loaded.tokenizer, result);
+        let (text, generated, error) = decode_generated(tokenizer, result);
         let bytes_ids: Vec<_> = raw
             .iter()
             .copied()
             .take_while(|&id| id >= neural::SPECIALS as u32)
             .collect();
         row["raw_tokens"] = record!(raw);
-        row["raw_bytes"] = bytes_receipt(&loaded.tokenizer, &bytes_ids);
+        row["raw_bytes"] = bytes_receipt(tokenizer, &bytes_ids);
         row["eos_index"] = record!(raw.iter().position(|&id| id == EOS));
         row["provided"] = record!(prompt.provided);
         row["excluded"] = record!(prompt.excluded);
         row["request_digest"] = record!(digest(request)?);
         row["prompt_digest"] = record!(digest(&prompt.token_ids)?);
         row["native_prompt_digest"] = record!(prompt.token_digest);
-        row["framing"] = record!(loaded.manifest.framing()?.id());
+        row["framing"] = record!(framing.id());
         row["prompt_length"] = record!(prompt.token_ids.len());
         row["exact_match"] = record!(strict_answer_match(
             text.as_deref(),
@@ -1300,7 +1315,7 @@ fn observe_generation_mode(loaded:&Loaded,e:&Episode,request:&ModelRequest,contr
         control.check("before_teacher")?;
         // Gold enters only after free generation has completed, including failures.
         row["teacher_forced_diagnostic_after_generation"] =
-            match teacher(loaded, e, &prompt.token_ids, &raw, control) {
+            match teacher(legacy.ok_or_else(||Error::Invalid("teacher requires legacy loaded core".into()))?.0, e, &prompt.token_ids, &raw, control) {
                 Ok(t) => t,
                 Err(e) => {
                     if e.to_string().contains("nonfinite") {
