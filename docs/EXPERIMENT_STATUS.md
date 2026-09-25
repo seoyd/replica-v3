@@ -44,6 +44,12 @@ testsc6268c9bd3e67d8e2cf689805e353bcf22f614047e089292698a5e09ab209e18.
 Only these two required executables were retained in the new evidence root;
 source patchac36455fd9e1a0eaf42e1494c8ecaa53f1210c967036e265fed37705f745251b.
 Original source for training remains80ec58a37bf50d41a919a0ddfed86b4c969fd4b8.
+New sourceaf8ad53bf52e592f531b2f29ea84670ac201e618 was normally pushed and
+matched the full remote SHA. Independent posthoc A passed with receipt
+3d52de63ae888bd9a1a5cc5a06c101cdab406d73e8dc7d22a86841b69466d2c6;
+four actual negative CLI processes preserved all checked original/new records.
+The admission command exited0. Main evaluation is now running on the frozen
+executor, using normal Metal F32 generation and no optimizer/backward.
 
 ## 2026-09-25 Full response fit — backward cap reached before final evaluation
 

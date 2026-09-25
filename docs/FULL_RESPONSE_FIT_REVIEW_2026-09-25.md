@@ -1,5 +1,36 @@
 # FULL response fit — independent review
 
+## Separately authorized posthoc A
+
+The user subsequently authorized no-learning final-native evaluation and B,
+retaining the old cap/failure rather than completing the original3072 run.
+Independent A passed the new boundary on source
+af8ad53bf52e592f531b2f29ea84670ac201e618. Descriptor policy/physical is
+b8b3e02a3464632b108d5710ff7815e979c99a82a9aa19e39f8a5ebb866057b1;
+executor052c9a7d150b97f5a0b16ac2f7968a721cc529688946163e0e72de06403f54d4.
+Receipt `artifacts/full-response-fit-20260925-review/posthoc-a/review-a.r3b`,
+physical3d52de63ae888bd9a1a5cc5a06c101cdab406d73e8dc7d22a86841b69466d2c6.
+
+Actual frozen CLI processes rejected duplicate sibling registration, existing
+outside output, a new child inside the original, and using the posthoc root
+for ordinary training. Each expected exit1 preserved the original/posthoc file
+maps and all checked hashes, without new pending/attempt/admission records.
+The independent Rust reader bound old native/clock/config and consumed tokens,
+trace digest and prior3280 generation/64 teacher/3035.100428542seconds to the
+new descriptor. Original3069/model17981/Adam3645 and failed resume=false are
+unchanged. New collector byte allowance is28833811 after original logical
+bytes and registration; broader evidence-footprint excess is not hidden.
+
+The reviewer reused final-source direct scope and four-row RETURNED process
+evidence (6.57s/8.00s, one test each plus included child), without rerunning old
+Metal/scorer/optimizer verification. Independent readback plus four CLI checks
+took18.86s, all new forward/generation/teacher/optimizer/backward0. The source
+review caught original-internal output before writes; it was fixed before
+source freeze and the dynamic case above verifies it. This A accepts only the
+new observation boundary; original run completion and model quality remain
+unaccepted. Exact commands and case-log hashes are in the local
+`posthoc-a/phase-a.md` and `posthoc-a/readback.r3b` beneath the review root.
+
 **CODE_A=PASS** for source `80ec58a37bf50d41a919a0ddfed86b4c969fd4b8`, policy `403e9c50e054048f5967fb60ff5ea9731b8f987a019dc8c68794187c97322858`. This accepts the registered single-F continuation's input/state/caller boundaries. At A admission, SMALL learning and parent parity had not run; model quality, development and Goal1 were not accepted.
 
 The original F64 is unchanged: physical `9ea752b455d0222cdbc414f799fd86e8a3aff1f31d3893f3571f7e215b4a3ca4`, model14912/Adam576/cursor64, optimizer origin14336. Independent native tensor readback verified full weights and Adam digest `8a37026b1b815dcf2360745dec7c3c15184e2fabd9504e6b191a206ee9291431`. New cursor0 is distinct from all three historical counters. Hyperparameters, LR3e-5, ANSWER mean CE, existing FULL corpus/tokenizer and review inputs remain fixed.
