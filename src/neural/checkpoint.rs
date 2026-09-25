@@ -160,6 +160,7 @@ pub struct ResumeBinding {
     /// 4: response CE + 0.1 * mean of per-side first-divergence softplus (margin1).
     /// 5: family4 + 0.1 * mean first-query last-layer selected-record attention NLL.
     /// 6: response_ce_answer_mean_v1, per-answer token mean then example mean.
+    /// 7: first-decision answer mean v1; selected training roles use weight2.
     pub family: u8,
     pub first_target_weight_bits: u64,
     /// Historical slot: span alpha for2, fixed auxiliary coefficient0.1 for3/4/5.
@@ -215,7 +216,7 @@ impl ResumeBinding {
     }
     pub fn validate(&self, state: &TrainingState, tok: &ByteBpe) -> Result<()> {
         if self.version != 1
-            || ![1, 2, 3, 4, 5, ANSWER_MEAN_FAMILY].contains(&self.family)
+            || ![1, 2, 3, 4, 5, ANSWER_MEAN_FAMILY, 7].contains(&self.family)
             || self.execution > 1
             || self.first_target_weight_bits != state.config.first_target_weight.to_bits()
             || self.tokenizer != Self::digest_bytes(tok.semantic_id().as_bytes())
@@ -237,6 +238,12 @@ impl ResumeBinding {
                     || self.first_target_weight_bits != 1f64.to_bits()
                     || self.span_alpha_bits.is_some()
                     || self.annotation.is_some()
+                    || self.execution != 1))
+            || (self.family == 7
+                && (self.normalizer != 2
+                    || self.first_target_weight_bits != 1f64.to_bits()
+                    || self.span_alpha_bits != Some(2f64.to_bits())
+                    || self.annotation.is_none()
                     || self.execution != 1))
             || ([3,4,5].contains(&self.family)
                 && (self.normalizer != self.family
@@ -387,7 +394,7 @@ impl OptimizerProtocol {
         }else{self.parent_step};
         if *self!=expected || self.runtime_digest.len()!=64 || !self.runtime_digest.bytes().all(|v|v.is_ascii_hexdigit())
             || self.parent_step.checked_add(self.local_step)!=Some(s.step) || s.config.budget_start_step!=start
-            || s.resume_binding.as_ref().is_none_or(|b|b.execution!=1||b.family!=ANSWER_MEAN_FAMILY) {
+            || s.resume_binding.as_ref().is_none_or(|b|b.execution!=1||![ANSWER_MEAN_FAMILY,7].contains(&b.family)) {
             return Err(Error::Corrupt("optimizer role/clock/runtime/objective mismatch".into()));
         } Ok(())
     }

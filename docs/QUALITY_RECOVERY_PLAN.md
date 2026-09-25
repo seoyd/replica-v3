@@ -1,5 +1,32 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: cost-bounded first-decision comparison
+
+The new C/W study inherits model17981/Adam3645 from the preserved3069-update
+FULL-fit endpoint. Original failure and posthoc acceptance remain closed.
+C uses the existing ANSWER mean path. W changes only validated FULL-word
+training rows to first-target weight2 with per-answer denominator T+1;
+review rows retain weight1. Prompt/padding remain excluded and EOS included.
+Native objective identity and the verified training-role map bind the fork and
+every resume. Neither product routing nor tokenizer/weights initialization changes.
+
+Both arms consume the same256 source-tape rows starting at573, retaining
+Metal F32, LR3e-5, inherited Adam, QE and review4/word4. Limits per arm are
+256 optimizer commits and264 backward calls (eight discarded-call reserve).
+Aggregate limits are512/528, generation2560, teacher208 and active7200s,
+segments900s. New study, executables and immutable review evidence together
+must fit1GiB; new shared-build growth is limited to2GiB, peak UNKNOWN unless
+measured. Old footprint excess is neither erased nor charged as new storage.
+
+Direct formula/native/process regressions and independent A precede learning.
+The only scheduled checkpoints are128 and256; final comparisons use the same
+endpoint, teacher covers all four words, and B follows fixed normal/failure
+selection. Severe or repeated parent-relative retention loss limits the peer
+to the same step; runtime/cancel/UNKNOWN blocks both. Reserve exhaustion closes
+as a cost limit with saved-endpoint evaluation, without extra optimizer calls.
+FOLLOWUP_SIGNAL is a screening result, never QA/S4/S5/S6 or Goal1 acceptance.
+No additional seed/LR/weight search or extension is authorized.
+
 ## Closed: separately authorized final-native posthoc evaluation
 
 The authorized final-native diagnosis completed on source

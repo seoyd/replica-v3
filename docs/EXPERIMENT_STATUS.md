@@ -1,5 +1,60 @@
 # 진단 및 구현 상태
 
+## 2026-09-25 Cost-bounded first decision — P0/P1
+
+P0 verified HEAD771a9fb551d9dc21a699c2f266089f4a13363db2 has no product-source
+change from af8ad53bf52e592f531b2f29ea84670ac201e618. User .DS_Store remains
+untracked and preserved. Installed rustc/cargo1.98.1 and the existing locked
+dependencies are retained. Parent native physical hash matches
+f61db3b873859f2aac5083ace36385067f8cbb4d250cdd4d364d0eea289ea55c.
+Old failure, posthoc raw/B and protected11264 are not rerun or rewritten.
+P1 source and targeted direct regressions are ready for independent A; SMALL
+learning, generation and teacher calls remain0. No quality result is implied
+by preparation. New source changes are confined to `src/training.rs`,
+`src/neural/checkpoint.rs` and `src/muon.rs`: explicit normalized WORD first
+decision, native family7/role-map binding, C/W inherited-Adam policy and bounded
+caller/evaluation/review paths. Existing ANSWER weight1 behavior is unchanged.
+
+Selected preparation is `artifacts/first-decision-20260925-study-v3`;
+the two earlier preparations remain preserved and counted, not admitted.
+Plan SHA256b2c1ff97d6c0b24949ce450db4b27f6a048715ba8fcc69dccbf81a08c2e6e94f;
+policya70d3a508522df9a80356ad2f12e078a7e03c57e3b5df7ac27f4552f274ddd52.
+The verified next tape is R[573],256 rows. Per-arm planned input411360,
+target29952 and padding65824 are frozen before learning.
+Current whole new scope57156315 logical bytes includes all three preparation
+roots, evidence/TINY fixtures and both main/test executables. Anticipated scope
+1026849056bytes reserves six scheduled natives and two deadline-split natives;
+there is no parent or initial0 copy. Build peak/growth are UNKNOWN, not PASS.
+
+Direct tests each executed one outer test and passed:
+`training::tests::first_decision_f64_gradient_masks_and_microbatch`,
+`training::fresh::muon::tests::first_decision_tiny_process_and_binding`, and
+`training::fresh::muon::tests::first_decision_dispatch_and_returned`.
+The Metal test includes C/W continuous2 versus1+fresh-process1 and uses8
+TINY optimizer/backward calls; independent A retains8. Direct generation/teacher
+are0. Its earlier fixture setup failures happened before optimizer/backward
+and are retained. Scalar checks cover f64/gradient/masks/EOS/weight1 parity,
+weight2 normalization and4+4 accumulation. Dispatcher checks use small explicit
+fixtures, with RETURNED reuse and cancel/UNKNOWN/I/O rejection, not hundreds
+of TINY updates. Evidence lives in `artifacts/first-decision-20260925-evidence`.
+
+The last source-only corrections included the test executable in the whole
+byte guard and admitted C/W in the actual CLI review parser. The byte guard's
+model-free test was rerun; actual CLI C/W and legacy F each reached missing-root
+I/O rejection instead of Clap rejection, with no model calls. Metal evidence
+preceded those unrelated edits and is identified as such; A must use the final
+source for its reserved8-call process test. Final release executable SHA256 is
+9b278450f53df8c8dae9f689f2f9dd4ad25bcc0ebd8c108af30a4cc703b409fb.
+
+The actual implementation subagent was requested as gpt-6-sol/high for the
+connected loss/gradient/native/state changes. Local Codex config reads
+gpt-6-sol/xhigh; the root session has no exposed live model-switch control, so
+its actual effort change is UNCHANGED/UNKNOWN, not claimed as medium. Global
+config and permissions were not overwritten. Implementation and independent
+review run sequentially; A is planned as gpt-6-astra/high, B as gpt-6-sol/medium.
+Codex input/output/reasoning/cache usage is UNKNOWN and is never added to
+Replica training or generation token counts.
+
 ## 2026-09-25 Full response fit — separately authorized final-native diagnosis
 
 The user authorized final-native no-learning evaluation and B verification

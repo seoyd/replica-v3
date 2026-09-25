@@ -8,6 +8,7 @@ const ARMS:[&str;2]=["A","M"];
 const EVENT_CONTRACT:&str="R3-SELECTED-EVENT-ID-PROTOCOL-1.1";
 const FIT_CONTRACT:&str="R3-FULL-RESPONSE-FIT-1.0";
 const FIT_POSTHOC:&str="R3-FULL-RESPONSE-FIT-POSTHOC-1.0";
+const FIRST_CONTRACT:&str="R3-COST-BOUNDED-FIRST-DECISION-1.0";
 const FIT_STEPS:[usize;5]=[256,768,1536,2304,3072];
 const EVENT_SYSTEM:&str="제공된 기록과 질문만으로 답하세요. 질문에서 지정한 출력 형식만 사용하세요. 기록에 없는 정보를 만들지 마세요. 근거가 없거나 모호하면 구별해서 유보하세요. 순서만으로 원인을 단정하지 마세요.";
 const EVENT_TASK:&str="유효한 현재 기록의 사건 번호만 8자리 숫자로 답하라.";
@@ -15,6 +16,7 @@ const EVENT_TASK:&str="유효한 현재 기록의 사건 번호만 8자리 숫�
 mod diagnosis;
 #[derive(Subcommand)]
 pub enum Action {
+    FirstPrepare { #[arg(long)] original:PathBuf, #[arg(long)] output:PathBuf },
     FullFitPosthocPrepare { #[arg(long)] original:PathBuf, #[arg(long)] output:PathBuf },
     FullFitPosthocAdmit { #[arg(long)] root:PathBuf, #[arg(long)] review:PathBuf },
     FullFitPosthoc { #[arg(long)] root:PathBuf, #[arg(long,value_parser=["evaluate","report","review"])] phase:String },
@@ -27,7 +29,7 @@ pub enum Action {
     Baseline { #[arg(long)] root:PathBuf },
     Train { #[arg(long)] root:PathBuf },
     Report { #[arg(long)] root:PathBuf },
-    Review { #[arg(long)] root:PathBuf, #[arg(long,value_parser=["A","M","F","I"])] arm:String },
+    Review { #[arg(long)] root:PathBuf, #[arg(long,value_parser=["A","M","F","I","C","W"])] arm:String },
 }
 
 #[derive(Clone,Serialize,Deserialize)]
@@ -43,6 +45,15 @@ struct Study {
     event:Option<EventProtocol>,
     #[serde(default,skip_serializing_if="Option::is_none")]
     full_fit:Option<FullFit>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    first_decision:Option<FirstDecision>,
+}
+#[derive(Clone,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FirstDecision {
+    original:PathBuf,plan_hash:String,terminal_hash:String,
+    posthoc:PathBuf,posthoc_plan_hash:String,
+    source_index:usize,role_map:[u8;32],backward_cap:usize,trace_digest:String,
 }
 #[derive(Clone,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -68,7 +79,7 @@ struct EventProtocol {
     retention:BTreeMap<String,binary::Value>, parent_exposure:Vec<usize>,
 }
 impl Study {
-    fn arms(&self)->&[&'static str]{if self.full_fit.is_some(){&["F"]}else if self.event.is_some(){&["F","I"]}else{&ARMS}}
+    fn arms(&self)->&[&'static str]{if self.first_decision.is_some(){&["C","W"]}else if self.full_fit.is_some(){&["F"]}else if self.event.is_some(){&["F","I"]}else{&ARMS}}
     fn clock(&self,local:usize)->usize{self.event.as_ref().map_or(0,|e|e.optimizer.local_step)+local}
 }
 fn sources()->Result<String>{digest(&(source_digest()?,neural::hash(include_bytes!("muon.rs")),neural::hash(include_bytes!("metal_runtime.rs"))))}
@@ -527,6 +538,206 @@ fn fit_verify_inputs(s:&Study)->Result<()> {
     for(e,id)in c.train.iter().zip(&f.exact_identities){if fit_identity(e,&tok)?!=*id{return Err(bad("FULL_FIT prompt-target identity changed"));}}
     if fit_costs(&c,&tok,&s.tape)?!=s.costs{return Err(bad("FULL_FIT token costs changed"));}Ok(())
 }
+fn first_roles(c:&data::native::Corpus,tm:&[Meta])->Result<Vec<u8>>{
+    if c.train.len()!=7680||tm.len()!=c.train.len(){return Err(bad("first-decision train role cardinality"));}
+    let mut roles=Vec::with_capacity(c.train.len());
+    for (i,m) in tm.iter().enumerate(){
+        let word=i>=6144;
+        if word!=m.template.contains("/id") || (word&&m.template.split_once("/id").is_none()){
+            return Err(bad("first-decision FULL word metadata role"));
+        }
+        roles.push(u8::from(word));
+    }
+    Ok(roles)
+}
+fn first_prepare(original:&Path,output:&Path)->Result<()> {
+    if !output.file_name().is_some_and(|n|n.to_string_lossy().starts_with("first-decision-20260925-")){
+        return Err(bad("first-decision output cost scope name"));
+    }
+    let old=load_study(original,false)?;
+    if old.contract!=FIT_CONTRACT||old.first_decision.is_some(){return Err(bad("first-decision original FULL fit required"));}
+    let h=history(&old)?;let end=h.last().ok_or_else(||bad("first-decision original terminal missing"))?;
+    let p=&end.arms[0];let trace=fit_trace(&old,&h)?;
+    let next=(576+3069)%3072;
+    if next!=573||p.local!=3069||end.resume||end.success||trace["updates"]!=3069||trace["backward"]!=3072
+        ||trace["source_last_index"]!=572||file_hash(&p.native)?!=p.physical{
+        return Err(bad("first-decision original terminal/tape not verified"));
+    }
+    let l=checkpoint::load(&p.native,Device::Cpu,true)?;
+    let st=l.manifest.training.as_ref().ok_or_else(||bad("first-decision parent state"))?;
+    let op=l.manifest.optimizer_protocol.as_ref().ok_or_else(||bad("first-decision parent Adam"))?;
+    if st.step!=17981||op.local_step!=3645||st.resume_binding!=Some(bind(&old,0,st,&l.tokenizer)?)
+        ||p.physical!="f61db3b873859f2aac5083ace36385067f8cbb4d250cdd4d364d0eea289ea55c"
+        ||l.model.adapter().is_some(){return Err(bad("first-decision exact parent native"));}
+    let c=event_inputs(&old,0)?;let(_,tm,_)=inputs(&old)?;
+    let registration:binary::Value=read_confirmed(&old.root.with_extension("full-fit-posthoc.r3b"))?;
+    let posthoc=PathBuf::from(registration["output"].as_str().ok_or_else(||bad("first-decision posthoc registration"))?);
+    let(d,view)=fit_posthoc_load(&posthoc,false)?;
+    if d.original!=old.root||observation_history(&view,"posthoc")?.last().is_none_or(|r|r["success"]!=true){
+        return Err(bad("first-decision completed posthoc required"));
+    }
+    let posthoc_plan_hash=file_hash(&posthoc.join("posthoc-plan.r3b"))?;
+    let roles=first_roles(&c,&tm)?;
+    let tape=(0..256).map(|i|old.tape[(3069+i)%3072]).collect::<Vec<_>>();
+    if tape.first()!=Some(&old.tape[3069])||tape.len()!=256{ return Err(bad("first-decision tape suffix")); }
+    let costs=fit_costs(&c,&l.tokenizer,&tape)?;
+    let device=Backend::Metal0.open()?;let runtime=RuntimeProfile::capture(Backend::Metal0,&device)?;
+    let mut same=old.runtime.clone();same.binary=runtime.binary.clone();if runtime!=same{return Err(bad("first-decision runtime changed"));}
+    let native_bytes=std::fs::metadata(&p.native)?.len();
+    let planned_native_bytes=native_bytes.checked_mul(8).ok_or_else(||bad("first-decision byte reserve overflow"))?;
+    let binary_bytes=std::fs::metadata(std::env::current_exe()?)?.len();
+    let anticipated_scope_bytes=planned_native_bytes.checked_add(binary_bytes*2+64*1024*1024).ok_or_else(||bad("first-decision scoped byte reserve overflow"))?;
+    if anticipated_scope_bytes>1<<30{return Err(bad("BLOCKED_DISK: first-decision reserve includes evidence and binaries"));}
+    std::fs::create_dir(output)?;let root=output.canonicalize()?;
+    std::fs::create_dir(root.join("C"))?;std::fs::create_dir(root.join("W"))?;
+    let terminal_path=old.root.join(format!("segment-{:03}-finished.r3b",h.len()-1));
+    let mut s=old.clone();s.contract=FIRST_CONTRACT.into();s.root=root.clone();s.parent=p.native.clone();s.parent_hash=p.physical.clone();
+    s.parent_content=l.model.weights_content_id()?;s.parent_adam=optimizer_hash(&l.optimizer)?;s.parent_step=17981;
+    s.source=sources()?;s.runtime=runtime;s.config.budget_start_step=17981;s.config.max_steps=18237;
+    s.config.budget_start_tokens=st.consumed_tokens;s.config.max_tokens=st.consumed_tokens+costs["input"].as_u64().unwrap();
+    s.tape=tape;s.costs=costs;s.max_updates=256;s.generation_cap=2560;s.teacher_cap=208;s.active_cap=7200.;s.segment_cap=900.;s.bytes_cap=1<<30;
+    s.event.as_mut().unwrap().optimizer=op.clone();
+    s.first_decision=Some(FirstDecision{original:old.root.clone(),plan_hash:file_hash(&old.root.join("plan.r3b"))?,
+        terminal_hash:file_hash(&terminal_path)?,posthoc,posthoc_plan_hash,source_index:573,
+        role_map:checkpoint::ResumeBinding::digest_bytes(&roles),backward_cap:264,trace_digest:digest(&trace)?});
+    first_verify_inputs(&s)?;
+    publish_confirmed(&root.join("plan.r3b"),&s)?;
+    publish_confirmed(&root.join("preparation.r3b"),&binary::record!({"contract":s.contract,"policy":digest(&s)?,"source":s.source,
+        "parent":s.parent_hash,"weights":s.parent_content,"adam":s.parent_adam,"model_step":17981,"optimizer_step":3645,
+        "cursor":0,"source_tape_next":573,"roles":s.first_decision.as_ref().unwrap().role_map,"costs":s.costs,
+        "planned_native_bytes":planned_native_bytes,"anticipated_scope_bytes":anticipated_scope_bytes,"planned_native_saves":8,
+        "reserved_executables":2,"reserved_other_bytes":64*1024*1024,"max_updates_per_arm":256,"max_backward_per_arm":264,"model_calls":0}))?;
+    println!("FIRST_PREPARED policy={} parent={} model17981 Adam3645 next573 input={} target={} padding={} planned_native_bytes={} anticipated_scope_bytes={} calls0 A_PENDING",digest(&s)?,s.parent_hash,s.costs["input"],s.costs["target"],s.costs["padding"],planned_native_bytes,anticipated_scope_bytes);Ok(())
+}
+fn first_verify_inputs(s:&Study)->Result<()> {
+    let f=s.first_decision.as_ref().ok_or_else(||bad("first-decision policy missing"))?;
+    if s.contract!=FIRST_CONTRACT||s.arms()!=["C","W"]||s.max_updates!=256||f.backward_cap!=264||f.source_index!=573
+        ||!s.root.file_name().is_some_and(|n|n.to_string_lossy().starts_with("first-decision-20260925-"))
+        ||s.parent_step!=17981||s.clock(0)!=3645||s.config.lr!=3e-5||s.config.warmup!=0
+        ||s.generation_cap!=2560||s.teacher_cap!=208||s.active_cap!=7200.||s.segment_cap!=900.
+        ||s.bytes_cap!=1<<30{return Err(bad("first-decision fixed policy"));}
+    let old:Study=read_confirmed(&f.original.join("plan.r3b"))?;
+    if file_hash(&f.original.join("plan.r3b"))?!=f.plan_hash||old.contract!=FIT_CONTRACT||old.first_decision.is_some()
+        ||file_hash(&s.parent)?!=s.parent_hash{return Err(bad("first-decision original binding"));}
+    let h=history(&old)?;let last=h.last().ok_or_else(||bad("first-decision original history"))?;
+    if digest(&fit_trace(&old,&h)?)?!=f.trace_digest{return Err(bad("first-decision original trace changed"));}
+    let terminal=f.original.join(format!("segment-{:03}-finished.r3b",h.len()-1));
+    if file_hash(&terminal)?!=f.terminal_hash||last.arms[0].local!=3069||last.arms[0].physical!=s.parent_hash
+        ||last.resume||last.success||s.tape!=(0..256).map(|i|old.tape[(3069+i)%3072]).collect::<Vec<_>>(){return Err(bad("first-decision original cursor/tape"));}
+    let c=event_inputs(s,0)?;let(_,tm,_)=inputs(s)?;let tok=scoring_tokenizer(s)?;
+    if checkpoint::ResumeBinding::digest_bytes(&first_roles(&c,&tm)?)!=f.role_map||fit_costs(&c,&tok,&s.tape)?!=s.costs{
+        return Err(bad("first-decision role map/costs"));
+    }
+    if file_hash(&f.posthoc.join("posthoc-plan.r3b"))?!=f.posthoc_plan_hash{return Err(bad("first-decision posthoc plan changed"));}
+    Ok(())
+}
+fn first_parent_scores(s:&Study)->Result<BTreeMap<String,binary::Value>>{
+    let f=s.first_decision.as_ref().ok_or_else(||bad("first-decision parent profile"))?;
+    let(d,view)=fit_posthoc_load(&f.posthoc,false)?;
+    if d.endpoint.physical!=s.parent_hash{return Err(bad("first-decision parent posthoc native"));}
+    let model=checkpoint::metadata(&s.parent)?.0.model_content_digest;
+    let mut out=BTreeMap::new();
+    for panel in fit_panels(&view)?.into_iter().take(5){
+        let(score,_)=event_read_panel(&view,"F",3069,&model,&panel,64)?;
+        out.insert(panel.0,score);
+    }
+    Ok(out)
+}
+fn first_baseline(s:&Study)->Result<()> {
+    if !history(s)?.is_empty(){return Err(bad("first-decision baseline after training"));}
+    let binding=binary::record!({"policy":digest(s)?,"parent":s.parent_hash,"source":"completed-posthoc-parent-64","model_calls":0});
+    let(index,mut ctl)=start_observation(s,"baseline",&binding)?;
+    let result=(||->Result<()>{let scores=first_parent_scores(s)?;
+        if scores.len()!=5||scores.values().any(|r|r["joint"]["total"]!=64){return Err(bad("first-decision parent64 evidence"));}
+        ctl.seal_completed_no_call()?;Ok(())})();
+    finish_observation(s,"baseline",index,&mut ctl,&result,binary::record!({"parent64":result.is_ok(),"new_generation":0,"new_teacher":0}))?;
+    result
+}
+fn first_teacher_cases(s:&Study,train:bool)->Result<Vec<Episode>>{
+    let c=event_inputs(s,0)?;let(_,tm,dm)=inputs(s)?;
+    let(start,end,episodes,meta)=if train{(6144,7680,&c.train,&tm)}else{(3072,3264,&c.validation,&dm)};
+    let mut groups=BTreeMap::<String,BTreeMap<String,Vec<usize>>>::new();
+    for i in start..end{
+        let(pair,version)=meta[i].template.split_once("/id").ok_or_else(||bad("first-decision teacher word role"))?;
+        if !["0","1"].contains(&version){return Err(bad("first-decision teacher ID role"));}
+        groups.entry(pair.into()).or_default().entry(episodes[i].binding.clone()).or_default().push(i);
+    }
+    if groups.len()!=6{return Err(bad("first-decision teacher six-pair coverage"));}
+    let mut selected=vec![];
+    for group in groups.values(){
+        let rows=group.values().find(|rows|rows.len()==8).ok_or_else(||bad("first-decision teacher two-ID group"))?;
+        let mut rows=rows.clone();rows.sort();
+        let mut counts=[[0usize;4];2];
+        for &i in &rows{let version=meta[i].template.rsplit_once("/id").unwrap().1.parse::<usize>().map_err(|_|bad("first-decision teacher ID version"))?;
+            if version>1||meta[i].view>3{return Err(bad("first-decision teacher view/version"));}counts[version][meta[i].view]+=1;}
+        if counts!=[[1;4];2]{return Err(bad("first-decision teacher balanced ID/views"));}
+        selected.extend(rows);
+    }
+    if selected.len()!=48{return Err(bad("first-decision teacher48"));}
+    Ok(selected.into_iter().map(|i|episodes[i].clone()).collect())
+}
+fn first_evaluate(s:&Study,arm:usize,l:&mut checkpoint::Loaded,p:&Progress,final_eval:bool,ctl:&mut RunControl)->Result<BTreeMap<String,binary::Value>>{
+    if p.local<128||p.local>256{return Err(bad("first-decision endpoint range"));}
+    let final_eval=final_eval||p.local>128;
+    l.model.refresh_identity()?;let mut out=BTreeMap::new();
+    for panel in fit_panels(s)?.into_iter().take(if final_eval{6}else{5}){
+        let name=panel.0.clone();
+        let short=event_panel_score(s,s.arms()[arm],p.local,l,&panel,64,ctl)?;
+        let score=if final_eval&&["FULL-word","FULL-renamed","FULL-train"].contains(&name.as_str()){
+            event_panel_score(s,s.arms()[arm],p.local,l,&panel,192,ctl)?
+        }else{short};
+        out.insert(name,score);
+    }
+    if final_eval{
+        let train=first_teacher_cases(s,true)?;let dev=first_teacher_cases(s,false)?;
+        let es=train.iter().chain(&dev).cloned().collect::<Vec<_>>();
+        let label=format!("teacher-{}-FULL",p.local);
+        let binding=binary::record!({"policy":digest(s)?,"source":s.source,"runtime":s.runtime,"model":l.model.weights_content_id()?,
+            "arm":s.arms()[arm],"local":p.local,"cases":digest(&es)?,"planned":96,"train":48,"dev":48,"call_protocol":1});
+        let rows=teacher_prefix(&s.root.join(s.arms()[arm]),&label,&binding,l,&es,ctl)?;
+        diagnosis::validate_teacher_forward(&s.runtime,s.config.seq_len,&es,&rows,&l.tokenizer)?;
+        let score=binary::record!({"binding":binding,"train":diagnosis::teacher_scores(&train,&rows[..48],&l.tokenizer)?,
+            "dev":diagnosis::teacher_scores(&dev,&rows[48..],&l.tokenizer)?,"rows_digest":digest(&rows)?});
+        let path=s.root.join(s.arms()[arm]).join(format!("{label}-score.r3b"));
+        if path.exists(){if read_confirmed::<binary::Value>(&path)?!=score{return Err(bad("first-decision teacher score changed"));}}
+        else{publish_confirmed(&path,&score)?;}
+    }
+    Ok(out)
+}
+fn first_final_observation(s:&Study,arm:usize,l:&mut checkpoint::Loaded,p:&Progress,ctl:&mut RunControl)->Result<()> {
+    first_evaluate(s,arm,l,p,true,ctl)?;Ok(())
+}
+fn first_decision(s:&Study,arm:usize,p:&Progress,scores:&BTreeMap<String,binary::Value>)->Result<Option<String>>{
+    let parent=first_parent_scores(s)?;
+    let mut persistent=false;let mut severe=false;
+    for name in ["value","citation","S1Q1","FULL-word","FULL-renamed"]{
+        let short;
+        let current=if scores[name]["joint"]["total"]!=64{
+            let panel=fit_panels(s)?.into_iter().find(|p|p.0==name).ok_or_else(||bad("first-decision guard panel"))?;
+            let model=checkpoint::metadata(&p.native)?.0.model_content_digest;
+            short=event_read_panel(s,s.arms()[arm],p.local,&model,&panel,64)?.0;&short
+        }else{&scores[name]};
+        let before=&parent[name];
+        let cur=current["joint"]["full"].as_u64().ok_or_else(||bad("first-decision score FULL"))?;
+        let base=before["joint"]["full"].as_u64().ok_or_else(||bad("first-decision parent FULL"))?;
+        let all4=current["joint"]["all4"].as_u64().ok_or_else(||bad("first-decision score ALL4"))?;
+        let base4=before["joint"]["all4"].as_u64().ok_or_else(||bad("first-decision parent ALL4"))?;
+        let errors=current["joint"]["errors"].as_u64().ok_or_else(||bad("first-decision score errors"))?;
+        severe|=base.saturating_sub(cur)>=16||errors>=4;
+        persistent|=base.saturating_sub(cur)>=5||base4.saturating_sub(all4)>=3;
+    }
+    let prior=if p.local==256{
+        let old:binary::Value=read_confirmed(&s.root.join(s.arms()[arm]).join("decision-128.r3b"))?;
+        if old["policy"]!=digest(s)?||!old["stop"].is_null(){return Err(bad("first-decision prior guard changed"));}
+        old["persistent"].as_bool().ok_or_else(||bad("first-decision prior guard flag"))?
+    }else{false};
+    let stop=if severe{Some("SEVERE_RETENTION".to_owned())}else if prior&&persistent{Some("PERSISTENT_RETENTION".to_owned())}else{None};
+    let record=binary::record!({"policy":digest(s)?,"local":p.local,"scores":scores,"parent":parent,"persistent":persistent,"stop":stop});
+    let path=s.root.join(s.arms()[arm]).join(format!("decision-{}.r3b",p.local));
+    if path.exists(){if read_confirmed::<binary::Value>(&path)?!=record{return Err(bad("first-decision guard changed"));}}
+    else{publish_confirmed(&path,&record)?;}
+    Ok(stop)
+}
 fn fit_panels(s:&Study)->Result<Vec<Panel>>{
     let f=s.full_fit.as_ref().ok_or_else(||bad("FULL_FIT panels/profile"))?;let(old,tm,dm)=inputs(s)?;let c=event_inputs(s,0)?;
     let mut out=vec![];for(name,at,n)in [("value",0,512),("citation",512,512),("S1Q1",2560,512),("FULL-word",3072,192),("FULL-renamed",3264,192)]{
@@ -663,6 +874,101 @@ fn fit_discarded(s:&Study)->Result<[usize;3]>{
             total[0]+=1;total[1]+=r["input"].as_u64().ok_or_else(||bad("discarded input UNKNOWN"))?as usize;total[2]+=r["target"].as_u64().ok_or_else(||bad("discarded target UNKNOWN"))?as usize;
         }
     }Ok(total)
+}
+fn first_discarded(s:&Study,arm:usize)->Result<[usize;3]>{
+    let mut total=[0usize;3];
+    for item in std::fs::read_dir(s.root.join(s.arms()[arm]))?{let path=item?.path();
+        if path.file_name().is_some_and(|v|v.to_string_lossy().ends_with("-discarded.r3b")){
+            let r:binary::Value=read_confirmed(&path)?;
+            if r["forward_backward"]!=1||r["optimizer"]!=0{return Err(bad("first-decision discarded UNKNOWN"));}
+            total[0]+=1;
+            total[1]+=r["input"].as_u64().ok_or_else(||bad("first-decision discarded input UNKNOWN"))?as usize;
+            total[2]+=r["target"].as_u64().ok_or_else(||bad("first-decision discarded target UNKNOWN"))?as usize;
+        }
+    }
+    if total[0]>8{return Err(bad("first-decision discarded reserve exceeded"));}
+    Ok(total)
+}
+#[derive(Debug,PartialEq,Eq)]
+enum FirstDispatch { Train, EvaluateOnly, CostStop }
+fn first_dispatch(local:usize,endpoint:usize,discarded:usize,committed_cap:usize,backward_cap:usize)->Result<FirstDispatch>{
+    if local>endpoint||endpoint>committed_cap||local>committed_cap||discarded>backward_cap||local+discarded>backward_cap{
+        return Err(bad("first-decision dispatcher cursor/budget UNKNOWN"));
+    }
+    if local==endpoint{return Ok(FirstDispatch::EvaluateOnly);}
+    if local+discarded==backward_cap{return Ok(FirstDispatch::CostStop);}
+    Ok(FirstDispatch::Train)
+}
+fn first_train(s:&Study)->Result<()> {
+    if read_confirmed::<binary::Value>(&s.root.join("baseline-finished.r3b"))?["success"]!=true{return Err(bad("first-decision baseline missing"));}
+    let h=history(s)?;if h.last().is_some_and(|r|!r.resume){return Err(bad("first-decision closed"));}
+    let index=h.len();let mut phase=h.last().map_or(0,|r|r.phase);
+    let initial=Progress{local:0,native:s.parent.clone(),physical:s.parent_hash.clone(),stop:None,evaluated:0,fit:false};
+    let mut ps=h.last().map(|r|r.arms.clone()).unwrap_or(vec![initial.clone(),initial]);
+    let saved=[ps[0].local,ps[1].local];
+    let previous=if index==0{None}else{Some(file_hash(&s.root.join(format!("segment-{:03}-finished.r3b",index-1)))?)};
+    let mut ctl=control(s,&h)?;
+    publish_confirmed(&s.root.join(format!("segment-{index:03}-started.r3b")),&binary::record!({"policy":digest(s)?,"previous":previous,"phase":phase,"arms":ps}))?;
+    let device=Backend::Metal0.open()?;
+    let mut models=(0..2).map(|arm|load_arm(s,arm,&ps[arm],&device)).collect::<Result<Vec<_>>>()?;
+    let samples=samples_with_framing(&event_inputs(s,0)?.train,&models[0].0.tokenizer,s.config.seq_len,neural::Framing::QuestionEvidence)?;
+    let mut entered=false;
+    let result=(||->Result<()>{
+        let schedule=[1,128,256];
+        if phase>=schedule.len(){return Err(bad("first-decision phase past end"));}
+        let mut endpoint=schedule[phase];
+        for arm in 0..2{
+            let(l,o)=&mut models[arm];let p=&mut ps[arm];
+            if p.local>endpoint{return Err(bad("first-decision cursor past endpoint"));}
+            let mut trace=std::fs::OpenOptions::new().append(true).create(true).open(s.root.join(s.arms()[arm]).join(format!("updates-{index:03}.r3rows")))?;
+            while p.local<endpoint{
+                ctl.check("first_before_microbatch")?;guard_bytes(s,0)?;
+                let discarded=first_discarded(s,arm)?;
+                if first_dispatch(p.local,endpoint,discarded[0],s.max_updates,s.first_decision.as_ref().unwrap().backward_cap)?==FirstDispatch::CostStop{
+                    p.stop=Some("BUDGET_EXHAUSTED".into());endpoint=p.local;break;
+                }
+                let b=batch(&samples,&s.tape[p.local],&device)?;device.synchronize()?;let start=Instant::now();
+                let entry=s.root.join(s.arms()[arm]).join(format!("step-{}-segment-{index:03}-entered.r3b",p.local+1));
+                publish_confirmed(&entry,&binary::record!({"policy":digest(s)?,"local":p.local+1,"rows":s.tape[p.local],"status":"MAY_ENTER"}))?;
+                let mut row=train_update(s,arm,l,o,p,&b,&mut ctl,&mut entered,&entry,start)?;
+                row["source_tape_index"]=binary::record!((573+p.local-1)%3072);append_row(&mut trace,&row)?;
+                if p.local==1||p.local%32==0{println!("FIRST_UPDATE arm={} local={} model={} Adam={} input={} target={} objective={}",s.arms()[arm],p.local,row["model_step"],row["optimizer_local"],row["input"],row["target"],row["answer_ce"]);}
+            }
+            if p.local>saved[arm]&&!fit_saved_cursor(p){save_arm(s,index,arm,l,o,p)?;}
+        }
+        if ps[0].local!=ps[1].local{
+            for p in &mut ps{p.stop=Some("UNMATCHED_COST_ENDPOINT".into());}
+            ctl.seal_completed_no_call()?;return Ok(());
+        }
+        if phase==0{phase=1;ctl.seal_completed_no_call()?;return Ok(());}
+        if ps[0].local<128&&ps.iter().any(|p|p.stop.as_deref()==Some("BUDGET_EXHAUSTED")){
+            ctl.seal_completed_no_call()?;return Ok(());
+        }
+        if ps[0].local<endpoint{return Err(bad("first-decision endpoint cursor"));}
+        for arm in 0..2{
+            let(l,_)=&mut models[arm];let p=&mut ps[arm];
+            let scores=first_evaluate(s,arm,l,p,false,&mut ctl)?;
+            p.stop=first_decision(s,arm,p,&scores)?.or(p.stop.take());p.evaluated=p.local;
+        }
+        let stopping=ps.iter().any(|p|p.stop.is_some());
+        if stopping&&phase==1{
+            // A normal +128 quality stop makes this same native the final endpoint.
+            for arm in 0..2{let(l,_)=&mut models[arm];first_final_observation(s,arm,l,&ps[arm],&mut ctl)?;}
+        }
+        if phase==2||stopping{for p in &mut ps{p.fit=true;}}else{phase=2;}
+        ctl.seal_completed_no_call()?;Ok(())
+    })();
+    if let Err(e)=&result{ctl.classify_error(e);}if entered{return result;}
+    for arm in 0..2{if ps[arm].local>saved[arm]&&!fit_saved_cursor(&ps[arm]){
+        let(l,o)=&mut models[arm];save_arm(s,index,arm,l,o,&mut ps[arm])?;
+    }}
+    let pure_time=ctl.receipt()["observed_conditions"]==binary::record!(["TIME_BUDGET"]);
+    let terminal=ps.iter().all(|p|p.fit)||ps.iter().any(|p|p.stop.as_deref()==Some("UNMATCHED_COST_ENDPOINT"))
+        ||ps.iter().any(|p|p.stop.as_deref()==Some("BUDGET_EXHAUSTED"))&&ps[0].local<128;
+    let seg=Segment{policy:digest(s)?,previous,phase,arms:ps,success:result.is_ok(),resume:!terminal&&(result.is_ok()||pure_time),control:ctl.receipt(),error:result.as_ref().err().map(ToString::to_string)};
+    publish_confirmed(&s.root.join(format!("segment-{index:03}-finished.r3b")),&seg)?;
+    println!("FIRST_SEGMENT index={index} phase={phase} local={:?} fit={:?} resume={} active={} bytes={}",seg.arms.iter().map(|p|p.local).collect::<Vec<_>>(),seg.arms.iter().map(|p|p.fit).collect::<Vec<_>>(),seg.resume,seg.control["elapsed_seconds"],first_owned_bytes(s)?);
+    if pure_time{Ok(())}else{result}
 }
 fn fit_counts(step:usize,ending:bool,dev_pass:bool)->[usize;7]{
     let full=[1536,3072].contains(&step);
@@ -953,7 +1259,7 @@ fn prepare(parent:&Path,word_root:&Path,output:&Path)->Result<()> {
         costs:binary::record!({"input":input,"target":target,"padding":padding,"exposures":exposure,"samples":8192,
             "sample_content":digest(&c.train.iter().map(digest).collect::<Result<Vec<_>>>()?)?,
             "sample_tokens":digest(&ss.iter().map(|v|digest(&(&v.tokens,v.response_start))).collect::<Result<Vec<_>>>()?)?}),
-        baseline_hash:file_hash(&baseline_raw)?,baseline_raw,max_updates:1024,generation_cap:6400,teacher_cap:6400,active_cap:7200.,segment_cap:900.,bytes_cap:1610612736,event:None,full_fit:None};
+        baseline_hash:file_hash(&baseline_raw)?,baseline_raw,max_updates:1024,generation_cap:6400,teacher_cap:6400,active_cap:7200.,segment_cap:900.,bytes_cap:1610612736,event:None,full_fit:None,first_decision:None};
     for arm in ARMS {std::fs::create_dir(root.join(arm))?;}
     publish_confirmed(&root.join("plan.r3b"),&s)?;
     let roles=[OptimizerProtocol::new(&l.model.config,false,digest(&s.runtime)?,st.step)?,OptimizerProtocol::new(&l.model.config,true,digest(&s.runtime)?,st.step)?];
@@ -963,10 +1269,10 @@ fn prepare(parent:&Path,word_root:&Path,output:&Path)->Result<()> {
 
 fn load_study(root:&Path,execute:bool)->Result<Study>{
     let s:Study=read_confirmed(&root.join("plan.r3b"))?;
-    if s.contract!=if s.full_fit.is_some(){FIT_CONTRACT}else if s.event.is_some(){EVENT_CONTRACT}else{CONTRACT}||s.root!=root.canonicalize()?{return Err(bad("study root/contract binding"));}
+    if s.contract!=if s.first_decision.is_some(){FIRST_CONTRACT}else if s.full_fit.is_some(){FIT_CONTRACT}else if s.event.is_some(){EVENT_CONTRACT}else{CONTRACT}||s.root!=root.canonicalize()?{return Err(bad("study root/contract binding"));}
     inputs(&s)?;
     if s.event.is_some(){for arm in 0..s.arms().len(){event_inputs(&s,arm)?;}}
-    if s.full_fit.is_some(){fit_verify_inputs(&s)?;}
+    if s.first_decision.is_some(){first_verify_inputs(&s)?;}else if s.full_fit.is_some(){fit_verify_inputs(&s)?;}
     if execute {
         if s.source!=sources()?{return Err(bad("Muon frozen source changed"));}
         s.runtime.verify(&Backend::Metal0.open()?)?;
@@ -980,7 +1286,8 @@ fn admit(root:&Path,review:&Path)->Result<()> {
     // The independent reviewer authors this typed receipt after real tests.
     if r["contract"]!=s.contract||r["source"]!=s.source||r["policy"]!=digest(&s)?||r["runtime"]!=binary::record!(s.runtime)
         ||r["verdict"]!="PASS"||(s.event.is_none()&&r["tests_passed"].as_u64().is_none_or(|n|n<6))
-        ||(s.full_fit.is_some()&&r["boundaries"]!=binary::record!(["full_input_lineage","rotated_tape_exposure","inherited_native_process","single_arm_guard","large_count_reader","final_no_call"]))
+        ||(s.first_decision.is_some()&&r["boundaries"]!=binary::record!(["first_objective_gradient","inherited_native_process","pair_dispatch_budget"]))
+        ||(s.first_decision.is_none()&&s.full_fit.is_some()&&r["boundaries"]!=binary::record!(["full_input_lineage","rotated_tape_exposure","inherited_native_process","single_arm_guard","large_count_reader","final_no_call"]))
         ||(s.full_fit.is_none()&&s.event.is_some()&&r["boundaries"]!=binary::record!(["request_labels","strict_scorer_gate","tape_cost","inherited_native_process","actual_teacher_modes","final_no_call"]))
         ||r["active_seconds"].as_f64().is_none_or(|v|!v.is_finite()||v<0.||v>=s.active_cap) {
         return Err(bad("independent A incomplete/mismatch"));
@@ -1060,9 +1367,34 @@ fn control(s:&Study,h:&[Segment])->Result<RunControl>{
 fn owned_bytes(root:&Path)->Result<u64>{
     let mut bytes=0u64;for e in std::fs::read_dir(root)?{let e=e?;let m=e.metadata()?;if m.is_dir(){bytes+=owned_bytes(&e.path())?;}else{bytes+=m.len();}}Ok(bytes)
 }
-fn guard_bytes(s:&Study,reserve:u64)->Result<()> {if owned_bytes(&s.root)?.saturating_add(reserve)>s.bytes_cap{return Err(bad("BLOCKED_DISK: study immutable byte cap"));}Ok(())}
+fn first_owned_bytes(s:&Study)->Result<u64>{
+    let parent=s.root.parent().ok_or_else(||bad("first-decision cost parent"))?;
+    let mut bytes=0u64;
+    for e in std::fs::read_dir(parent)?{let e=e?;let name=e.file_name();
+        if name.to_string_lossy().starts_with("first-decision-20260925-"){
+            let m=e.metadata()?;bytes+=if m.is_dir(){owned_bytes(&e.path())?}else{m.len()};
+        }
+    }
+    let release=parent.parent().ok_or_else(||bad("first-decision project root"))?.join("target/release");
+    let main=release.join("replica-train");
+    if main.exists(){bytes+=std::fs::metadata(&main)?.len();}
+    let deps=release.join("deps");
+    if deps.exists(){for item in std::fs::read_dir(deps)?{let item=item?;let name=item.file_name();
+        if name.to_string_lossy().starts_with("replica_train-")&&item.path().extension().is_none()&&item.file_type()?.is_file(){bytes+=item.metadata()?.len();}
+    }}
+    let executable=std::env::current_exe()?;
+    if !executable.starts_with(parent)&&executable!=main&&!executable.starts_with(release.join("deps")){
+        bytes+=std::fs::metadata(executable)?.len();
+    }
+    Ok(bytes)
+}
+fn guard_bytes(s:&Study,reserve:u64)->Result<()> {
+    let actual=if s.first_decision.is_some(){first_owned_bytes(s)?}else{owned_bytes(&s.root)?};
+    if actual.saturating_add(reserve)>s.bytes_cap{return Err(bad("BLOCKED_DISK: study immutable byte cap"));}Ok(())
+}
 fn bind(s:&Study,arm:usize,state:&TrainingState,tok:&ByteBpe)->Result<checkpoint::ResumeBinding>{
     let mut b=checkpoint::ResumeBinding::default_for(state,tok);b.family=checkpoint::ANSWER_MEAN_FAMILY;b.normalizer=2;b.execution=1;
+    if let Some(first)=&s.first_decision {if arm==1{b.family=7;b.span_alpha_bits=Some(2f64.to_bits());b.annotation=Some(first.role_map);}}
     b.policy=checkpoint::ResumeBinding::digest_bytes(&binary::to_vec(&(s,s.arms()[arm]))?);b.provenance=b.policy;
     b.train_order=checkpoint::ResumeBinding::digest_bytes(&binary::to_vec(&s.tape)?);b.framing=neural::Framing::QuestionEvidence.digest();Ok(b)
 }
@@ -1071,6 +1403,11 @@ fn load_arm(s:&Study,arm:usize,p:&Progress,device:&Device)->Result<(checkpoint::
     let corpus=if s.event.is_some(){event_inputs(s,arm)?}else{verified_corpus(&s.word_root.join("corpus.r3cor"),&s.corpus_hash)?};
     let opt=if p.local==0 {
         if p.physical!=s.parent_hash||state.step!=s.parent_step||l.model.weights_content_id()?!=s.parent_content||optimizer_hash(&l.optimizer)?!=s.parent_adam{return Err(bad("fresh parent weights/Adam provenance"));}
+        if let Some(first)=&s.first_decision {
+            let original:Study=read_confirmed(&first.original.join("plan.r3b"))?;
+            if state.sampler_state!=3069||state.resume_binding!=Some(bind(&original,0,&state,&l.tokenizer)?)
+                ||l.manifest.optimizer_protocol.as_ref()!=Some(&s.event.as_ref().unwrap().optimizer){return Err(bad("first-decision explicit ANSWER parent fork"));}
+        }
         state.parent_checkpoint_hash=Some(s.parent_hash.clone());state.config=s.config.clone();state.corpus_hash=corpus.manifest.train.sha256.clone();
         state.validation_hash=corpus.manifest.validation.sha256.clone();
         if !state.previous_corpora.contains(&l.tokenizer.train_hash){state.previous_corpora.push(l.tokenizer.train_hash.clone());}
@@ -1229,7 +1566,19 @@ fn decision(s:&Study,arm:usize,p:&Progress,scores:&BTreeMap<String,binary::Value
     if path.exists(){if read_confirmed::<binary::Value>(&path)?!=d{return Err(bad("guard decision mismatch"));}}else{publish_confirmed(&path,&d)?;}Ok(stop)
 }
 fn train_update(s:&Study,arm:usize,l:&mut checkpoint::Loaded,o:&mut Optimizer,p:&mut Progress,b:&Batch,ctl:&mut RunControl,entered:&mut bool,entry:&Path,start:Instant)->Result<binary::Value>{
-    let logits=l.model.forward(&b.input,Some(&b.valid))?;let(_,loss,targets,examples)=response_objective(&logits,b,1.,true)?;
+    let logits=l.model.forward(&b.input,Some(&b.valid))?;
+    let (plain,first_nll,loss,targets,weighted_denominator)=if s.first_decision.is_some(){
+        let row=&s.tape[p.local];
+        let roles=row.map(|i|i>=6144);
+        if row[..4].iter().any(|&i|i>=6144)||row[4..].iter().any(|&i|!(6144..7680).contains(&i)){
+            return Err(bad("first-decision row role policy"));
+        }
+        if arm==1{first_decision_objective(&logits,b,&roles)?}
+        else {let(ce,answer,n,_)=response_objective(&logits,b,1.,true)?;
+            let first=masked_loss(&logits,&b.target,&b.first_target_mask)?.0;(ce,first,answer,n,n)}
+    }else{let(ce,answer,n,_)=response_objective(&logits,b,1.,true)?;
+        let first=masked_loss(&logits,&b.target,&b.first_target_mask)?.0;(ce,first,answer,n,n)};
+    let examples=b.mask.dim(0)?;
     let value=loss.to_scalar::<f32>()?;if !value.is_finite(){return Err(bad("nonfinite study loss"));}
     let graph=loss.backward()?;let mut grads=BTreeMap::new();
     for(n,v)in &l.model.vars{grads.insert(n.clone(),graph.get(v).ok_or_else(||bad("missing gradient"))?.detach());}
@@ -1243,7 +1592,7 @@ fn train_update(s:&Study,arm:usize,l:&mut checkpoint::Loaded,o:&mut Optimizer,p:
     l.model.device.synchronize()?;let opt=began.elapsed().as_secs_f64();*entered=false;p.local+=1;
     let st=l.manifest.training.as_mut().unwrap();st.step=s.parent_step+p.local;st.sampler_state=p.local as u64;st.consumed_tokens+=b.tokens as u64;st.target_tokens+=targets as u64;st.train_loss=Some(value as f64);
     l.manifest.optimizer_protocol=Some(o.protocol.clone());
-    Ok(binary::record!({"local":p.local,"model_step":st.step,"optimizer_local":o.protocol.local_step,"rows":s.tape[p.local-1],"input":b.tokens,"target":targets,"padding":b.input.elem_count()-b.tokens,"examples":examples,"answer_ce":value,"lr":s.config.lr,"stats":stats,"forward_backward_seconds":fb,"optimizer_seconds":opt,"step_seconds":start.elapsed().as_secs_f64(),"arm":s.arms()[arm]}))
+    Ok(binary::record!({"local":p.local,"model_step":st.step,"optimizer_local":o.protocol.local_step,"rows":s.tape[p.local-1],"input":b.tokens,"target":targets,"padding":b.input.elem_count()-b.tokens,"examples":examples,"answer_ce":value,"plain_ce":plain.to_scalar::<f32>()?,"first_nll":first_nll.to_scalar::<f32>()?,"weighted_denominator":weighted_denominator,"lr":s.config.lr,"stats":stats,"forward_backward_seconds":fb,"optimizer_seconds":opt,"step_seconds":start.elapsed().as_secs_f64(),"arm":s.arms()[arm]}))
 }
 fn train(s:&Study)->Result<()> {
     if s.full_fit.is_some(){return fit_train(s);}
@@ -1315,7 +1664,97 @@ fn train(s:&Study)->Result<()> {
     if pure_time{Ok(())}else{result}
 }
 
+fn first_report(s:&Study)->Result<()> {
+    let h=history(s)?;let end=h.last().ok_or_else(||bad("first-decision NOT_RUN"))?;
+    let samples=samples_with_framing(&event_inputs(s,0)?.train,&scoring_tokenizer(s)?,s.config.seq_len,neural::Framing::QuestionEvidence)?;
+    for arm in 0..2{
+        let p=&end.arms[arm];let mut count=0usize;let(mut input,mut target,mut padding)=(0usize,0usize,0usize);
+        for index in 0..h.len(){let path=s.root.join(s.arms()[arm]).join(format!("updates-{index:03}.r3rows"));
+            if !path.exists(){continue;}
+            for row in binary::read_value_records(&path)?{
+                let draw=s.tape.get(count).ok_or_else(||bad("first-decision trace overrun"))?;count+=1;
+                let length=draw.iter().map(|&i|samples[i].tokens.len()-1).max().unwrap();let mut cost=[0usize;3];
+                for &i in draw{cost[0]+=samples[i].tokens.len()-1;cost[1]+=samples[i].tokens.len()-samples[i].response_start;cost[2]+=length-(samples[i].tokens.len()-1);}
+                if row["local"]!=count||row["model_step"]!=17981+count||row["optimizer_local"]!=3645+count
+                    ||row["source_tape_index"]!=(573+count-1)%3072||row["rows"]!=binary::record!(draw)
+                    ||row["input"]!=cost[0]||row["target"]!=cost[1]||row["padding"]!=cost[2]
+                    ||row["examples"]!=8||row["weighted_denominator"]!=cost[1]+if arm==1{4}else{0}
+                    ||row["plain_ce"].as_f64().is_none_or(|x|!x.is_finite())
+                    ||row["first_nll"].as_f64().is_none_or(|x|!x.is_finite())
+                    ||row["answer_ce"].as_f64().is_none_or(|x|!x.is_finite()){
+                    return Err(bad("first-decision trace/objective/cost/clock"));
+                }
+                input+=cost[0];target+=cost[1];padding+=cost[2];
+            }
+        }
+        let discarded=first_discarded(s,arm)?;
+        if count!=p.local||count>256||count+discarded[0]>264{return Err(bad("first-decision committed/backward cap"));}
+        let(m,_)=checkpoint::metadata(&p.native)?;let st=m.training.as_ref().ok_or_else(||bad("first-decision endpoint state"))?;
+        let op=m.optimizer_protocol.as_ref().ok_or_else(||bad("first-decision endpoint Adam"))?;
+        if st.step!=17981+count||op.local_step!=3645+count||st.sampler_state!=count as u64
+            ||st.resume_binding!=Some(bind(s,arm,st,&scoring_tokenizer(s)?)?)||file_hash(&p.native)?!=p.physical{
+            return Err(bad("first-decision endpoint native/binding"));
+        }
+        if p.evaluated>0{
+            let model=m.model_content_digest;
+            for panel in fit_panels(s)?.into_iter().take(if p.fit{6}else{5}){
+                let n=if p.fit&&["FULL-word","FULL-renamed","FULL-train"].contains(&panel.0.as_str()){192}else{64};
+                event_read_panel(s,s.arms()[arm],p.evaluated,&model,&panel,n)?;
+            }
+            let guard:binary::Value=read_confirmed(&s.root.join(s.arms()[arm]).join(format!("decision-{}.r3b",p.evaluated)))?;
+            if guard["stop"]!=binary::record!(p.stop)||guard["policy"]!=digest(s)?{return Err(bad("first-decision guard/endpoint"));}
+        }
+        println!("FIRST_TRACE arm={} committed={} backward={} discarded={} model={} Adam={} input={} target={} padding={} evaluated={} fit={} stop={:?}",s.arms()[arm],count,count+discarded[0],discarded[0],st.step,op.local_step,input+discarded[1],target+discarded[2],padding,p.evaluated,p.fit,p.stop);
+    }
+    println!("FIRST_USAGE active={} generation={} teacher={} scoped_bytes={} Goal1=false",previous_usage(s,&h)?.0,previous_usage(s,&h)?.1,previous_usage(s,&h)?.2,first_owned_bytes(s)?);
+    Ok(())
+}
+fn first_review(s:&Study,arm:usize)->Result<()> {
+    first_report(s)?;
+    let h=history(s)?;let end=h.last().ok_or_else(||bad("first-decision B endpoint"))?;
+    if end.resume||!end.success||!end.arms.iter().all(|p|p.fit)||end.arms[0].local!=end.arms[1].local{
+        return Err(bad("first-decision B requires matched completed endpoint"));
+    }
+    let p=&end.arms[arm];let model=checkpoint::metadata(&p.native)?.0.model_content_digest;
+    let mut cases=vec![];let mut expected=vec![];let mut failures=vec![];
+    for(panel,take)in fit_panels(s)?.into_iter().take(5).zip([4,3,3,3,3]){
+        let n=if ["FULL-word","FULL-renamed"].contains(&panel.0.as_str()){192}else{64};
+        let(_,rows)=event_read_panel(s,s.arms()[arm],p.local,&model,&panel,n)?;
+        for i in 0..take{cases.push(panel.1[i].clone());expected.push(rows[i].clone());}
+        if ["FULL-word","FULL-renamed"].contains(&panel.0.as_str()){
+            for (i,r) in rows.iter().enumerate(){if failures.len()>=16{break;}
+                if r["exact_match"]!=true{
+                    let mate=(i/4)*4+((i+1)%4);
+                    for j in [i,mate]{if failures.len()>=16{break;}failures.push((panel.1[j].clone(),rows[j].clone()));}
+                }
+            }
+        }
+    }
+    for(e,r)in failures{cases.push(e);expected.push(r);}
+    let label=format!("review-{}",s.arms()[arm]);
+    let(index,mut ctl)=start_observation(s,&label,&binary::record!({"policy":digest(s)?,"native":p.physical,"cases":digest(&cases)?,"teacher":8}))?;
+    let result=(||->Result<()>{let l=checkpoint::load(&p.native,Backend::Metal0.open()?,false)?;
+        let binding=binary::record!({"policy":digest(s)?,"model":model,"cases":digest(&cases)?,"planned":cases.len(),"call_protocol":1});
+        let rows=generated(&l,&s.root,&label,&cases,&binding,&mut ctl)?;
+        for(a,b)in rows.iter().zip(&expected){for field in ["raw_tokens","actual","finish_reason","error","generation_completed"]{
+            if a[field]!=b[field]{return Err(bad("first-decision B generation mismatch"));}
+        }}
+        let mut teacher=first_teacher_cases(s,true)?;teacher.truncate(4);
+        let mut dev=first_teacher_cases(s,false)?;dev.truncate(4);teacher.extend(dev);
+        let raw=binary::read_value_records(&s.root.join(s.arms()[arm]).join(format!("teacher-{}-FULL-teachers.r3rows",p.local)))?;
+        let main=first_teacher_cases(s,true)?.into_iter().chain(first_teacher_cases(s,false)?).collect::<Vec<_>>();
+        let mut origin=vec![];for e in &teacher{let at=main.iter().position(|x|x.id==e.id).ok_or_else(||bad("first-decision B teacher case"))?;
+            origin.push(raw.get(at+1).ok_or_else(||bad("first-decision B teacher raw"))?.clone());}
+        let tbind=binary::record!({"policy":digest(s)?,"model":model,"cases":digest(&teacher)?,"planned":8,"call_protocol":1});
+        let replay=teacher_prefix(&s.root,&label,&tbind,&l,&teacher,&mut ctl)?;
+        for(a,b)in replay.iter().zip(&origin){if a["gold"]!=b["gold"]||a["argmax"]!=b["argmax"]{return Err(bad("first-decision B teacher IDs"));}
+            let x:Vec<f64>=binary::from_value(a["nll"].clone())?;let y:Vec<f64>=binary::from_value(b["nll"].clone())?;
+            if x.len()!=y.len()||x.iter().zip(y).any(|(x,y)|(x-y).abs()>1e-5){return Err(bad("first-decision B teacher NLL"));}}
+        ctl.seal_completed_no_call()?;Ok(())})();
+    finish_observation(s,&label,index,&mut ctl,&result,binary::record!({"normal":16,"generation":cases.len(),"teacher":8,"native":p.physical}))?;result
+}
 fn report(s:&Study)->Result<()> {
+    if s.first_decision.is_some(){return first_report(s);}
     if s.full_fit.is_some(){return fit_report(s);}
     if s.event.is_some(){return event_report(s);}
     let h=history(s)?;let end=h.last().ok_or_else(||bad("NOT_RUN"))?;let tok=scoring_tokenizer(s)?;
@@ -1372,6 +1811,7 @@ fn report(s:&Study)->Result<()> {
 }
 fn scoring_tokenizer(s:&Study)->Result<ByteBpe>{let tok=ByteBpe::load(&s.word_root.join("tokenizer.r3b"))?;if tok.semantic_id()!=s.tokenizer{return Err(bad("frozen scorer tokenizer changed"));}Ok(tok)}
 fn review(s:&Study,arm:usize)->Result<()> {
+    if s.first_decision.is_some(){return first_review(s,arm);}
     if s.full_fit.is_some(){return fit_review(s);}
     if s.event.is_some(){return event_review(s,arm);}
     let h=history(s)?;let end=h.last().ok_or_else(||bad("not run"))?;
@@ -1393,6 +1833,7 @@ fn review(s:&Study,arm:usize)->Result<()> {
 }
 pub fn run(a:Action)->Result<()> {
     match a {
+        Action::FirstPrepare{original,output}=>first_prepare(&original,&output),
         Action::FullFitPosthocPrepare{original,output}=>fit_posthoc_prepare(&original,&output),
         Action::FullFitPosthocAdmit{root,review}=>fit_posthoc_admit(&root,&review),
         Action::FullFitPosthoc{root,phase}=>fit_posthoc_run(&root,&phase),
@@ -1401,8 +1842,8 @@ pub fn run(a:Action)->Result<()> {
         Action::EventPrepare{diagnosis,audit,output}=>event_prepare(&diagnosis,&audit,&output),
         Action::Prepare{parent,word_root,output}=>prepare(&parent,&word_root,&output),
         Action::Admit{root,review}=>admit(&root,&review),
-        Action::Baseline{root}=>baseline(&load_study(&root,true)?),
-        Action::Train{root}=>train(&load_study(&root,true)?),
+        Action::Baseline{root}=>{let s=load_study(&root,true)?;if s.first_decision.is_some(){first_baseline(&s)}else{baseline(&s)}},
+        Action::Train{root}=>{let s=load_study(&root,true)?;if s.first_decision.is_some(){first_train(&s)}else{train(&s)}},
         Action::Report{root}=>report(&load_study(&root,false)?),
         Action::Review{root,arm}=>{let s=load_study(&root,true)?;let index=s.arms().iter().position(|&a|a==arm).ok_or_else(||bad("wrong study arm"))?;review(&s,index)},
     }
@@ -1497,6 +1938,122 @@ impl Optimizer {
 #[cfg(all(test,feature="metal"))]
 mod tests {
     use super::*;
+    fn first_tiny_fixture()->Result<(Study,PathBuf)>{
+        let(mut original,root)=event_fixture()?;
+        if original.full_fit.is_none(){return Err(bad("first-decision TINY needs FULL preparation"));}
+        let origin=root.join("origin");std::fs::create_dir(&origin)?;original.root=origin.canonicalize()?;
+        publish_confirmed(&original.root.join("plan.r3b"),&original)?;
+        let mut l=checkpoint::load(&original.parent,Device::Cpu,true)?;
+        let st=l.manifest.training.as_mut().unwrap();st.step=17981;st.sampler_state=3069;st.config=original.config.clone();
+        st.consumed_tokens=st.config.budget_start_tokens;st.target_tokens=0;
+        st.resume_binding=Some(bind(&original,0,st,&l.tokenizer)?);
+        let mut op=l.manifest.optimizer_protocol.clone().unwrap();op.local_step=3645;op.study_start_step=Some(14912);
+        l.manifest.optimizer_protocol=Some(op.clone());
+        let parent=root.join("first-tiny-parent.r3m");
+        checkpoint::save(&parent,&l.model,&l.tokenizer,l.manifest.clone(),&l.optimizer)?;
+        let mut s=original.clone();s.parent=parent;s.parent_hash=file_hash(&s.parent)?;s.parent_content=l.model.weights_content_id()?;
+        s.parent_adam=optimizer_hash(&l.optimizer)?;s.parent_step=17981;s.event.as_mut().unwrap().optimizer=op;
+        s.config.budget_start_step=17981;s.config.max_steps=18237;s.config.max_tokens=s.config.budget_start_tokens+500_000;
+        s.tape=(0..2).map(|i|original.tape[(3069+i)%3072]).collect();s.max_updates=2;
+        let(c,tm,_)=inputs(&original)?;let role_map=checkpoint::ResumeBinding::digest_bytes(&first_roles(&c,&tm)?);
+        s.first_decision=Some(FirstDecision{original:original.root.clone(),plan_hash:file_hash(&original.root.join("plan.r3b"))?,
+            terminal_hash:"0".repeat(64),posthoc:original.root.clone(),posthoc_plan_hash:"0".repeat(64),
+            source_index:573,role_map,backward_cap:10,trace_digest:"0".repeat(64)});
+        Ok((s,root))
+    }
+    #[test]
+    #[ignore="first-decision Metal TINY C/W continuous2 vs fresh-process1+1; direct8 updates/backwards"]
+    fn first_decision_tiny_process_and_binding()->Result<()> {
+        if let Ok(root)=std::env::var("R3_FIRST_TINY_CHILD"){
+            let s:Study=read_confirmed(&PathBuf::from(root).join("plan.r3b"))?;
+            let arm=std::env::var("R3_FIRST_TINY_ARM").unwrap().parse::<usize>().unwrap();
+            let mut p:Progress=read_confirmed(&s.root.join(format!("progress-{}-1.r3b",s.arms()[arm])))?;
+            event_tiny_steps(&s,arm,&mut p,1,1)?;return Ok(());
+        }
+        let(s,root)=first_tiny_fixture()?;
+        let continuous=event_test_root(&s,&root.join("first-decision-20260925-continuous"))?;
+        let split=event_test_root(&s,&root.join("first-decision-20260925-split"))?;
+        for arm in 0..2{
+            let initial=Progress{local:0,native:s.parent.clone(),physical:s.parent_hash.clone(),stop:None,evaluated:0,fit:false};
+            let mut full=initial.clone();event_tiny_steps(&continuous,arm,&mut full,2,0)?;
+            let mut partial=initial;event_tiny_steps(&split,arm,&mut partial,1,0)?;
+            let status=std::process::Command::new(std::env::current_exe()?).args(["--exact","training::fresh::muon::tests::first_decision_tiny_process_and_binding","--ignored","--nocapture","--test-threads=1"])
+                .env("R3_FIRST_TINY_CHILD",&split.root).env("R3_FIRST_TINY_ARM",arm.to_string()).status()?;
+            assert!(status.success());
+            partial=read_confirmed(&split.root.join(format!("progress-{}-2.r3b",s.arms()[arm])))?;
+            let a=checkpoint::load(&full.native,Device::Cpu,true)?;let b=checkpoint::load(&partial.native,Device::Cpu,true)?;
+            assert_eq!(a.model.weights_content_id()?,b.model.weights_content_id()?);
+            assert_eq!(optimizer_hash(&a.optimizer)?,optimizer_hash(&b.optimizer)?);
+            assert_eq!(a.manifest.optimizer_protocol,b.manifest.optimizer_protocol);
+            let st=a.manifest.training.as_ref().unwrap();assert_eq!((st.step,st.sampler_state,a.manifest.optimizer_protocol.as_ref().unwrap().local_step),(17983,2,3647));
+            assert_eq!(st.resume_binding.as_ref().unwrap().family,if arm==0{checkpoint::ANSWER_MEAN_FAMILY}else{7});
+            let mut wrong=s.clone();wrong.parent_hash="0".repeat(64);
+            assert!(load_arm(&wrong,arm,&Progress{local:0,native:s.parent.clone(),physical:s.parent_hash.clone(),stop:None,evaluated:0,fit:false},&Device::Cpu).is_err());
+            assert!(load_arm(&split,1-arm,&partial,&Device::Cpu).is_err());
+            let mut wrong=s.clone();wrong.first_decision.as_mut().unwrap().role_map=[0;32];
+            assert!(load_arm(&wrong,arm,&partial,&Device::Cpu).is_err());
+            let mut tampered=checkpoint::load(&partial.native,Device::Cpu,true)?;
+            tampered.manifest.training.as_mut().unwrap().resume_binding=None;
+            let path=root.join(format!("missing-objective-{arm}.r3m"));
+            assert!(checkpoint::save(&path,&tampered.model,&tampered.tokenizer,tampered.manifest,&tampered.optimizer).is_err());
+        }
+        println!("FIRST_TINY direct optimizer8 backward8 generation0 teacher0; synthetic nonzero Adam fixture; evidence={}",root.display());Ok(())
+    }
+    #[test]
+    #[ignore="first-decision model-free actual dispatcher/RETURNED/cancel/UNKNOWN/I-O; zero model calls"]
+    fn first_decision_dispatch_and_returned()->Result<()> {
+        let(s,root)=first_tiny_fixture()?;
+        let s=event_test_root(&s,&root.join("first-decision-20260925-dispatch"))?;
+        assert_eq!(first_dispatch(0,2,0,2,10)?,FirstDispatch::Train);
+        assert_eq!(first_dispatch(2,2,8,2,10)?,FirstDispatch::EvaluateOnly);
+        assert_eq!(first_dispatch(1,2,9,2,10)?,FirstDispatch::CostStop);
+        assert!(first_dispatch(3,2,0,2,10).is_err());
+        assert!(first_dispatch(1,2,10,2,10).is_err());
+        let discard=s.root.join("C").join("fixture-discarded.r3b");
+        publish_confirmed(&discard,&binary::record!({"forward_backward":1,"optimizer":0,"input":27,"target":5,"reason":"TIME_BUDGET","synthetic_accounting_fixture":true}))?;
+        assert_eq!(first_discarded(&s,0)?,[1,27,5]);
+        let l=checkpoint::load(&s.parent,Device::Cpu,false)?;
+        let mut panel=fit_panels(&s)?.remove(3);panel.1.truncate(4);panel.2.truncate(4);
+        let label="first-returned";let binding=event_binding(&s,"C",0,&l.model.weights_content_id()?,&panel)?;
+        event_returned_fixture(&s,&s.root.join("C"),label,&binding,&panel.1,&l.tokenizer,false)?;
+        let raw=s.root.join("C").join(format!("{label}.r3rows"));let before=file_hash(&raw)?;
+        let mut zero=RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),std::time::Duration::ZERO,u64::MAX)?;
+        zero.set_call_limits(0,0);
+        assert_eq!(generated_until(&l,&s.root.join("C"),label,&panel.1,&binding,&mut zero,4)?.len(),4);
+        zero.seal_completed_no_call()?;
+        assert_eq!(zero.receipt()["generation_calls"],0);assert_eq!(before,file_hash(&raw)?);
+        let cancel=std::sync::Arc::new(AtomicBool::new(true));
+        let mut ctl=RunControl::new(cancel,std::time::Duration::from_secs(30),u64::MAX)?;
+        assert!(generated_until(&l,&s.root.join("C"),"first-cancelled",&panel.1,&binding,&mut ctl,1).is_err());
+        assert_eq!(ctl.receipt()["generation_calls"],0);
+        let pending=prepare_call(&s.root.join("C"),"first-unknown","generation",&binding,&panel.1[0],0)?;
+        let mut ctl=RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),std::time::Duration::from_secs(30),u64::MAX)?;
+        assert!(generated_until(&l,&s.root.join("C"),"first-unknown",&panel.1,&binding,&mut ctl,1).is_err());
+        assert_eq!(ctl.receipt()["generation_calls"],0);assert!(pending.exists());
+        let mut ctl=RunControl::new(std::sync::Arc::new(AtomicBool::new(false)),std::time::Duration::from_secs(30),u64::MAX)?;
+        assert!(generated_until(&l,&s.root.join("missing-directory"),"first-io",&panel.1,&binding,&mut ctl,1).is_err());
+        assert_eq!(ctl.receipt()["generation_calls"],0);
+        // A synthetic clocked native proves the actual pair dispatcher can
+        // finish a segment with no new optimizer, backward or model call.
+        let mut ps=vec![];
+        for arm in 0..2{
+            let mut p=Progress{local:0,native:s.parent.clone(),physical:s.parent_hash.clone(),stop:None,evaluated:0,fit:false};
+            let(mut fork,mut opt)=load_arm(&s,arm,&p,&Device::Cpu)?;
+            p.local=1;opt.protocol.local_step=3646;
+            let st=fork.manifest.training.as_mut().unwrap();st.step=17982;st.sampler_state=1;
+            save_arm(&s,0,arm,&mut fork,&opt,&mut p)?;ps.push(p);
+        }
+        publish_confirmed(&s.root.join("review-a.r3b"),&binary::record!({"active_seconds":0.,"synthetic_fixture":true}))?;
+        publish_confirmed(&s.root.join("baseline-finished.r3b"),&binary::record!({"success":true,"synthetic_fixture":true}))?;
+        publish_confirmed(&s.root.join("segment-000-started.r3b"),&binary::record!({"policy":digest(&s)?,"previous":null,"phase":0,"arms":ps}))?;
+        let receipt=binary::record!({"elapsed_seconds":0.,"generation_calls":0,"teacher_calls":0,"observed_conditions":["TIME_BUDGET"]});
+        publish_confirmed(&s.root.join("segment-000-finished.r3b"),&Segment{policy:digest(&s)?,previous:None,phase:0,arms:ps,success:false,resume:true,control:receipt,error:Some("TIME_BUDGET".into())})?;
+        first_train(&s)?;let h=history(&s)?;let latest=h.last().unwrap();
+        assert_eq!(latest.phase,1);assert!(latest.resume);
+        assert!(latest.arms.iter().all(|p|p.local==1&&p.evaluated==0));
+        assert_eq!(latest.control["generation_calls"],0);assert_eq!(latest.control["teacher_calls"],0);
+        println!("FIRST_DISPATCH actual RETURNED4, cancel/UNKNOWN/I-O rejected, optimizer0 backward0 generation0 teacher0 evidence={}",root.display());Ok(())
+    }
     #[test]
     #[ignore="read-only real budget endpoint; no optimizer/backward/generation/teacher"]
     fn full_fit_posthoc_scope()->Result<()> {
@@ -1567,7 +2124,9 @@ mod tests {
     fn event_fixture() -> Result<(Study,PathBuf)> {
         let prepared=PathBuf::from(std::env::var("R3_FULL_FIT_PREPARATION").or_else(|_|std::env::var("R3_EVENT_PREPARATION")).map_err(|_|bad("explicit event preparation required"))?);
         let mut s:Study=read_confirmed(&prepared.join("plan.r3b"))?;
-        let root=std::env::temp_dir().join(format!("replica-event-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));std::fs::create_dir(&root)?;
+        let root=if let Ok(base)=std::env::var("R3_FIRST_EVIDENCE"){
+            PathBuf::from(base).join(format!("first-decision-20260925-tiny-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))
+        }else{std::env::temp_dir().join(format!("replica-event-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))};std::fs::create_dir(&root)?;
         let tok=scoring_tokenizer(&s)?;let mut cfg=Config::tiny(tok.vocab_size());cfg.context=2048;cfg.profile="NATIVE_TRPP_EXPERIMENTAL_V1".into();
         let device=Backend::Metal0.open()?;s.runtime=RuntimeProfile::capture(Backend::Metal0,&device)?;
         let model=Transformer::init(cfg,20260924,device)?;

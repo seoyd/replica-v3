@@ -703,6 +703,41 @@ fn response_objective(logits: &Tensor, batch: &Batch, weight: f64, answer: bool)
     if weight != 1. { return Err(Error::Invalid("answer mean requires unweighted response CE".into())); }
     Ok((ce,answer_mean_loss(logits,batch)?,targets,batch.mask.dim(0)?))
 }
+// The explicit first-decision fork uses example-normalized answer loss. The
+// historical ANSWER path above remains the w=1 implementation and policy.
+fn first_decision_objective(logits: &Tensor, batch: &Batch, word: &[bool])
+    -> Result<(Tensor, Tensor, Tensor, usize, usize)> {
+    let examples=batch.mask.dim(0)?;
+    if examples==0||word.len()!=examples{return Err(Error::Invalid("first-decision role count".into()));}
+    let (plain,old,targets,_)=response_objective(logits,batch,1.,true)?;
+    let mut weighted=Vec::with_capacity(examples);
+    let mut denominator=0usize;
+    for (row,&is_word) in word.iter().enumerate(){
+        let mask=batch.mask.narrow(0,row,1)?;
+        let first=batch.first_target_mask.narrow(0,row,1)?;
+        let m=mask.to_vec2::<f32>()?;let f=first.to_vec2::<f32>()?;
+        if m[0].iter().any(|&v|v!=0.&&v!=1.)||f[0].iter().any(|&v|v!=0.&&v!=1.)
+            ||f[0].iter().zip(&m[0]).any(|(&a,&b)|a>b)
+            ||f[0].iter().filter(|&&v|v==1.).count()!=1
+            ||m[0].iter().position(|&v|v==1.)!=f[0].iter().position(|&v|v==1.) {
+            return Err(Error::Invalid("first-decision supervised mask".into()));
+        }
+        let n=m[0].iter().filter(|&&v|v==1.).count();
+        let row_logits=logits.narrow(0,row,1)?;
+        let row_target=batch.target.narrow(0,row,1)?;
+        let (mean,count)=masked_loss(&row_logits,&row_target,&mask)?;
+        let (first_nll,one)=masked_loss(&row_logits,&row_target,&first)?;
+        if count!=n||one!=1||!mean.to_scalar::<f32>()?.is_finite()||!first_nll.to_scalar::<f32>()?.is_finite(){
+            return Err(Error::Invalid("first-decision nonfinite/empty target".into()));
+        }
+        denominator+=n+usize::from(is_word);
+        weighted.push(if is_word{(((mean*(n as f64))?+first_nll)?/((n+1)as f64))?}else{mean});
+    }
+    let first_nll=masked_loss(logits,&batch.target,&batch.first_target_mask)?.0;
+    let objective=if word.iter().any(|v|*v){Tensor::stack(&weighted,0)?.mean_all()?}else{old};
+    if !objective.to_scalar::<f32>()?.is_finite(){return Err(Error::Invalid("first-decision nonfinite objective".into()));}
+    Ok((plain,first_nll,objective,targets,denominator))
+}
 // Training-only paired supervision. The two targets share their prefix up to
 // the first divergence, so neither teacher prefix reveals the selected side.
 // No extra forward, generated answer correction, or product inference oracle.
@@ -2006,6 +2041,74 @@ fn train_with_policy(run: Run<'_>, control: &mut recovery::RunControl, fresh: Op
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn first_decision_f64_gradient_masks_and_microbatch() -> Result<()> {
+        let device=Device::Cpu;let lengths=[2,2,2,2,16,16,16,16];
+        let samples=lengths.iter().enumerate().map(|(i,&n)|{
+            let mut tokens=vec![BOS,8+i as u32,20];
+            tokens.extend((0..n-1).map(|j|8+(j%12)as u32));tokens.push(EOS);
+            Sample{tokens,response_start:3,curriculum:false}
+        }).collect::<Vec<_>>();
+        let b=batch(&samples,&(0..8).collect::<Vec<_>>(),&device)?;
+        let t=b.input.dim(1)?;let v=32;
+        let values=(0..8*t*v).map(|i|((i*17%67)as f32-31.)/19.).collect::<Vec<_>>();
+        let roles=[false,false,false,false,true,true,true,true];
+        let logits=Var::from_vec(values.clone(),(8,t,v),&device)?;
+        let (ce,first,objective,targets,weighted_den)=first_decision_objective(&logits,&b,&roles)?;
+        assert_eq!(targets,72);assert_eq!(weighted_den,76);
+        assert!(ce.to_scalar::<f32>()?.is_finite()&&first.to_scalar::<f32>()?.is_finite());
+        let masks=b.mask.flatten_all()?.to_vec1::<f32>()?;
+        let first_masks=b.first_target_mask.flatten_all()?.to_vec1::<f32>()?;
+        let target=b.target.flatten_all()?.to_vec1::<u32>()?;
+        let oracle=|z:&[f32]|->(f64,Vec<f64>){
+            let mut total=0.;let mut gradient=vec![0.;z.len()];
+            for row in 0..8 {let len=lengths[row];let denom=(len+usize::from(roles[row]))as f64;
+                for pos in 0..t {let at=row*t+pos;if masks[at]==0.{continue;}
+                    let weight=if roles[row]&&first_masks[at]==1.{2.}else{1.};
+                    let part=&z[at*v..(at+1)*v];let max=part.iter().copied().fold(f32::NEG_INFINITY,f32::max)as f64;
+                    let sum=part.iter().map(|&x|(f64::from(x)-max).exp()).sum::<f64>();
+                    let coeff=weight/(8.*denom);
+                    total+=coeff*(max+sum.ln()-f64::from(part[target[at]as usize]));
+                    for k in 0..v{gradient[at*v+k]=coeff*((f64::from(part[k])-max).exp()/sum-f64::from(k==target[at]as usize));}
+                }
+            }(total,gradient)
+        };
+        let (reference,grad)=oracle(&values);
+        assert!((f64::from(objective.to_scalar::<f32>()?)-reference).abs()<2e-6);
+        let actual=objective.backward()?.get(&logits).unwrap().flatten_all()?.to_vec1::<f32>()?;
+        for (a,b) in actual.iter().zip(&grad){assert!((f64::from(*a)-b).abs()<2e-6);}
+        for row in 0..8{let eos=row*t+samples[row].tokens.len()-2;
+            assert_eq!(target[eos],EOS);assert_eq!(masks[eos],1.);
+            assert_eq!(first_masks[row*t+2],1.);
+            assert_eq!(masks[row*t],0.);
+            for pos in samples[row].tokens.len()-1..t{assert_eq!(masks[row*t+pos],0.);}
+        }
+        for at in [2*v+8,(4*t+2)*v+9,(7*t+17)*v+EOS as usize]{
+            let mut lo=values.clone();let mut hi=values.clone();lo[at]-=0.001;hi[at]+=0.001;
+            let fd=(oracle(&hi).0-oracle(&lo).0)/f64::from(hi[at]-lo[at]);
+            assert!((f64::from(actual[at])-fd).abs()<2e-6);
+        }
+        let (_,old,_,_)=response_objective(&logits,&b,1.,true)?;
+        let (_,_,w1,_,d1)=first_decision_objective(&logits,&b,&[false;8])?;
+        assert_eq!(d1,targets);assert!((w1.to_scalar::<f32>()?-old.to_scalar::<f32>()?).abs()<1e-7);
+        assert!((objective.to_scalar::<f32>()?-2.*old.to_scalar::<f32>()?).abs()>0.1);
+        let mut accumulated=vec![0f64;actual.len()];let mut value=0.;
+        for start in [0,4]{let ids=(start..start+4).collect::<Vec<_>>();let mb=batch(&samples,&ids,&device)?;
+            let local=logits.narrow(0,start,4)?.narrow(1,0,mb.input.dim(1)?)?;
+            let (_,_,loss,_,_)=first_decision_objective(&local,&mb,&roles[start..start+4])?;
+            value+=f64::from(loss.to_scalar::<f32>()?)*0.5;
+            let g=loss.backward()?.get(&logits).unwrap().flatten_all()?.to_vec1::<f32>()?;
+            for(i,x)in g.iter().enumerate(){accumulated[i]+=f64::from(*x)*0.5;}
+        }
+        assert!((value-reference).abs()<2e-6);
+        for(i,x)in accumulated.iter().enumerate(){assert!((x-f64::from(actual[i])).abs()<2e-6);}
+        let mut invalid=batch(&samples,&[0],&device)?;
+        invalid.first_target_mask=Tensor::zeros(invalid.first_target_mask.shape(),DType::F32,&device)?;
+        assert!(first_decision_objective(&logits.narrow(0,0,1)?.narrow(1,0,invalid.input.dim(1)?)?,&invalid,&[true]).is_err());
+        let nan=Tensor::full(f32::NAN,(8,t,v),&device)?;
+        assert!(first_decision_objective(&nan,&b,&roles).is_err());
+        Ok(())
+    }
     #[test]
     fn answer_mean_scalar_mask_gradient_and_accumulation() -> Result<()> {
         let device=Device::Cpu;
