@@ -1,0 +1,144 @@
+{
+  "directed_scenarios": [
+    {
+      "effect_delta": 5,
+      "expect": {
+        "classification": "DUPLICATE_EFFECT",
+        "final_value": 10,
+        "first_value": 5
+      },
+      "fault": "receiver applies effect durably then dies before ACK",
+      "name": "non_idempotent_receiver_crash_after_apply_before_ack_auto_retry",
+      "policy": "automatic retry",
+      "receiver": "non_idempotent"
+    },
+    {
+      "effect_delta": 5,
+      "expect": {
+        "classification": "DUPLICATE_EFFECT",
+        "final_value": 10
+      },
+      "fault": "sender receives ACK then dies before persisting ACKED",
+      "name": "non_idempotent_sender_crash_after_ack_before_local_receipt_auto_retry",
+      "policy": "automatic retry",
+      "receiver": "non_idempotent"
+    },
+    {
+      "effect_delta": 5,
+      "expect": {
+        "classification": "SAFE_UNKNOWN",
+        "sender_status": "UNKNOWN_EFFECT"
+      },
+      "fault": "delivery outcome ambiguous",
+      "name": "non_idempotent_ambiguous_no_retry",
+      "policy": "do_not_retry",
+      "receiver": "non_idempotent"
+    },
+    {
+      "effect_delta": 5,
+      "effect_id": "stable",
+      "expect": {
+        "duplicate_effect": 0,
+        "final_value": 5,
+        "retry_outcome": "REPLAY"
+      },
+      "fault": "receiver applies durably then dies before ACK",
+      "name": "idempotent_receiver_crash_after_apply_before_ack",
+      "receiver": "durable_idempotent",
+      "retry": "same_effect_id"
+    },
+    {
+      "effect_delta": 5,
+      "effect_id": "stable",
+      "expect": {
+        "duplicate_effect": 0,
+        "final_value": 5,
+        "retry_outcome": "REPLAY"
+      },
+      "fault": "sender dies after ACK before local ACKED persist",
+      "name": "idempotent_sender_crash_after_ack_before_local_receipt",
+      "receiver": "durable_idempotent",
+      "retry": "same_effect_id"
+    },
+    {
+      "deliveries": 3,
+      "expect": {
+        "effect_applied_once": true,
+        "first": "COMMIT",
+        "later": "REPLAY"
+      },
+      "name": "receiver_restart_dedup",
+      "receiver": "durable_idempotent",
+      "restart_between": [
+        2,
+        3
+      ]
+    }
+  ],
+  "format": "replica-commit-kernel-external-effect-vectors",
+  "frozen_rule": "Automatic retry of ambiguous external effects is only allowed when the receiver's effect mutation + idempotency ledger + receipt form one durable atomic transition.",
+  "mutation_vectors": [
+    {
+      "expected_bug": "DUPLICATE_EFFECT",
+      "name": "receiver_effect_first",
+      "sequence": [
+        "persist_effect",
+        "crash",
+        "ledger_not_persisted",
+        "retry_same_effect"
+      ]
+    },
+    {
+      "expected_bug": "LOST_EFFECT_REPLAYED",
+      "name": "receiver_ledger_first",
+      "sequence": [
+        "persist_dedup_ledger",
+        "crash",
+        "effect_not_persisted",
+        "retry_same_effect"
+      ]
+    }
+  ],
+  "provenance": "Reconstructed/frozen from the actually executed v1.2I sender/receiver tests and saved reports. A standalone vector JSON did not exist at the original run time.",
+  "stress_scenarios": [
+    {
+      "expect": {
+        "duplicate_or_lost": 0,
+        "receiver_ledger": 150
+      },
+      "faults": {
+        "prepared_or_inflight_crash": 34,
+        "receiver_apply_then_crash": 20,
+        "sender_ack_then_crash": 20,
+        "timeout": 20
+      },
+      "name": "150_unique_effects_fault_mix",
+      "unique_effects": 150
+    },
+    {
+      "deliveries_per_effect": 5,
+      "expect": {
+        "COMMIT": 120,
+        "REPLAY": 480,
+        "actual_effects": 120
+      },
+      "name": "120_effects_each_delivered_5_times",
+      "total_deliveries": 600,
+      "unique_effects": 120
+    },
+    {
+      "expect": {
+        "duplicate_or_lost": 0,
+        "receiver_ledger": 80,
+        "sender_acked": 80
+      },
+      "faults": {
+        "receiver_apply_then_crash": 12,
+        "sender_ack_then_crash": 12
+      },
+      "name": "80_concurrent_recovery",
+      "unique_effects": 80
+    }
+  ],
+  "version": "1.2I"
+}

@@ -1,4 +1,4 @@
-# Replica Commit Kernel — Rust A/B/C/D gates
+# Replica Commit Kernel — Rust A/B/C/D/E component gates
 
 The supplied archive was uncompiled in its research environment. On the Replica
 Mac, the original candidate passed all32 frozen vectors in debug and release.
@@ -13,8 +13,8 @@ concurrency, natural-language quality or product integration acceptance.
 v1.3A ports the frozen **v1.2B 32-vector core commit boundary**. v1.3B adds
 the R3BIN single-writer disk/process boundary described below. v1.3C adds a
 separate in-memory F concurrency profile. v1.3D adds the K/L correction profile
-below. External-effect contracts in `docs/FROZEN_CONTRACT_B_TO_M.md` remain
-future Rust gates.
+below. v1.3E adds the local I/J/M external-effect profile below. These component
+gates do not yet constitute an integrated product commit authority.
 
 ## First target-machine gate
 
@@ -113,6 +113,48 @@ With a new mutation root, run
 `cargo test --locked --offline --test mutations correction_closure_mutants_are_killed -- --exact --ignored`.
 The two supplied K/L JSON scenario files were reconstructed after the research
 run; their original source/report provenance and this Rust execution are distinct.
+
+## E: local external-effect profile
+
+`external::Endpoint` persists typed sender/receiver snapshots through the same
+atomic native-file helper. Sender admission is durable before transport. An
+ambiguous non-idempotent send becomes `UnknownEffect` and cannot automatically
+retry. An idempotent receiver binds stable effect ID to payload, applying effect,
+ledger and receipt together; the receipt returned on replay is the saved one.
+Restore replays receiver history and verifies value/ledger/receipt consistency.
+
+`reconcile` accepts attributable per-effect evidence from a trusted host adapter.
+Stale/non-authoritative/other-effect observations and open-world absence do not
+become terminal truth. Closed absence additionally requires a closed delivery
+watermark; the receiver's ordinary query does not claim that watermark. Evidence
+history is retained. A boolean supplied by a model is not authority proof.
+
+Compensation is a separately declared numerical effect with a different stable
+ID; retries keep that ID. An ambiguous in-flight reversal requires reconciliation.
+Only proven application permits restoration. Without a declared compensator,
+the sender records manual intervention. One unresolved compensation cycle is
+allowed at a time; this bounded profile does not invent arbitrary inverses.
+Late ACK handling reads current sender state. Earlier completed compensation
+does not create an extra restore in a later cancelled cycle.
+
+These tests use local child processes and R3BIN request/response files, not live
+external services. The closed-absence probe joins every old sender/receiver
+before claiming the delivery watermark. No general network exactly-once or
+external compensation guarantee follows.
+
+Run the frozen12 reconciliation cases with
+`cargo test --locked --offline --test external frozen_j_twelve_cases_and_attribution_boundaries -- --exact`.
+For local process gates, set `R3_KERNEL_E_EVIDENCE` to a new directory and run
+`cargo test --locked --offline --test external -- --include-ignored --skip process_worker --skip evidence_child_counts --test-threads=1`.
+`R3_KERNEL_E_REUSE_I`, if explicitly set, points to completed I150/I600 evidence
+for read-only native/receipt revalidation; it never replaces the remaining tests.
+With a new mutation root, run
+`cargo test --locked --offline --test mutations external_guards_are_killed -- --exact --ignored`.
+
+A/B, C, D and E remain separate typed profiles. Combining authorization,
+correction closure, durable receipts and existing product memory is a subsequent
+integration boundary, not implied by these standalone PASS results. GRU/TR++
+remain separate and neither is invoked by the kernel tests.
 
 ## Frozen bundle identity
 

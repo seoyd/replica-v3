@@ -3,6 +3,87 @@
 use std::{fs, path::PathBuf, process::Command};
 
 #[test]
+#[ignore = "two compiled external retry/absence guard mutants"]
+fn external_guards_are_killed() {
+    let (root, scratch) = prepare_scratch();
+    fs::create_dir_all(scratch.join("tests/data")).unwrap();
+    for p in [
+        "tests/external.rs",
+        "tests/data/commit_kernel_v1_2I_vectors.json",
+        "tests/data/commit_kernel_v1_2J_vectors.json",
+        "tests/data/commit_kernel_v1_2M_vectors.json",
+    ] {
+        fs::copy(root.join(p), scratch.join(p)).unwrap();
+    }
+    let source = fs::read_to_string(root.join("src/external.rs")).unwrap();
+    let mut summary = String::new();
+    for (name, from, to, test, ignored) in [
+        (
+            "open_absence",
+            "if o.closed_world && o.watermark_closed {",
+            "if true {",
+            "frozen_j_twelve_cases_and_attribution_boundaries",
+            false,
+        ),
+        (
+            "non_idempotent_retry",
+            "if t.status == TaskStatus::InFlight && !self.receiver_idempotent {",
+            "if false {",
+            "i_directed_restart_and_non_idempotent_unknown",
+            true,
+        ),
+    ] {
+        assert_eq!(source.matches(from).count(), 1);
+        fs::write(
+            scratch.join("src/external.rs"),
+            source.replacen(from, to, 1),
+        )
+        .unwrap();
+        fs::write(
+            scratch.join(format!("{name}.mutation.txt")),
+            format!("FROM {from}\nTO {to}\n"),
+        )
+        .unwrap();
+        let mut command = Command::new(env!("CARGO"));
+        command
+            .current_dir(&scratch)
+            .env("CARGO_INCREMENTAL", "0")
+            .env("CARGO_TARGET_DIR", scratch.join("target"))
+            .env("CARGO_PROFILE_DEV_DEBUG", "0")
+            .env("CARGO_PROFILE_TEST_DEBUG", "0")
+            .env("R3_KERNEL_E_EVIDENCE", scratch.join(name))
+            .args([
+                "test",
+                "--locked",
+                "--offline",
+                "--test",
+                "external",
+                "--",
+                "--exact",
+                test,
+            ]);
+        if ignored {
+            command.arg("--ignored");
+        }
+        let out = command.output().unwrap();
+        fs::write(scratch.join(format!("{name}.stdout")), &out.stdout).unwrap();
+        fs::write(scratch.join(format!("{name}.stderr")), &out.stderr).unwrap();
+        assert_eq!(out.status.code(), Some(101));
+        assert!(String::from_utf8(out.stdout)
+            .unwrap()
+            .contains(&format!("test {test} ... FAILED")));
+        summary.push_str(&format!(
+            "{name}: compiled_semantic_failure=true exit=101 test={test}\n"
+        ));
+    }
+    fs::write(scratch.join("summary.txt"), summary).unwrap();
+    assert_eq!(
+        fs::read_to_string(root.join("src/external.rs")).unwrap(),
+        source
+    );
+}
+
+#[test]
 #[ignore = "two compiled correction closure/cache mutants; explicit scratch root"]
 fn correction_closure_mutants_are_killed() {
     let (root, scratch) = prepare_scratch();
@@ -76,6 +157,7 @@ fn prepare_scratch() -> (PathBuf, PathBuf) {
         "src/kernel.rs",
         "src/concurrency.rs",
         "src/correction.rs",
+        "src/external.rs",
     ] {
         fs::copy(root.join(path), scratch.join(path)).unwrap();
     }

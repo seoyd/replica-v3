@@ -1,5 +1,30 @@
 # 진단 및 구현 상태
 
+## 2026-09-25 Commit Kernel E — local component execution PASS
+
+The user supplied the I/J/M original source/report bundle plus reconstructed
+scenario fixtures. New Rust `external::Endpoint` uses native sender/receiver
+state and the existing atomic writer. It binds effect IDs/payload/receipts,
+blocks ambiguous non-idempotent retries, retains reconciliation evidence and
+implements explicitly declared compensation/restoration with stable IDs.
+No model, GRU/TR++ mixture, product-memory mutation or live external service.
+
+Frozen J12/12, direct process/guard tests4/4, stress completion1/1, late ACK1/1
+and two compiled semantic mutants detected. I150 recovered150/150; I600 returned
+COMMIT120/REPLAY480. Concurrent recovery80/80 and compensation60 cycles/120 tasks
+completed without duplicate/lost effects. The initial stress run failed when
+two test threads chose the same timestamp-derived log directory. It remains
+preserved. An atomic sequence fixed the test path; completed I150/I600 were
+revalidated read-only, and partial I80 was preserved rather than reused.
+
+Actual normal/failed-prefix/continuation executions:565 sender+1124 receiver
+children,198 intentional SIGKILLs. Compiled mutation controls added4 sender+
+4 receiver children and2 SIGKILLs. Total569/1128/200; no unexpected child exit.
+The failed parent test is still a failure. Model generation/teacher/backward/
+optimizer counts are all0. Exact hashes, commands and limitations are in
+`COMMIT_KERNEL_EXTERNAL_2026-09-25.md`. Component PASS is not combined C/D/E
+authorization/durability or Replica product integration/Goal1 acceptance.
+
 ## 2026-09-25 Commit Kernel D — correction/native/process execution PASS
 
 The user supplied the original K/L source/report bundle plus later-reconstructed

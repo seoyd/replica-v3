@@ -1,6 +1,6 @@
 # Diagnostic repair and bounded quality recovery
 
-## Current boundary: Commit Kernel D and later external-effect inputs
+## Current boundary: Commit Kernel E components and later integration
 
 The narrow fixture repair and independent changed-boundary review are closed.
 The supplied Commit Kernel candidate has passed v1.3A exact vectors, direct
@@ -17,9 +17,19 @@ restart does not establish their combined durability. The subsequently supplied
 K/L original source/report and reconstructed scenario vectors support the
 separate D version/dependency profile. Its direct, native, process and mutation
 gates pass; see `COMMIT_KERNEL_CORRECTION_2026-09-25.md`. D reuses B's atomic-file
-helper but does not yet persist C proposal/receipt state. Original I/J/M inputs
-have been requested for E. Do not invent expected states or reuse Go results as
-Rust evidence. No live external service is part of these gates.
+helper but does not yet persist C proposal/receipt state. Supplied original
+I/J/M source/reports and reconstructed vectors now support a separate E native
+sender/receiver/reconciliation/compensation profile. Its local process gates
+pass; see `COMMIT_KERNEL_EXTERNAL_2026-09-25.md`. No live external service is
+part of these gates. Do not reuse Go outcomes as Rust evidence.
+
+Component gates are not yet a combined product runtime. The next integration
+must bind the actual approved proposal/effect and current dependency closure to
+one durable operation/nonce/receipt boundary before routing operating-memory
+mutations. Do not merely place the existing SQLite write after an independent
+kernel commit or claim those two durable domains are atomic. Preserve the
+accepted component evidence and existing product path while this contract is
+made concrete; no model-core change or general external-action API follows.
 
 GRU and TR++ must remain separate: no mixed architecture, shared learned state,
 weight transplant, training or inference routing. This runtime crate introduces

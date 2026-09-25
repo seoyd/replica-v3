@@ -1,0 +1,171 @@
+{
+  "directed_cases": [
+    {
+      "evidence": {
+        "authoritative": true,
+        "digest_match": true,
+        "fresh": true,
+        "receipt": "APPLIED"
+      },
+      "expected": "VERIFIED_SUCCESS",
+      "name": "receipt_success"
+    },
+    {
+      "evidence": {
+        "authoritative": true,
+        "digest_match": true,
+        "fresh": true,
+        "receipt": "FAILED"
+      },
+      "expected": "VERIFIED_FAILURE",
+      "name": "receipt_failure"
+    },
+    {
+      "evidence": {
+        "authoritative": true,
+        "digest_match": true,
+        "fresh": true,
+        "receipt": "PARTIAL"
+      },
+      "expected": "PARTIAL_EFFECT",
+      "name": "receipt_partial"
+    },
+    {
+      "evidence": {
+        "authoritative": true,
+        "digest_match": false,
+        "fresh": true,
+        "receipt": "APPLIED"
+      },
+      "expected": "DISPUTED",
+      "name": "receipt_digest_mismatch"
+    },
+    {
+      "evidence": {
+        "authoritative": true,
+        "digest_match": true,
+        "fresh": true,
+        "query": "APPLIED"
+      },
+      "expected": "VERIFIED_SUCCESS",
+      "name": "exact_query_success"
+    },
+    {
+      "evidence": {
+        "authoritative": true,
+        "digest_match": true,
+        "fresh": true,
+        "query": "FAILED"
+      },
+      "expected": "VERIFIED_FAILURE",
+      "name": "exact_query_failure"
+    },
+    {
+      "evidence": {
+        "authoritative": true,
+        "closed_world": false,
+        "fresh": true,
+        "query": "ABSENT",
+        "watermark_closed": false
+      },
+      "expected": "UNKNOWN",
+      "name": "fresh_absence_open_world"
+    },
+    {
+      "evidence": {
+        "authoritative": true,
+        "closed_world": true,
+        "fresh": true,
+        "query": "ABSENT",
+        "watermark_closed": true
+      },
+      "expected": "VERIFIED_FAILURE",
+      "name": "closed_authoritative_absence"
+    },
+    {
+      "evidence": {
+        "authoritative": true,
+        "digest_match": true,
+        "fresh": false,
+        "query": "APPLIED"
+      },
+      "expected": "UNKNOWN",
+      "name": "stale_success_query"
+    },
+    {
+      "evidence": {
+        "aggregate_delta_matches": true,
+        "unique_causality": false
+      },
+      "expected": "UNKNOWN",
+      "name": "aggregate_matches_expected"
+    },
+    {
+      "evidence": {
+        "aggregate_delta_matches": true,
+        "unique_causality": true
+      },
+      "expected": "UNKNOWN",
+      "name": "aggregate_unique_hint_only"
+    },
+    {
+      "evidence": {
+        "both_authoritative": true,
+        "fresh": true,
+        "query": "FAILED",
+        "receipt": "APPLIED"
+      },
+      "expected": "DISPUTED",
+      "name": "success_failure_conflict"
+    }
+  ],
+  "format": "replica-commit-kernel-reconciliation-vectors",
+  "provenance": "Reconstructed/frozen from the 12 directed cases and synthetic policy experiments actually executed in v1.2J. No standalone vector JSON existed at original run time.",
+  "synthetic_policy_experiments": [
+    {
+      "attempts": 250000,
+      "naive_expected": {
+        "false_verified": 11185,
+        "verified": 203215
+      },
+      "name": "normal_250k",
+      "note": "Fault-model comparison only; not a Replica production error rate.",
+      "strict_expected": {
+        "false_verified": 0,
+        "verified": 131286
+      }
+    },
+    {
+      "attempts": 250000,
+      "authority_bug_rate": 0.001,
+      "name": "authority_common_mode_fault_0_1_percent",
+      "note": "Demonstrates authoritative evidence can still be wrong under common-mode failure.",
+      "strict_expected": {
+        "false_verified": 127,
+        "verified": 130982
+      }
+    },
+    {
+      "attempts": 200000,
+      "expected": {
+        "eager_duplicate_candidates": 61833,
+        "eager_false_terminal": 61833
+      },
+      "name": "eventual_consistency_eager_absence",
+      "rule": "Do not turn first not-found into failure for non-idempotent effect."
+    },
+    {
+      "attempts": 200000,
+      "expected": {
+        "coverage": 0.83721,
+        "false_terminal": 0,
+        "median_resolution_tick": 2,
+        "p95_resolution_tick": 8,
+        "unknown": 32558,
+        "verified_total": 167442
+      },
+      "name": "realistic_query_coverage"
+    }
+  ],
+  "version": "1.2J"
+}

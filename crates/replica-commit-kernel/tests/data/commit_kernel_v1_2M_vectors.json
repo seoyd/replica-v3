@@ -1,0 +1,167 @@
+{
+  "actual_process_directed": [
+    {
+      "compensation_delta": -10,
+      "expect": {
+        "receiver_value": 0,
+        "send_outcome": "COMMIT",
+        "task_status": "ACKED"
+      },
+      "initial_external_value": 10,
+      "name": "normal_compensation"
+    },
+    {
+      "expect": {
+        "final_receiver_value": 0,
+        "final_task": "ACKED",
+        "first_sender": "SEND_UNKNOWN",
+        "mid_task": "IN_FLIGHT",
+        "retry": "REPLAY"
+      },
+      "fault": "receiver dies after durable compensation apply before ACK",
+      "name": "receiver_crash_after_apply_before_ack"
+    },
+    {
+      "expect": {
+        "final_receiver_value": 0,
+        "final_task": "ACKED",
+        "mid_task": "IN_FLIGHT",
+        "retry": "REPLAY"
+      },
+      "fault": "sender dies after ACK before local ACKED persist",
+      "name": "sender_crash_after_ack_before_local_ack"
+    },
+    {
+      "expect": {
+        "receiver_value": 10,
+        "send_outcome": "REJECT_CANCELLED",
+        "task_status": "CANCELLED"
+      },
+      "name": "reversal_before_send"
+    },
+    {
+      "expect": {
+        "comp": "COMMIT",
+        "comp_status": "ACKED",
+        "final_receiver_value": 10,
+        "restore": "COMMIT",
+        "restore_status": "ACKED"
+      },
+      "name": "reversal_after_compensation_acked"
+    },
+    {
+      "expect": {
+        "final_receiver_value": 10,
+        "mid_task": "RECONCILE_REQUIRED",
+        "reconcile": "VERIFIED_APPLIED",
+        "restore_created": true
+      },
+      "name": "applied_unknown_then_reversal_reconcile"
+    },
+    {
+      "expect": {
+        "final_receiver_value": 10,
+        "final_task": "CANCELLED",
+        "mid_task": "RECONCILE_REQUIRED",
+        "reconcile": "VERIFIED_ABSENT",
+        "restore_created": false
+      },
+      "name": "not_applied_unknown_then_reversal_reconcile"
+    }
+  ],
+  "compensation_availability": [
+    {
+      "action": "bank_transfer",
+      "declared_compensator": null,
+      "expected": "MANUAL_INTERVENTION_REQUIRED"
+    },
+    {
+      "action": "send_email",
+      "declared_compensator": null,
+      "expected": "MANUAL_INTERVENTION_REQUIRED"
+    },
+    {
+      "action": "reserve_slot",
+      "declared_compensator": "cancel_reservation",
+      "expected": "COMPENSATION_REQUIRED"
+    },
+    {
+      "action": "set_reversible_flag",
+      "declared_compensator": "restore_previous_flag",
+      "expected": "COMPENSATION_REQUIRED"
+    }
+  ],
+  "format": "replica-commit-kernel-compensation-vectors",
+  "mutation_vectors": [
+    {
+      "bug": "retry uses new compensation ID",
+      "expect_bug": {
+        "ledger_count": 2,
+        "receiver_value": -10
+      },
+      "name": "unstable_compensation_effect_id"
+    },
+    {
+      "bug": "compensation was applied but reversal blindly cancels without reconciliation",
+      "expect_bug": {
+        "correct_value": 10,
+        "receiver_value": 0
+      },
+      "name": "blind_cancel_inflight_without_query"
+    },
+    {
+      "bug": "compensation was never applied but reversal blindly restores",
+      "expect_bug": {
+        "correct_value": 10,
+        "receiver_value": 20
+      },
+      "name": "blind_restore_without_query"
+    }
+  ],
+  "provenance": "Reconstructed/frozen from the actual v1.2M reference semantics, separate-process crash tests, 60-cycle stress, and mutation tests. A standalone vector JSON did not exist at original run time.",
+  "reference_semantics": [
+    {
+      "expected": true,
+      "name": "invalidate_creates_one_task"
+    },
+    {
+      "expected": true,
+      "name": "reversal_before_send_cancels"
+    },
+    {
+      "expected": true,
+      "name": "reversal_after_acked_creates_restore"
+    },
+    {
+      "expected": true,
+      "name": "reversal_inflight_requires_reconcile"
+    },
+    {
+      "expected": true,
+      "name": "stale_comp_rejected"
+    },
+    {
+      "expected": true,
+      "name": "stable_task_id_prevents_duplicate_intent"
+    }
+  ],
+  "stress": {
+    "cycles": 60,
+    "expect": {
+      "ACKED": 120,
+      "cycles_complete": 60,
+      "duplicate": 0,
+      "final_receiver_value": 10,
+      "lost": 0,
+      "receiver_ledger": 120,
+      "tasks": 120
+    },
+    "external_tasks": 120,
+    "faults_observed": {
+      "pre_send_crash": 12,
+      "receiver_apply_crash": 22,
+      "sender_ack_crash": 29
+    }
+  },
+  "version": "1.2M"
+}
