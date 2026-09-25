@@ -1,6 +1,15 @@
 # Diagnostic repair and bounded quality recovery
 
-## Active: value-reading isolation
+## Closed: value-reading isolation
+
+The input diagnosis completed with repaired A and independent B PASS on frozen
+source c173e13cc39a6c6bdc3dd2fa1cff7633d54b9bc1. It used216 new generations,
+96 existing O rows and zero learning/teacher calls. O and U have identical
+rowwise correctness: train FULL/value16/48 and dev FULL10/value12 of48.
+S has FULL0/48 in both splits, value8/48 train and10/48 dev; all S citations
+are malformed and each split has six length endings. Original quality remains
+unchanged. The only proposed next hypothesis is a separately authorized
+FULL-versus-VALUE_ONLY output-contract comparison; no such learning is opened.
 
 R3-VALUE-READING-ISOLATION-1.0 is an evaluation-only input ablation on preserved
 C model18237/Adam3901. Its native physical hash is

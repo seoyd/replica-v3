@@ -1,5 +1,65 @@
 # 진단 및 구현 상태
 
+## 2026-09-25 Value-reading isolation — closed diagnostic
+
+**DIAGNOSTIC_EXECUTION/A/B = PASS; QUALITY_APPROVED=false.** Frozen source is
+c173e13cc39a6c6bdc3dd2fa1cff7633d54b9bc1, executable SHA256
+bbedb487c576e6c614cffaa2944f52c236d4de56407e320ec18d76b2b40cafb8.
+No original model, Adam, raw, failed terminal or prior acceptance was replaced.
+W weight2 remains unadopted; original C word29/192 and Goal1 status are unchanged.
+
+| Condition/split | FULL | Whole value | Exact support | EOS | Malformed | Outside-ID rows |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| O train48 (reused) | 16 | 16 | 48 | 48 | 0 | 0 |
+| U train48 | 16 | 16 | 48 | 48 | 0 | 0 |
+| S train48 | 0 | 8 | 0 | 42 | 48 | 4 |
+| O dev48 (reused) | 10 | 12 | 36 | 48 | 0 | 12 |
+| U dev48 | 10 | 12 | 36 | 48 | 0 | 12 |
+| S dev48 | 0 | 10 | 0 | 42 | 48 | 6 |
+
+O/U correctness agrees rowwise. Each S split includes six length-ended failures;
+all remain in the denominator. S provides only one record, so its outside-ID set
+differs from O/U. Each split contains12 correlated semantic groups, not48
+independent scenes. These input ablations do not establish original-task selection
+success or a particular attention/mechanistic cause.
+
+Paired counts are ordered both-correct/gain/loss/both-wrong:
+O-to-U FULL train16/0/0/32, dev10/0/0/38; whole-value train16/0/0/32,
+dev12/0/0/36. O-to-S FULL train0/0/16/32, dev0/0/10/38; whole-value
+train1/7/15/25, dev1/9/11/27. U flags are unchanged for every word and scene;
+S FULL is zero for every word and scene, with mixed whole-value gains/losses.
+Exact word/pair/scene matrices are retained in `independent-score.r3b` and the
+canonical report under the same evidence root.
+
+Execution order was parity8, U-train48, U-dev48, S-train48, S-dev48, no-call report,
+then independent B16; all CLI exits were0. B reproduced raw tokens, text, EOS,
+error and completion exactly. New generation216, reused O96, generation input
+tokens41886, generated tokens3655, teacher/optimizer/backward0. Measured active
+time across six receipts36.698421167s; main command wall39.33s plus B3.83s gives
+43.16s. The immutable B receipt's `command_wall_seconds` field contains main-only
+39.33s because its parser did not recognize the B log's POSIX time layout; the
+original field and log are preserved, with the corrected scope disclosed here.
+Maximum observed process RSS294158336 bytes, peak footprint549159896 bytes.
+Final scoped immutable accounting is158902487/167772160 bytes, including the
+root, three unique external used executables and the independent Markdown report.
+Unused build outputs and the failed/successful review evidence remain preserved.
+Overall shared-build/cost PASS is not claimed: total shared-build growth is UNKNOWN.
+
+Canonical evidence remains under `artifacts/value-reading-20260925-main/`:
+v1/v2 plans, source-bound A, six-panel raw/report, phase logs and `review-b.r3b`
+(SHA256c7bfdafb5f143ef0fa6e5c8f83e2a4ebd38bc4e256ed23f69562d91c6b5dc717).
+The initial A failure and its repaired acceptance are both preserved in
+`docs/VALUE_READING_REVIEW_2026-09-25.md`. The independent B reader initially
+omitted non-EOS length endings from its error count; its corrected read-only
+scorer agrees on all six panels. No model answer was regenerated to correct a score.
+
+Next hypothesis only: compare FULL with an explicitly instructed VALUE_ONLY
+output contract while holding training inputs and all other learning settings
+fixed, to test whether producing the citation-bearing answer impedes whole-word
+value output. It is refuted if heldout whole-value accuracy does not improve
+consistently across words and scene groups. This remains unexecuted and would
+not replace the unchanged FULL/retention/Goal1 acceptance gates.
+
 ## 2026-09-25 Value-reading isolation — preparation
 
 User authorization after the recorded storage stop increases this task's immutable
