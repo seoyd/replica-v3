@@ -1,5 +1,27 @@
 # 진단 및 구현 상태
 
+## 2026-09-26 Fresh TR++ / Full GRU — PARTIAL, no quality acceptance
+
+The recovered reset-after specification was implemented as a separate Rust core;
+TR++ remains unchanged and no hybrid or Commit Kernel integration was added.
+Independent A passed actual numeric/Metal/native/new-process checks after two
+narrow, preserved initial A findings were repaired. Frozen execution source:
+`2667c27f4353dd8d2a684daa74e38e3af0311826`.
+
+TR++ completed3072 updates, final2752-row generation and independent B16 replay
+(all16 matched, including14 incorrect answers). Final word FULL30/192,
+ALL4 0/48, original QA0/640: quality FAIL. GRU reached630 commits/634 backwards
+and saved consistent weights/Adam at TIME_BUDGET. Its last evaluated512 model
+had word FULL0/64;630 quality, final QA and endpoint replay are NOT_RUN.
+GRU recorded7232.802929 seconds including cooperative stop/finalization:
+strict7200-second wall compliance is NOT_MET. No budget extension was run.
+
+At common512, TR++ and GRU word FULL were both0/64; this single-seed protocol
+does not establish general architecture superiority. Original protected11264,
+historical failures and all original models/raw/Adam remain preserved.
+See [execution and evidence](QUALITY_GRU_EXECUTION_2026-09-25.md). Full paired
+study completion, product integration and Goal1 remain unaccepted.
+
 ## 2026-09-25 Commit Kernel E — local component execution PASS
 
 The user supplied the I/J/M original source/report bundle plus reconstructed
