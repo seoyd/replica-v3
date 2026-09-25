@@ -2,6 +2,33 @@
 
 ## 2026-09-25 Cost-bounded first decision — P0/P1
 
+The final corrected preparation is `artifacts/first-decision-20260925-study-v6`.
+The128 cost-final receipt now references the unchanged regular decision hash;
+matched128/128 and unequal127/128 actual fresh-process resumes passed with
+RETURNED reuse and zero model calls. Earlier0/0 and1/0 cost endpoints passed
+again after this change. Evidence: `cost128-002.log` SHA256
+e9591899474265d9c68d460bacb45dd8b10fa6f4123f004f21ddbf3b44f94551;
+`cost-stop-005.log` SHA256
+7c8bceefdd6e62da47785f19521115e35a0c1d5bffd9a1fa92c719afe65b7830.
+Plan SHA2563b99f321bf846ce9d5a708c1f2d93dbc6f3092b6a3794d5a6322c01925b26f51,
+policy4beb6cd490dd81cfb666327081b7977fde218344dfe715870091ce62f44714f2,
+release executable SHA256
+1c9d1c2234a03802c8be473bb365eae055a8afb8d594991a0e964f3128d75bfd.
+All five earlier preparations remain unadmitted. Current scope109293379bytes
+includes eight new roots and four executables; with eight reserved natives it
+projects1022754115bytes of1073741824. Build growth/peak remain UNKNOWN.
+The same A session must now verify this final correction and its reserved
+TINY8 calls; SMALL training/generation/teacher remain0 before admission.
+
+The same A session found one remaining immutable-decision collision on
+fe4ae288fb956aba10131dc9a97bab00564803e2: reserve exhaustion after an already
+evaluated128 endpoint attempted to bind expanded cost-final scores to the old
+regular decision. Its finding is preserved as `a-static-fe4ae28.md` in the same
+review root, SHA256370d92bccbc3f0fd94dfaae47745616895bcf9952f8dae8118d7a21987e23caf.
+Independent TINY and SMALL remain0; this candidate is not admitted. The targeted
+fix must reuse the immutable quality decision and bind cost finalization without
+reapplying or replacing it. The earlier three corrections were confirmed.
+
 Independent A's first static pass on dc346a044df787f2fef3a57839826bb61cccfaf7
 found cost-stop boundary defects before consuming any independent TINY budget:
 reserve exhaustion could permit a ninth discarded backward, saved endpoints
