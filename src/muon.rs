@@ -632,6 +632,9 @@ fn first_verify_inputs(s:&Study)->Result<()> {
     Ok(())
 }
 fn first_parent_scores(s:&Study)->Result<BTreeMap<String,binary::Value>>{
+    #[cfg(test)]
+    if s.max_updates==2{return Ok(["value","citation","S1Q1","FULL-word","FULL-renamed"].into_iter()
+        .map(|name|(name.into(),binary::record!({"joint":{"full":4,"all4":1,"errors":0,"total":4}}))).collect());}
     let f=s.first_decision.as_ref().ok_or_else(||bad("first-decision parent profile"))?;
     let(d,view)=fit_posthoc_load(&f.posthoc,false)?;
     if d.endpoint.physical!=s.parent_hash{return Err(bad("first-decision parent posthoc native"));}
@@ -677,18 +680,23 @@ fn first_teacher_cases(s:&Study,train:bool)->Result<Vec<Episode>>{
     Ok(selected.into_iter().map(|i|episodes[i].clone()).collect())
 }
 fn first_evaluate(s:&Study,arm:usize,l:&mut checkpoint::Loaded,p:&Progress,final_eval:bool,ctl:&mut RunControl)->Result<BTreeMap<String,binary::Value>>{
-    if p.local<128||p.local>256{return Err(bad("first-decision endpoint range"));}
+    if p.local>256{return Err(bad("first-decision endpoint range"));}
     let final_eval=final_eval||p.local>128;
     l.model.refresh_identity()?;let mut out=BTreeMap::new();
     for panel in fit_panels(s)?.into_iter().take(if final_eval{6}else{5}){
+        guard_bytes(s,8*1024*1024)?;
         let name=panel.0.clone();
-        let short=event_panel_score(s,s.arms()[arm],p.local,l,&panel,64,ctl)?;
+        let short=event_panel_score(s,s.arms()[arm],p.local,l,&panel,first_panel_count(s,false),ctl)?;
         let score=if final_eval&&["FULL-word","FULL-renamed","FULL-train"].contains(&name.as_str()){
-            event_panel_score(s,s.arms()[arm],p.local,l,&panel,192,ctl)?
+            event_panel_score(s,s.arms()[arm],p.local,l,&panel,first_panel_count(s,true),ctl)?
         }else{short};
         out.insert(name,score);
+        guard_bytes(s,0)?;
     }
     if final_eval{
+        #[cfg(test)]
+        if s.max_updates==2{return Ok(out);}
+        guard_bytes(s,8*1024*1024)?;
         let train=first_teacher_cases(s,true)?;let dev=first_teacher_cases(s,false)?;
         let es=train.iter().chain(&dev).cloned().collect::<Vec<_>>();
         let label=format!("teacher-{}-FULL",p.local);
@@ -701,6 +709,7 @@ fn first_evaluate(s:&Study,arm:usize,l:&mut checkpoint::Loaded,p:&Progress,final
         let path=s.root.join(s.arms()[arm]).join(format!("{label}-score.r3b"));
         if path.exists(){if read_confirmed::<binary::Value>(&path)?!=score{return Err(bad("first-decision teacher score changed"));}}
         else{publish_confirmed(&path,&score)?;}
+        guard_bytes(s,0)?;
     }
     Ok(out)
 }
@@ -712,10 +721,10 @@ fn first_decision(s:&Study,arm:usize,p:&Progress,scores:&BTreeMap<String,binary:
     let mut persistent=false;let mut severe=false;
     for name in ["value","citation","S1Q1","FULL-word","FULL-renamed"]{
         let short;
-        let current=if scores[name]["joint"]["total"]!=64{
+        let current=if scores[name]["joint"]["total"]!=first_panel_count(s,false){
             let panel=fit_panels(s)?.into_iter().find(|p|p.0==name).ok_or_else(||bad("first-decision guard panel"))?;
             let model=checkpoint::metadata(&p.native)?.0.model_content_digest;
-            short=event_read_panel(s,s.arms()[arm],p.local,&model,&panel,64)?.0;&short
+            short=event_read_panel(s,s.arms()[arm],p.local,&model,&panel,first_panel_count(s,false))?.0;&short
         }else{&scores[name]};
         let before=&parent[name];
         let cur=current["joint"]["full"].as_u64().ok_or_else(||bad("first-decision score FULL"))?;
@@ -731,12 +740,21 @@ fn first_decision(s:&Study,arm:usize,p:&Progress,scores:&BTreeMap<String,binary:
         if old["policy"]!=digest(s)?||!old["stop"].is_null(){return Err(bad("first-decision prior guard changed"));}
         old["persistent"].as_bool().ok_or_else(||bad("first-decision prior guard flag"))?
     }else{false};
-    let stop=if severe{Some("SEVERE_RETENTION".to_owned())}else if prior&&persistent{Some("PERSISTENT_RETENTION".to_owned())}else{None};
-    let record=binary::record!({"policy":digest(s)?,"local":p.local,"scores":scores,"parent":parent,"persistent":persistent,"stop":stop});
+    let quality_stop=if severe{Some("SEVERE_RETENTION".to_owned())}else if prior&&persistent{Some("PERSISTENT_RETENTION".to_owned())}else{None};
+    let cost_stop=p.stop.as_ref().filter(|v|["BUDGET_EXHAUSTED","UNMATCHED_COST_ENDPOINT"].contains(&v.as_str())).cloned();
+    let stop=cost_stop.clone().or(quality_stop.clone());
+    let record=binary::record!({"policy":digest(s)?,"local":p.local,"scores":scores,"parent":parent,"persistent":persistent,"quality_stop":quality_stop,"cost_stop":cost_stop,"stop":stop});
     let path=s.root.join(s.arms()[arm]).join(format!("decision-{}.r3b",p.local));
     if path.exists(){if read_confirmed::<binary::Value>(&path)?!=record{return Err(bad("first-decision guard changed"));}}
     else{publish_confirmed(&path,&record)?;}
-    Ok(stop)
+    Ok(quality_stop)
+}
+fn first_panel_count(s:&Study,full:bool)->usize{
+    #[cfg(test)]
+    if s.max_updates==2{return 4;}
+    #[cfg(not(test))]
+    let _=s;
+    if full{192}else{64}
 }
 fn fit_panels(s:&Study)->Result<Vec<Panel>>{
     let f=s.full_fit.as_ref().ok_or_else(||bad("FULL_FIT panels/profile"))?;let(old,tm,dm)=inputs(s)?;let c=event_inputs(s,0)?;
@@ -892,12 +910,23 @@ fn first_discarded(s:&Study,arm:usize)->Result<[usize;3]>{
 #[derive(Debug,PartialEq,Eq)]
 enum FirstDispatch { Train, EvaluateOnly, CostStop }
 fn first_dispatch(local:usize,endpoint:usize,discarded:usize,committed_cap:usize,backward_cap:usize)->Result<FirstDispatch>{
-    if local>endpoint||endpoint>committed_cap||local>committed_cap||discarded>backward_cap||local+discarded>backward_cap{
+    if local>endpoint||endpoint>committed_cap||local>committed_cap||discarded>8||local+discarded>backward_cap{
         return Err(bad("first-decision dispatcher cursor/budget UNKNOWN"));
     }
     if local==endpoint{return Ok(FirstDispatch::EvaluateOnly);}
-    if local+discarded==backward_cap{return Ok(FirstDispatch::CostStop);}
+    if discarded==8||local+discarded==backward_cap{return Ok(FirstDispatch::CostStop);}
     Ok(FirstDispatch::Train)
+}
+fn first_finish_cost(s:&Study,models:&mut [(checkpoint::Loaded,Optimizer)],ps:&mut [Progress],ctl:&mut RunControl)->Result<()> {
+    if ps[0].local!=ps[1].local{for p in ps.iter_mut(){if p.stop.is_none(){p.stop=Some("UNMATCHED_COST_ENDPOINT".into());}}}
+    for arm in 0..2{
+        let p=&mut ps[arm];if p.fit{continue;}
+        let scores=first_evaluate(s,arm,&mut models[arm].0,p,true,ctl)?;
+        let quality=first_decision(s,arm,p,&scores)?;
+        if p.stop.is_none(){p.stop=quality;}
+        p.evaluated=p.local;p.fit=true;
+    }
+    Ok(())
 }
 fn first_train(s:&Study)->Result<()> {
     if read_confirmed::<binary::Value>(&s.root.join("baseline-finished.r3b"))?["success"]!=true{return Err(bad("first-decision baseline missing"));}
@@ -914,19 +943,23 @@ fn first_train(s:&Study)->Result<()> {
     let samples=samples_with_framing(&event_inputs(s,0)?.train,&models[0].0.tokenizer,s.config.seq_len,neural::Framing::QuestionEvidence)?;
     let mut entered=false;
     let result=(||->Result<()>{
+        if ps.iter().any(|p|["BUDGET_EXHAUSTED","UNMATCHED_COST_ENDPOINT"].contains(&p.stop.as_deref().unwrap_or(""))){
+            first_finish_cost(s,&mut models,&mut ps,&mut ctl)?;ctl.seal_completed_no_call()?;return Ok(());
+        }
         let schedule=[1,128,256];
         if phase>=schedule.len(){return Err(bad("first-decision phase past end"));}
-        let mut endpoint=schedule[phase];
-        for arm in 0..2{
+        let endpoint=schedule[phase];
+        let mut cost_stop=false;
+        'arms: for arm in 0..2{
             let(l,o)=&mut models[arm];let p=&mut ps[arm];
             if p.local>endpoint{return Err(bad("first-decision cursor past endpoint"));}
             let mut trace=std::fs::OpenOptions::new().append(true).create(true).open(s.root.join(s.arms()[arm]).join(format!("updates-{index:03}.r3rows")))?;
             while p.local<endpoint{
-                ctl.check("first_before_microbatch")?;guard_bytes(s,0)?;
                 let discarded=first_discarded(s,arm)?;
                 if first_dispatch(p.local,endpoint,discarded[0],s.max_updates,s.first_decision.as_ref().unwrap().backward_cap)?==FirstDispatch::CostStop{
-                    p.stop=Some("BUDGET_EXHAUSTED".into());endpoint=p.local;break;
+                    p.stop=Some("BUDGET_EXHAUSTED".into());cost_stop=true;break;
                 }
+                ctl.check("first_before_microbatch")?;guard_bytes(s,0)?;
                 let b=batch(&samples,&s.tape[p.local],&device)?;device.synchronize()?;let start=Instant::now();
                 let entry=s.root.join(s.arms()[arm]).join(format!("step-{}-segment-{index:03}-entered.r3b",p.local+1));
                 publish_confirmed(&entry,&binary::record!({"policy":digest(s)?,"local":p.local+1,"rows":s.tape[p.local],"status":"MAY_ENTER"}))?;
@@ -935,20 +968,18 @@ fn first_train(s:&Study)->Result<()> {
                 if p.local==1||p.local%32==0{println!("FIRST_UPDATE arm={} local={} model={} Adam={} input={} target={} objective={}",s.arms()[arm],p.local,row["model_step"],row["optimizer_local"],row["input"],row["target"],row["answer_ce"]);}
             }
             if p.local>saved[arm]&&!fit_saved_cursor(p){save_arm(s,index,arm,l,o,p)?;}
+            if cost_stop{break 'arms;}
         }
-        if ps[0].local!=ps[1].local{
-            for p in &mut ps{p.stop=Some("UNMATCHED_COST_ENDPOINT".into());}
-            ctl.seal_completed_no_call()?;return Ok(());
+        if ps.iter().any(|p|p.stop.as_deref()==Some("BUDGET_EXHAUSTED")){
+            first_finish_cost(s,&mut models,&mut ps,&mut ctl)?;ctl.seal_completed_no_call()?;return Ok(());
         }
+        if ps[0].local!=ps[1].local{return Err(bad("first-decision unmatched without cost stop"));}
         if phase==0{phase=1;ctl.seal_completed_no_call()?;return Ok(());}
-        if ps[0].local<128&&ps.iter().any(|p|p.stop.as_deref()==Some("BUDGET_EXHAUSTED")){
-            ctl.seal_completed_no_call()?;return Ok(());
-        }
         if ps[0].local<endpoint{return Err(bad("first-decision endpoint cursor"));}
         for arm in 0..2{
             let(l,_)=&mut models[arm];let p=&mut ps[arm];
             let scores=first_evaluate(s,arm,l,p,false,&mut ctl)?;
-            p.stop=first_decision(s,arm,p,&scores)?.or(p.stop.take());p.evaluated=p.local;
+            let quality=first_decision(s,arm,p,&scores)?;if p.stop.is_none(){p.stop=quality;}p.evaluated=p.local;
         }
         let stopping=ps.iter().any(|p|p.stop.is_some());
         if stopping&&phase==1{
@@ -963,8 +994,7 @@ fn first_train(s:&Study)->Result<()> {
         let(l,o)=&mut models[arm];save_arm(s,index,arm,l,o,&mut ps[arm])?;
     }}
     let pure_time=ctl.receipt()["observed_conditions"]==binary::record!(["TIME_BUDGET"]);
-    let terminal=ps.iter().all(|p|p.fit)||ps.iter().any(|p|p.stop.as_deref()==Some("UNMATCHED_COST_ENDPOINT"))
-        ||ps.iter().any(|p|p.stop.as_deref()==Some("BUDGET_EXHAUSTED"))&&ps[0].local<128;
+    let terminal=ps.iter().all(|p|p.fit);
     let seg=Segment{policy:digest(s)?,previous,phase,arms:ps,success:result.is_ok(),resume:!terminal&&(result.is_ok()||pure_time),control:ctl.receipt(),error:result.as_ref().err().map(ToString::to_string)};
     publish_confirmed(&s.root.join(format!("segment-{index:03}-finished.r3b")),&seg)?;
     println!("FIRST_SEGMENT index={index} phase={phase} local={:?} fit={:?} resume={} active={} bytes={}",seg.arms.iter().map(|p|p.local).collect::<Vec<_>>(),seg.arms.iter().map(|p|p.fit).collect::<Vec<_>>(),seg.resume,seg.control["elapsed_seconds"],first_owned_bytes(s)?);
@@ -1375,15 +1405,24 @@ fn first_owned_bytes(s:&Study)->Result<u64>{
             let m=e.metadata()?;bytes+=if m.is_dir(){owned_bytes(&e.path())?}else{m.len()};
         }
     }
+    let terminal=s.first_decision.as_ref().and_then(|f|std::fs::read_dir(&f.original).ok()).and_then(|items|
+        items.filter_map(|e|e.ok()).filter(|e|{let n=e.file_name();let n=n.to_string_lossy();n.starts_with("segment-")&&n.ends_with("-finished.r3b")})
+            .max_by_key(|e|e.file_name()));
+    let cutoff=if let Some(entry)=terminal{entry.metadata()?.modified()?}
+        else if cfg!(test)&&s.max_updates==2{std::time::UNIX_EPOCH}
+        else{return Err(bad("first-decision original terminal cost boundary"));};
     let release=parent.parent().ok_or_else(||bad("first-decision project root"))?.join("target/release");
-    let main=release.join("replica-train");
-    if main.exists(){bytes+=std::fs::metadata(&main)?.len();}
-    let deps=release.join("deps");
-    if deps.exists(){for item in std::fs::read_dir(deps)?{let item=item?;let name=item.file_name();
-        if name.to_string_lossy().starts_with("replica_train-")&&item.path().extension().is_none()&&item.file_type()?.is_file(){bytes+=item.metadata()?.len();}
-    }}
+    let deps=release.join("deps");let mut counted=BTreeSet::new();
+    for dir in [&release,&deps]{if !dir.exists(){continue;}
+        for item in std::fs::read_dir(dir)?{let item=item?;let name=item.file_name();let name=name.to_string_lossy();
+            if item.path().extension().is_none()&&item.file_type()?.is_file()
+                &&(name.starts_with("replica-")||name.starts_with("replica_"))&&item.metadata()?.modified()?>=cutoff{
+                counted.insert(item.path());bytes+=item.metadata()?.len();
+            }
+        }
+    }
     let executable=std::env::current_exe()?;
-    if !executable.starts_with(parent)&&executable!=main&&!executable.starts_with(release.join("deps")){
+    if !executable.starts_with(parent)&&!counted.contains(&executable){
         bytes+=std::fs::metadata(executable)?.len();
     }
     Ok(bytes)
@@ -1691,29 +1730,43 @@ fn first_report(s:&Study)->Result<()> {
         if count!=p.local||count>256||count+discarded[0]>264{return Err(bad("first-decision committed/backward cap"));}
         let(m,_)=checkpoint::metadata(&p.native)?;let st=m.training.as_ref().ok_or_else(||bad("first-decision endpoint state"))?;
         let op=m.optimizer_protocol.as_ref().ok_or_else(||bad("first-decision endpoint Adam"))?;
-        if st.step!=17981+count||op.local_step!=3645+count||st.sampler_state!=count as u64
-            ||st.resume_binding!=Some(bind(s,arm,st,&scoring_tokenizer(s)?)?)||file_hash(&p.native)?!=p.physical{
+        let binding=if count==0{
+            let first=s.first_decision.as_ref().ok_or_else(||bad("first-decision parent profile"))?;
+            let original:Study=read_confirmed(&first.original.join("plan.r3b"))?;
+            st.sampler_state==3069&&p.physical==s.parent_hash
+                &&st.resume_binding==Some(bind(&original,0,st,&scoring_tokenizer(s)?)?)
+        }else{st.sampler_state==count as u64&&st.resume_binding==Some(bind(s,arm,st,&scoring_tokenizer(s)?)?)};
+        if st.step!=17981+count||op.local_step!=3645+count||!binding||file_hash(&p.native)?!=p.physical{
             return Err(bad("first-decision endpoint native/binding"));
         }
-        if p.evaluated>0{
+        if p.fit||p.evaluated>0{
             let model=m.model_content_digest;
             for panel in fit_panels(s)?.into_iter().take(if p.fit{6}else{5}){
-                let n=if p.fit&&["FULL-word","FULL-renamed","FULL-train"].contains(&panel.0.as_str()){192}else{64};
+                let n=first_panel_count(s,p.fit&&["FULL-word","FULL-renamed","FULL-train"].contains(&panel.0.as_str()));
                 event_read_panel(s,s.arms()[arm],p.evaluated,&model,&panel,n)?;
             }
             let guard:binary::Value=read_confirmed(&s.root.join(s.arms()[arm]).join(format!("decision-{}.r3b",p.evaluated)))?;
-            if guard["stop"]!=binary::record!(p.stop)||guard["policy"]!=digest(s)?{return Err(bad("first-decision guard/endpoint"));}
+            let expected_cost=p.stop.as_ref().filter(|v|["BUDGET_EXHAUSTED","UNMATCHED_COST_ENDPOINT"].contains(&v.as_str()));
+            let quality=guard["quality_stop"].as_str();
+            if guard["stop"]!=binary::record!(p.stop)||guard["cost_stop"]!=binary::record!(expected_cost)
+                ||quality.is_some_and(|v|!["SEVERE_RETENTION","PERSISTENT_RETENTION"].contains(&v))
+                ||(expected_cost.is_none()&&guard["quality_stop"]!=binary::record!(p.stop))
+                ||guard["policy"]!=digest(s)?{return Err(bad("first-decision guard/endpoint"));}
         }
         println!("FIRST_TRACE arm={} committed={} backward={} discarded={} model={} Adam={} input={} target={} padding={} evaluated={} fit={} stop={:?}",s.arms()[arm],count,count+discarded[0],discarded[0],st.step,op.local_step,input+discarded[1],target+discarded[2],padding,p.evaluated,p.fit,p.stop);
     }
-    println!("FIRST_USAGE active={} generation={} teacher={} scoped_bytes={} Goal1=false",previous_usage(s,&h)?.0,previous_usage(s,&h)?.1,previous_usage(s,&h)?.2,first_owned_bytes(s)?);
+    println!("FIRST_USAGE active={} generation={} teacher={} scoped_bytes={} comparison={} Goal1=false",previous_usage(s,&h)?.0,previous_usage(s,&h)?.1,previous_usage(s,&h)?.2,first_owned_bytes(s)?,if end.arms[0].local==end.arms[1].local{"MATCHED"}else{"UNMATCHED_COST_ENDPOINT"});
     Ok(())
 }
 fn first_review(s:&Study,arm:usize)->Result<()> {
     first_report(s)?;
     let h=history(s)?;let end=h.last().ok_or_else(||bad("first-decision B endpoint"))?;
-    if end.resume||!end.success||!end.arms.iter().all(|p|p.fit)||end.arms[0].local!=end.arms[1].local{
-        return Err(bad("first-decision B requires matched completed endpoint"));
+    if end.resume||!end.success||!end.arms.iter().all(|p|p.fit){
+        return Err(bad("first-decision B requires completed actual endpoints"));
+    }
+    if end.arms[0].local!=end.arms[1].local
+        && !end.arms.iter().any(|p|p.stop.as_deref()==Some("BUDGET_EXHAUSTED")){
+        return Err(bad("first-decision B unmatched without cost stop"));
     }
     let p=&end.arms[arm];let model=checkpoint::metadata(&p.native)?.0.model_content_digest;
     let mut cases=vec![];let mut expected=vec![];let mut failures=vec![];
@@ -2006,9 +2059,9 @@ mod tests {
         let s=event_test_root(&s,&root.join("first-decision-20260925-dispatch"))?;
         assert_eq!(first_dispatch(0,2,0,2,10)?,FirstDispatch::Train);
         assert_eq!(first_dispatch(2,2,8,2,10)?,FirstDispatch::EvaluateOnly);
-        assert_eq!(first_dispatch(1,2,9,2,10)?,FirstDispatch::CostStop);
+        assert_eq!(first_dispatch(1,2,8,2,10)?,FirstDispatch::CostStop);
         assert!(first_dispatch(3,2,0,2,10).is_err());
-        assert!(first_dispatch(1,2,10,2,10).is_err());
+        assert!(first_dispatch(1,2,9,2,10).is_err());
         let discard=s.root.join("C").join("fixture-discarded.r3b");
         publish_confirmed(&discard,&binary::record!({"forward_backward":1,"optimizer":0,"input":27,"target":5,"reason":"TIME_BUDGET","synthetic_accounting_fixture":true}))?;
         assert_eq!(first_discarded(&s,0)?,[1,27,5]);
@@ -2053,6 +2106,57 @@ mod tests {
         assert!(latest.arms.iter().all(|p|p.local==1&&p.evaluated==0));
         assert_eq!(latest.control["generation_calls"],0);assert_eq!(latest.control["teacher_calls"],0);
         println!("FIRST_DISPATCH actual RETURNED4, cancel/UNKNOWN/I-O rejected, optimizer0 backward0 generation0 teacher0 evidence={}",root.display());Ok(())
+    }
+    #[test]
+    #[ignore="model-free actual cost-stop caller, saved endpoints and unequal-endpoint report; zero model calls"]
+    fn first_decision_cost_stop_endpoints()->Result<()> {
+        if let Ok(path)=std::env::var("R3_FIRST_COST_CHILD"){
+            let s:Study=read_confirmed(&PathBuf::from(path).join("plan.r3b"))?;
+            first_train(&s)?;first_report(&s)?;
+            let h=history(&s)?;let end=h.last().unwrap();let unequal=s.root.file_name().unwrap().to_string_lossy().contains("unequal");
+            assert!(end.success&&!end.resume&&end.arms.iter().all(|p|p.fit));
+            assert_eq!((end.arms[0].local,end.arms[1].local),if unequal{(1,0)}else{(0,0)});
+            assert_eq!(end.arms[if unequal{1}else{0}].stop.as_deref(),Some("BUDGET_EXHAUSTED"));
+            if unequal{assert_eq!(end.arms[0].stop.as_deref(),Some("UNMATCHED_COST_ENDPOINT"));}
+            assert_eq!(end.control["generation_calls"],0);assert_eq!(end.control["teacher_calls"],0);
+            assert!(first_train(&s).is_err(),"closed cost endpoint must not resume training");
+            return Ok(());
+        }
+        let(s,root)=first_tiny_fixture()?;
+        for unequal in [false,true]{
+            let s=event_test_root(&s,&root.join(if unequal{"cost-unequal"}else{"cost-equal"}))?;
+            publish_confirmed(&s.root.join("review-a.r3b"),&binary::record!({"active_seconds":0.,"synthetic_fixture":true}))?;
+            publish_confirmed(&s.root.join("baseline-finished.r3b"),&binary::record!({"success":true,"synthetic_fixture":true}))?;
+            let mut progress=vec![Progress{local:0,native:s.parent.clone(),physical:s.parent_hash.clone(),stop:None,evaluated:0,fit:false};2];
+            if unequal{
+                let(mut fork,mut opt)=load_arm(&s,0,&progress[0],&Device::Cpu)?;
+                progress[0].local=1;opt.protocol.local_step=3646;
+                let st=fork.manifest.training.as_mut().unwrap();st.step=17982;st.sampler_state=1;
+                save_arm(&s,0,0,&mut fork,&opt,&mut progress[0])?;
+                let samples=samples_with_framing(&event_inputs(&s,0)?.train,&fork.tokenizer,s.config.seq_len,neural::Framing::QuestionEvidence)?;
+                let draw=&s.tape[0];let length=draw.iter().map(|&i|samples[i].tokens.len()-1).max().unwrap();
+                let mut cost=[0usize;3];for &i in draw{cost[0]+=samples[i].tokens.len()-1;cost[1]+=samples[i].tokens.len()-samples[i].response_start;cost[2]+=length-(samples[i].tokens.len()-1);}
+                let mut trace=std::fs::File::create(s.root.join("C/updates-000.r3rows"))?;
+                append_row(&mut trace,&binary::record!({"local":1,"model_step":17982,"optimizer_local":3646,"source_tape_index":573,"rows":draw,
+                    "input":cost[0],"target":cost[1],"padding":cost[2],"examples":8,"weighted_denominator":cost[1],
+                    "plain_ce":1.,"first_nll":1.,"answer_ce":1.,"synthetic_accounting_fixture":true}))?;
+                let receipt=binary::record!({"elapsed_seconds":0.,"generation_calls":0,"teacher_calls":0,"observed_conditions":["TIME_BUDGET"]});
+                publish_confirmed(&s.root.join("segment-000-started.r3b"),&binary::record!({"policy":digest(&s)?,"previous":null,"phase":0,"arms":progress}))?;
+                publish_confirmed(&s.root.join("segment-000-finished.r3b"),&Segment{policy:digest(&s)?,previous:None,phase:0,arms:progress.clone(),success:false,resume:true,control:receipt,error:Some("TIME_BUDGET".into())})?;
+            }
+            let stopped=if unequal{1}else{0};
+            for i in 0..8{publish_confirmed(&s.root.join(s.arms()[stopped]).join(format!("fixture-{i}-discarded.r3b")),
+                &binary::record!({"forward_backward":1,"optimizer":0,"input":27,"target":5,"synthetic_accounting_fixture":true}))?;}
+            let l=checkpoint::load(&s.parent,Device::Cpu,false)?;let model=l.model.weights_content_id()?;
+            for arm in 0..2{for panel in fit_panels(&s)?.into_iter().take(6){
+                let local=progress[arm].local;let label=format!("eval-{local}-{}",panel.0);
+                let binding=event_binding(&s,s.arms()[arm],local,&model,&panel)?;
+                event_returned_fixture(&s,&s.root.join(s.arms()[arm]),&label,&binding,&panel.1[..4],&l.tokenizer,false)?;
+            }}
+            let status=std::process::Command::new(std::env::current_exe()?).args(["--exact","training::fresh::muon::tests::first_decision_cost_stop_endpoints","--ignored","--nocapture","--test-threads=1"])
+                .env("R3_FIRST_COST_CHILD",&s.root).status()?;assert!(status.success());
+        }
+        println!("FIRST_COST actual equal0 and unequal1/0 report, RETURNED fixtures, optimizer0 backward0 generation0 teacher0 evidence={}",root.display());Ok(())
     }
     #[test]
     #[ignore="read-only real budget endpoint; no optimizer/backward/generation/teacher"]

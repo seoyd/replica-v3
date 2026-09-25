@@ -2,6 +2,42 @@
 
 ## 2026-09-25 Cost-bounded first decision — P0/P1
 
+Independent A's first static pass on dc346a044df787f2fef3a57839826bb61cccfaf7
+found cost-stop boundary defects before consuming any independent TINY budget:
+reserve exhaustion could permit a ninth discarded backward, saved endpoints
+could close without evaluation, and the reader conflated cost and quality stop.
+This candidate is not admitted. The immutable finding is preserved in
+`artifacts/first-decision-20260925-review/a-static-dc346a0.md`, SHA256
+ae878bc5a2950e833217161b4f3e7e97ff837301756df5a6f8b28ab6739723b3.
+Those boundaries were corrected and model-free caller regressions passed.
+Reserve8 now stops before another backward; saved endpoints are evaluated even
+below128 or at unequal arm steps, with unmatched comparison explicitly reported.
+Cost and quality stops remain separate in the final reader. Test
+`first_decision_cost_stop_endpoints` passed one parent and two fresh children;
+`first_decision_dispatch_and_returned` passed one test. An earlier --lib filter
+executed0 tests and is not counted as PASS. No extra model calls were made.
+Independent TINY calls remain0; the reserved8 will test this correction in the
+same A session. No SMALL learning has started.
+
+The corrected selected preparation is
+`artifacts/first-decision-20260925-study-v5`; all four earlier preparations
+remain unadmitted and preserved. Plan SHA256
+ab4225fb2fd91cec4df4a02e05be691ff642393514785d245de922a42a18a0e6,
+policy dbd34c6b5abc7eba21254028dd9f6aa0004680082b3a4e1765f6bbfdd3a05187,
+release executable SHA256
+87e86490a1231c9b1e4a8c2a28037ec597fb5bdba185f5d24389ef7530462823.
+Scoped logical bytes99640279 include all new preparation/review/evidence roots
+and four task executables, including the zero-test executable. Eight reserved
+native saves add913460736bytes, projecting1013101015 of1073741824bytes.
+Build growth/peak remain UNKNOWN. Cost fixture evidence is
+`cost-stop-004.log` (SHA256 a0e72eb85cbcd838ae530d2aac0c60e6206e07e382e534589098ade2735ed38d)
+and `dispatch-004.log` (SHA256 c71423dee4e46fc98660797414a92292224939389775c8eb9939eb9e1f3dfd1f)
+under the existing first-decision evidence root. No whole artifact inventory
+or deletion was performed. The project skill gained31 lines recording the
+supplied model/effort recommendations, actual-setting checks and separate costs.
+
+The following P0/P1 record describes the initial preparation, superseded by v5.
+
 P0 verified HEAD771a9fb551d9dc21a699c2f266089f4a13363db2 has no product-source
 change from af8ad53bf52e592f531b2f29ea84670ac201e618. User .DS_Store remains
 untracked and preserved. Installed rustc/cargo1.98.1 and the existing locked

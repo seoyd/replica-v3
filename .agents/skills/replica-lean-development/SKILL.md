@@ -75,6 +75,37 @@ grant execution permission, or define model quality gates.
 - If missing information could change correctness, preservation, interpretation or
   release eligibility, obtain it. Do not save tokens by guessing.
 
+## Model, effort and measured cost
+
+- Use only settings actually supported by the current account/client. These are
+  project recommendations, not capability rankings or guaranteed savings:
+  verified CLI/hash/count/publication: Luna High or Sol Low; bounded Rust edits:
+  Sol Medium; loss/gradient/checkpoint/stop state: Sol High; independent design,
+  formula and acceptance: Astra High once. Use a supported equivalent if absent.
+- Default xhigh/Max/Ultra off when a real setting control is available. Escalate
+  for the same unresolved reproduction after two fixes, nonlocal state corruption
+  or an independent numerical-oracle mismatch. Narrow xhigh follows an unresolved
+  High investigation, never a routine compile typo or report-format correction.
+- Prompt wording does not change settings. Record requested and observed model /
+  effort separately; without a live control report UNCHANGED or UNKNOWN. Do not
+  overwrite global configuration, install services, use API keys or lower guards.
+- When delegation is explicitly authorized or required, use one implementer then
+  one independent reviewer sequentially. Use a concise handoff with source/parent,
+  invariants, changed paths, exact commands, results, budgets and next action.
+  Do not create a standing router/management agent or self-issue reviewer PASS.
+- Normal learning needs no repeated reasoning session. Keep logs on disk and
+  re-enter at scheduled evaluation, command exit or actual error; obey required
+  progress cadence without dumping raw output. Keep normal progress within eight
+  lines unless the user's request or a consequential failure requires detail.
+- Reuse unchanged source/binary/input-bound checks; never reduce required dynamic
+  verification or run a duplicate closure review without a new mismatch/change.
+- Record observed stage model/effort, agent and tool-call counts, rework and result
+  in the existing status/report when available. Codex context/input/output/
+  reasoning/cache usage is separate from Replica input/target/generation tokens.
+  Missing usage is UNKNOWN; do not infer savings percentages or add these totals.
+- Keep a running experiment alive across routing changes unless its own stop
+  condition or the user requires cancellation. No automatic budget extension.
+
 ## Artifact hygiene in this repository
 
 - Copy only required source/fixtures for a review; read original evidence in place.
