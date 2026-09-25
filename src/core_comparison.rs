@@ -9,6 +9,7 @@ const SEED:u64=20260925;
 #[derive(Subcommand)]
 pub enum Action {
     Prepare {#[arg(long)] word_root:PathBuf,#[arg(long)] output:PathBuf,#[arg(long)] audit_only:bool},
+    Revise {#[arg(long)] previous:PathBuf,#[arg(long)] output:PathBuf,#[arg(long)] failed_review:PathBuf},
     Admit {#[arg(long)] root:PathBuf,#[arg(long)] review:PathBuf},
     Execute {#[arg(long)] root:PathBuf,#[arg(long,value_parser=["TRPP","GRU"])] core:String,
         #[arg(long,value_parser=["baseline","train","evaluate","finalize","review"])] phase:String,
@@ -17,7 +18,7 @@ pub enum Action {
     VerifyTiny {#[arg(long)] continuous:PathBuf,#[arg(long)] split:PathBuf},
     /// Bounded numerical fixture, not a SMALL learning run.
     Tiny {#[arg(long)] output:PathBuf,#[arg(long,value_parser=["TRPP","GRU"])] core:String,
-        #[arg(long,default_value_t=2)] until:usize,#[arg(long)] resume:bool},
+        #[arg(long,default_value_t=2)] until:usize,#[arg(long)] resume:bool,#[arg(long)] cancel_after_commit:bool},
 }
 enum Core {Tr(Transformer),Gru(gru::Gru)}
 impl Core {
@@ -44,8 +45,13 @@ struct Study {
     references:BTreeMap<PathBuf,String>,tokenizer:PathBuf,tokenizer_id:String,
     cores:[ComparisonCore;2],config:TrainConfig,tape:Vec<[usize;8]>,cache_key:[[u8;32];6],
     costs:binary::Value,old_qa:binary::Value,quality:binary::Value,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    revision:Option<InitialReference>,
 }
 #[derive(Clone,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InitialReference {plan:PathBuf,plan_hash:String,cache:PathBuf,cache_hash:String,failed_review:PathBuf,review_hash:String,endpoints:[Endpoint;2]}
+#[derive(Clone,Serialize,Deserialize,PartialEq)]
 #[serde(deny_unknown_fields)]
 struct Endpoint {state:ComparisonState,path:PathBuf,hash:String,content:String}
 #[derive(Clone,Serialize,Deserialize)]
@@ -101,7 +107,7 @@ fn prepare(word_root:&Path,output:&Path,audit_only:bool)->Result<()> {
         "word192":{"full":183,"query_both":88,"swap_both":88,"all4":44,"value":190,"support":190,"outside":0,"malformed":0},
         "fit192":"representative diagnostic; not full1536 fit gate","QA":"original bucket gates, diagnostic only","Goal1":false});
     let s=Study{contract:CONTRACT.into(),root:root.clone(),artifact_root,source:source()?,runtime,word_root,references:refs,tokenizer,tokenizer_id:tok.semantic_id(),cores,config:config(),tape,cache_key,
-        costs:binary::record!({"input_per_arm":input,"target_per_arm":targets,"exposures":exposures,"prompt_target_identities":identities,"max_train_length":max_len,"parameters":[tp,gp]}),old_qa:selection,quality};
+        costs:binary::record!({"input_per_arm":input,"target_per_arm":targets,"exposures":exposures,"prompt_target_identities":identities,"max_train_length":max_len,"parameters":[tp,gp]}),old_qa:selection,quality,revision:None};
     recovery::experiment_record::token_cache::comparison_cache(&root.join("samples.r3tok"),cache_key,256,tok.vocab_size(),&samples,true)?;
     publish_confirmed(&root.join("plan.r3b"),&s)?;
     for(i,mut core)in [Core::Tr(tr),Core::Gru(gr)].into_iter().enumerate(){let dir=root.join(ARMS[i]);std::fs::create_dir(&dir)?;core.bind(&s.tokenizer_id)?;
@@ -118,8 +124,31 @@ fn inputs(s:&Study)->Result<(data::native::Corpus,Vec<Meta>,Vec<Meta>,ByteBpe,Ve
     let(tm,dm,_)=verified_metadata(&s.word_root,&p)?;let tok=ByteBpe::load(&s.tokenizer)?;
     if tok.semantic_id()!=s.tokenizer_id{return Err(bad("comparison tokenizer changed"));}
     let ss=samples_with_framing(&c.train,&tok,256,Framing::QuestionEvidence)?;
-    let ss=recovery::experiment_record::token_cache::comparison_cache(&s.root.join("samples.r3tok"),s.cache_key,256,tok.vocab_size(),&ss,false)?;
+    let cache=if let Some(r)=&s.revision{
+        if file_hash(&r.plan)?!=r.plan_hash||file_hash(&r.cache)?!=r.cache_hash||file_hash(&r.failed_review)?!=r.review_hash{return Err(bad("initial reference changed"));}r.cache.clone()
+    }else{s.root.join("samples.r3tok")};
+    let ss=recovery::experiment_record::token_cache::comparison_cache(&cache,s.cache_key,256,tok.vocab_size(),&ss,false)?;
     Ok((c,tm,dm,tok,ss))
+}
+fn revise(previous:&Path,output:&Path,failed_review:&Path)->Result<()> {
+    let old:Study=read_confirmed(&previous.join("plan.r3b"))?;let r:binary::Value=read(failed_review)?;
+    if old.contract!=CONTRACT||old.root!=previous.canonicalize()?||old.config!=config()||old.revision.is_some()
+        ||r["verdict"]!="FAIL"||r["policy"]!=digest(&old)?||r["source"]!=old.source{return Err(bad("only unused initial pair after bound A FAIL may be revised"));}
+    inputs(&old)?;
+    let initial=[read_confirmed::<Endpoint>(&old.root.join("TRPP/initial.r3b"))?,read_confirmed::<Endpoint>(&old.root.join("GRU/initial.r3b"))?];
+    for(i,e)in initial.iter().enumerate(){if !history(&old,i)?.is_empty()||e.state.committed!=0||e.state.adam_clock!=0||e.state.policy!=digest(&old)?||e.state.core!=old.cores[i]{return Err(bad("revision cannot reopen a trained run"));}
+        load_endpoint(e,Device::Cpu)?;}
+    if output.parent().map(Path::canonicalize).transpose()?.as_ref()!=Some(&old.artifact_root){return Err(bad("revision evidence root"));}
+    std::fs::create_dir(output)?;let mut s=old.clone();s.root=output.canonicalize()?;s.source=source()?;s.runtime=RuntimeProfile::capture(Backend::Metal0,&Backend::Metal0.open()?)?;
+    let plan=old.root.join("plan.r3b");let cache=old.root.join("samples.r3tok");
+    s.revision=Some(InitialReference{plan_hash:file_hash(&plan)?,plan,cache_hash:file_hash(&cache)?,cache,failed_review:failed_review.canonicalize()?,review_hash:file_hash(failed_review)?,endpoints:initial.clone()});
+    publish_confirmed(&s.root.join("plan.r3b"),&s)?;
+    for(i,e)in initial.iter().enumerate(){let dir=s.root.join(ARMS[i]);std::fs::create_dir(&dir)?;publish_confirmed(&dir.join("initial.r3b"),e)?;}
+    publish_confirmed(&s.root.join("preparation.r3b"),&binary::record!({"policy":digest(&s)?,"source":s.source,"runtime":s.runtime,"reused_initial":initial,"prior_plan":digest(&old)?,"costs":s.costs,"optimizer":0,"generation":0,"teacher":0,"new_model_bytes":0,"independent_A":"PENDING"}))?;
+    println!("REVISED policy={} original_step0_reused=true new_model_bytes=0 optimizer=0 A_PENDING",digest(&s)?);Ok(())
+}
+fn initial_reference(s:&Study,arm:usize,ep:&Endpoint)->bool{
+    s.revision.as_ref().is_some_and(|r|r.endpoints[arm]==*ep&&ep.state.committed==0&&ep.state.adam_clock==0&&ep.state.core==s.cores[arm])
 }
 fn study(root:&Path,execute:bool)->Result<Study>{let s:Study=read_confirmed(&root.join("plan.r3b"))?;
     if s.contract!=CONTRACT||s.root!=root.canonicalize()?||s.root.parent()!=Some(s.artifact_root.as_path())||s.source!=source()?||s.config!=config()||s.tape.len()!=3072{return Err(bad("comparison policy/source mismatch"));}
@@ -142,6 +171,11 @@ fn load_endpoint(e:&Endpoint,device:Device)->Result<(Core,Adam)>{if file_hash(&e
     let mut core=Core::load(&st.core,vars,device)?;core.bind(&st.tokenizer)?;
     if core.content()?!=e.content{return Err(bad("endpoint semantic weights"));}Ok((core,Adam{moments}))
 }
+fn preserve_completed(dir:&Path,core:&mut Core,adam:&Adam,current:&Endpoint,before:&Endpoint,in_optimizer:bool,label:&str)->Result<Endpoint>{
+    if !in_optimizer&&current.state.committed>before.state.committed {
+        save_endpoint(dir,core,adam,current.state.clone(),label)
+    }else{Ok(before.clone())}
+}
 fn history(s:&Study,arm:usize)->Result<Vec<Segment>>{let dir=s.root.join(ARMS[arm]);let mut out=vec![];
     let mut previous:Endpoint=read_confirmed(&dir.join("initial.r3b"))?;
     for i in 0..128 {let entered=dir.join(format!("segment-{i:03}-entered.r3b"));let returned=dir.join(format!("segment-{i:03}-returned.r3b"));
@@ -150,7 +184,7 @@ fn history(s:&Study,arm:usize)->Result<Vec<Segment>>{let dir=s.root.join(ARMS[ar
         let start:binary::Value=read_confirmed(&entered)?;
         if r.policy!=digest(s)?||r.core!=ARMS[arm]||r.index!=i||r.trace_hash!=file_hash(&r.trace)?||r.endpoint.hash!=file_hash(&r.endpoint.path)?||!r.seconds.is_finite()||r.seconds<0.
             ||start["endpoint"]!=binary::record!(previous)||start["policy"]!=r.policy||start["index"]!=i||start["phase"]!=r.phase
-            ||r.endpoint.state.policy!=r.policy||r.endpoint.state.core!=s.cores[arm]||r.endpoint.state.committed<previous.state.committed
+            ||(r.endpoint.state.policy!=r.policy&&!initial_reference(s,arm,&r.endpoint))||r.endpoint.state.core!=s.cores[arm]||r.endpoint.state.committed<previous.state.committed
             ||r.endpoint.state.committed>3072||r.endpoint.state.committed-previous.state.committed>r.backwards
             ||r.control["teacher_calls"]!=0||r.control["generation_calls"]!=r.generation{return Err(bad("comparison segment binding"));}
         if !["COMPLETED","TIME_BUDGET"].contains(&r.stop.as_str())
@@ -158,7 +192,7 @@ fn history(s:&Study,arm:usize)->Result<Vec<Segment>>{let dir=s.root.join(ARMS[ar
         previous=r.endpoint.clone();out.push(r);
     }Ok(out)
 }
-fn update(core:&Core,adam:&mut Adam,st:&mut ComparisonState,b:&Batch,c:&mut RunControl,backwards:&mut usize)->Result<binary::Value>{
+fn update(core:&Core,adam:&mut Adam,st:&mut ComparisonState,b:&Batch,c:&mut RunControl,backwards:&mut usize,in_optimizer:&mut bool)->Result<binary::Value>{
     c.check("before_core_forward")?;let started=Instant::now();let logits=core.forward(b)?;
     let(plain,loss,n,_)=response_objective(&logits,b,1.,true)?;let value=loss.to_scalar::<f32>()?;
     if !value.is_finite(){return Err(bad("nonfinite fresh loss"));}
@@ -166,8 +200,10 @@ fn update(core:&Core,adam:&mut Adam,st:&mut ComparisonState,b:&Batch,c:&mut RunC
     for(name,var)in core.vars(){grads.insert(name.clone(),graph.get(var).ok_or_else(||bad("missing core gradient"))?.detach());}
     core.device().synchronize()?;let fb=started.elapsed().as_secs_f64();c.check("before_core_optimizer")?;
     let clock=st.committed+1;let lr=st.config.lr*(clock.min(st.config.warmup)as f64/st.config.warmup as f64);
+    *in_optimizer=true;
     let(norm,delta)=adam.apply_admitted_step(core.vars(),&grads,&st.config,clock,lr,|_,_,_,_|Ok(()))?;
     core.device().synchronize()?;st.committed=clock;st.adam_clock=clock;st.input_tokens+=b.tokens as u64;st.target_tokens+=n as u64;
+    *in_optimizer=false;
     Ok(binary::record!({"commit":clock,"adam_clock":clock,"input":b.tokens,"target":n,"loss":value,"token_ce":plain.to_scalar::<f32>()?,"lr":lr,
         "gradient_norm":norm,"update_l2":delta,"forward_backward_seconds":fb,"seconds":started.elapsed().as_secs_f64(),"rss_kib":rss_kib()?}))
 }
@@ -250,10 +286,8 @@ fn review(s:&Study,arm:usize,core:&Core,ep:&Endpoint,tok:&ByteBpe,ctl:&mut RunCo
         if raw.len()!=p.1.len()+1{return Err(bad("review incomplete source"));}
         for(e,r)in p.1.into_iter().zip(raw.into_iter().skip(1)){verify_generated(&r,tok)?;if r["id"]!=e.id||r["expected"]!=e.answer{return Err(bad("review raw case"));}cases.push((p.0.clone(),e,r));}
     }
-    // Preregistered metadata order: normal word8, then at most8 incorrect/error
-    // rows from the fixed panel order. Fill absent failures in that same order.
-    let mut selected=cases.iter().enumerate().filter(|(_,v)|v.0=="word").take(8).map(|(i,_)|i).collect::<Vec<_>>();
-    for failures in [true,false]{for(i,(_,_,row))in cases.iter().enumerate(){if selected.len()==16{break;}if !selected.contains(&i)&&(!failures||row["exact_match"]!=true){selected.push(i);}}}
+    // First four word orbits, selected solely by the frozen metadata order.
+    let selected=cases.iter().enumerate().filter(|(_,v)|v.0=="word").take(16).map(|(i,_)|i).collect::<Vec<_>>();
     if selected.len()!=16{return Err(bad("review fixed16 cardinality"));}
     let es=selected.iter().map(|&i|cases[i].1.clone()).collect::<Vec<_>>();let original=selected.iter().map(|&i|cases[i].2.clone()).collect::<Vec<_>>();
     let label=format!("review-{step}");let binding=binary::record!({"policy":digest(s)?,"native":ep.hash,"cases":digest(&es)?,"source_raw":digest(&original)?,"indices":selected,"accuracy_denominator":false});
@@ -268,7 +302,7 @@ fn execute(s:&Study,arm:usize,phase:&str,until:usize)->Result<()> {
     lock.try_lock().map_err(|_|bad("comparison heavy process already active"))?;
     let all=[history(s,0)?,history(s,1)?];let h=&all[arm];let dir=s.root.join(ARMS[arm]);let index=h.len();
     let mut ep=if let Some(last)=h.last(){last.endpoint.clone()}else{read_confirmed(&dir.join("initial.r3b"))?};
-    if ep.state.policy!=digest(s)?||ep.state.core!=s.cores[arm]{return Err(bad("comparison endpoint core/policy"));}
+    if (ep.state.policy!=digest(s)?&&!initial_reference(s,arm,&ep))||ep.state.core!=s.cores[arm]{return Err(bad("comparison endpoint core/policy"));}
     if phase=="baseline"&&ep.state.committed!=0{return Err(bad("baseline after learning"));}
     if phase=="train" {
         if until<=ep.state.committed||until>3072||![1,512,1536,3072].contains(&until){return Err(bad("training endpoint bound"));}
@@ -285,15 +319,16 @@ fn execute(s:&Study,arm:usize,phase:&str,until:usize)->Result<()> {
     let mut ctl=RunControl::new(cancel,Duration::from_secs_f64((7200.-used).min(1800.)),16*1024*1024)?;ctl.set_call_limits(8192-calls,0);
     let trace=dir.join(format!("segment-{index:03}-trace.r3rows"));let mut f=std::fs::OpenOptions::new().write(true).create_new(true).open(&trace)?;
     let before=ep.clone();publish_confirmed(&dir.join(format!("segment-{index:03}-entered.r3b")),&binary::record!({"policy":digest(s)?,"phase":phase,"endpoint":ep,"index":index,"remaining_seconds":7200.-used,"generation_remaining":8192-calls,"backward_remaining":3088-backwards}))?;
-    let began=Instant::now();let(mut new_backward,mut generated)=(0,0);
+    let began=Instant::now();let(mut new_backward,mut generated)=(0,0);let mut in_optimizer=false;
     let result=(||->Result<()>{
         if phase=="train"{
+            ep.state.policy=digest(s)?;ep.state.runtime=s.runtime.clone();
             let next=[1,512,1536,3072].into_iter().find(|&n|n>ep.state.committed).unwrap();let end=until.min(next);
             while ep.state.committed<end {
                 ctl.check("before_comparison_update")?;if backwards+new_backward>=3088{return Err(bad("comparison backward cap"));}
                 let row=&s.tape[ep.state.committed];let b=batch(&samples,row,core.device())?;
                 append_row(&mut f,&binary::record!({"phase":"ENTERED","cursor":ep.state.committed+1,"input":b.tokens,"batch":row}))?;
-                let trace=update(&core,&mut adam,&mut ep.state,&b,&mut ctl,&mut new_backward)?;append_row(&mut f,&trace)?;
+                let trace=update(&core,&mut adam,&mut ep.state,&b,&mut ctl,&mut new_backward,&mut in_optimizer)?;append_row(&mut f,&trace)?;
                 if ep.state.committed%64==0||ep.state.committed==1{println!("TRAIN core={} step={}/3072 input={} target={} loss={} rss={} last_saved={}",ARMS[arm],ep.state.committed,ep.state.input_tokens,ep.state.target_tokens,trace["loss"],trace["rss_kib"],before.state.committed);}
             }Ok(())
         }else if phase=="review"{review(s,arm,&core,&ep,&tok,&mut ctl,&mut generated,1048576-tokens)}
@@ -302,10 +337,9 @@ fn execute(s:&Study,arm:usize,phase:&str,until:usize)->Result<()> {
     if let Err(e)=&result{ctl.classify_error(e);}
     let control=ctl.receipt();
     let stop=if ctl.reason()==Some("TIME_BUDGET")&&control["observed_conditions"]!=binary::record!(["TIME_BUDGET"]){"INTEGRITY_FAIL"}else{ctl.reason().unwrap_or("COMPLETED")}.to_string();
-    // A failed optimizer is never resumed. Pure deadline disposal preserves the last complete clock.
-    if phase=="train"&&["COMPLETED","TIME_BUDGET"].contains(&stop.as_str())&&ep.state.committed!=before.state.committed {
-        ep=save_endpoint(&dir,&mut core,&adam,ep.state.clone(),&format!("segment-{index:03}"))?;
-    }else if phase=="train"&&stop!="COMPLETED"&&stop!="TIME_BUDGET"{ep=before.clone();}
+    // Preserve safe completed work even after cancellation; the sticky stop still blocks resume.
+    // An interrupted optimizer may have partially changed tensors and must never be published.
+    if phase=="train"{ep=preserve_completed(&dir,&mut core,&adam,&ep,&before,in_optimizer,&format!("segment-{index:03}"))?;}
     append_row(&mut f,&binary::record!({"phase":"RETURNED","endpoint":ep,"stop":stop,"discarded":new_backward.saturating_sub(ep.state.committed.saturating_sub(before.state.committed))}))?;
     let receipt=ctl.receipt();let segment=Segment{policy:digest(s)?,core:ARMS[arm].into(),phase:phase.into(),index,endpoint:ep.clone(),backwards:new_backward,
         generation:receipt["generation_calls"].as_u64().unwrap_or(0)as usize,generated_tokens:generated,seconds:began.elapsed().as_secs_f64(),stop:stop.clone(),trace:trace.clone(),trace_hash:file_hash(&trace)?,control:receipt};
@@ -313,7 +347,8 @@ fn execute(s:&Study,arm:usize,phase:&str,until:usize)->Result<()> {
     println!("SEGMENT core={} phase={phase} step={} backward={new_backward} generation={} tokens={generated} seconds={:.3} stop={stop} native={} new_bytes={}",ARMS[arm],ep.state.committed,segment.generation,segment.seconds,ep.path.display(),new_bytes(&s.artifact_root)?);
     result
 }
-fn tiny(output:&Path,arm:&str,until:usize,resume:bool)->Result<()> {
+fn tiny(output:&Path,arm:&str,until:usize,resume:bool,cancel_after_commit:bool)->Result<()> {
+    if cancel_after_commit&&(resume||until!=1){return Err(bad("cancel regression requires one fresh update"));}
     if !(1..=2).contains(&until){return Err(bad("TINY only two updates"));}
     let device=Backend::Metal0.open()?;let runtime=RuntimeProfile::capture(Backend::Metal0,&device)?;
     let tok=ByteBpe::train(&[b"tiny answer".to_vec()],&neural::hash(b"tiny answer"),264)?;
@@ -335,11 +370,22 @@ fn tiny(output:&Path,arm:&str,until:usize,resume:bool)->Result<()> {
     };
     if until<=st.committed{return Err(bad("TINY no repeated optimizer"));}
     let samples=vec![Sample{tokens:vec![BOS,8,9,10,11,EOS],response_start:3,curriculum:false},Sample{tokens:vec![BOS,9,8,EOS],response_start:2,curriculum:false}];
-    let mut ctl=RunControl::new(Arc::new(AtomicBool::new(false)),Duration::from_secs(120),16*1024*1024)?;
-    let mut backward=0;
-    while st.committed<until{let b=batch(&samples,&[0,1],core.device())?;let row=update(&core,&mut adam,&mut st,&b,&mut ctl,&mut backward)?;
+    let cancel=Arc::new(AtomicBool::new(false));
+    let mut ctl=RunControl::new(cancel.clone(),Duration::from_secs(120),16*1024*1024)?;
+    let before=if cancel_after_commit{Some(save_endpoint(output,&mut core,&adam,st.clone(),"before-cancel")?)}else{None};
+    let mut backward=0;let mut in_optimizer=false;
+    while st.committed<until{let b=batch(&samples,&[0,1],core.device())?;let row=update(&core,&mut adam,&mut st,&b,&mut ctl,&mut backward,&mut in_optimizer)?;
         publish_confirmed(&output.join(format!("update-{}.r3b",st.committed)),&row)?;}
-    let ep=save_endpoint(output,&mut core,&adam,st,"tiny")?;
+    let ep=if let Some(before)=before{
+        cancel.store(true,Ordering::Relaxed);assert!(ctl.check("before_comparison_update").is_err());
+        assert_eq!(ctl.reason(),Some("CANCELLED"));
+        let mut current=before.clone();current.state=st;
+        let saved=preserve_completed(output,&mut core,&adam,&current,&before,in_optimizer,"tiny")?;
+        assert_eq!(saved.state.committed,1);
+        assert!(preserve_completed(output,&mut core,&adam,&current,&before,true,"must-not-save")?==before);
+        publish_confirmed(&output.join("cancelled.r3b"),&binary::record!({"stop":ctl.reason(),"resume":false,"backward":backward,"endpoint":saved}))?;
+        saved
+    }else{save_endpoint(output,&mut core,&adam,st,"tiny")?};
     // Wrong policies/cores and legacy loaders fail before dispatch or optimizer.
     let mut wrong=ep.state.clone();wrong.tokenizer=neural::hash(b"wrong tokenizer");assert!(artifact::load_comparison(&ep.path,&wrong,core.device()).is_err());
     wrong=ep.state.clone();wrong.adam_clock+=1;assert!(artifact::load_comparison(&ep.path,&wrong,core.device()).is_err());
@@ -391,7 +437,8 @@ fn report(s:&Study)->Result<()> {
 }
 pub fn run(action:Action)->Result<()>{match action{
     Action::Prepare{word_root,output,audit_only}=>prepare(&word_root,&output,audit_only),Action::Admit{root,review}=>admit(&root,&review),
+    Action::Revise{previous,output,failed_review}=>revise(&previous,&output,&failed_review),
     Action::Execute{root,core,phase,until}=>{let s=study(&root,true)?;let arm=ARMS.iter().position(|v|*v==core).ok_or_else(||bad("core"))?;if phase=="finalize"{finalize(&s,arm)}else{execute(&s,arm,&phase,until)}},
-    Action::Report{root}=>report(&study(&root,false)?),Action::Tiny{output,core,until,resume}=>tiny(&output,&core,until,resume),
+    Action::Report{root}=>report(&study(&root,false)?),Action::Tiny{output,core,until,resume,cancel_after_commit}=>tiny(&output,&core,until,resume,cancel_after_commit),
     Action::VerifyTiny{continuous,split}=>verify_tiny(&continuous,&split),
 }}
