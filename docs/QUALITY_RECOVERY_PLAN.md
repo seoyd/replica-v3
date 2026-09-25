@@ -1,5 +1,48 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: value-reading isolation
+
+R3-VALUE-READING-ISOLATION-1.0 is an evaluation-only input ablation on preserved
+C model18237/Adam3901. Its native physical hash is
+1f5656d5c033a5cba3d271c3939aed66aaa14f4a00b11cc30f8081af5db28a90.
+The accepted original B and C/W result remain closed: W weight2 is not adopted.
+No optimizer, backward, teacher, TINY learning, QA640 or confirmation is allowed.
+
+Select original O train48/dev48 from already returned C final train192/word192
+using metadata, without scores. Each split contains six word pairs, two distinct
+semantic bases per pair and their four views; train balances ID0/ID1 and dev
+retains its actual ID0-only structure. Each word appears12 times per split.
+Verify source/case/request/target/native/tokenizer and actual prior exposure.
+O96 reuses original raw. A request-only current entity/context resolver prepares
+U by replacing only the other record's value field and S by retaining only the
+selected evidence record. System, question, limits, answer and remaining fields
+are unchanged. The resolver is training-executable preparation code only.
+
+All288 O/U/S cases must satisfy prompt+target+EOS<=256 and target+EOS<=32,
+roundtrip and generation-prefix agreement, with provided2/2/1 and excluded0.
+Use normal Metal F32 greedy/strict UTF-8 and existing native collectors; never
+repair outputs or remove wrong RETURNED rows from denominators. A shared
+manifest defines both collection and reporting. Missing, corrupt, pending,
+cancelled and unknown calls fail closed; clean noninvocation timeouts retain
+their cursor. Reporting and completed-row reuse require no new model calls.
+
+After direct input and small actual reader/finalizer regressions, independent A
+checks the new boundary. Execute O parity8, then U/S train48/dev48 (192 new
+generations), then report and independent B<=16 distinct reproductions. Total
+new generations<=216, generated tokens<=6912, active<=900s, segment<=300s.
+New immutable evidence including executables<=128MiB; observe limited shared
+build net growth<=512MiB separately, reporting unmeasured costs as UNKNOWN.
+Do not copy original models/corpus or clean/inventory unrelated artifacts.
+
+Report FULL, whole-value, exact target support, actual EOS, malformed and
+outside IDs against each actual request, plus O-to-U/S paired gains/losses,
+word and semantic-group breakdowns. S is oracle-assisted and changes length;
+U changes value duplication and potentially token positions. Neither result
+is original-task quality or proof of a particular internal cause. Preserve
+original word29/192 and C/W NO_CLEAR_SIGNAL. QUALITY_APPROVED=false and
+DIAGNOSTIC_ONLY=true; S4/S5/S6/Goal1 remain unaccepted. Conclude with one
+evidence-based next hypothesis without executing new training or exploration.
+
 ## Closed: cost-bounded first-decision comparison
 
 C/W completed256 committed updates each and the separate authorized endpoint

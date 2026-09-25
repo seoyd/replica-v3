@@ -1,5 +1,52 @@
 # 진단 및 구현 상태
 
+## 2026-09-25 Value-reading isolation — preparation
+
+The new diagnosis preserves C/W and fixes C model18237/Adam3901, with native
+`artifacts/first-decision-20260925-study-v7/C/segment-002-step-256.r3m`, physical
+SHA2561f5656d5c033a5cba3d271c3939aed66aaa14f4a00b11cc30f8081af5db28a90.
+Original O raw is reused; U duplicates only the selected value into the other
+record, and S keeps only the request-selected record. Neither is product
+selection quality, and W weight2 remains unadopted.
+
+The scoped `value_reading_actual_selection` test passed1/1 in37.91s with0 model
+calls: balanced train48/dev48 were selected only from returned C final
+train192/word192, with six word pairs, four words, complete views and distinct
+semantic bindings. Train balances ID0/ID1; dev uses its actual ID0-only inputs.
+An earlier obsolete whole-origin audit was interrupted (exit130, NOT_PASS).
+Preparation was narrowed to the closed B evidence, named C native and two O
+panels instead of repeating the prior C/W/teacher audit.
+
+The direct `value_reading_boundary_fixture` and six-panel
+`value_reading_full_report_preflight` passed1/1 each (21.48s and18.90s).
+These are synthetic reader/scorer tests, not model generations. Negative release
+CLI checks refused parity without A and report without completed panels (exit1),
+leaving the original plan unchanged. Test output was captured in execution tool
+results; no separate raw test log was retained.
+
+All288 inputs passed: O/U prompt218, S prompt167, target+EOS16 throughout;
+total234/183, provided2/2/1, excluded0. Plan physical SHA256
+6814889c550f9f9064ca5aa5cdc69af069695b00f4744d20b81d5b5502248dd7,
+at `artifacts/value-reading-20260925-main/value-reading-plan.r3b`.
+Its exposure fields count only C's256-update suffix:40 selected train rows have
+one exact exposure and8 have zero. `semantic_other_exposure` counts other rows
+of the same binding in that suffix (40x7,8x0); it does not mean other-system
+history or total inherited exposure. An inherited trace audit remains pending.
+
+New optimizer/backward/teacher/generation calls are0 at this checkpoint.
+Independent A, actual observations and B are pending.
+New caps: generation216, generated tokens6912, active900s,
+segment300s, immutable evidence/executables128MiB, observed shared-build net
+growth512MiB. Pre-build `target/release` measurement1218008KiB is allocated
+directory size from `du -sk`, not logical bytes or cumulative writes/peak.
+Post-build release size1241424KiB gives observed net23416KiB; the earlier debug
+size was not measured, so total shared-build growth and overall cost PASS are
+UNKNOWN. Three used executables plus plan total111520218 logical bytes.
+Release SHA2565d5c790e124ad5ebec585ca967016165921aa15f046b0581312f255d7abce8da;
+test binary SHA256aff1a2a21dd5bab8f534f5e790b54570c162d1c9284dec5a46319fdaf7ed6c4a.
+Implementation worker was configured Sol Medium; no root live model/effort
+change is claimed. Existing accepted numerical/Metal/optimizer tests are reused.
+
 ## 2026-09-25 First-decision final result — NO_CLEAR_SIGNAL
 
 The authorized evaluation-only completion and independent B reproductions are
