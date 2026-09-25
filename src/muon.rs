@@ -122,7 +122,8 @@ fn event_inputs(s:&Study,arm:usize)->Result<data::native::Corpus>{
     let e=s.event.as_ref().ok_or_else(||bad("event policy absent"))?;
     for(p,h)in &e.refs{if file_hash(p)?!=*h||pending_path(p).exists(){return Err(bad("frozen event source changed"));}}
     if file_hash(&e.original)?!=e.original_hash{return Err(bad("source tape changed"));}
-    verified_corpus(&e.corpus[arm],&e.corpus_hashes[arm])
+    let corpus_arm=if s.first_decision.is_some(){0}else{arm};
+    verified_corpus(&e.corpus[corpus_arm],&e.corpus_hashes[corpus_arm])
 }
 fn event_length(prompt:usize,gold:usize,output_limit:usize)->Result<usize>{
     let target=gold.checked_add(1).ok_or_else(||bad("event target length overflow"))?;
@@ -2081,7 +2082,45 @@ mod tests {
             let path=root.join(format!("missing-objective-{arm}.r3m"));
             assert!(checkpoint::save(&path,&tampered.model,&tampered.tokenizer,tampered.manifest,&tampered.optimizer).is_err());
         }
+        for local in 1..=2{
+            let c:binary::Value=read_confirmed(&continuous.root.join("C").join(format!("fixture-trace-{local}.r3b")))?;
+            let w:binary::Value=read_confirmed(&continuous.root.join("W").join(format!("fixture-trace-{local}.r3b")))?;
+            for field in ["rows","input","target","padding"]{assert_eq!(c[field],w[field],"C/W FULL corpus {field}");}
+        }
         println!("FIRST_TINY direct optimizer8 backward8 generation0 teacher0; synthetic nonzero Adam fixture; evidence={}",root.display());Ok(())
+    }
+    #[test]
+    #[ignore="model-free first-decision C/W FULL corpus, framing, cost and native binding parity"]
+    fn first_decision_full_corpus_both_arms()->Result<()> {
+        let(s,root)=first_tiny_fixture()?;let full=event_inputs(&s,0)?;let word=event_inputs(&s,1)?;
+        let mut old=s.clone();old.first_decision=None;let id_only=event_inputs(&old,1)?;
+        assert_ne!(s.event.as_ref().unwrap().corpus_hashes[0],s.event.as_ref().unwrap().corpus_hashes[1]);
+        assert_eq!(full.manifest.train.sha256,word.manifest.train.sha256);
+        assert_eq!(full.manifest.validation.sha256,word.manifest.validation.sha256);
+        assert_eq!(full.train.iter().map(|e|&e.id).collect::<Vec<_>>(),word.train.iter().map(|e|&e.id).collect::<Vec<_>>());
+        assert_ne!(full.train[6144].answer,id_only.train[6144].answer);
+        let tok=scoring_tokenizer(&s)?;
+        let a=samples_with_framing(&full.train,&tok,s.config.seq_len,neural::Framing::QuestionEvidence)?;
+        let b=samples_with_framing(&word.train,&tok,s.config.seq_len,neural::Framing::QuestionEvidence)?;
+        for draw in &s.tape{
+            let mut costs=[[0usize;3];2];
+            for (arm,samples) in [&a,&b].into_iter().enumerate(){
+                let length=draw.iter().map(|&i|samples[i].tokens.len()-1).max().unwrap();
+                for &i in draw{costs[arm][0]+=samples[i].tokens.len()-1;
+                    costs[arm][1]+=samples[i].tokens.len()-samples[i].response_start;
+                    costs[arm][2]+=length-(samples[i].tokens.len()-1);}
+            }
+            assert_eq!(costs[0],costs[1]);assert!(costs[0][1]>0);
+            for &i in draw{assert_eq!(a[i].tokens,b[i].tokens);assert_eq!(a[i].response_start,b[i].response_start);}
+        }
+        let p=Progress{local:0,native:s.parent.clone(),physical:s.parent_hash.clone(),stop:None,evaluated:0,fit:false};
+        let(c,_)=load_arm(&s,0,&p,&Device::Cpu)?;let(w,_)=load_arm(&s,1,&p,&Device::Cpu)?;
+        let cs=c.manifest.training.as_ref().unwrap();let ws=w.manifest.training.as_ref().unwrap();
+        assert_eq!(cs.corpus_hash,full.manifest.train.sha256);assert_eq!(ws.corpus_hash,cs.corpus_hash);
+        assert_eq!(cs.validation_hash,full.manifest.validation.sha256);assert_eq!(ws.validation_hash,cs.validation_hash);
+        assert_eq!(cs.resume_binding,Some(bind(&s,0,cs,&tok)?));assert_eq!(ws.resume_binding,Some(bind(&s,1,ws,&tok)?));
+        assert_ne!(cs.resume_binding,ws.resume_binding);
+        println!("FIRST_FULL_BOTH C/W sample IDs, prompt/target framing, tape costs and native FULL hashes; optimizer0 backward0 generation0 teacher0 evidence={}",root.display());Ok(())
     }
     #[test]
     #[ignore="first-decision model-free actual dispatcher/RETURNED/cancel/UNKNOWN/I-O; zero model calls"]

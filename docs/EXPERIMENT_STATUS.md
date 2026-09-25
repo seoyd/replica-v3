@@ -2,6 +2,43 @@
 
 ## 2026-09-25 Cost-bounded first decision — P0/P1
 
+The corpus-selection repair is implemented in `event_inputs`: first-decision
+C/W both use FULL index0, while the historical F/I arm selection is unchanged.
+The new model-free `first_decision_full_corpus_both_arms` test passed1/1 with
+zero optimizer/backward/generation/teacher calls, checking sample IDs, token
+framing, tape costs and actual native corpus/binding metadata. Its log
+`full-both-001.log` SHA256 is
+82d90ccddf03791b2258aea7687151cad22eb652405f8629626aab159b0f1ea5.
+The future TINY test also asserts identical C/W rows/input/target/padding;
+it was NOT rerun after the16-call cap. Independent A acceptance remains
+blocked pending an explicit allowance for eight more TINY optimizer/backward
+calls. SMALL training, baseline generation and teacher remain0.
+
+Current selected preparation: `artifacts/first-decision-20260925-study-v7`.
+Plan SHA256490595bd72a88b17d489aa14d8107d0b576c976bbeee82e2f0e366c97882503c,
+policyf2b8a6929971ba7764501b20ff674afda2a8a485c1343724c551b9ba75d80d69,
+release executable SHA256
+e0ef2170a3604c408f41929ce4f727ac89c4b469a526f42c3ac6d2bb7a08e7c0.
+Scoped bytes117896162 include nine new roots and four task executables. Eight
+reserved natives project1031356898 of1073741824bytes; shared build growth/peak
+remain UNKNOWN. All six earlier preparations and the independent failures are
+preserved and unadmitted. Current independent report is
+`docs/FIRST_DECISION_REVIEW_2026-09-25.md`; it records actual test execution
+separately from failed input-contract acceptance, not a training authorization.
+
+Independent A executed its reserved8 Metal TINY optimizer/backward calls on
+ff4f8e90726959732cfbace1533b0b93a4d698ef. The process test exited0, but subsequent
+metadata validation found that W sampled/bound the old ID_ONLY corpus while
+the real first-decision training caller uses FULL for both arms. Two-update
+target counts were C234 versus W178, with input counts differing by64. Therefore
+the process execution is not acceptance of the intended C/W input contract:
+overall A is FAIL and no admission receipt is issued. Total direct/independent
+TINY optimizer/backward is16/16, fully consumed. SMALL/generation/teacher remain0.
+The corpus-selection correction and model-free invariance checks are authorized;
+another actual TINY run requires an explicit budget amendment. Existing wrong-
+input test logs and natives remain preserved and cannot be called fixed-source
+evidence. No SMALL learning may begin without independent A acceptance.
+
 The final corrected preparation is `artifacts/first-decision-20260925-study-v6`.
 The128 cost-final receipt now references the unchanged regular decision hash;
 matched128/128 and unequal127/128 actual fresh-process resumes passed with
