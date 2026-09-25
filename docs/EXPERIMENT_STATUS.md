@@ -1,5 +1,28 @@
 # 진단 및 구현 상태
 
+## 2026-09-25 Commit Kernel C — in-memory concurrency execution PASS
+
+The user-supplied E/F bundle resolves the previously pending concurrency input.
+The new standalone F profile leaves frozen A/B semantics and all model/product
+paths unchanged. Direct tests5/5, checked-boundary unit1/1, compiled semantic
+mutants11/11 detected, and narrow A regression12/12 passed. Final32-worker run:
+8192 proposal attempts,512 controls,8548 actual transitions,725 commits,
+replay mismatch0, duplicate effect0, same-nonce multiple commit0.
+Seven barrier scenarios each ran128 rounds. Queue caps32/64/64 and service
+65/25/10 were verified through the actual authority. Details, hashes, preserved
+failures and commands: `COMMIT_KERNEL_CONCURRENCY_2026-09-25.md`.
+
+A shared mutant target initially overwrote the normal test executable, producing
+three final regression failures. Original source was intact. Mutant targets are
+now isolated; the final normal executable hash matches the earlier passing
+binary. Both failed logs and the wrong executable are preserved.
+
+C is in-memory only; B's separate durability gate is not a combined C crash
+guarantee. D/E and product-memory integration remain untested. GRU/TR++ mixing
+is prohibited; neither model is modified or invoked. Generation, teacher,
+optimizer and backward calls are0. Protected11264 and historical failures stay
+unchanged. No model quality/Goal1 acceptance follows from these tests.
+
 ## 2026-09-25 Core readiness and runtime handoff — current boundary
 
 Starting report HEADbc97b1763a7e65ba91203114bd092bf208809945 has no product,

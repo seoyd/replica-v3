@@ -1,10 +1,8 @@
 //! Small semantic mutation gate. The real source and frozen fixture are read-only.
-//! One scratch crate and shared build target are reused sequentially.
+//! One scratch crate and its isolated build target are reused sequentially.
 use std::{fs, path::PathBuf, process::Command};
 
-#[test]
-#[ignore = "explicit scratch path required; compiles eleven semantic guard mutants"]
-fn guards_are_killed_by_frozen_vectors() {
+fn prepare_scratch() -> (PathBuf, PathBuf) {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let scratch = PathBuf::from(
         std::env::var_os("R3_KERNEL_MUTATION_ROOT").expect("explicit new scratch root"),
@@ -17,6 +15,8 @@ fn guards_are_killed_by_frozen_vectors() {
         "src/vectors.rs",
         "src/main.rs",
         "src/durable.rs",
+        "src/kernel.rs",
+        "src/concurrency.rs",
     ] {
         fs::copy(root.join(path), scratch.join(path)).unwrap();
     }
@@ -29,6 +29,13 @@ fn guards_are_killed_by_frozen_vectors() {
             &serde_json::to_string(&repo.join("vendor/candle-core-0.11.0")).unwrap(),
         );
     fs::write(scratch.join("Cargo.toml"), manifest).unwrap();
+    (root, scratch)
+}
+
+#[test]
+#[ignore = "explicit scratch path required; compiles eleven semantic guard mutants"]
+fn guards_are_killed_by_frozen_vectors() {
+    let (root, scratch) = prepare_scratch();
     let source = fs::read_to_string(root.join("src/kernel.rs")).unwrap();
     let fixture = root.join("tests/data/commit_kernel_reference_vectors_v1_2B.json");
     let mutations = [
@@ -126,6 +133,134 @@ fn guards_are_killed_by_frozen_vectors() {
     fs::write(scratch.join("summary.txt"), summary).unwrap();
     assert_eq!(
         fs::read_to_string(root.join("src/kernel.rs")).unwrap(),
+        source
+    );
+}
+
+#[test]
+#[ignore = "explicit scratch root; C guard mutants must execute and fail real tests"]
+fn concurrency_guards_are_killed() {
+    let (root, scratch) = prepare_scratch();
+    fs::create_dir(scratch.join("tests")).unwrap();
+    fs::copy(
+        root.join("tests/concurrency.rs"),
+        scratch.join("tests/concurrency.rs"),
+    )
+    .unwrap();
+    let source = fs::read_to_string(root.join("src/concurrency.rs")).unwrap();
+    let boundary = "commit_time_invalidation_and_replay_preserve_original_guards";
+    let preservation = "preservation_guards_and_real_queue_boundaries";
+    let races = "seven_barrier_races_use_the_actual_authority";
+    let mutations = [
+        (
+            "effect_digest",
+            "p.reviewed_effect_digest != digest",
+            "false",
+            preservation,
+        ),
+        (
+            "capability_registry",
+            "!self.capabilities.contains(&p.capability_id)",
+            "false",
+            preservation,
+        ),
+        ("parent_active", "!s.parent_active", "false", boundary),
+        (
+            "parent_generation",
+            "p.expected.parent_generation != s.parent_generation",
+            "false",
+            boundary,
+        ),
+        (
+            "policy",
+            "p.expected.policy_epoch != s.policy_epoch",
+            "false",
+            boundary,
+        ),
+        (
+            "capability_epoch",
+            "p.expected.capability_epoch != s.capability_epoch",
+            "false",
+            boundary,
+        ),
+        (
+            "object",
+            "p.expected.object_version != s.object_version",
+            "false",
+            boundary,
+        ),
+        (
+            "predicate",
+            "p.expected.predicate_version != s.predicate_version",
+            "false",
+            races,
+        ),
+        (
+            "operation_mismatch",
+            "entry.effect_digest != digest",
+            "false",
+            preservation,
+        ),
+        (
+            "nonce",
+            "self.nonces.contains_key(&p.nonce)",
+            "false",
+            races,
+        ),
+        (
+            "operation_dedup",
+            "self.ledger.get(&p.operation_id)",
+            "self.ledger.get(&u64::MAX)",
+            boundary,
+        ),
+    ];
+    let mut summary = String::new();
+    for (name, from, to, test) in mutations {
+        let count = source.matches(from).count();
+        assert!(count > 0, "mutation {name} exists");
+        fs::write(scratch.join("src/concurrency.rs"), source.replace(from, to)).unwrap();
+        fs::write(
+            scratch.join(format!("{name}.mutation.txt")),
+            format!("count={count}\nFROM {from}\nTO {to}\n"),
+        )
+        .unwrap();
+        let out = Command::new(env!("CARGO"))
+            .current_dir(&scratch)
+            .env("CARGO_INCREMENTAL", "0")
+            // Same package/target names can overwrite the real test executable in
+            // a shared target while Cargo retains its original freshness stamp.
+            .env("CARGO_TARGET_DIR", scratch.join("target"))
+            .env("CARGO_PROFILE_DEV_DEBUG", "0")
+            .env("CARGO_PROFILE_TEST_DEBUG", "0")
+            .env_remove("R3_KERNEL_C_EVIDENCE")
+            .args([
+                "test",
+                "--locked",
+                "--offline",
+                "--test",
+                "concurrency",
+                "--",
+                "--exact",
+                test,
+            ])
+            .output()
+            .unwrap();
+        fs::write(scratch.join(format!("{name}.stdout")), &out.stdout).unwrap();
+        fs::write(scratch.join(format!("{name}.stderr")), &out.stderr).unwrap();
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        assert_eq!(out.status.code(), Some(101), "{name}");
+        assert!(
+            stdout.contains(&format!("test {test} ... FAILED")),
+            "compiled semantic failure required: {name}"
+        );
+        assert!(stdout.contains("test result: FAILED"), "{name}");
+        summary.push_str(&format!(
+            "{name}: compiled_semantic_failure=true exit=101 test={test}\n"
+        ));
+    }
+    fs::write(scratch.join("summary.txt"), summary).unwrap();
+    assert_eq!(
+        fs::read_to_string(root.join("src/concurrency.rs")).unwrap(),
         source
     );
 }

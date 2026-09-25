@@ -1,6 +1,6 @@
 # Diagnostic repair and bounded quality recovery
 
-## Current boundary: Commit Kernel concurrency protocol inputs
+## Current boundary: Commit Kernel C and later correction inputs
 
 The narrow fixture repair and independent changed-boundary review are closed.
 The supplied Commit Kernel candidate has passed v1.3A exact vectors, direct
@@ -8,14 +8,19 @@ negatives and semantic mutations on Rust. v1.3B has passed R3BIN disk-only
 restart and seven actual SIGKILL boundaries. Product/model integration is not
 enabled. See `COMMIT_KERNEL_RUST_EXECUTION_2026-09-25.md` for scoped evidence.
 
-Before implementing the later concurrency protocol, obtain the original
-v1.2E/F source/vectors or an explicit rule for advancing object/predicate versions
-on commits. The supplied v1.2B `two_valid_operations` accepts two operations
-against the same version and leaves both versions unchanged; it is not a
-write-skew/same-object conflict protocol. Do not silently redefine these frozen
-semantics or claim C/D/E from serialized process tests. Exact inputs have been
-requested. No new model learning or product-memory routing is authorized by a
-successful core/process test alone.
+The supplied E/F bundle now closes the version-rule input gap. A separate F
+in-memory authority passes the C direct/concurrent/mutation gates; frozen B
+`two_valid_operations` still accepts the same-version operations unchanged.
+See `COMMIT_KERNEL_CONCURRENCY_2026-09-25.md` for actual Rust counts and the
+reconstructed-E/preserved-F provenance distinction. C concurrency plus B disk
+restart does not establish their combined durability. Original K/L source and
+vectors have been requested for the later correction/dependency port; do not
+invent their expected states or reuse Go results as Rust evidence.
+
+GRU and TR++ must remain separate: no mixed architecture, shared learned state,
+weight transplant, training or inference routing. This runtime crate introduces
+neither GRU nor a model integration. No new model learning or product-memory
+routing is authorized by a successful core/process test alone.
 
 ## Closed preparation: fixture readiness and supplied Commit Kernel candidate
 

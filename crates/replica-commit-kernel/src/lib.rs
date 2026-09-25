@@ -1,3 +1,4 @@
+pub mod concurrency;
 pub mod durable;
 pub mod kernel;
 pub mod vectors;

@@ -1,4 +1,4 @@
-# Replica Commit Kernel — Rust v1.3A candidate
+# Replica Commit Kernel — Rust A/B/C gates
 
 The supplied archive was uncompiled in its research environment. On the Replica
 Mac, the original candidate passed all32 frozen vectors in debug and release.
@@ -11,9 +11,9 @@ concurrency, natural-language quality or product integration acceptance.
 ## Scope
 
 v1.3A ports the frozen **v1.2B 32-vector core commit boundary**. v1.3B adds
-the R3BIN single-writer disk/process boundary described below. Concurrency,
-correction and external-effect contracts in `docs/FROZEN_CONTRACT_B_TO_M.md`
-remain future Rust gates.
+the R3BIN single-writer disk/process boundary described below. v1.3C adds a
+separate in-memory F concurrency profile. Correction and external-effect
+contracts in `docs/FROZEN_CONTRACT_B_TO_M.md` remain future Rust gates.
 
 ## First target-machine gate
 
@@ -60,6 +60,33 @@ For mutations, set `R3_KERNEL_MUTATION_ROOT` to a new scratch directory and run
 `cargo test --locked --offline --test mutations -- --ignored --exact guards_are_killed_by_frozen_vectors`.
 The test preserves the original source/fixture and requires a compiled CLI exit1
 with actual failed vectors; a compiler failure is not a detected mutant.
+
+## C: separate concurrency profile
+
+`concurrency::Authority` serializes commit-time validation and mutation, with
+bounded Critical/High/Low queues (32/64/64), a 65/25/10 service cycle, empty-share
+borrowing and identical pending-proposal coalescing. The host pumps
+`service_one`; a pending ticket is not a durable receipt. Proposal priority has
+a High floor; controls are a separate trusted-host API, not user authority.
+
+The supplied F protocol advances object version on DELTA and predicate version
+on conditional A_OFF/B_OFF. It is separate from the frozen A/B protocol, whose
+32-vector expectations and version semantics remain unchanged. Rust retains
+checked arithmetic, trusted capability membership and reviewed-effect binding.
+E's reconstructed weak reference and F's preserved source are distinct models;
+matching safety goals does not imply identical state hashes or workloads.
+
+Run `cargo test --locked --offline --test concurrency -- --test-threads=1`.
+Set `R3_KERNEL_C_EVIDENCE` to a new directory to preserve actual R3BIN execution
+traces. For C mutations, use a new `R3_KERNEL_MUTATION_ROOT` and
+`cargo test --locked --offline --test mutations concurrency_guards_are_killed -- --exact --ignored`.
+Mutants use their own target directory: sharing same-name package outputs can
+overwrite a normal executable without invalidating its Cargo freshness record.
+
+C has no disk-restore adapter yet; B process durability and C concurrency PASS
+are not combined concurrent durability. No model/generation/training integration
+is enabled. GRU must remain separate from TR++ weights, state, training and
+inference; this crate adds neither core nor a bridge between them.
 
 ## Frozen bundle identity
 

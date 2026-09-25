@@ -1,0 +1,78 @@
+{
+  "format": "replica-commit-kernel-concurrency-vectors",
+  "scenarios": [
+    {
+      "hardened": {
+        "bad": 0,
+        "total": 20
+      },
+      "name": "write_skew",
+      "required_guard": "commit-time predicate/invariant revalidation",
+      "weak": {
+        "bad": 18,
+        "total": 20
+      }
+    },
+    {
+      "hardened": {
+        "bad": 0,
+        "total": 4
+      },
+      "name": "phantom_insert",
+      "required_guard": "commit-time predicate/range dependency validation",
+      "weak": {
+        "bad": 2,
+        "total": 4
+      }
+    },
+    {
+      "hardened": {
+        "bad": 0,
+        "total": 6
+      },
+      "name": "same_operation_concurrent_retry",
+      "required_guard": "atomic operation-id dedup at commit",
+      "weak": {
+        "bad": 4,
+        "total": 6
+      }
+    },
+    {
+      "hardened": {
+        "bad": 0,
+        "total": 6
+      },
+      "name": "different_operations_same_nonce",
+      "required_guard": "atomic nonce exclusivity at commit",
+      "weak": {
+        "bad": 4,
+        "total": 6
+      }
+    },
+    {
+      "hardened": {
+        "bad": 0,
+        "total": 6
+      },
+      "name": "same_object_concurrent_write",
+      "required_guard": "commit-time object-version validation",
+      "weak": {
+        "bad": 4,
+        "total": 6
+      }
+    },
+    {
+      "hardened": {
+        "bad": 0,
+        "total": 12
+      },
+      "name": "cancel_revoke_race",
+      "required_guard": "commit-time parent/capability recheck",
+      "weak": {
+        "bad": 4,
+        "total": 12
+      }
+    }
+  ],
+  "version": "1.2E"
+}
