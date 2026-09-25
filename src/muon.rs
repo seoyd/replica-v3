@@ -3050,11 +3050,37 @@ impl Optimizer {
 
 #[cfg(all(test,feature="metal"))]
 mod tests {
+    fn value_test_plan(root:&Path)->Result<ValueReading>{
+        // The archived plan binds the original product source. A test-only edit
+        // changes sources(), so inspect the canonical plan and its references.
+        let p:ValueReading=read_confirmed(&root.join("value-reading-plan-v2.r3b"))?;
+        if p.contract!=VALUE_READING||p.root!=root.canonicalize()?||p.panels.len()!=6
+            ||p.panels.iter().map(|x|x.0.as_str()).collect::<Vec<_>>()!=["O-train","O-dev","U-train","U-dev","S-train","S-dev"]
+            ||p.panels.iter().any(|x|x.1.len()!=48||x.2.len()!=48)
+            ||p.predecessor_plan_hash!=file_hash(&root.join("value-reading-plan.r3b"))?
+            ||p.revision_authority!="user-approved-20260925-160MiB-immutable-scope"
+            ||p.generation_cap!=216||p.token_cap!=6912||p.active_cap!=900.||p.segment_cap!=300.||p.bytes_cap!=160*1024*1024
+            ||file_hash(&p.evaluation.join("eval-only-plan.r3b"))?!=p.evaluation_hash
+            ||file_hash(&p.original.join("plan.r3b"))?!=p.original_hash
+            ||file_hash(&p.native)?!=p.physical||file_hash(&p.tokenizer)?!=p.tokenizer_hash
+            ||file_hash(&p.executable)?!=p.executable_hash||file_hash(&p.prior_executable)?!=p.prior_executable_hash
+            ||file_hash(&p.test_executable)?!=p.test_executable_hash
+            ||(0..2).any(|i|file_hash(&p.original_raw[i]).ok()!=Some(p.original_raw_hash[i].clone())){
+            return Err(bad("value reading test plan/reference changed"));
+        }
+        Ok(p)
+    }
+    fn value_fixture_files(root:&Path)->Result<BTreeMap<String,String>>{
+        std::fs::read_dir(root)?.map(|entry|{
+            let path=entry?.path();
+            Ok((path.file_name().unwrap().to_string_lossy().into_owned(),file_hash(&path)?))
+        }).collect()
+    }
     #[test]
     #[ignore="prepared 288-case manifest, synthetic six-panel report and B16 preflight; zero model calls"]
     fn value_reading_full_report_preflight()->Result<()> {
         let original=PathBuf::from(std::env::var("R3_VALUE_READING_ROOT").map_err(|_|bad("explicit prepared value reading root"))?);
-        let mut p=value_load(&original)?;
+        let mut p=value_test_plan(&original)?;
         let root=std::env::temp_dir().join(format!("value-reading-20260925-preflight-{}",std::process::id()));
         std::fs::create_dir(&root)?;p.root=root.canonicalize()?;
         publish_confirmed(&p.root.join("review-a.r3b"),&binary::record!({"contract":VALUE_READING,"policy":digest(&p)?,"source":p.source,"verdict":"PASS","fixture":true}))?;
@@ -3092,8 +3118,28 @@ mod tests {
         let report=value_report(&p)?;assert_eq!(report["scores"].as_object().unwrap().len(),6);
         assert_eq!(report["scores"]["S-dev"]["total"],48);
         let(cases,expected)=value_review_cases(&p)?;assert_eq!(cases.len(),16);assert_eq!(expected.len(),16);
-        let before=std::fs::read_dir(&p.root)?.count();assert_eq!(report,value_report(&p)?);
-        assert_eq!(before,std::fs::read_dir(&p.root)?.count());
+        let before=value_fixture_files(&p.root)?;assert_eq!(report,value_report(&p)?);
+        assert_eq!(before,value_fixture_files(&p.root)?);
+        let mut wrong_model=p.clone();wrong_model.model="wrong-model".into();
+        assert!(value_report(&wrong_model).unwrap_err().to_string().contains("RETURNED count/binding"));
+        assert_eq!(report,value_report(&p)?);
+        let resolution=p.root.join("value-U-train-generation-0000-000-resolved.r3b");
+        let resolution_bytes=std::fs::read(&resolution)?;
+        std::fs::remove_file(&resolution)?;
+        assert!(value_report(&p).unwrap_err().to_string().contains("usage UNKNOWN"));
+        std::fs::write(&resolution,&resolution_bytes)?;
+        assert_eq!(report,value_report(&p)?);
+        let segment=p.root.join("s-dev-segment-000-finished.r3b");
+        let marker=p.root.join("s-dev-finished.r3b");
+        let segment_bytes=std::fs::read(&segment)?;let marker_bytes=std::fs::read(&marker)?;
+        let mut unknown:binary::Value=read_confirmed(&segment)?;
+        unknown["control"]["observed_conditions"]=binary::record!(["UNKNOWN"]);
+        std::fs::remove_file(&segment)?;std::fs::remove_file(&marker)?;
+        publish_confirmed(&segment,&unknown)?;publish_confirmed(&marker,&unknown)?;
+        assert!(value_report(&p).unwrap_err().to_string().contains("segment UNKNOWN/cancel"));
+        std::fs::write(&segment,&segment_bytes)?;std::fs::write(&marker,&marker_bytes)?;
+        assert_eq!(report,value_report(&p)?);
+        assert_eq!(before,value_fixture_files(&p.root)?);
         std::fs::remove_dir_all(&p.root)?;Ok(())
     }
     #[test]
@@ -3165,23 +3211,23 @@ mod tests {
             }
             let rows=value_rows(&p,j,true)?;let summary=value_score(&p,j,&rows)?;
             assert_eq!(summary["total"],2);assert!(summary["full"].as_u64().unwrap()<2);
+            if j==2{
+                let mut malformed_outside=rows.clone();
+                let text="[event:bad [event:87654321] tail";
+                assert!(!panel.1[1].request.evidence.items.iter().any(|x|x.event_id==87654321));
+                let ids=tok.encode(text.as_bytes())?;let mut raw=ids.clone();raw.push(EOS);
+                let r=&mut malformed_outside[1];
+                r["raw_tokens"]=binary::record!(raw);r["generation"]["tokens"]=binary::record!(ids);
+                r["generation"]["generated"]=binary::record!(raw.len());r["generation"]["finish"]=binary::record!("stop");
+                r["finish_reason"]=binary::record!("stop");r["generation_completed"]=binary::record!(true);
+                r["actual"]=binary::record!(text);r["error"]=binary::Value::Null;
+                r["decode_error"]=binary::Value::Null;r["error_class"]=binary::Value::Null;
+                r["generation_error"]=binary::Value::Null;r["command_stop"]=binary::Value::Null;
+                r["exact_match"]=binary::record!(false);
+                let scored=value_score(&p,j,&malformed_outside)?;
+                assert_eq!(scored["malformed"],2);assert_eq!(scored["outside"],1);
+            }
         }
-        for label in ["parity","u-train","u-dev","s-train","s-dev"]{publish_confirmed(&root.join(format!("{label}-finished.r3b")),
-            &binary::record!({"success":true,"control":{"observed_conditions":[],"elapsed_seconds":0.0,"generation_calls":0,"teacher_calls":0}}))?;}
-        let a=value_report(&p)?;let before=std::fs::read_dir(&root)?.count();let b=value_report(&p)?;
-        assert_eq!(a,b);assert_eq!(before,std::fs::read_dir(&root)?.count());
-        assert_eq!(a["scores"]["U-train"]["total"],2);
-        assert_eq!(a["scores"]["U-train"]["malformed"].as_u64().unwrap()>=1,true);
-        assert!(identifiable::binding::citation::individually_valid_ids("[event:bad [event:87654321] tail")
-            .contains(&87654321));
-        let mut altered=p.clone();altered.model="wrong-model".into();
-        assert!(value_rows(&altered,2,true).is_err());
-        let resolution=root.join("value-U-train-generation-0000-000-resolved.r3b");
-        std::fs::remove_file(&resolution)?;assert!(value_rows(&p,2,true).is_err());
-        let mut unknown:binary::Value=read_confirmed(&root.join("s-dev-finished.r3b"))?;
-        unknown["control"]["observed_conditions"]=binary::record!(["UNKNOWN"]);
-        std::fs::remove_file(root.join("s-dev-finished.r3b"))?;publish_confirmed(&root.join("s-dev-finished.r3b"),&unknown)?;
-        assert!(value_report(&p).is_err());
         std::fs::remove_dir_all(root)?;
         Ok(())
     }

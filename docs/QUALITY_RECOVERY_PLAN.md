@@ -1,5 +1,37 @@
 # Diagnostic repair and bounded quality recovery
 
+## Active: fixture readiness and supplied Commit Kernel candidate
+
+Close the stale value-reading regression without weakening production checks:
+the small fixture covers only reader/scorer behavior; full report coverage uses
+the required balanced parity8, prepared/resolved rows, segment history and usage.
+Start every negative from a restored valid fixture and check its intended error;
+successful report/readback must leave file names and contents unchanged. Run only
+the exact affected tests and independent changed-boundary review. Model,
+generation, teacher, optimizer and backward calls remain zero.
+
+Summarize existing product/common-path support separately from experiments and
+quality acceptance. Preserve TR++, accepted11264, native/Adam/raw/failures and
+user changes; no cleanup, model/corpus/vendor copies or storage redesign.
+
+The user's subsequent runtime handoff makes the next candidate the existing
+Commit Kernel v1.3A, not a substitute GRU or a newly designed kernel. Its actual
+Rust source and frozen32-vector file are required before execution. Expected
+vector SHA256:cd5f0533762fe68da3c3da01410c87a240a224db33350c52f3d4c339984c0323.
+Verify actual file bytes first; mismatches stop without editing expected results.
+Keep this candidate isolated from model/inference/training paths. Existing lock
+is preserved; locked/offline debug and release vector tests, direct negative
+tests and semantic guard mutations must pass before any durable/concurrent or
+memory integration gate. Earlier synthetic/Go results are not Rust acceptance.
+The canonical product memory remains binary; a frozen reference JSON fixture
+would be test input, not authorization for a JSON persistent store.
+
+Without the supplied candidate/vector, report missing inputs and local Rust
+execution NOT_TESTED; do not invent their schema, names, expected states or PASS.
+No GRU/core comparison or new quality training is opened by this preparation.
+New scope and measured shared-build growth each have a2GiB planning cap; report
+unknown peak/unmeasured costs separately. Only related verified changes publish.
+
 ## Closed: value-reading isolation
 
 The input diagnosis completed with repaired A and independent B PASS on frozen

@@ -1,5 +1,83 @@
 # 진단 및 구현 상태
 
+## 2026-09-25 Core readiness and runtime handoff — current boundary
+
+Starting report HEADbc97b1763a7e65ba91203114bd092bf208809945 has no product,
+test, Cargo or vendor difference from reviewed sourcec173e13cc39a6c6bdc3dd2fa1cff7633d54b9bc1.
+The user-owned untracked `.DS_Store` is preserved. Work is restricted to the stale
+test fixture and this evidence/application summary; no model call or learning
+has been opened. Earlier accepted value-reading A/B and all original failures stay closed.
+
+R0 fixture repair is complete. Only `src/muon.rs` test code changed. The small
+two-row fixture now tests the reader/scorer, including overlapping malformed and
+valid outside-ID counts. The full fixture uses six48-row panels, parity8,
+192 U/S resolutions and200 accounted synthetic calls. Repeated report/readback
+preserves names and content hashes. Wrong model, missing resolution and UNKNOWN
+are tested independently with restored baselines and specific errors.
+The two exact ignored tests each passed1/1; logs are under
+`artifacts/core-readiness-20260925/r0-fixture/`. New test executable SHA256:
+e3029840796cfbe69293daf945ba87c8136ffa27a5243db2df5757deba46686e.
+The original referenced executable was restored at its original path with hash
+aff1a2a21dd5bab8f534f5e790b54570c162d1c9284dec5a46319fdaf7ed6c4a.
+An independent Sol/Medium reviewer accepted this narrow test-only diff and logs;
+no repeated old A/B or model calls. Shared debug build growth15700KiB and R0
+evidence125912KiB were measured; peak transient allocation remains unknown.
+
+The subsequent runtime handoff changes the next work from GRU comparison to the
+existing Commit Kernel v1.3A. Its synthetic and Go/process history is not local
+Rust evidence. The user then supplied `replica_commit_kernel_rust_v1_3A.tar.gz`;
+archive SHA256 e2ea033cd8a1ee19b9a596062bb978e9138087b18ceb34e16ef085df09d7f9f8.
+Scoped path/type checks found only regular files/directories. The original
+archive remains unchanged; extraction/build evidence is isolated under
+`artifacts/commit-kernel-20260925/`. No global inventory was performed.
+
+GRU_SPEC=NOT_PROVIDED; CORE_COMPARISON=NOT_RUN_PREREQUISITE.
+COMMIT_KERNEL_SOURCE=PROVIDED; ORIGINAL_VECTOR_EXECUTION=PASS.
+Expected frozen vector SHA256 is
+cd5f0533762fe68da3c3da01410c87a240a224db33350c52f3d4c339984c0323;
+the actual fixture hash matches. The unmodified source compiled and executed
+32/32 vectors in debug and release, exit0; its two integration tests passed in
+both profiles. Zero-test library/doc targets are not counted as tests. Direct
+negative and mutation checks remain pending, so Gate A is not yet accepted.
+No A-to-E integration or
+canonical-memory routing is claimed. The handoff's historical BLOCKED_TOOLCHAIN
+describes its separate research environment, not this Mac.
+
+Local toolchain observed: rustc1.98.1 (48a229ceaefd4985c50990b14116b6d856af0985,
+LLVM22.1.8), cargo1.98.1 (797e8a9bc), targetaarch64-apple-darwin, macOS27.0
+build26A428. Existing Cargo.lock SHA256 is
+a911931fc3baca7367a34c129673640661a8fc3d41458d49e4eb744ae5454154;
+it is not regenerated. Starting Git tree isb4a81c6b67d9c40f0c65816fd98d6585931a3fbf.
+Before the scoped test build, volume available20082372KiB and allocated
+`target/debug`10648564KiB were measured. A single test executable and small
+fixtures are conservatively planned within512MiB additional free space; the new
+scope/build-growth caps are2GiB each. No existing data is deleted or copied.
+
+### Application versus experimental evidence
+
+| Component | Product/common path | Experimental implementation / evidence | Unimplemented or not accepted |
+| --- | --- | --- | --- |
+| TR++ | Native decoder in `neural/transformer.rs`:6 layers, Q8/KV2 GQA, pre-RMS/QK norm, RoPE, SwiGLU, tied embeddings; SMALL local5/global1 | Existing bounded studies reuse this implementation | No universal QA/intelligence or Goal1 acceptance |
+| Metal F32 | `neural::Backend`, runtime identity and native worker/cache are connected; explicit Metal request rejects CPU fallback | Existing reduction/runtime A/B accepted, reused without rerun | CPU remains default; no automatic FP16/BF16/FP4 GPU path |
+| ANSWER CE | Training response masks include EOS, exclude prompt/pad, then average per-answer means; native objective binds resume | Retained in accepted narrow citation lineage | Not proof that wide QA is solved |
+| REBIND4352 /11264 | Saved native artifacts are protected; not automatically product defaults | Scalar binding and fixed two-record value+citation scopes accepted | Full S4/S5/S6 and Goal1 remain unaccepted |
+| Muon | Native optimizer identity/state supports its explicit protocol | Hidden-matrix Muon plus AdamW experiment, A512/M512 and completed diagnosis preserved | Not adopted as quality-default optimizer |
+| q/v LoRA | Optional rank8 adapter projection and base-reference/delta loader exist | Frozen-base, active-adapter128 study preserved; delta includes adapter/Adam state | Quality failed; base immutability did not preserve active answers |
+| First-target2 | Separate normalized training objective and native policy; ordinary ANSWER remains weight1 | C/W256 comparison and eval-only completion preserved | W weight2 not adopted |
+| ID_ONLY | Explicit experimental request/target/scorer in training executable | F/I64 endpoints preserved; request-only labels stay outside inference | Not a replacement for FULL answers or an adopted quality solution |
+| FP4 reference | No automatic product/core substitution | `precision_probe::decode` verifies and loads original F32 parent/tokenizer, unpacks E2M1/B32/F32-scale, then constructs F32 CPU tensors | Not MXFP4/NVFP4, GPU FP4, lossless quantization, training or S6 acceptance |
+| Native storage | R3MODEL inference/resume distinction; R3CORP source, R3TOK train cache, R3ER/control and R3BIN rows | Existing format/readers reused | Inference-only export cannot resume without optimizer; no new format/DB engine |
+| Operating memory | `store.rs` still uses rusqlite; RPV3 payload/history and native archive are separate | Existing version/history behavior retained | SQLite has not been removed; no kernel integration is implied |
+
+FP4 historical artifact size6713446 bytes and its fixed256/256 output observation
+refer only to the protected11264 reference experiment already recorded below.
+Its F32 tensor payload38053632 bytes is not a full weights+Adam resume file.
+The current decoder still requires the original parent to validate weights,
+tokenizer/config and untouched tensors; it does not deliver a standalone current
+C/GRU model of that size. Those numbers are reused evidence, not new measurements.
+TR KV/recurrent scratch, durable user memory, optimizer state and inference
+weights have different roles; zero GRU KV would not imply zero total memory.
+
 ## 2026-09-25 Value-reading isolation — closed diagnostic
 
 **DIAGNOSTIC_EXECUTION/A/B = PASS; QUALITY_APPROVED=false.** Frozen source is
