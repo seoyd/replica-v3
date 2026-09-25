@@ -1,6 +1,6 @@
 # 진단 및 구현 상태
 
-## 2026-09-26 TR++ binding recovery — prepared and diagnosed, quality pending
+## 2026-09-26 TR++ binding recovery — partial same-256 comparison
 
 The separate parent-bound C/T study preserves the completed fresh TR++3072
 native (`f58e6564134fccf7926df1f2d077396fe08aac67cf84ad8bbb88324872a7440f`),
@@ -19,8 +19,59 @@ This supports testing the prespecified loss; it does not prove the failure's
 cause or any quality improvement. Four TINY optimizer updates were used for
 continuous2 versus restarted1+1 parity. Their time is conservatively charged
 20 seconds, and an earlier runtime-rejected diagnosis is charged 90 seconds.
-The successful diagnostic took 145.241 seconds. C/T SMALL updates and new
-greedy generations remain0 at this stage. Product routing is unchanged.
+The successful diagnostic took 145.241 seconds. Product routing is unchanged.
+
+Frozen source commit `5fddc20920e7e2d67033b445e99755b0e8c83909`,
+executor SHA256 `fc2c422a70419362d5747de66cf43bd31bd3a91d0e8f9357f6a47e25991e4423`,
+and native plan SHA256 `d4f48c84d658906fc44290b0ebbdc75b5aad9f6b309832a6b5c833d204a67649`
+were used for both arms. Direct binding tests4/4, the four TINY optimizer
+updates and independent A passed before SMALL training. C and T each completed
+256 new updates and 256 attempted backwards, ending at model/Adam step3328.
+Each consumed378496 input and29952 supervised target tokens. Their final
+native SHA256 values are respectively
+`0c3fd8b2f63b1c36fb58e2e0d124fdec2e037bb48e92620f211cfe35b842fb75`
+and `3dcc6317d80d929b47fd93389adf8cbdf3f2f0fc23b54dda193b36e41dcffde1`.
+The endpoint evaluations completed832/832 normal greedy rows per arm.
+
+| Same 256 endpoint | C FULL | T FULL | C/T value | C/T exact support | C/T outside ID | C/T ALL4 |
+|---|---:|---:|---:|---:|---:|---:|
+| word192 |36|37|96 / 95|68 / 73|71 / 78|0 / 0|
+| renamed192 |30|28|93 / 94|69 / 57|76 / 81|0 / 0|
+| representative train192 |60|61|97 / 95|116 / 122|35 / 37|0 / 0|
+| value64 |34|34|—|—|—|0 / 0|
+| citation64 |8|3|35 / 34|15 / 7|36 / 48|0 / 0|
+| S1Q1-64 |8|5|33 / 33|11 / 10|45 / 42|0 / 0|
+| old QA64 |0|0|—|—|15 / 5|—|
+
+On paired word rows T gained16 and lost15; on renamed it gained18 and lost20.
+Both word and renamed ALL4 remain0/48. The 256 report is SHA256
+`294e238df71330ee2e18e200606951a3d72857ad9c95d8b943401aebdd9e7535`.
+An independent read-only recount of all1664 saved raw rows verified the
+same inputs, answers, paired counts, scores, native hashes and usage; its
+scratch receipt SHA256 is
+`d7d45a4abb0679cdddc6060a69089576ac531ddae3d3002a0d03ce1ba5872105`.
+This is a B256 raw recount, not the contracted same-512 B reproduction.
+
+New generations1664 produced30970 tokens. C/T training took397.188/415.639s;
+their evaluations took568.562/561.835s. Including charged TINY, failed
+diagnosis and successful diagnosis, cumulative owned model work was
+2198.447991s. Only201.552009s remained before the 2400s training cutoff,
+shorter than either observed 256-update training segment, so neither arm
+entered the next segment. The report measured463904421 logical artifact bytes
+against the 1GiB cap; the pre-run shared-target baseline was not recorded, so
+its net growth is UNKNOWN. No new teacher, optimizer or model call was made
+for the independent recount. The original parent and both 256 natives remain
+unchanged; no old failure or partial receipt was overwritten.
+
+FULL_STUDY_COMPLETE=false. The registered FOLLOWUP_SIGNAL requires same512,
+so the report records false at256 without treating it as a completed512
+quality decision. T's observed word +1/192, renamed -2/192 and increased
+outside IDs do not support a clear improvement at this checkpoint. Formal B
+reproduction, sealed confirmation, model quality acceptance and Goal1 are
+NOT_RUN/not accepted. No extra SMALL training is authorized by this closed
+budget. Evidence is retained under
+`artifacts/trpp-binding-recovery-20260926-prep-v5/` and the independent A
+scratch root; corpus, native weights/Adam and raw stay unpublished.
 
 ## 2026-09-26 Fresh TR++ / Full GRU — PARTIAL, no quality acceptance
 
