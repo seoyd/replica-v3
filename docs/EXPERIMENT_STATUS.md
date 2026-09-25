@@ -1,6 +1,48 @@
 # 진단 및 구현 상태
 
+## 2026-09-25 First-decision evaluation-only preparation
+
+The authorized successor is prepared at
+`artifacts/first-decision-20260925-eval-only-01`. It references both saved256
+natives and completed C raw without copying or changing the failed v7 study.
+No new optimizer, backward, TINY, generation or teacher calls occurred.
+The evaluator verifies the original trace/cost, forty immutable references and
+separate128/256 native identities; it carries prior active881.983181876s,
+generation1408 and teacher0. Planned aggregate completion is at most2240
+generation and208 teacher, within the original2560/208 caps.
+
+Direct read-only origin/replay and main→B-C→B-W usage fixtures each passed1/1
+(test bodies15.12s and15.09s). The latter keeps the immutable main report stable
+while cumulative B charges increase. First failed origin fixtures exposed an
+exact error-prefix mismatch and a128-versus256 model binding error; both were
+fixed before model calls. Duplicate B failure/mate selections were replaced by
+distinct complete groups with pre-call request bindings.
+
+Preparation plan SHA256
+80f95e40a72156a0fafc64f150a22785e922a1446a7ce84bb3aac9a48e71cb3b
+remains immutable. A pre-admission executor revision, SHA256
+3c3b8f5bf86cd1295b0f7744af364d9ef978243c9911ad93068decd1d2b0578d,
+binds corrected source and executable without creating a new budget or root.
+Evaluator SHA256 is d28bc14f169af3eb6cfdeee1a66a4651c90f666c7caa5f9e2e9a54e53e9582ae;
+src/muon.rs SHA256 is da031a5d268e6d2fa7b64b6c85e1431e8c22d0ac8d6f00063a85c811ffb37a5b.
+The original e0ef2170 executable is preserved at
+`artifacts/first-decision-20260925-evidence/replica-train-v7-frozen`
+(23158176bytes). Observed task scope832547003bytes includes task executables;
+unmeasured shared-build growth and peak remain UNKNOWN. Independent B boundary
+admission and new model observations are NOT_RUN; original execution FAIL and
+model-quality nonacceptance remain unchanged.
+
 ## 2026-09-25 Cost-bounded first decision — P2 learning complete, evaluation blocked
+
+The user has explicitly authorized completion in a separate evaluation-only
+scope, retaining the original failed terminal and completed C raw. Additional
+optimizer/TINY are0; original cumulative generation2560/teacher208/active7200s
+caps remain unchanged. Independent B's read-only precheck verified1408 existing
+generation resolutions (C1088/W320), teacher0 and both final native hashes.
+Only missing W final768 plus up to64 B generations and main192/B16 teacher
+examples are planned; they have NOT_RUN at this point. The same B session
+confirmed the sampler coverage correction without model calls. The successor
+must bind original usage and frozen evidence before executing any missing work.
 
 The teacher sampler has now been repaired without model calls. Actual train
 metadata has32 four-view binding groups per word-pair/ID version; a binding may

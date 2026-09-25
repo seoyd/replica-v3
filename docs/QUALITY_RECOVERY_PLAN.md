@@ -2,6 +2,15 @@
 
 ## Active: cost-bounded first-decision comparison
 
+Both arms completed256 commits/model18237/Adam3901, but original finalization
+failed before teacher and W final panels because of a metadata-selection error.
+The user explicitly authorized a separate evaluation-only scope after the
+sampler's zero-call correction: preserve the failed original run and C's
+completed raw, evaluate only the missing work and independent B. No optimizer
+or TINY calls remain authorized. Original cumulative generation2560, teacher208,
+active7200s and1GiB scope caps are retained, with all prior usage included.
+This is not permission to edit resume=false or report the original as successful.
+
 The new C/W study inherits model17981/Adam3645 from the preserved3069-update
 FULL-fit endpoint. Original failure and posthoc acceptance remain closed.
 C uses the existing ANSWER mean path. W changes only validated FULL-word
