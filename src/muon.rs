@@ -602,6 +602,8 @@ fn first_prepare(original:&Path,output:&Path)->Result<()> {
         terminal_hash:file_hash(&terminal_path)?,posthoc,posthoc_plan_hash,source_index:573,
         role_map:checkpoint::ResumeBinding::digest_bytes(&roles),backward_cap:264,trace_digest:digest(&trace)?});
     first_verify_inputs(&s)?;
+    let teacher_train=first_teacher_cases(&s,true)?;let teacher_dev=first_teacher_cases(&s,false)?;
+    first_review_teacher_positions(&teacher_train,&teacher_dev)?;
     publish_confirmed(&root.join("plan.r3b"),&s)?;
     publish_confirmed(&root.join("preparation.r3b"),&binary::record!({"contract":s.contract,"policy":digest(&s)?,"source":s.source,
         "parent":s.parent_hash,"weights":s.parent_content,"adam":s.parent_adam,"model_step":17981,"optimizer_step":3645,
@@ -658,30 +660,79 @@ fn first_baseline(s:&Study)->Result<()> {
 }
 fn first_teacher_cases(s:&Study,train:bool)->Result<Vec<Episode>>{
     let c=event_inputs(s,0)?;let(_,tm,dm)=inputs(s)?;
-    let(start,end,episodes,meta)=if train{(6144,7680,&c.train,&tm)}else{(3072,3264,&c.validation,&dm)};
-    let mut groups=BTreeMap::<String,BTreeMap<String,Vec<usize>>>::new();
-    for i in start..end{
-        let(pair,version)=meta[i].template.split_once("/id").ok_or_else(||bad("first-decision teacher word role"))?;
-        if !["0","1"].contains(&version){return Err(bad("first-decision teacher ID role"));}
-        groups.entry(pair.into()).or_default().entry(episodes[i].binding.clone()).or_default().push(i);
+    let(episodes,meta)=if train{(&c.train[6144..7680],&tm[6144..7680])}else{(&c.validation[3072..3264],&dm[3072..3264])};
+    Ok(first_teacher_indices(episodes,meta,train)?.into_iter().map(|i|episodes[i].clone()).collect())
+}
+fn first_teacher_indices(episodes:&[Episode],meta:&[Meta],train:bool)->Result<Vec<usize>>{
+    if episodes.len()!=if train{1536}else{192}||meta.len()!=episodes.len(){return Err(bad("first-decision teacher source count"));}
+    let pairs=["words0-1","words0-2","words0-3","words1-2","words1-3","words2-3"];
+    let mut groups=BTreeMap::<String,BTreeMap<usize,BTreeMap<String,[Option<usize>;4]>>>::new();let mut ids=BTreeSet::new();
+    for (i,(e,m)) in episodes.iter().zip(meta).enumerate(){
+        let(pair,id)=m.template.split_once("/id").ok_or_else(||bad("first-decision teacher word role"))?;
+        let version=match id{"0"=>0,"1" if train=>1,_=>return Err(bad("first-decision teacher ID role"))};
+        if !pairs.contains(&pair)||m.view>3||m.split!=if train{"train"}else{"dev"}
+            ||e.id!=m.id||e.family!=m.base||e.sequence!=m.base||e.id!=format!("{}/{}",m.base,m.view)
+            ||!e.binding.ends_with(&format!("/{pair}"))||!ids.insert(e.id.clone()){
+            return Err(bad("first-decision teacher metadata/duplicate ID/view"));
+        }
+        let slots=groups.entry(pair.into()).or_default().entry(version).or_default().entry(e.binding.clone()).or_insert([None;4]);
+        if slots[m.view].replace(i).is_some(){return Err(bad("first-decision teacher duplicate view"));}
     }
     if groups.len()!=6{return Err(bad("first-decision teacher six-pair coverage"));}
     let mut selected=vec![];
-    for group in groups.values(){
-        let rows=group.values().find(|rows|rows.len()==8).ok_or_else(||bad("first-decision teacher two-ID group"))?;
-        let mut rows=rows.clone();rows.sort();
-        let mut counts=[[0usize;4];2];
-        for &i in &rows{let version=meta[i].template.rsplit_once("/id").unwrap().1.parse::<usize>().map_err(|_|bad("first-decision teacher ID version"))?;
-            if version>1||meta[i].view>3{return Err(bad("first-decision teacher view/version"));}counts[version][meta[i].view]+=1;}
-        if counts!=[[1;4];2]{return Err(bad("first-decision teacher balanced ID/views"));}
-        selected.extend(rows);
+    for pair in pairs{
+        let versions=&groups[pair];
+        if versions.len()!=if train{2}else{1}{return Err(bad("first-decision teacher ID-version coverage"));}
+        for (version,bindings) in versions{
+            if *version>usize::from(train)||bindings.len()!=if train{32}else{8}
+                ||bindings.values().any(|slots|slots.iter().any(Option::is_none)){
+                return Err(bad("first-decision teacher binding four-view coverage"));
+            }
+        }
+        let mut chosen=BTreeSet::new();
+        for version in if train{vec![0,1]}else{vec![0,0]}{
+            let(binding,slots)=versions[&version].iter().find(|(binding,_)|!chosen.contains(*binding))
+                .ok_or_else(||bad("first-decision teacher two distinct bindings"))?;
+            chosen.insert(binding.clone());selected.extend(slots.iter().map(|v|v.unwrap()));
+        }
     }
-    if selected.len()!=48{return Err(bad("first-decision teacher48"));}
-    Ok(selected.into_iter().map(|i|episodes[i].clone()).collect())
+    if selected.len()!=48||selected.iter().collect::<BTreeSet<_>>().len()!=48{return Err(bad("first-decision teacher48 unique"));}
+    let mut words=BTreeSet::new();let mut versions=[0usize;2];
+    for &i in &selected{let(value,id)=event_label(&episodes[i].request,false)?;
+        if episodes[i].answer!=format!("{value}입니다. [event:{id}]"){return Err(bad("first-decision teacher answer binding"));}
+        words.insert(value);versions[usize::from(meta[i].template.ends_with("/id1"))]+=1;
+    }
+    if words!=["왼쪽","오른쪽","직진","대기"].into_iter().map(str::to_owned).collect()
+        ||versions!=if train{[24,24]}else{[48,0]}{return Err(bad("first-decision teacher four-word/ID balance"));}
+    Ok(selected)
+}
+fn first_review_teacher_positions(train:&[Episode],dev:&[Episode])->Result<Vec<usize>>{
+    if train.len()!=48||dev.len()!=48{return Err(bad("first-decision B teacher source48"));}
+    let mut positions=vec![];
+    for (is_train,pair,version,view) in [(true,"words0-1",0,0),(true,"words0-1",0,1),
+        (true,"words2-3",1,0),(true,"words2-3",1,1),(false,"words0-1",0,2),
+        (false,"words0-1",0,3),(false,"words2-3",0,2),(false,"words2-3",0,3)]{
+        let cases=if is_train{train}else{dev};
+        let i=cases.iter().position(|e|e.binding.ends_with(&format!("/{pair}"))
+            &&e.family.ends_with(&format!("/id{version}"))&&e.id.ends_with(&format!("/{view}")))
+            .ok_or_else(||bad("first-decision B all-word/ID/view selection"))?;
+        positions.push(i+if is_train{0}else{48});
+    }
+    let main=train.iter().chain(dev).collect::<Vec<_>>();let mut words=BTreeSet::new();let mut ids=BTreeSet::new();
+    for &i in &positions{let e=main[i];let(value,id)=event_label(&e.request,false)?;
+        if e.answer!=format!("{value}입니다. [event:{id}]")||!ids.insert(&e.id){return Err(bad("first-decision B teacher duplicate/answer"));}
+        words.insert(value);
+    }
+    if positions.len()!=8||words!=["왼쪽","오른쪽","직진","대기"].into_iter().map(str::to_owned).collect(){
+        return Err(bad("first-decision B four-word coverage"));
+    }
+    Ok(positions)
 }
 fn first_evaluate(s:&Study,arm:usize,l:&mut checkpoint::Loaded,p:&Progress,final_eval:bool,ctl:&mut RunControl)->Result<BTreeMap<String,binary::Value>>{
     if p.local>256{return Err(bad("first-decision endpoint range"));}
     let final_eval=final_eval||p.local>128;
+    let teachers=if final_eval&&!first_fixture(s){let train=first_teacher_cases(s,true)?;let dev=first_teacher_cases(s,false)?;
+        first_review_teacher_positions(&train,&dev)?;Some((train,dev))}else{None};
     l.model.refresh_identity()?;let mut out=BTreeMap::new();
     for panel in fit_panels(s)?.into_iter().take(if final_eval{6}else{5}){
         guard_bytes(s,8*1024*1024)?;
@@ -694,9 +745,8 @@ fn first_evaluate(s:&Study,arm:usize,l:&mut checkpoint::Loaded,p:&Progress,final
         guard_bytes(s,0)?;
     }
     if final_eval{
-        if first_fixture(s){return Ok(out);}
+        let Some((train,dev))=teachers else{return Ok(out);};
         guard_bytes(s,8*1024*1024)?;
-        let train=first_teacher_cases(s,true)?;let dev=first_teacher_cases(s,false)?;
         let es=train.iter().chain(&dev).cloned().collect::<Vec<_>>();
         let label=format!("teacher-{}-FULL",p.local);
         let binding=binary::record!({"policy":digest(s)?,"source":s.source,"runtime":s.runtime,"model":l.model.weights_content_id()?,
@@ -1816,6 +1866,10 @@ fn first_review(s:&Study,arm:usize)->Result<()> {
         }
     }
     for(e,r)in failures{cases.push(e);expected.push(r);}
+    let train=first_teacher_cases(s,true)?;let dev=first_teacher_cases(s,false)?;
+    let positions=first_review_teacher_positions(&train,&dev)?;
+    let main=train.into_iter().chain(dev).collect::<Vec<_>>();
+    let teacher=positions.iter().map(|&i|main[i].clone()).collect::<Vec<_>>();
     let label=format!("review-{}",s.arms()[arm]);
     let(index,mut ctl)=start_observation(s,&label,&binary::record!({"policy":digest(s)?,"native":p.physical,"cases":digest(&cases)?,"teacher":8}))?;
     let result=(||->Result<()>{let l=checkpoint::load(&p.native,Backend::Metal0.open()?,false)?;
@@ -1824,12 +1878,8 @@ fn first_review(s:&Study,arm:usize)->Result<()> {
         for(a,b)in rows.iter().zip(&expected){for field in ["raw_tokens","actual","finish_reason","error","generation_completed"]{
             if a[field]!=b[field]{return Err(bad("first-decision B generation mismatch"));}
         }}
-        let mut teacher=first_teacher_cases(s,true)?;teacher.truncate(4);
-        let mut dev=first_teacher_cases(s,false)?;dev.truncate(4);teacher.extend(dev);
         let raw=binary::read_value_records(&s.root.join(s.arms()[arm]).join(format!("teacher-{}-FULL-teachers.r3rows",p.local)))?;
-        let main=first_teacher_cases(s,true)?.into_iter().chain(first_teacher_cases(s,false)?).collect::<Vec<_>>();
-        let mut origin=vec![];for e in &teacher{let at=main.iter().position(|x|x.id==e.id).ok_or_else(||bad("first-decision B teacher case"))?;
-            origin.push(raw.get(at+1).ok_or_else(||bad("first-decision B teacher raw"))?.clone());}
+        let mut origin=vec![];for &at in &positions{origin.push(raw.get(at+1).ok_or_else(||bad("first-decision B teacher raw"))?.clone());}
         let tbind=binary::record!({"policy":digest(s)?,"model":model,"cases":digest(&teacher)?,"planned":8,"call_protocol":1});
         let replay=teacher_prefix(&s.root,&label,&tbind,&l,&teacher,&mut ctl)?;
         for(a,b)in replay.iter().zip(&origin){if a["gold"]!=b["gold"]||a["argmax"]!=b["argmax"]{return Err(bad("first-decision B teacher IDs"));}
@@ -2121,6 +2171,38 @@ mod tests {
         assert_eq!(cs.resume_binding,Some(bind(&s,0,cs,&tok)?));assert_eq!(ws.resume_binding,Some(bind(&s,1,ws,&tok)?));
         assert_ne!(cs.resume_binding,ws.resume_binding);
         println!("FIRST_FULL_BOTH C/W sample IDs, prompt/target framing, tape costs and native FULL hashes; optimizer0 backward0 generation0 teacher0 evidence={}",root.display());Ok(())
+    }
+    #[test]
+    #[ignore="read-only actual FULL metadata teacher48/48 and B8 coverage; no model calls"]
+    fn first_decision_teacher_selection_no_call()->Result<()> {
+        let root=PathBuf::from(std::env::var("R3_FIRST_P2_ROOT").map_err(|_|bad("explicit completed first-decision root required"))?);
+        let s:Study=read_confirmed(&root.join("plan.r3b"))?;
+        let c=event_inputs(&s,0)?;let(_,tm,dm)=inputs(&s)?;
+        let train=&c.train[6144..7680];let train_meta=&tm[6144..7680];
+        let dev=&c.validation[3072..3264];let dev_meta=&dm[3072..3264];
+        let ti=first_teacher_indices(train,train_meta,true)?;let di=first_teacher_indices(dev,dev_meta,false)?;
+        assert_eq!((ti.len(),di.len()),(48,48));
+        let t=ti.iter().map(|&i|train[i].clone()).collect::<Vec<_>>();let d=di.iter().map(|&i|dev[i].clone()).collect::<Vec<_>>();
+        assert_eq!(first_teacher_cases(&s,true)?.iter().map(|e|&e.id).collect::<Vec<_>>(),t.iter().map(|e|&e.id).collect::<Vec<_>>());
+        assert_eq!(first_teacher_cases(&s,false)?.iter().map(|e|&e.id).collect::<Vec<_>>(),d.iter().map(|e|&e.id).collect::<Vec<_>>());
+        let positions=first_review_teacher_positions(&t,&d)?;assert_eq!(positions.len(),8);
+        let main=t.iter().chain(&d).collect::<Vec<_>>();let mut words=BTreeSet::new();let mut versions=[0usize;2];
+        for &i in &positions{let(value,_)=event_label(&main[i].request,false)?;words.insert(value);
+            if i<48{versions[usize::from(main[i].family.ends_with("/id1"))]+=1;}}
+        assert_eq!(versions,[2,2]);assert_eq!(words,["왼쪽","오른쪽","직진","대기"].into_iter().map(str::to_owned).collect());
+        let mut malformed=train_meta.to_vec();malformed[0].view=4;
+        assert!(first_teacher_indices(train,&malformed,true).is_err());
+        let mut missing=train_meta.to_vec();missing[1].view=missing[0].view;
+        assert!(first_teacher_indices(train,&missing,true).is_err());
+        let mut wrong_version=train_meta.to_vec();wrong_version[0].template="words0-1/id9".into();
+        assert!(first_teacher_indices(train,&wrong_version,true).is_err());
+        let mut duplicate=train.to_vec();duplicate[1].id=duplicate[0].id.clone();
+        assert!(first_teacher_indices(&duplicate,train_meta,true).is_err());
+        let mut malformed_dev=dev_meta.to_vec();malformed_dev[0].view=4;
+        assert!(first_teacher_indices(dev,&malformed_dev,false).is_err());
+        let mut wrong_b=t.clone();wrong_b[0].answer="invalid".into();
+        assert!(first_review_teacher_positions(&wrong_b,&d).is_err());
+        println!("FIRST_TEACHER_SELECT actual train48 dev48 B8 all4words trainID0/1=2/2; malformed/missing/duplicate rejected; optimizer0 backward0 generation0 teacher0 root={}",root.display());Ok(())
     }
     #[test]
     #[ignore="first-decision model-free actual dispatcher/RETURNED/cancel/UNKNOWN/I-O; zero model calls"]

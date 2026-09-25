@@ -1,6 +1,59 @@
 # 진단 및 구현 상태
 
-## 2026-09-25 Cost-bounded first decision — P0/P1/A
+## 2026-09-25 Cost-bounded first decision — P2 learning complete, evaluation blocked
+
+The teacher sampler has now been repaired without model calls. Actual train
+metadata has32 four-view binding groups per word-pair/ID version; a binding may
+span both ID versions. Dev has eight four-view bindings per pair and only ID0,
+so requiring an eight-row/two-ID dev group caused the failure. The corrected
+selector validates every group and chooses two distinct complete four-view
+bindings per pair: balanced ID0/ID1 in train, two dev ID0 bindings. Main coverage
+is48/48. The independent eight-case selection now covers all four words with
+train ID0/ID1 counts2/2, rather than truncating the first word pair.
+
+`first_decision_teacher_selection_no_call` passed1/1 against the actual v7
+metadata, including malformed version/view, missing view, duplicate ID and bad
+B-answer rejection. It made0 optimizer/backward/generation/teacher calls.
+Log `teacher-select-001.log` SHA256
+abb7d8fdc34b5839f930eec1d0a48f3de7b68144751448dba58cc245c9bb9b30;
+src/muon.rs SHA2562490741b402c4e72f83b2db3d23e27492deb3cdf608decf9ec090ae397935f25.
+The original release executable e0ef2170a3604c408f41929ce4f727ac89c4b469a526f42c3ac6d2bb7a08e7c0
+is unchanged. There is no v8 training study, release rebuild or failure resume.
+Completing the preserved endpoints requires a separately authorized evaluation
+scope; no such new model execution is claimed by this source-only repair.
+
+Frozen source295ecfbec741cc62d385b1aefdfd49a9ecf5ace7 and the accepted v7 binary
+executed both arms to256 committed updates/model18237/Adam3901. The +1 natives
+were restored by the next process. At128 both had V64/VC64/S1Q163 on64 each;
+word C10/W10 and renamed C15/W14 on64, with ALL4=0. No retention stop occurred.
+Both256 natives were saved, but the final command exited1 during C teacher
+manifest selection: `first-decision teacher two-ID group`. Actual binding groups
+did not satisfy the selector's assumed eight-row grouping. No teacher call was
+made for that failed selection and W's final evaluation did not run.
+
+The original segment002 remains success=false/resume=false, with all raw and
+native files unchanged. C's completed final observations are V64/VC64/S1Q161
+on64, word29/192, renamed35/192 and train62/192; word/renamed ALL4=0. These
+partial results are not a completed C/W comparison or a quality acceptance.
+Final native physical hashes: C
+1f5656d5c033a5cba3d271c3939aed66aaa14f4a00b11cc30f8081af5db28a90;
+W c7d9e767646173815b8c8afd45299067723512ada87b3a61beea1ee25830c3bd.
+Model calls stopped after the failure. The correction is restricted to teacher
+metadata selection and zero-call coverage regression; the old failure cannot
+be silently resumed. Source/runtime, final usage and B remain separate verdicts.
+
+Admission and baseline exited0. Baseline made0 new generation/teacher calls,
+reusing completed parent64 scores. The historical original-fit parent16 refers
+to14912 and is not evidence for17981. Existing final-posthoc B on17981 reproduced
+normal32 plus failure/mates32 (receipt0c4f06fb30d8224b9f3ad13019cd7a65b172c1e8446e5d1057423be68dbda27f);
+any current parent-parity reuse must bind those actual requests, not claim a new
+16-call run. Run logs are named `run-admit001`, `run-baseline001` and
+`run-train-segment000001` through `000003` in the first-decision evidence root.
+Final observed scope816329324bytes remains below1GiB; this is not a claim about
+unmeasured shared-build growth/peak. Sol Low executed only the registered CLI
+segments and stopped on the nonzero result without retrying.
+
+## 2026-09-25 Cost-bounded first decision — P0/P1/A history
 
 Independent A accepted source295ecfbec741cc62d385b1aefdfd49a9ecf5ace7 with v7.
 Corrected actual Metal C/W runs each used two-step input3276/target234/padding452
