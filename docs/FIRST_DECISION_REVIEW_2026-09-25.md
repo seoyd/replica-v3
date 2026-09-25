@@ -1,6 +1,11 @@
 # First-decision independent review — 2026-09-25
 
-## A — FAIL: pair input and native corpus binding disagree
+Current A: PASS for corrected candidate295ecfbec741cc62d385b1aefdfd49a9ecf5ace7
+and selected v7 only, following the user's explicit additional8-TINY amendment.
+The current acceptance section below supersedes execution eligibility, while
+the failed measurements and findings remain historical evidence.
+
+## Historical A — FAIL: pair input and native corpus binding disagree
 
 Independent session `first_decision_review_a` reviewed contract
 `R3-COST-BOUNDED-FIRST-DECISION-1.0` and candidate
@@ -107,3 +112,77 @@ storage/build final measurement UNKNOWN; QUALITY NOT_RUN;
 FOLLOWUP_SIGNAL NOT_ASSESSED; GOAL1 NOT_ACCEPTED. B is NOT_RUN. Product repair
 can proceed without model calls, but this A does not authorize learning or
 reuse the mismatched-input test as corrected execution evidence.
+
+## Current A — corrected FULL pair accepted
+
+The same independent A session reviewed the narrow corpus correction on
+`295ecfbec741cc62d385b1aefdfd49a9ecf5ace7`. First-decision now resolves corpus0
+in the shared `event_inputs` path, so preparation, native load/resume, actual
+training and TINY inputs share FULL. Historical F/I behavior stays explicit.
+The failed report above was preserved before editing as
+`artifacts/first-decision-20260925-review/a-report-ff4f8e9-fail.md`, SHA256
+`97b6ca6439bccb51fd8d6a68d7082a5b16a79937b183547a340a922900c97662`.
+Both earlier static finding files and all mismatched-input raw remain unchanged.
+
+The user explicitly authorized8 additional TINY optimizer/backward calls,
+raising only that combined cap16→24. A ran exactly those8, with no generation,
+teacher or SMALL calls. Actual Metal C/W continuous2 versus1+fresh-process1
+passed one outer test plus two children, all exit0. The new cross-arm trace
+assertions passed. An independent Rust reader of the resulting native and
+trace files also passed: both arms consume input3276/target234/padding452 over
+two updates, identical rows and first Adam3646, ending model17983/Adam3647.
+Weights/m/v and objective/cursor/token state agree within each continuous versus
+restart comparison. Weight1/family6 and WORD weight2/family7 remain distinct.
+Missing objective and wrong parent/arm/role-map negatives passed in this actual
+test; runtime rejection and ordinary-resume fail-closed remain source checks.
+
+A also executed `first_decision_full_corpus_both_arms`: one test, exit0, zero
+optimizer/backward/generation/teacher. It verifies FULL train/validation hashes,
+sample IDs, framed prompt/target tokens, tape costs and native bindings for both
+arms while retaining historical ID_ONLY semantics outside first-decision.
+The unchanged objective regression and independent f64 oracle described above
+are reused. The three accepted boundaries are first_objective_gradient,
+inherited_native_process and pair_dispatch_budget; the earlier cost repairs'
+source-bound zero-call tests are reused, without a duplicate closure review.
+
+The v7 preflight traversed actual input/old-trace/cost verification and reached
+the expected `first-decision NOT_RUN` report error before learning, exit1.
+Actual CLI review parsing accepts both C and W; intentionally absent roots
+returned I/O errors, exit1. These are expected negative checks, not executed
+study evaluations. The independent reader verified all256 tape rows and
+2048 exposures against the original rotation, the role digest and exact parent.
+
+Current raw SHA256 values under the review root:
+
+- `a-tiny-v7.log`: `57d27e9d2008e756bb59d6124aeed55426529ec27455f7b532d518d1581f19d7`.
+- `a-full-both-v7.log`: `40aaf762f8fd2d2e797a5e6178d089e93ff28a08f844186c1d219d27388fbfe2`.
+- `a-check-v7.log`: `59682fc410a6d6b42dcee980c6e38d61652c808f9ae775c2ecaaabefef118c5c`.
+- Test executable SHA256: `283586a4bd106c0b034a3ad9da7e20793647dd456ca7039164443165880da184`.
+
+Selected root `artifacts/first-decision-20260925-study-v7`; plan SHA256
+`490595bd72a88b17d489aa14d8107d0b576c976bbeee82e2f0e366c97882503c`;
+policy `f2b8a6929971ba7764501b20ff674afda2a8a485c1343724c551b9ba75d80d69`;
+runtime source `4e3c427ae0edae5325c407e705fcb6a308390cb68af7aed10092f2ae78bdbd50`;
+main executable SHA256
+`e0ef2170a3604c408f41929ce4f727ac89c4b469a526f42c3ac6d2bb7a08e7c0`.
+
+The additional8 calls consumed input13104/target936/padding1808. Total direct
+and independent TINY calls are24/24, including the preserved failed-input run;
+no remaining TINY calls are authorized. Current TINY test elapsed14.37s,
+process wall14.47s; observed maximum RSS2724741120bytes and peak memory footprint
+3377892976bytes. All available26 direct/independent outer-test and timed-reader
+records, including failed and zero-test attempts, sum181.30s. Child time is
+included once through its outer test. A separate0.26s rounding reserve (0.01s
+per record) makes the receipt's common7200s charge181.56s. `a-cost-totals.log`
+lists the inputs; zero values have0.01s resolution, not proof of no time.
+Compile time and untimed nonmodel CLI/filesystem wall time remain outside that
+measured test sum, with unmeasured wall time UNKNOWN. Build growth/peak and
+final whole-scope bytes require their separate bounded accounting.
+
+CODE PASS; EXECUTION PASS for the amended TINY/changed boundaries;
+RAW_INTEGRITY PASS for the reviewed preparation and C/W FULL trace identity;
+COST calls within amended24 cap and accounted test time181.56<7200, storage/build
+not self-certified; QUALITY NOT_RUN; FOLLOWUP_SIGNAL NOT_ASSESSED;
+GOAL1 NOT_ACCEPTED; B NOT_RUN. The immutable A receipt authorizes only this
+source/runtime/policy for the registered next stage; it does not grant model
+quality, extra calls, or Goal1 acceptance.

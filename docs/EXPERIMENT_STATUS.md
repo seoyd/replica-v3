@@ -1,6 +1,30 @@
 # 진단 및 구현 상태
 
-## 2026-09-25 Cost-bounded first decision — P0/P1
+## 2026-09-25 Cost-bounded first decision — P0/P1/A
+
+Independent A accepted source295ecfbec741cc62d385b1aefdfd49a9ecf5ace7 with v7.
+Corrected actual Metal C/W runs each used two-step input3276/target234/padding452
+and passed continuous2 versus1+fresh-process1, clocks/native objectives and
+cross-arm input identity. The extra8 authorized TINY calls bring total actual
+optimizer/backward to24/24; none are repeated. Generation/teacher remain0 at A.
+Receipt `artifacts/first-decision-20260925-review/review-a-v7.r3b` SHA256
+773c54bbefb3f651bd284f5f8f24206d26f4b0d9f233c4b1707e77e3c1b25cd8 binds
+source/policy/runtime and the immutable independent report, SHA256
+aceb40a2cf92cdac9275e509e1666c01c1e9ee736cc17c744ed972ad773c09ba.
+Measured direct/independent test and reader wall time totals181.30seconds from
+26 logged attempts, including failed and zero-test executions. Children are
+already included in parent wall time. Resolution reserve0.26seconds is charged
+separately, making initial RunControl cost181.56seconds. Compilation and untimed
+no-call CLI/fs work are separate UNKNOWN, never asserted as zero model time.
+P2 uses a separate gpt-6-sol/low executor and the unchanged binary; A used
+gpt-6-astra/high. The records below preserve preparation failures chronologically.
+
+The user explicitly approved eight additional TINY optimizer/backward calls
+after reviewing candidate295ecfbec741cc62d385b1aefdfd49a9ecf5ace7 and the actual
+wrong-input A failure. TINY aggregate cap is now24, with all prior16 charged.
+Independent A may use the remaining8 on corrected v7; SMALL512/528, all other
+call/time/storage limits and quality thresholds are unchanged. This approval
+does not reopen an old model run or discard the failed acceptance evidence.
 
 The corpus-selection repair is implemented in `event_inputs`: first-decision
 C/W both use FULL index0, while the historical F/I arm selection is unchanged.

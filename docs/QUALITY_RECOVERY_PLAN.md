@@ -19,6 +19,10 @@ must fit1GiB; new shared-build growth is limited to2GiB, peak UNKNOWN unless
 measured. Old footprint excess is neither erased nor charged as new storage.
 
 Direct formula/native/process regressions and independent A precede learning.
+After the wrong-corpus TINY evidence was detected, the user explicitly approved
+eight additional TINY optimizer/backward calls on the corrected source: the
+aggregate TINY allowance is24, including all16 prior calls. This amendment does
+not change the SMALL512/528 limits, data, objectives or quality thresholds.
 The only scheduled checkpoints are128 and256; final comparisons use the same
 endpoint, teacher covers all four words, and B follows fixed normal/failure
 selection. Severe or repeated parent-relative retention loss limits the peer
