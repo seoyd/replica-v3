@@ -2,6 +2,26 @@
 
 ## 2026-09-25 Value-reading isolation — preparation
 
+Current closure: **A FAIL / BLOCKED_STORAGE / B NOT_RUN**. Prepared source
+`b0a68b60d40017ed2ec1216011542c0f415257ce` was pushed and its full remote SHA
+matched. Independent input checks passed all288 cases, but the actual report CLI
+accepted synthetic TIME history with200 calls/325s while reporting184 calls/25s.
+The missing parity raw binding is part of the same finalization defect.
+See `docs/VALUE_READING_REVIEW_2026-09-25.md`. No A receipt was issued.
+
+The narrow full-history/RETURNED reconciliation repair is still uncommitted and
+not accepted. Two never-executed alternate build outputs were produced: stripped
+20628288 bytes and size-optimized15054160 bytes. A runtime executable-identity
+update was then corrected in source only; neither output represents that last
+source correction. Repaired actual-CLI validation has not run.
+The second build used a separate output path instead of the intended same unused
+path; all files remain preserved. Measured task size151389093 logical bytes
+(including three external used executables) exceeds128MiB by17171365 bytes,
+before further reviewer output. A160MiB change was requested, **not granted**
+at this checkpoint. No removal or budget reset was performed.
+Release allocated growth across the two repair builds is56KiB; total shared-build
+growth remains UNKNOWN. Optimizer/backward/teacher/new generation remain0.
+
 The new diagnosis preserves C/W and fixes C model18237/Adam3901, with native
 `artifacts/first-decision-20260925-study-v7/C/segment-002-step-256.r3m`, physical
 SHA2561f5656d5c033a5cba3d271c3939aed66aaa14f4a00b11cc30f8081af5db28a90.
@@ -31,7 +51,13 @@ at `artifacts/value-reading-20260925-main/value-reading-plan.r3b`.
 Its exposure fields count only C's256-update suffix:40 selected train rows have
 one exact exposure and8 have zero. `semantic_other_exposure` counts other rows
 of the same binding in that suffix (40x7,8x0); it does not mean other-system
-history or total inherited exposure. An inherited trace audit remains pending.
+history or total inherited exposure. A separate read-only inherited audit found
+prior F64 exact6, FULL-fit3069 exact384, C256 exact40 exposures across those48
+rows; cumulative exact exposure is8 for2 rows and9 for46 rows. Earlier
+other-system exposures total62 and C same-binding other-row exposures total280;
+neither is added to exact prompt-target counts. Evidence:
+`artifacts/value-reading-20260925-main/exposure-audit.txt`, SHA256
+4ff5d04ef2053f3f851341e6b25f0610abf4b0cc72e4b76cc8623ca950827f8d.
 
 New optimizer/backward/teacher/generation calls are0 at this checkpoint.
 Independent A, actual observations and B are pending.
