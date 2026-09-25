@@ -1,0 +1,147 @@
+{
+  "directed_scenarios": [
+    {
+      "correction": {
+        "id": "effect:email",
+        "status": "VERIFIED_SUCCESS",
+        "v": 2
+      },
+      "expect": {
+        "action_v1_state": "STALE",
+        "claim_v1_state": "STALE",
+        "effect_v1_preserved": true,
+        "head_effect": 2
+      },
+      "initial": [
+        {
+          "id": "effect:email",
+          "kind": "EVIDENCE",
+          "status": "UNKNOWN_EFFECT",
+          "v": 1
+        },
+        {
+          "deps": [
+            [
+              "effect:email",
+              1
+            ]
+          ],
+          "id": "claim:sent",
+          "kind": "CLAIM",
+          "v": 1
+        },
+        {
+          "deps": [
+            [
+              "claim:sent",
+              1
+            ]
+          ],
+          "executed_external": false,
+          "id": "action:notify_user",
+          "kind": "ACTION",
+          "v": 1
+        }
+      ],
+      "name": "unknown_to_verified_success"
+    },
+    {
+      "correction": {
+        "id": "effect:email",
+        "status": "VERIFIED_FAILURE",
+        "v": 3
+      },
+      "expect": {
+        "history_preserved": true,
+        "recomputed_action_state": "STALE",
+        "recomputed_claim_state": "STALE"
+      },
+      "name": "verified_success_to_verified_failure",
+      "precondition": "claim/action were recomputed against effect v2"
+    },
+    {
+      "correction": {
+        "id": "effect:email",
+        "status": "DISPUTED",
+        "v": 4
+      },
+      "expect": {
+        "executed_action_state": "COMPENSATION_REQUIRED",
+        "record_preserved": true
+      },
+      "name": "executed_external_after_correction",
+      "precondition": "external action was already executed and depends on current corrected claim"
+    },
+    {
+      "change": "root corrected to v2 while claim v1 remains logical head",
+      "graph": "root v1 -> claim v1 -> action",
+      "hardened_expectation": "REJECT_STALE_CLOSURE",
+      "name": "direct_head_only_counterexample",
+      "weak_expectation": "weak direct-head-only guard can incorrectly COMMIT action"
+    },
+    {
+      "crash_state": {
+        "action_cache": "ACTIVE",
+        "c1_cache": "STALE",
+        "c2_cache": "ACTIVE",
+        "root_head": 2
+      },
+      "expect": {
+        "recursive_action_current": false,
+        "recursive_c1_current": false,
+        "recursive_c2_current": false
+      },
+      "graph": "root -> c1 -> c2 -> action",
+      "name": "mid_propagation_crash_cache_is_not_truth"
+    }
+  ],
+  "format": "replica-commit-kernel-correction-vectors",
+  "provenance": "Reconstructed/frozen from the executed v1.2K reference experiments and gate report; no separate vector file existed at original run time.",
+  "stress_scenarios": [
+    {
+      "derived_nodes": 100000,
+      "executed_external_nodes": 40,
+      "expect": {
+        "compensation_required": 40,
+        "invariant_errors": 0,
+        "stale_nodes": 99960
+      },
+      "name": "fanout_100k"
+    },
+    {
+      "attempts": 5000,
+      "expect": {
+        "external_compensation_required": 136,
+        "fresh_committed": 5000,
+        "invariant_errors": 0,
+        "stale_closure_rejected": 5000,
+        "stale_commit_bug": 0
+      },
+      "name": "correction_race_5000"
+    },
+    {
+      "expect": {
+        "active_current_invalid_after_restore": 0,
+        "byte_equivalent_truth": true,
+        "external_state_mismatches": 0,
+        "head_map_equal": true,
+        "restore_invariant_errors": 0
+      },
+      "name": "restart_from_records_and_heads_only",
+      "records": 36336
+    },
+    {
+      "branch_a_descendants": 25000,
+      "branch_b_descendants": 25000,
+      "correct_root": "A",
+      "expect": {
+        "A_stale": 25000,
+        "B_active": 25000,
+        "invariant_errors": 0,
+        "unrelated_B_invalidated": 0
+      },
+      "name": "unrelated_branch_preservation"
+    }
+  ],
+  "version": "1.2K"
+}

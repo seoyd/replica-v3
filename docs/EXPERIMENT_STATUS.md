@@ -1,5 +1,27 @@
 # 진단 및 구현 상태
 
+## 2026-09-25 Commit Kernel D — correction/native/process execution PASS
+
+The user supplied the original K/L source/report bundle plus later-reconstructed
+scenario vectors. The standalone Rust correction profile preserves immutable
+history, switches heads atomically with added records, validates the full current
+dependency closure and rebuilds advisory cache/reverse indexes from truth.
+GRU and TR++ remain separate and untouched; model calls and learning are0.
+
+Final direct/process integration6/6, internal poisoned-cache unit1/1 and compiled
+direct-head/cache-trust mutants2/2 detected. Final native tests cover100000
+in-memory descendants (99960 STALE/40 flagged COMPENSATION_REQUIRED),36336-record
+binary rebuild, unrelated branches25000+25000, and5000 stale/fresh interleavings.
+Eight correction and five recompute crash boundaries pass. Additional200 actual
+SIGKILL tests produce OLD100/NEW100/OTHER0 on a round-robin schedule. These are
+new Rust results, not the original random98/102 report. Shared atomic-writer B
+regressions3/3 also pass. See `COMMIT_KERNEL_CORRECTION_2026-09-25.md` for exact
+hashes, preserved initial codec-bound failure and scope limits.
+
+D's external-action flag is synthetic metadata, not an executed external effect.
+C proposal/nonce/receipt integration, E external effects/compensation and product
+memory integration remain untested. I/J/M source inputs have been requested.
+
 ## 2026-09-25 Commit Kernel C — in-memory concurrency execution PASS
 
 The user-supplied E/F bundle resolves the previously pending concurrency input.

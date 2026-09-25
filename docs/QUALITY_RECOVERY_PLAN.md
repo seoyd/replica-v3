@@ -1,6 +1,6 @@
 # Diagnostic repair and bounded quality recovery
 
-## Current boundary: Commit Kernel C and later correction inputs
+## Current boundary: Commit Kernel D and later external-effect inputs
 
 The narrow fixture repair and independent changed-boundary review are closed.
 The supplied Commit Kernel candidate has passed v1.3A exact vectors, direct
@@ -13,9 +13,13 @@ in-memory authority passes the C direct/concurrent/mutation gates; frozen B
 `two_valid_operations` still accepts the same-version operations unchanged.
 See `COMMIT_KERNEL_CONCURRENCY_2026-09-25.md` for actual Rust counts and the
 reconstructed-E/preserved-F provenance distinction. C concurrency plus B disk
-restart does not establish their combined durability. Original K/L source and
-vectors have been requested for the later correction/dependency port; do not
-invent their expected states or reuse Go results as Rust evidence.
+restart does not establish their combined durability. The subsequently supplied
+K/L original source/report and reconstructed scenario vectors support the
+separate D version/dependency profile. Its direct, native, process and mutation
+gates pass; see `COMMIT_KERNEL_CORRECTION_2026-09-25.md`. D reuses B's atomic-file
+helper but does not yet persist C proposal/receipt state. Original I/J/M inputs
+have been requested for E. Do not invent expected states or reuse Go results as
+Rust evidence. No live external service is part of these gates.
 
 GRU and TR++ must remain separate: no mixed architecture, shared learned state,
 weight transplant, training or inference routing. This runtime crate introduces

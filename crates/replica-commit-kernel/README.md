@@ -1,4 +1,4 @@
-# Replica Commit Kernel — Rust A/B/C gates
+# Replica Commit Kernel — Rust A/B/C/D gates
 
 The supplied archive was uncompiled in its research environment. On the Replica
 Mac, the original candidate passed all32 frozen vectors in debug and release.
@@ -12,8 +12,9 @@ concurrency, natural-language quality or product integration acceptance.
 
 v1.3A ports the frozen **v1.2B 32-vector core commit boundary**. v1.3B adds
 the R3BIN single-writer disk/process boundary described below. v1.3C adds a
-separate in-memory F concurrency profile. Correction and external-effect
-contracts in `docs/FROZEN_CONTRACT_B_TO_M.md` remain future Rust gates.
+separate in-memory F concurrency profile. v1.3D adds the K/L correction profile
+below. External-effect contracts in `docs/FROZEN_CONTRACT_B_TO_M.md` remain
+future Rust gates.
 
 ## First target-machine gate
 
@@ -87,6 +88,31 @@ C has no disk-restore adapter yet; B process durability and C concurrency PASS
 are not combined concurrent durability. No model/generation/training integration
 is enabled. GRU must remain separate from TR++ weights, state, training and
 inference; this crate adds neither core nor a bridge between them.
+
+## D: versioned correction profile
+
+`correction::Store` keeps immutable version records, current heads, exact
+dependencies and a rebuilt reverse/cache index. `record` is a historical read;
+`is_current` traverses the full closure at current use and does not trust cache.
+Appending a correction invalidates reachable descendants only. An already
+executed action is marked `CompensationRequired`; no external action is performed.
+Status/payload are retained evidence, not a semantic truth judgement.
+
+`correction::DurableStore` writes record additions and head switches together
+using B's atomic native-file helper and an exclusive writer lock. A batch fails
+without publishing a partial state. Uncertain I/O poisons the live handle until
+disk-only restore. Native decoding is supplied by the host; tests use R3BIN.
+Missing, duplicate, cyclic or regressed state fails closed. Temps and sidecar
+caches are never recovery authority. This separate K/L profile is not yet
+connected to C's proposal/receipt protocol or product memory.
+
+Run `cargo test --locked --offline --test correction` for directed/stress checks.
+For actual child-process tests, set `R3_KERNEL_D_EVIDENCE` to a new directory and
+run `cargo test --locked --offline --test correction -- --ignored --skip process_worker --test-threads=1`.
+With a new mutation root, run
+`cargo test --locked --offline --test mutations correction_closure_mutants_are_killed -- --exact --ignored`.
+The two supplied K/L JSON scenario files were reconstructed after the research
+run; their original source/report provenance and this Rust execution are distinct.
 
 ## Frozen bundle identity
 

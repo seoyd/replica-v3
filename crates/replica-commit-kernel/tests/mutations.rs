@@ -2,6 +2,64 @@
 //! One scratch crate and its isolated build target are reused sequentially.
 use std::{fs, path::PathBuf, process::Command};
 
+#[test]
+#[ignore = "two compiled correction closure/cache mutants; explicit scratch root"]
+fn correction_closure_mutants_are_killed() {
+    let (root, scratch) = prepare_scratch();
+    fs::create_dir_all(scratch.join("tests/data")).unwrap();
+    for path in [
+        "tests/correction.rs",
+        "tests/data/commit_kernel_v1_2K_vectors.json",
+        "tests/data/commit_kernel_v1_2L_vectors.json",
+    ] {
+        fs::copy(root.join(path), scratch.join(path)).unwrap();
+    }
+    let source = fs::read_to_string(root.join("src/correction.rs")).unwrap();
+    let cases = [
+        ("direct_head_only", "for d in r.deps.iter().rev() {", "for d in r.deps.iter().rev().take(0) {", vec!["--test", "correction"], "frozen_provenance_and_directed_closure"),
+        ("cache_truth", "let mut todo = vec![(key.clone(), false)];", "if self.cache.get(key) == Some(&Validity::Active) { return true; } let mut todo = vec![(key.clone(), false)];", vec!["--lib"], "correction::tests::lying_and_half_propagated_cache_has_no_authority"),
+    ];
+    let mut summary = String::new();
+    for (name, from, to, target, test) in cases {
+        assert_eq!(source.matches(from).count(), 1);
+        fs::write(
+            scratch.join("src/correction.rs"),
+            source.replacen(from, to, 1),
+        )
+        .unwrap();
+        fs::write(
+            scratch.join(format!("{name}.mutation.txt")),
+            format!("FROM {from}\nTO {to}\n"),
+        )
+        .unwrap();
+        let out = Command::new(env!("CARGO"))
+            .current_dir(&scratch)
+            .env("CARGO_INCREMENTAL", "0")
+            .env("CARGO_TARGET_DIR", scratch.join("target"))
+            .env("CARGO_PROFILE_DEV_DEBUG", "0")
+            .env("CARGO_PROFILE_TEST_DEBUG", "0")
+            .args(["test", "--locked", "--offline"])
+            .args(target)
+            .args(["--", "--exact", test])
+            .output()
+            .unwrap();
+        fs::write(scratch.join(format!("{name}.stdout")), &out.stdout).unwrap();
+        fs::write(scratch.join(format!("{name}.stderr")), &out.stderr).unwrap();
+        assert_eq!(out.status.code(), Some(101));
+        assert!(String::from_utf8(out.stdout)
+            .unwrap()
+            .contains(&format!("test {test} ... FAILED")));
+        summary.push_str(&format!(
+            "{name}: compiled_semantic_failure=true exit=101 test={test}\n"
+        ));
+    }
+    fs::write(scratch.join("summary.txt"), summary).unwrap();
+    assert_eq!(
+        fs::read_to_string(root.join("src/correction.rs")).unwrap(),
+        source
+    );
+}
+
 fn prepare_scratch() -> (PathBuf, PathBuf) {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let scratch = PathBuf::from(
@@ -17,6 +75,7 @@ fn prepare_scratch() -> (PathBuf, PathBuf) {
         "src/durable.rs",
         "src/kernel.rs",
         "src/concurrency.rs",
+        "src/correction.rs",
     ] {
         fs::copy(root.join(path), scratch.join(path)).unwrap();
     }

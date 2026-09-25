@@ -1,0 +1,170 @@
+{
+  "cache_attack_vectors": [
+    {
+      "cache": "truncated/malformed cache.json",
+      "expected_old_action": "REJECT_STALE_CLOSURE",
+      "name": "malformed_cache"
+    },
+    {
+      "cache": {
+        "action@1": "ACTIVE",
+        "claim@1": "ACTIVE",
+        "root@1": "ACTIVE",
+        "root@2": "ACTIVE"
+      },
+      "expected_old_action": "REJECT_STALE_CLOSURE",
+      "name": "lying_active_cache"
+    }
+  ],
+  "correction": {
+    "append": {
+      "id": "root",
+      "kind": "EVIDENCE",
+      "status": "VERIFIED_FAILURE",
+      "v": 2
+    },
+    "head_switch": {
+      "root": 2
+    }
+  },
+  "directed_crash_points": [
+    {
+      "expected_old_action": "COMMIT_OLD_WORLD",
+      "expected_world": "OLD",
+      "failpoint": "after_open"
+    },
+    {
+      "expected_old_action": "COMMIT_OLD_WORLD",
+      "expected_world": "OLD",
+      "failpoint": "after_write"
+    },
+    {
+      "expected_old_action": "COMMIT_OLD_WORLD",
+      "expected_world": "OLD",
+      "failpoint": "after_fsync"
+    },
+    {
+      "expected_old_action": "COMMIT_OLD_WORLD",
+      "expected_world": "OLD",
+      "failpoint": "after_close"
+    },
+    {
+      "expected_old_action": "REJECT_STALE_CLOSURE",
+      "expected_world": "NEW",
+      "failpoint": "after_rename"
+    },
+    {
+      "expected_old_action": "REJECT_STALE_CLOSURE",
+      "expected_world": "NEW",
+      "failpoint": "after_dirsync"
+    },
+    {
+      "expected_old_action": "REJECT_STALE_CLOSURE",
+      "expected_world": "NEW",
+      "failpoint": "cache_half"
+    },
+    {
+      "expected_old_action": "REJECT_STALE_CLOSURE",
+      "expected_world": "NEW",
+      "failpoint": "cache_after_rename"
+    }
+  ],
+  "format": "replica-commit-kernel-durable-correction-vectors",
+  "initial_world": {
+    "heads": {
+      "action": 1,
+      "claim": 1,
+      "root": 1
+    },
+    "records": [
+      {
+        "id": "root",
+        "kind": "EVIDENCE",
+        "status": "VERIFIED_SUCCESS",
+        "v": 1
+      },
+      {
+        "deps": [
+          [
+            "root",
+            1
+          ]
+        ],
+        "id": "claim",
+        "kind": "CLAIM",
+        "status": "VERIFIED",
+        "v": 1
+      },
+      {
+        "deps": [
+          [
+            "claim",
+            1
+          ]
+        ],
+        "id": "action",
+        "kind": "ACTION",
+        "status": "AUTHORIZED",
+        "v": 1
+      }
+    ]
+  },
+  "provenance": "Reconstructed/frozen from the executed v1.2L SIGKILL harness and gate report; no separate vector file existed at original run time.",
+  "random_sigkill": {
+    "expected_failures": 0,
+    "observed_new": 102,
+    "observed_old": 98,
+    "observed_other": 0,
+    "runs": 200
+  },
+  "recompute_crash_points": [
+    {
+      "expected_action_head": 1,
+      "expected_claim_head": 1,
+      "expected_fresh": "NO_FRESH_ACTION",
+      "expected_old_action": "REJECT_STALE_CLOSURE",
+      "expected_root_head": 2,
+      "failpoint": "after_write"
+    },
+    {
+      "expected_action_head": 1,
+      "expected_claim_head": 1,
+      "expected_fresh": "NO_FRESH_ACTION",
+      "expected_old_action": "REJECT_STALE_CLOSURE",
+      "expected_root_head": 2,
+      "failpoint": "after_fsync"
+    },
+    {
+      "expected_action_head": 1,
+      "expected_claim_head": 1,
+      "expected_fresh": "NO_FRESH_ACTION",
+      "expected_old_action": "REJECT_STALE_CLOSURE",
+      "expected_root_head": 2,
+      "failpoint": "after_close"
+    },
+    {
+      "expected_action_head": 2,
+      "expected_claim_head": 2,
+      "expected_fresh": "FRESH_ACTION_CURRENT",
+      "expected_old_action": "REJECT_STALE_CLOSURE",
+      "expected_root_head": 2,
+      "failpoint": "after_rename"
+    },
+    {
+      "expected_action_head": 2,
+      "expected_claim_head": 2,
+      "expected_fresh": "FRESH_ACTION_CURRENT",
+      "expected_old_action": "REJECT_STALE_CLOSURE",
+      "expected_root_head": 2,
+      "failpoint": "after_dirsync"
+    }
+  ],
+  "split_file_mutant": {
+    "expected_bug": "DANGLING_HEAD",
+    "steps": [
+      "persist head root=2 separately",
+      "crash before root v2 record"
+    ]
+  },
+  "version": "1.2L"
+}

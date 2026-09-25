@@ -160,31 +160,47 @@ impl<C: SnapshotCodec> DurableKernel<C> {
         hook: &mut impl FnMut(&str) -> io::Result<()>,
     ) -> io::Result<()> {
         let bytes = self.codec.encode(snapshot)?;
-        if bytes.len() as u64 > MAX_SNAPSHOT {
-            return Err(invalid("kernel snapshot size limit"));
-        }
-        self.serial = self
-            .serial
-            .checked_add(1)
-            .ok_or_else(|| invalid("snapshot serial overflow"))?;
-        let temp = self
-            .root
-            .join(format!("kernel.{}.{}.tmp", std::process::id(), self.serial));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)?;
-        hook("temp-open")?;
-        file.write_all(&bytes)?;
-        hook("write")?;
-        file.sync_all()?;
-        hook("file-sync")?;
-        drop(file);
-        hook("close")?;
-        fs::rename(&temp, self.root.join("kernel.state.r3b"))?;
-        hook("rename")?;
-        File::open(&self.root)?.sync_all()?;
-        hook("directory-sync")?;
-        Ok(())
+        persist_bytes(
+            &self.root,
+            "kernel",
+            &mut self.serial,
+            &bytes,
+            MAX_SNAPSHOT,
+            hook,
+        )
     }
+}
+
+/// Shared atomic native-file boundary; callers validate their own typed state.
+pub(crate) fn persist_bytes(
+    root: &Path,
+    name: &str,
+    serial: &mut u64,
+    bytes: &[u8],
+    max: u64,
+    hook: &mut impl FnMut(&str) -> io::Result<()>,
+) -> io::Result<()> {
+    if bytes.len() as u64 > max {
+        return Err(invalid("snapshot size limit"));
+    }
+    *serial = serial
+        .checked_add(1)
+        .ok_or_else(|| invalid("snapshot serial overflow"))?;
+    let temp = root.join(format!("{name}.{}.{serial}.tmp", std::process::id()));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
+    hook("temp-open")?;
+    file.write_all(bytes)?;
+    hook("write")?;
+    file.sync_all()?;
+    hook("file-sync")?;
+    drop(file);
+    hook("close")?;
+    fs::rename(&temp, root.join(format!("{name}.state.r3b")))?;
+    hook("rename")?;
+    File::open(root)?.sync_all()?;
+    hook("directory-sync")?;
+    Ok(())
 }
