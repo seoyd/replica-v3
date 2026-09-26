@@ -24,6 +24,9 @@ const PRIOR_A_LINK: &str = "1467d8b3e92abd14aabc1e987506dd1fe11b49d269a427f00db7
 const PRIOR_SCREEN0: &str = "dee4cb3afbb08cd31354f663b0dc60e9cba3f27a03e85d8b8ad716b74f902490";
 const PRIOR_PREPARATION_SECONDS: f64 = 1904.564346666;
 const CONTINUATION_OUTER_RESERVE: f64 = 30.;
+const FAILED_CONTINUATION_ATTEMPT: &str = "56ae33d6402b5816fad145e2fa718b5442753b918a31a1b75373415516a7015c";
+const FAILED_CONTINUATION_LOG: &str = "ee99777d7a6532576dd5d0ae06d697de0faf23385c8b6ff353031a3029a6a51e";
+const FAILED_CONTINUATION_BINARY: &str = "5586664d38df17aa55cfc25888df1c3edc4f4ee79bb8f360678b6bdf8f3378ee";
 const FIRST_SEAL_LOG_HASH: &str = "6113e01a05d04c735632fb377b26a35ff90a83fb97f771876a1ca107cca1ef9c";
 const FIRST_SEAL_PREPARATION_HASH: &str = "f4e483e20e6f813bd022c626cc8994a685215a840857a730fd4b6c50465f56a2";
 const FIRST_SEAL_COMMAND_006_HASH: &str = "7f11ff786f80195644a8b0871a87e8594c023bdd16e34ef558cfb3f0045d8c67";
@@ -219,6 +222,10 @@ struct Continuation {
     evaluation_limit:u64,
     total_limit:u64,
     outer_reserve_seconds:f64,
+    failed_attempt_returned:String,
+    failed_log_hash:String,
+    failed_binary_hash:String,
+    failed_outer_extra_seconds:f64,
     attempt_returned:String,
     source:String,
     binary:String,
@@ -447,6 +454,14 @@ fn expected_file_hash(path:&Path,expected:&str)->Result<()> {
     if file_hash(path)?!=expected {return Err(bad("depth bound file changed"));}
     Ok(())
 }
+fn verified_linked_report(link_path:&Path,report_path:&Path,plan_hash:&str)->Result<binary::Value> {
+    let link:binary::Value=read_confirmed(link_path)?;
+    if link["path"]!=binary::record!(report_path)
+        || link["hash"]!=file_hash(report_path)? || link["plan"]!=plan_hash {
+        return Err(bad("depth independent report link/bytes"));
+    }
+    read_confirmed(report_path)
+}
 fn outer_reserve_covers(wall:f64,inner:f64,reserve:f64)->bool {
     wall.is_finite() && inner.is_finite() && reserve.is_finite()
         && wall>0. && inner>=0. && reserve>=0.
@@ -497,7 +512,7 @@ fn repair_successor_inner(p:&Plan,allow_historical:bool)->Result<RepairSuccessor
 fn repair_successor(p:&Plan)->Result<RepairSuccessor> {repair_successor_inner(p,false)}
 fn successor_wall_verified(p:&Plan,r:&binary::Value)->Result<bool> {
     if !p.root.join("repair-successor.r3b").exists() {return Ok(true);}
-    let s=repair_successor_inner(p,p.root.join("continuation.r3b").exists())?;
+    let s=repair_successor_inner(p,true)?;
     let path=p.root.join("provenance/successor-seal.log");
     let attempt:binary::Value=read_confirmed(&p.root.join("attempts/attempt-002-returned.r3b"))?;
     let inner=attempt["seconds"].as_f64().ok_or_else(||bad("depth successor inner duration"))?;
@@ -507,6 +522,36 @@ fn successor_wall_verified(p:&Plan,r:&binary::Value)->Result<bool> {
         && r["successor_wall_log_hash"]==file_hash(&path)?
         && r["successor_wall_seconds"]==wall
         && outer_reserve_covers(wall,inner,s.successor_outer_reserve))
+}
+fn prior_a_report(p:&Plan,old:&RepairSuccessor)->Result<binary::Value> {
+    expected_file_hash(&p.root.join("review-a.r3b"),PRIOR_A_LINK)?;
+    let report=verified_linked_report(&p.root.join("review-a.r3b"),
+        &p.root.join("review-a-accounting.r3b"),FROZEN_EXECUTION_PLAN)?;
+    if report["contract"]!=ACCOUNTING_CONTRACT || report["plan_hash"]!=FROZEN_EXECUTION_PLAN
+        || report["source"]!=old.source || report["binary"]!=old.binary
+        || report["independent_R"]!=p.correction_hash || report["verdict"]!="PASS"
+        || !successor_wall_verified(p,&report)? {
+        return Err(bad("depth predecessor independent A"));
+    }
+    Ok(report)
+}
+fn failed_continuation_extra(root:&Path)->Result<f64> {
+    let attempt=root.join("attempts/attempt-003-returned.r3b");
+    let log=root.join("provenance/continuation-register.log");
+    let binary=root.join("provenance/failed-continuation-replica-train");
+    expected_file_hash(&attempt,FAILED_CONTINUATION_ATTEMPT)?;
+    expected_file_hash(&log,FAILED_CONTINUATION_LOG)?;
+    expected_file_hash(&binary,FAILED_CONTINUATION_BINARY)?;
+    let r:binary::Value=read_confirmed(&attempt)?;
+    let inner=r["seconds"].as_f64().ok_or_else(||bad("depth failed continuation seconds"))?;
+    let wall=observed_process_wall(&log)?;
+    if r["kind"]!="register-continuation" || r["result"]!="RETURNED_ERROR"
+        || r["binary"]!=FAILED_CONTINUATION_BINARY
+        || r["model_calls"]!=0 || r["optimizer_calls"]!=0
+        || !outer_reserve_covers(wall,inner,CONTINUATION_OUTER_RESERVE) {
+        return Err(bad("depth failed continuation provenance"));
+    }
+    Ok((wall-inner).max(0.))
 }
 fn prior_preparation_recount(p:&Plan)->Result<f64> {
     let old=repair_seal_inner(p,true)?;
@@ -538,10 +583,10 @@ fn continuation(p:&Plan)->Result<Continuation> {
     let entered=p.root.join("commands/command-007-entered.r3b");
     let returned=p.root.join("commands/command-007-returned.r3b");
     let link=p.root.join("review-a.r3b");
-    let attempt=p.root.join("attempts/attempt-003-returned.r3b");
+    let attempt=p.root.join("attempts/attempt-004-returned.r3b");
     let prior:binary::Value=read_confirmed(&returned)?;
     let registered:binary::Value=read_confirmed(&attempt)?;
-    let a:binary::Value=read_confirmed(&p.root.join("review-a-accounting.r3b"))?;
+    let a=prior_a_report(p,&old)?;
     if c.contract!=CONTINUATION_CONTRACT
         || c.predecessor_plan!=FROZEN_EXECUTION_PLAN
         || file_hash(&p.root.join("plan.r3b"))?!=c.predecessor_plan
@@ -557,12 +602,16 @@ fn continuation(p:&Plan)->Result<Continuation> {
         || file_hash(&p.root.join("screen-0.r3b"))?!=c.predecessor_screen0
         || prior["kind"]!="admit-a" || prior["bucket"]!="preparation"
         || prior["result"]!="COMPLETED"
-        || a["verdict"]!="PASS" || !successor_wall_verified(p,&a)?
+        || a["verdict"]!="PASS"
         || c.prior_preparation_seconds!=prior_preparation_recount(p)?
         || c.prior_status!="RESOURCE_NOT_MET"
         || c.preparation_limit!=2400 || c.training_limit!=2400
         || c.evaluation_limit!=2100 || c.total_limit!=6900
         || c.outer_reserve_seconds!=CONTINUATION_OUTER_RESERVE
+        || c.failed_attempt_returned!=FAILED_CONTINUATION_ATTEMPT
+        || c.failed_log_hash!=FAILED_CONTINUATION_LOG
+        || c.failed_binary_hash!=FAILED_CONTINUATION_BINARY
+        || c.failed_outer_extra_seconds!=failed_continuation_extra(&p.root)?
         || c.attempt_returned!=file_hash(&attempt)?
         || registered["kind"]!="register-continuation"
         || registered["result"]!="COMPLETED"
@@ -581,8 +630,8 @@ fn continuation(p:&Plan)->Result<Continuation> {
 fn continuation_wall_verified(p:&Plan,r:&binary::Value)->Result<bool> {
     if !p.root.join("continuation.r3b").exists() {return Ok(true);}
     let c=continuation(p)?;
-    let path=p.root.join("provenance/continuation-register.log");
-    let attempt:binary::Value=read_confirmed(&p.root.join("attempts/attempt-003-returned.r3b"))?;
+    let path=p.root.join("provenance/continuation-register-successor.log");
+    let attempt:binary::Value=read_confirmed(&p.root.join("attempts/attempt-004-returned.r3b"))?;
     let inner=attempt["seconds"].as_f64().ok_or_else(||bad("depth continuation inner duration"))?;
     let wall=observed_process_wall(&path)?;
     Ok(r["continuation"]==file_hash(&p.root.join("continuation.r3b"))?
@@ -1085,14 +1134,15 @@ fn seal_successor(root:&Path)->Result<()> {
 }
 fn register_continuation(root:&Path)->Result<()> {
     let root=root.canonicalize()?;
-    if root.join("attempts/attempt-003-entered.r3b").exists() {
+    if root.join("attempts/attempt-004-entered.r3b").exists() {
         return Err(bad("depth continuation one-shot attempt already entered"));
     }
-    let request=digest(&(root.as_path(),file_hash(&root.join("repair-successor.r3b"))?,
-        file_hash(&root.join("commands/command-007-returned.r3b"))?,
-        file_hash(&root.join("review-a.r3b"))?))?;
+    let request=digest(&(root.as_path(),CONTINUATION_CONTRACT,
+        FAILED_CONTINUATION_ATTEMPT,FAILED_CONTINUATION_LOG,4usize))?;
     let mut captured=None;
+    let mut failed_extra=None;
     preflight_attempt(&root,"register-continuation",&request,||{
+        failed_extra=Some(failed_continuation_extra(&root)?);
         if root.join("continuation.r3b").exists()
             || root.join("commands/command-008-entered.r3b").exists()
             || root.join("D6/segment-000-entered.r3b").exists()
@@ -1106,14 +1156,13 @@ fn register_continuation(root:&Path)->Result<()> {
         expected_file_hash(&root.join("review-a.r3b"),PRIOR_A_LINK)?;
         expected_file_hash(&root.join("screen-0.r3b"),PRIOR_SCREEN0)?;
         prior_preparation_recount(&p)?;
-        let old:binary::Value=read_confirmed(&root.join("review-a-accounting.r3b"))?;
-        if old["verdict"]!="PASS" || !successor_wall_verified(&p,&old)? {
-            return Err(bad("depth continuation parent A identity"));
-        }
+        let old=repair_successor_inner(&p,true)?;
+        prior_a_report(&p,&old)?;
         let device=Backend::Metal0.open()?;
         captured=Some(RuntimeProfile::capture(Backend::Metal0,&device)?);
         Ok(())
     })?;
+    let failed_extra=failed_extra.ok_or_else(||bad("depth failed continuation cost missing"))?;
     let runtime=captured.ok_or_else(||bad("depth continuation runtime missing"))?;
     let p:Plan=read_confirmed(&root.join("plan.r3b"))?;
     let old=repair_successor_inner(&p,true)?;
@@ -1129,7 +1178,11 @@ fn register_continuation(root:&Path)->Result<()> {
         prior_status:"RESOURCE_NOT_MET".into(),
         preparation_limit:2400,training_limit:2400,evaluation_limit:2100,total_limit:6900,
         outer_reserve_seconds:CONTINUATION_OUTER_RESERVE,
-        attempt_returned:file_hash(&root.join("attempts/attempt-003-returned.r3b"))?,
+        failed_attempt_returned:FAILED_CONTINUATION_ATTEMPT.into(),
+        failed_log_hash:FAILED_CONTINUATION_LOG.into(),
+        failed_binary_hash:FAILED_CONTINUATION_BINARY.into(),
+        failed_outer_extra_seconds:failed_extra,
+        attempt_returned:file_hash(&root.join("attempts/attempt-004-returned.r3b"))?,
         source:source()?,binary:runtime.binary.clone(),runtime};
     publish_confirmed(&root.join("continuation.r3b"),&c)?;
     continuation(&p)?;
@@ -1424,7 +1477,10 @@ fn execution_usage(p: &Plan) -> Result<(f64,f64,f64,usize,usize)> {
             let old=repair_seal_inner(p,true)?;
             prep_seconds+=old.additional_charge_seconds+JOURNAL_CLOSE_RESERVE
                 +s.additional_first_seal_seconds+s.successor_outer_reserve;
-            if continued {prep_seconds+=continuation(p)?.outer_reserve_seconds;}
+            if continued {
+                let c=continuation(p)?;
+                prep_seconds+=c.outer_reserve_seconds+c.failed_outer_extra_seconds;
+            }
         } else {prep_seconds+=repair_seal(p)?.additional_charge_seconds+JOURNAL_CLOSE_RESERVE;}
     }
     let link=p.root.join("preflight-link.r3b");
@@ -2367,7 +2423,10 @@ fn execution_forecast_32(p:&Plan)->Result<binary::Value> {
             let old=repair_seal_inner(p,true)?;
             prep+=old.additional_charge_seconds+JOURNAL_CLOSE_RESERVE
                 +s.additional_first_seal_seconds+s.successor_outer_reserve;
-            if continued {prep+=continuation(p)?.outer_reserve_seconds;}
+            if continued {
+                let c=continuation(p)?;
+                prep+=c.outer_reserve_seconds+c.failed_outer_extra_seconds;
+            }
         } else {prep+=repair_seal(p)?.additional_charge_seconds+JOURNAL_CLOSE_RESERVE;}
     }
     if p.root.join("preflight-link.r3b").exists() {
@@ -3167,6 +3226,21 @@ mod tests {
         assert_eq!(prior_preparation_recount(&p).unwrap(),PRIOR_PREPARATION_SECONDS);
         expected_file_hash(&root.join("screen-0.r3b"),PRIOR_SCREEN0).unwrap();
         expected_file_hash(&root.join("review-a.r3b"),PRIOR_A_LINK).unwrap();
+        assert!(failed_continuation_extra(&root).unwrap()>=0.);
+        let old=repair_successor_inner(&p,true).unwrap();
+        prior_a_report(&p,&old).unwrap();
+    }
+    #[test]
+    fn linked_report_rejects_changed_physical_bytes() {
+        let d=tempfile::tempdir().unwrap();
+        let report=d.path().join("review.r3b");
+        let link=d.path().join("link.r3b");
+        publish_confirmed(&report,&binary::record!({"verdict":"PASS"})).unwrap();
+        publish_confirmed(&link,&binary::record!({"path":report,
+            "hash":file_hash(&report).unwrap(),"plan":"plan"})).unwrap();
+        assert!(verified_linked_report(&link,&report,"plan").is_ok());
+        std::fs::write(&report,b"changed").unwrap();
+        assert!(verified_linked_report(&link,&report,"plan").is_err());
     }
     #[test]
     fn depth8_process_case() {
