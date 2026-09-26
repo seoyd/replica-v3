@@ -1,5 +1,46 @@
 # 진단 및 구현 상태
 
+## 2026-09-26 depth8 accounting repair — A PASS, RESOURCE_NOT_MET
+
+`R3-DEPTH8-ACCOUNTING-FIX-1.0` changed only the depth8 execution boundary.
+The original plan, natives, Adam, D6/D8 raw, failures, and first repair seal
+remain immutable. An append-only successor binds the earlier seal, physical
+`preparation.r3b`, six legacy command pairs, command 006, preserved executables,
+and the contemporaneous tool excerpt. The old failed Metal preparation's
+117.922353876 seconds are included once; the original session timestamps bound
+130.242 seconds conservatively, so only 12.319646124 seconds were added. The
+first seal's external 26.37-second observation added the previously omitted
+4.678257417 seconds. The successor reserves 30 seconds for its own outer work;
+the observed difference was 21.829935625 seconds.
+
+The native finalization reader now requires matching pending payload, durable
+return receipt, manifest and current evidence. The manifest covers current raw,
+score, completion marker, native and independent B hashes. Focused tests passed
+11/11 plus a one-shot regression 1/1; an actual preseal receipt audit passed
+1/1. The D8 missing initial eight calls and the common initial screen completed:
+16 total generation calls, 256 generated tokens, zero optimizer/backward calls,
+and no new model weights. Independent A accepted only preparation/accounting and
+initial16. Its R3BIN report hash is
+`165ec42264c1820ca3bd6499a083264f872cab7e2cc890e91e8bc4c37d2cf250`.
+
+The product `admit` bound that report and finished, but its preparation receipt
+charged 281.481822917 seconds. Preparation is therefore
+**1904.564346666/1800 seconds, 104.564346666 over limit**. The completed A
+link does not grant a resource or quality PASS. D6/D8 local updates are 0/0;
+the registered 1/32/128/512 learning, final panels, B and Goal1 decision were
+not run. The study is **RESOURCE_NOT_MET** and cannot advance under this plan.
+Training and evaluation buckets remain 0/2400 and 0/2100 seconds. The existing
+generation ceiling remains 1760 calls and 262144 tokens; no new budget was
+granted. Whole-process wall acceptance remains UNKNOWN.
+
+Evidence is preserved under `artifacts/depth8-comparison-20260926-v3/execution/`.
+Frozen successor source file SHA256 is
+`3303a0844ba9892e8b159673f66d428afe8c1b20ac7d502b38591b58588ba213`,
+binary SHA256 `d807da16d5d81b073c62bd669a965aa4e17b9aa0eb4392aaca4c1f6bd4c3f093`,
+and successor receipt SHA256
+`e9df6181a1011edd9108bbea322abc5b1d7486cacf5ec9e8efbb56f19961c3a6`.
+The earlier cost failure and A report remain separate from model quality.
+
 ## 2026-09-26 depth8 execution recovery — EXECUTION_COST_BLOCKED at G2
 
 The append-only execution amendment under
