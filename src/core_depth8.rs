@@ -27,6 +27,12 @@ const CONTINUATION_OUTER_RESERVE: f64 = 30.;
 const FAILED_CONTINUATION_ATTEMPT: &str = "56ae33d6402b5816fad145e2fa718b5442753b918a31a1b75373415516a7015c";
 const FAILED_CONTINUATION_LOG: &str = "ee99777d7a6532576dd5d0ae06d697de0faf23385c8b6ff353031a3029a6a51e";
 const FAILED_CONTINUATION_BINARY: &str = "5586664d38df17aa55cfc25888df1c3edc4f4ee79bb8f360678b6bdf8f3378ee";
+const CONTINUATION_WALL_CONTRACT:&str="R3-DEPTH8-CONTINUATION-WALL-CORRECTION-1.0";
+const FROZEN_CONTINUATION:&str="7da73d57fa79d8e430379d25a0c8acafb51050c52cd7dcd5fd36e0252de36d4e";
+const CONTINUATION_ATTEMPT_004:&str="ac4ec2b884c7c63763ca2ac7e000da361e4e2c2629569ad01ee8efe65a2ccf05";
+const CONTINUATION_WALL_LOG:&str="b694d983e611d18cb23498a06b1680aca71045800e63d557195516285edac7ab";
+const CONTINUATION_BINARY:&str="44faeec8d14407530aa77fd1f8dedc0f896fbe09afc980e53b7fc57e77e80996";
+const WALL_CORRECTION_OUTER_RESERVE:f64=30.;
 const FIRST_SEAL_LOG_HASH: &str = "6113e01a05d04c735632fb377b26a35ff90a83fb97f771876a1ca107cca1ef9c";
 const FIRST_SEAL_PREPARATION_HASH: &str = "f4e483e20e6f813bd022c626cc8994a685215a840857a730fd4b6c50465f56a2";
 const FIRST_SEAL_COMMAND_006_HASH: &str = "7f11ff786f80195644a8b0871a87e8594c023bdd16e34ef558cfb3f0045d8c67";
@@ -48,6 +54,7 @@ pub enum Action {
     SealSuccessor { #[arg(long)] root: PathBuf },
     RegisterContinuation { #[arg(long)] root: PathBuf },
     AdmitContinuation { #[arg(long)] root: PathBuf, #[arg(long)] review: PathBuf },
+    SealContinuationWall { #[arg(long)] root: PathBuf },
     ReadFinal { #[arg(long)] root: PathBuf },
     ExecutePrepare { #[arg(long)] root: PathBuf, #[arg(long)] target_baseline_kib: u64,
         #[arg(long, default_value_t=0.)] prior_failed_prep_seconds: f64,
@@ -230,6 +237,15 @@ struct Continuation {
     source:String,
     binary:String,
     runtime:RuntimeProfile,
+}
+#[derive(Clone,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContinuationWallCorrection {
+    contract:String,predecessor:String,predecessor_attempt:String,
+    predecessor_log:String,predecessor_binary:PathBuf,predecessor_binary_hash:String,
+    predecessor_inner_seconds:f64,predecessor_wall_seconds:f64,
+    additional_seconds:f64,outer_reserve_seconds:f64,attempt_returned:String,
+    source:String,binary:String,runtime:RuntimeProfile,
 }
 #[derive(Clone, Copy)]
 struct ExecutionLimits { preparation:f64, training:f64, evaluation:f64, total:f64 }
@@ -576,7 +592,7 @@ fn prior_preparation_recount(p:&Plan)->Result<f64> {
     }
     Ok(seconds)
 }
-fn continuation(p:&Plan)->Result<Continuation> {
+fn continuation_inner(p:&Plan,allow_historical:bool)->Result<Continuation> {
     let c:Continuation=read_confirmed(&p.root.join("continuation.r3b"))?;
     let old=repair_successor_inner(p,true)?;
     let executable=p.root.join("provenance/accounting-successor-replica-train");
@@ -616,7 +632,7 @@ fn continuation(p:&Plan)->Result<Continuation> {
         || registered["kind"]!="register-continuation"
         || registered["result"]!="COMPLETED"
         || registered["source"]!=c.source || registered["binary"]!=c.binary
-        || c.source!=source()? || c.binary!=file_hash(&std::env::current_exe()?)?
+        || (!allow_historical && (c.source!=source()? || c.binary!=file_hash(&std::env::current_exe()?)?))
         || c.runtime.binary!=c.binary || c.runtime.backend!=old.runtime.backend
         || c.runtime.actual_device!=old.runtime.actual_device || c.runtime.dtype!=old.runtime.dtype
         || c.runtime.accumulator!=old.runtime.accumulator || c.runtime.lock!=old.runtime.lock
@@ -627,18 +643,79 @@ fn continuation(p:&Plan)->Result<Continuation> {
     preflight_usage(&p.root)?;
     Ok(c)
 }
+fn continuation(p:&Plan)->Result<Continuation> {continuation_inner(p,false)}
+fn continuation_wall_extra(p:&Plan)->Result<(Continuation,f64,f64,f64)> {
+    let c=continuation_inner(p,true)?;
+    expected_file_hash(&p.root.join("continuation.r3b"),FROZEN_CONTINUATION)?;
+    expected_file_hash(&p.root.join("attempts/attempt-004-returned.r3b"),CONTINUATION_ATTEMPT_004)?;
+    expected_file_hash(&p.root.join("provenance/continuation-register-successor.log"),CONTINUATION_WALL_LOG)?;
+    expected_file_hash(&p.root.join("provenance/continuation-replica-train"),CONTINUATION_BINARY)?;
+    let r:binary::Value=read_confirmed(&p.root.join("attempts/attempt-004-returned.r3b"))?;
+    let inner=r["seconds"].as_f64().ok_or_else(||bad("depth continuation inner seconds"))?;
+    let wall=observed_process_wall(&p.root.join("provenance/continuation-register-successor.log"))?;
+    let extra=wall-inner-c.outer_reserve_seconds;
+    if r["result"]!="COMPLETED" || r["kind"]!="register-continuation"
+        || r["source"]!=c.source || r["binary"]!=c.binary
+        || !inner.is_finite() || inner<0. || wall+0.01<inner || !extra.is_finite() || extra<=0. {
+        return Err(bad("depth continuation wall correction predecessor"));
+    }
+    Ok((c,inner,wall,extra))
+}
+fn continuation_wall_correction(p:&Plan)->Result<ContinuationWallCorrection> {
+    let w:ContinuationWallCorrection=read_confirmed(&p.root.join("continuation-wall-correction.r3b"))?;
+    let (old,inner,wall,extra)=continuation_wall_extra(p)?;
+    let executable=p.root.join("provenance/continuation-replica-train");
+    let attempt=p.root.join("attempts/attempt-005-returned.r3b");
+    let returned:binary::Value=read_confirmed(&attempt)?;
+    if w.contract!=CONTINUATION_WALL_CONTRACT || w.predecessor!=FROZEN_CONTINUATION
+        || w.predecessor_attempt!=CONTINUATION_ATTEMPT_004
+        || w.predecessor_log!=CONTINUATION_WALL_LOG
+        || w.predecessor_binary!=executable || w.predecessor_binary_hash!=CONTINUATION_BINARY
+        || w.predecessor_inner_seconds!=inner || w.predecessor_wall_seconds!=wall
+        || w.additional_seconds!=extra || w.outer_reserve_seconds!=WALL_CORRECTION_OUTER_RESERVE
+        || w.attempt_returned!=file_hash(&attempt)?
+        || returned["kind"]!="seal-continuation-wall" || returned["result"]!="COMPLETED"
+        || returned["source"]!=w.source || returned["binary"]!=w.binary
+        || w.source!=source()? || w.binary!=file_hash(&std::env::current_exe()?)?
+        || w.runtime.binary!=w.binary || w.runtime.backend!=old.runtime.backend
+        || w.runtime.actual_device!=old.runtime.actual_device || w.runtime.dtype!=old.runtime.dtype
+        || w.runtime.accumulator!=old.runtime.accumulator || w.runtime.lock!=old.runtime.lock
+        || w.runtime.patch!=old.runtime.patch || w.runtime.patch_source!=old.runtime.patch_source
+        || w.runtime.os_build!=old.runtime.os_build || w.runtime.fast_math!=old.runtime.fast_math {
+        return Err(bad("depth continuation wall correction identity"));
+    }
+    let correction_inner=returned["seconds"].as_f64()
+        .ok_or_else(||bad("depth wall correction attempt seconds"))?;
+    let correction_wall=observed_process_wall(&p.root.join("provenance/continuation-wall-correction.log"))?;
+    if !outer_reserve_covers(correction_wall,correction_inner,w.outer_reserve_seconds) {
+        return Err(bad("depth wall correction whole process reserve"));
+    }
+    preflight_usage(&p.root)?;
+    Ok(w)
+}
 fn continuation_wall_verified(p:&Plan,r:&binary::Value)->Result<bool> {
     if !p.root.join("continuation.r3b").exists() {return Ok(true);}
-    let c=continuation(p)?;
+    let corrected=p.root.join("continuation-wall-correction.r3b").exists();
+    let c=continuation_inner(p,corrected)?;
     let path=p.root.join("provenance/continuation-register-successor.log");
     let attempt:binary::Value=read_confirmed(&p.root.join("attempts/attempt-004-returned.r3b"))?;
     let inner=attempt["seconds"].as_f64().ok_or_else(||bad("depth continuation inner duration"))?;
     let wall=observed_process_wall(&path)?;
+    let allowed=if corrected {
+        let w=continuation_wall_correction(p)?;
+        let correction_log=p.root.join("provenance/continuation-wall-correction.log");
+        r["continuation_wall_correction"]==file_hash(&p.root.join("continuation-wall-correction.r3b"))?
+            && r["wall_correction_log"]==binary::record!(correction_log)
+            && r["wall_correction_log_hash"]==file_hash(&correction_log)?
+            && r["wall_correction_wall_seconds"]==observed_process_wall(&correction_log)?
+            && w.additional_seconds==wall-inner-c.outer_reserve_seconds
+            && wall+0.01>=inner
+    } else {outer_reserve_covers(wall,inner,c.outer_reserve_seconds)};
     Ok(r["continuation"]==file_hash(&p.root.join("continuation.r3b"))?
         && r["continuation_wall_log"]==binary::record!(path)
         && r["continuation_wall_log_hash"]==file_hash(&path)?
         && r["continuation_wall_seconds"]==wall
-        && outer_reserve_covers(wall,inner,c.outer_reserve_seconds))
+        && allowed)
 }
 
 fn source() -> Result<String> {
@@ -690,7 +767,11 @@ fn checked(root: &Path) -> Result<Plan> {
     let mut p: Plan = read_confirmed(&root.join("plan.r3b"))?;
     if execution(&p) && (p.source!=source()? || p.runtime.binary!=file_hash(&std::env::current_exe()?)?) {
         amendment(&p)?;
-        if p.root.join("continuation.r3b").exists() {
+        if p.root.join("continuation-wall-correction.r3b").exists() {
+            let next=continuation_wall_correction(&p)?;
+            p.source=next.source;
+            p.runtime=next.runtime;
+        } else if p.root.join("continuation.r3b").exists() {
             let next=continuation(&p)?;
             p.source=next.source;
             p.runtime=next.runtime;
@@ -1188,6 +1269,41 @@ fn register_continuation(root:&Path)->Result<()> {
     continuation(&p)?;
     Ok(())
 }
+fn seal_continuation_wall(root:&Path)->Result<()> {
+    let root=root.canonicalize()?;
+    if root.join("attempts/attempt-005-entered.r3b").exists() {
+        return Err(bad("depth wall correction one-shot attempt already entered"));
+    }
+    let request=digest(&(root.as_path(),CONTINUATION_WALL_CONTRACT,FROZEN_CONTINUATION,5usize))?;
+    let mut captured=None;
+    let mut measured=None;
+    preflight_attempt(&root,"seal-continuation-wall",&request,||{
+        if root.join("continuation-wall-correction.r3b").exists()
+            || root.join("commands/command-008-entered.r3b").exists()
+            || root.join("D6/segment-000-entered.r3b").exists()
+            || root.join("D8/segment-000-entered.r3b").exists() {
+            return Err(bad("depth wall correction parent already advanced"));
+        }
+        let p:Plan=read_confirmed(&root.join("plan.r3b"))?;
+        measured=Some(continuation_wall_extra(&p)?);
+        let device=Backend::Metal0.open()?;
+        captured=Some(RuntimeProfile::capture(Backend::Metal0,&device)?);
+        Ok(())
+    })?;
+    let (old,inner,wall,extra)=measured.ok_or_else(||bad("depth wall correction measurement missing"))?;
+    let runtime=captured.ok_or_else(||bad("depth wall correction runtime missing"))?;
+    if old.binary!=CONTINUATION_BINARY {return Err(bad("depth wall correction original binary"));}
+    let w=ContinuationWallCorrection{contract:CONTINUATION_WALL_CONTRACT.into(),
+        predecessor:FROZEN_CONTINUATION.into(),predecessor_attempt:CONTINUATION_ATTEMPT_004.into(),
+        predecessor_log:CONTINUATION_WALL_LOG.into(),
+        predecessor_binary:root.join("provenance/continuation-replica-train"),
+        predecessor_binary_hash:CONTINUATION_BINARY.into(),
+        predecessor_inner_seconds:inner,predecessor_wall_seconds:wall,
+        additional_seconds:extra,outer_reserve_seconds:WALL_CORRECTION_OUTER_RESERVE,
+        attempt_returned:file_hash(&root.join("attempts/attempt-005-returned.r3b"))?,
+        source:source()?,binary:runtime.binary.clone(),runtime};
+    publish_confirmed(&root.join("continuation-wall-correction.r3b"),&w)
+}
 fn execute_check(root:&Path)->Result<()> {
     let started=Instant::now();
     let p=checked(root)?;
@@ -1478,8 +1594,13 @@ fn execution_usage(p: &Plan) -> Result<(f64,f64,f64,usize,usize)> {
             prep_seconds+=old.additional_charge_seconds+JOURNAL_CLOSE_RESERVE
                 +s.additional_first_seal_seconds+s.successor_outer_reserve;
             if continued {
-                let c=continuation(p)?;
+                let corrected=p.root.join("continuation-wall-correction.r3b").exists();
+                let c=continuation_inner(p,corrected)?;
                 prep_seconds+=c.outer_reserve_seconds+c.failed_outer_extra_seconds;
+                if corrected {
+                    let w=continuation_wall_correction(p)?;
+                    prep_seconds+=w.additional_seconds+w.outer_reserve_seconds;
+                }
             }
         } else {prep_seconds+=repair_seal(p)?.additional_charge_seconds+JOURNAL_CLOSE_RESERVE;}
     }
@@ -2424,8 +2545,13 @@ fn execution_forecast_32(p:&Plan)->Result<binary::Value> {
             prep+=old.additional_charge_seconds+JOURNAL_CLOSE_RESERVE
                 +s.additional_first_seal_seconds+s.successor_outer_reserve;
             if continued {
-                let c=continuation(p)?;
+                let corrected=p.root.join("continuation-wall-correction.r3b").exists();
+                let c=continuation_inner(p,corrected)?;
                 prep+=c.outer_reserve_seconds+c.failed_outer_extra_seconds;
+                if corrected {
+                    let w=continuation_wall_correction(p)?;
+                    prep+=w.additional_seconds+w.outer_reserve_seconds;
+                }
             }
         } else {prep+=repair_seal(p)?.additional_charge_seconds+JOURNAL_CLOSE_RESERVE;}
     }
@@ -2734,6 +2860,10 @@ fn admit_b(root: &Path, review: &Path) -> Result<()> {
             || r["review_a_continuation"]!=file_hash(&p.root.join("review-a-continuation.r3b"))?)) {
         return Err(bad("depth independent B identity/full recount"));
     }
+    if p.root.join("continuation-wall-correction.r3b").exists()
+        && r["continuation_wall_correction"]!=file_hash(&p.root.join("continuation-wall-correction.r3b"))? {
+        return Err(bad("depth independent B continuation wall identity"));
+    }
     publish_confirmed(&p.root.join("review-b.r3b"),&binary::record!({
         "path":review.canonicalize()?,"hash":file_hash(review)?,"plan":file_hash(&p.root.join("plan.r3b"))?}))
 }
@@ -2812,6 +2942,9 @@ fn final_manifest_hash(p:&Plan,predecessor:&str)->Result<String> {
         if p.root.join("repair-successor.r3b").exists() {add(p.root.join("repair-successor.r3b"))?;}
         if p.root.join("continuation.r3b").exists() {
             add(p.root.join("continuation.r3b"))?;
+            if p.root.join("continuation-wall-correction.r3b").exists() {
+                add(p.root.join("continuation-wall-correction.r3b"))?;
+            }
             add(p.root.join("review-a-continuation.r3b"))?;
         }
         add(amendment_path(p))?;}
@@ -3023,6 +3156,7 @@ pub fn run(action: Action) -> Result<()> {
             repair_prepare(&root,&legacy_observation,&legacy_binary),
         Action::SealRepair {root} => seal_repair(&root),
         Action::SealSuccessor {root} => seal_successor(&root),
+        Action::SealContinuationWall {root} => seal_continuation_wall(&root),
         Action::RegisterContinuation {root} => register_continuation(&root),
         Action::AdmitContinuation {root,review} => admit_continuation(&root,&review),
         Action::ReadFinal {root} => read_final(&root),
@@ -3222,13 +3356,18 @@ mod tests {
         let Ok(root)=std::env::var("R3_DEPTH8_CONTINUATION_ROOT") else {return};
         let root=PathBuf::from(root).canonicalize().unwrap();
         let p:Plan=read_confirmed(&root.join("plan.r3b")).unwrap();
-        assert!(!root.join("continuation.r3b").exists());
+        assert!(root.join("continuation.r3b").exists());
+        assert!(!root.join("continuation-wall-correction.r3b").exists());
         assert_eq!(prior_preparation_recount(&p).unwrap(),PRIOR_PREPARATION_SECONDS);
         expected_file_hash(&root.join("screen-0.r3b"),PRIOR_SCREEN0).unwrap();
         expected_file_hash(&root.join("review-a.r3b"),PRIOR_A_LINK).unwrap();
         assert!(failed_continuation_extra(&root).unwrap()>=0.);
         let old=repair_successor_inner(&p,true).unwrap();
         prior_a_report(&p,&old).unwrap();
+        let (_,inner,wall,extra)=continuation_wall_extra(&p).unwrap();
+        assert_eq!(wall,114.20);
+        assert!(inner>0. && extra>0.);
+        assert_eq!(extra,wall-inner-CONTINUATION_OUTER_RESERVE);
     }
     #[test]
     fn linked_report_rejects_changed_physical_bytes() {
