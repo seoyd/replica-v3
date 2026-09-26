@@ -1,5 +1,38 @@
 # 진단 및 구현 상태
 
+## 2026-09-26 depth8 parent-bound continuation — A PASS, admission UNKNOWN / RESOURCE_NOT_MET
+
+The original 1800-second preparation failure and its immutable evidence remain
+unchanged. The user-authorized, parent-bound successor raises preparation to
+2400 seconds and total to 6900 seconds; training and evaluation stay at
+2400/2100 seconds. The frozen implementation is source
+`181254142978af28da62066c1510706800af433a`, source-file SHA256
+`8c72c18f4181dbf8e55f89139851948f004a5cb6a985a4dbdf6fe0081360228a`,
+and Metal executable SHA256
+`9afef1dc1067a53c9f63ac8f0df3f945980c5c52fa9c64119e3e5808b0bd0686`.
+The first successor registration failed without model work; the next one's
+external wall exceeded its reserve. Both failed attempts and their logs were
+preserved. An append-only correction included the missing wall cost. Independent
+A accepted only the corrected preparation/accounting and reused initial16;
+its report SHA256 is
+`8d80c3b56d6926706ac559eaf1ae5b0e924178609794344089eeb73ff9bf9a9e`.
+At that point preparation was **2132.316754541/2400 seconds**, leaving
+267.683245459 seconds; training and evaluation remained 0/2400 and 0/2100.
+
+The actual successor `admit` process then ran 307.72 seconds of external wall
+and was terminated at the preparation boundary (exit 143). Its
+`commands/command-008-entered.r3b` SHA256 is
+`e4aedbd0185ece764c4b20d7fb7c7d4579da7d8ec5ce6c165891c852f6c13a27`;
+there is **no returned receipt or accepted A link**. The preserved time log
+SHA256 is `983be667a79531a6b380c4820615617d815e0d8cabc6b32119b32e1226cd283e`.
+Observed preparation wall is at least approximately **2440.04/2400 seconds**,
+over the authorized cap by approximately 40.04 seconds. This is an unfinalized
+command and a resource failure, not a quality judgment or successful admission.
+No D6/D8 optimizer/backward step, new generation or teacher call occurred in
+this successor; both arms remain at local update 0. Initial16 were reused, not
+regenerated. D6/D8 learning, final panels and independent B are **NOT_RUN**.
+There is no authority to resume command 008 or start training under this scope.
+
 ## 2026-09-26 depth8 accounting repair — A PASS, RESOURCE_NOT_MET
 
 `R3-DEPTH8-ACCOUNTING-FIX-1.0` changed only the depth8 execution boundary.
