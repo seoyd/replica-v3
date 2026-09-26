@@ -1,36 +1,71 @@
 # 진단 및 구현 상태
 
-## 2026-09-26 TR++ binding completion — preparation only
+## 2026-09-26 TR++ binding completion — same-512 comparison closed
 
-The parent-bound C256/T256 supplement is prepared, not admitted for learning.
-The original partial study, C/T natives, 1,664 raw generations and B256 report
-remain unchanged. The new plan is
-`artifacts/trpp-binding-completion-20260926-prep-v1/plan.r3b`
-(SHA256 `0fa999312c486d368df24e5e2c64081907d75875ee6f8a1a69908802d3d4d27a`),
-linked by one immutable registration in the original evidence root. The
-executor SHA256 is `d2121e4c74ebe51ec4f204174b5bd6ff70f67197776cb2e98172a4bb38febfe1`.
-Its fixed tape suffix predicts 375,040 input and 29,952 target tokens per arm;
-these are prepared totals, not consumed training. First A failed; revised A is
-PENDING. New model, generation, teacher and optimizer calls are zero.
+The original C/T256 partial study, its natives/Adam, 1,664 raw generations,
+report and B256 remain unchanged. The first supplement plan SHA256 was
+`0fa999312c486d368df24e5e2c64081907d75875ee6f8a1a69908802d3d4d27a`.
+Independent A found that a valid F64 `0.0` no-call B time was rejected by an
+integer-zero comparison (immutable FAIL report SHA256
+`faa075f1754b5d01d53f51b12d62322c5a7e1227b86ac3d7fc6e1b7759d6c1e3`).
+The same root received one append-only `plan-v2.r3b` (SHA256
+`5d22e74b00249694e3c67492bb6ebf570bdd1f940fbe06ad160b5a2cc3beb660`).
+The first plan/registration/FAIL remain preserved. Revised independent A PASS
+SHA256 is `ba76fcd6b8cf8e93200df386675ca16c9bd1df31d9995dcac9ad9f608c122125`.
+Active source digest is `9eaf4d1d02f3ab529bb92873e4c3424d20c0fbb0810e4d134308306e2fad05f0`;
+executor SHA256 is `6d685642fe4cdd9525651aa6ae26e2fc8348518e1455a387ca658117da399343`.
 
-The first independent A found that F64 `0.0` no-call B time was rejected by
-an integer-zero comparison. Its immutable FAIL report SHA256 is
-`faa075f1754b5d01d53f51b12d62322c5a7e1227b86ac3d7fc6e1b7759d6c1e3`.
-The corrected same-lineage plan was appended as `plan-v2.r3b` (SHA256
-`5d22e74b00249694e3c67492bb6ebf570bdd1f940fbe06ad160b5a2cc3beb660`),
-with executor SHA256 `6d685642fe4cdd9525651aa6ae26e2fc8348518e1455a387ca658117da399343`.
-The first plan, registration and failed A remain byte-for-byte preserved.
-The revised inspector exits 0 with A_PENDING, a duplicate revision exits 1,
-and relevant direct tests pass 3/3. No new model calls were made for repair.
+Both arms continued the exact suffix of the original tape once: each 256
+committed/attempted updates, 375,040 input and 29,952 target tokens, ending
+at model/Adam clock3584. C native SHA256 is
+`71e98b88593c0ab6e6e2774a1d8d5e1e216d66a12147b46b284e1e428d482923`;
+T native SHA256 is
+`45950cf3caa8fef5592b8a92a7f8bfaf4e9cbf4df736cdcff1476f2fd58d752b`.
+Training model-work was C375.735/T395.845 seconds. The fixed 832/arm greedy
+panels returned in full: C15,067 generated tokens/594.052 seconds,
+T13,940 tokens/571.598 seconds.
 
-The measured new `target/debug` baseline was 11,630,684 KiB. After scoped
-builds and removal of exactly three user-approved incremental directories,
-it is 12,653,164 KiB, a 1,022,480 KiB increase under the 1 GiB new-growth
-cap. The old study's earlier shared-target growth remains UNKNOWN. Direct
-continuation/storage tests passed 2/2; `cargo check`, build, targeted rustfmt
-and clippy passed. Repository-wide `cargo fmt --check` found pre-existing
-unrelated formatting differences, and was not applied. No 512 endpoint,
-quality signal, B reproduction or confirmation has been claimed.
+| Final panel | C FULL | T FULL |
+| --- | ---: | ---: |
+| word | 47/192 | 34/192 |
+| renamed | 30/192 | 31/192 |
+| representative train | 52/192 | 53/192 |
+| value | 35/64 | 32/64 |
+| citation | 7/64 | 6/64 |
+| S1Q1 | 8/64 | 5/64 |
+| old QA | 0/64 | 0/64 |
+
+Word paired gain/loss was 13/26 and outside-ID rows C58/T70;
+renamed gain/loss was 14/13 and outside-ID C79/T75. Both word and renamed
+ALL4 stayed 0/48.
+Word value/support/EOS/QB/SB were C95/80/192/1/11 versus
+T96/68/192/0/1; renamed were C91/64/192/0/4 versus
+T96/67/192/0/0. Word/renamed parse failures were zero in both arms.
+Citation outside-ID was C38/T41 and S1Q1 C38/T39, with EOS64/64 and
+errors0/0 in both panels. Old QA outside-ID was C10/T0, EOS C48/T51,
+errors C16/T13. These raw error rows remain in the denominators.
+Independent B re-counted all 1,664 raw rows and reproduced
+the fixed first eight word rows per arm in fresh processes: 16 calls,
+256 generated tokens, 420.660 seconds; original raw token/bytes/text/finish/
+error/completion matched. B PASS SHA256 is
+`2f1e3db00157c8392dbf8abb6c1009abf725cbb4efe1f53ebdeb837d2c712f59`.
+
+Final report SHA256 `9c262a50718cc20db9be5b26bd6389229459b508ca367c8b2dfc843d79925fc3`
+records `COMPLETE_NO_CLEAR_SIGNAL`: execution/B integrity PASS, same-512
+quality FAIL and resource PASS. Confirmation was not run because the quality
+gate was false. New model-work
+was 2,357.890 seconds, accounted old+new 4,556.338 seconds; new generation
+1,680 calls/29,263 tokens, old+new 3,344 calls/60,233 tokens. New supplement
+files occupy 248,048,845 logical bytes (254,388 KiB allocated). The new
+`target/debug` baseline was 11,630,684 KiB; final 12,653,156 KiB is a
+1,022,472 KiB increase under 1 GiB after removal of exactly three
+user-approved incremental directories. Historical shared-target growth is
+still UNKNOWN. Runtime was Metal(0)/F32; peak host RSS, GPU allocation and
+transient target peak were not measured and remain UNKNOWN. Relevant tests
+passed 3/3; locked/offline check, build, scoped
+rustfmt and clippy passed. Whole-repository `cargo fmt --check` found unrelated
+existing formatting differences and was not applied. No new TINY/teacher,
+confirmation, product promotion or Goal1 acceptance occurred.
 
 ## 2026-09-26 TR++ binding recovery — partial same-256 comparison
 
