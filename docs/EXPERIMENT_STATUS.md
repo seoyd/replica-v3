@@ -1,5 +1,27 @@
 # 진단 및 구현 상태
 
+## 2026-09-26 TR++ binding completion — preparation only
+
+The parent-bound C256/T256 supplement is prepared, not admitted for learning.
+The original partial study, C/T natives, 1,664 raw generations and B256 report
+remain unchanged. The new plan is
+`artifacts/trpp-binding-completion-20260926-prep-v1/plan.r3b`
+(SHA256 `0fa999312c486d368df24e5e2c64081907d75875ee6f8a1a69908802d3d4d27a`),
+linked by one immutable registration in the original evidence root. The
+executor SHA256 is `d2121e4c74ebe51ec4f204174b5bd6ff70f67197776cb2e98172a4bb38febfe1`.
+Its fixed tape suffix predicts 375,040 input and 29,952 target tokens per arm;
+these are prepared totals, not consumed training. A is PENDING. New model,
+generation, teacher and optimizer calls are zero.
+
+The measured new `target/debug` baseline was 11,630,684 KiB. After scoped
+builds and removal of exactly three user-approved incremental directories,
+it is 12,653,164 KiB, a 1,022,480 KiB increase under the 1 GiB new-growth
+cap. The old study's earlier shared-target growth remains UNKNOWN. Direct
+continuation/storage tests passed 2/2; `cargo check`, build, targeted rustfmt
+and clippy passed. Repository-wide `cargo fmt --check` found pre-existing
+unrelated formatting differences, and was not applied. No 512 endpoint,
+quality signal, B reproduction or confirmation has been claimed.
+
 ## 2026-09-26 TR++ binding recovery — partial same-256 comparison
 
 The separate parent-bound C/T study preserves the completed fresh TR++3072
