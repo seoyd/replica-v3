@@ -7,13 +7,20 @@ const MAGIC: &[u8; 8] = b"R3TOK\0\0\0";
 // a synthetic experiment-record parent or target-role objective.
 pub(in crate::training) fn comparison_cache(path:&Path, hashes:[[u8;32];6], seq:usize,vocab:usize,
     samples:&[Sample],create:bool)->Result<Vec<Sample>> {
-    let key=Key {hashes,ordinals:(0..samples.len() as u32).collect(),seq,vocab};
-    let annotations=samples.iter().map(|_|target_loss::Annotation {spans:vec![],fractions:vec![],roles:vec![],supported:false}).collect::<Vec<_>>();
     if create {
+        let key=Key {hashes,ordinals:(0..samples.len() as u32).collect(),seq,vocab};
+        let annotations=samples.iter().map(|_|target_loss::Annotation {spans:vec![],fractions:vec![],roles:vec![],supported:false}).collect::<Vec<_>>();
         let bytes=encode(&key,samples,&annotations)?;
         publish_new(path,|f,_|{f.write_all(&bytes)?;Ok(())})?;
     }
-    let packed=decode(neural::read_bounded(path,MAX_FILE)?,&key)?;
+    comparison_cache_bytes(neural::read_bounded(path,MAX_FILE)?,hashes,seq,vocab,samples)
+}
+
+pub(in crate::training) fn comparison_cache_bytes(bytes:Vec<u8>,hashes:[[u8;32];6],seq:usize,vocab:usize,
+    samples:&[Sample])->Result<Vec<Sample>> {
+    let key=Key {hashes,ordinals:(0..samples.len() as u32).collect(),seq,vocab};
+    let annotations=samples.iter().map(|_|target_loss::Annotation {spans:vec![],fractions:vec![],roles:vec![],supported:false}).collect::<Vec<_>>();
+    let packed=decode(bytes,&key)?;
     parity(&packed,samples,&annotations)?;
     (0..samples.len()).map(|i|packed.sample(i)).collect()
 }

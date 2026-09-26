@@ -1504,16 +1504,60 @@ pub fn save_comparison(path:&Path,state:ComparisonState,vars:&BTreeMap<String,ca
 }
 fn read_comparison(file:&mut File)->Result<ComparisonArchive>{
     let size=file.metadata()?.len();if !(PREFIX as u64..=MAX_FILE).contains(&size){return Err(bad("comparison native size"));}
-    let mut prefix=[0u8;PREFIX];file.read_exact(&mut prefix)?;
+    let mut bytes=vec![0u8;size as usize];file.read_exact(&mut bytes)?;
+    decode_comparison_bytes(&bytes)
+}
+fn decode_comparison_bytes(bytes:&[u8])->Result<ComparisonArchive>{
+    let size=bytes.len() as u64;if !(PREFIX as u64..=MAX_FILE).contains(&size){return Err(bad("comparison native size"));}
+    let prefix=&bytes[..PREFIX];
     if &prefix[..8]!=MAGIC||u16::from_le_bytes(prefix[8..10].try_into().unwrap())!=4||prefix[10]!=2
         ||prefix[11..16].iter().chain(&prefix[56..]).any(|&b|b!=0)
         ||u64::from_le_bytes(prefix[16..24].try_into().unwrap())!=size{return Err(bad("comparison native header/core version"));}
-    let mut payload=vec![0;size as usize-PREFIX];file.read_exact(&mut payload)?;
+    let payload=&bytes[PREFIX..];
     if Sha256::digest(&payload)[..]!=prefix[24..56]{return Err(bad("comparison checksum"));}
     Ok(crate::binary::from_canonical_slice_bounded(&payload,MAX_FILE as usize-PREFIX)?)
 }
 pub fn load_comparison(path:&Path,expected:&ComparisonState,device:&Device)->Result<(ComparisonState,TensorMap,TensorMap)> {
-    let archive=read_comparison(&mut File::open(path)?)?;
+    let bytes=super::read_bounded(path,MAX_FILE as usize)?;
+    load_comparison_bytes(&bytes,expected,device)
+}
+pub fn load_comparison_bytes(bytes:&[u8],expected:&ComparisonState,device:&Device)->Result<(ComparisonState,TensorMap,TensorMap)> {
+    let archive=decode_comparison_bytes(bytes)?;
     if &archive.state!=expected{return Err(bad("comparison native policy/core/clock/runtime binding"));}
     let(model,adam)=comparison_tensors(&archive,device)?;Ok((archive.state,model,adam))
+}
+
+#[cfg(test)]
+mod comparison_snapshot_tests {
+    use super::*;
+    #[test]
+    fn verified_comparison_bytes_match_file_and_reject_tampering() -> Result<()> {
+        let device=Device::Cpu;
+        let model=super::super::transformer::Transformer::init(
+            super::super::transformer::Config::tiny(264),7,device.clone())?;
+        let mut moments=TensorMap::new();
+        for (name,var) in &model.vars {for prefix in ["adam.m.","adam.v."] {
+            moments.insert(format!("{prefix}{name}"),Tensor::zeros(var.dims(),candle_core::DType::F32,&device)?);
+        }}
+        let state=ComparisonState{schema:1,core:ComparisonCore::Trpp(model.config.clone()),
+            policy:"1".repeat(64),tokenizer:"2".repeat(64),framing:super::super::Framing::QuestionEvidence.digest(),
+            runtime:super::super::RuntimeProfile{backend:super::super::Backend::Cpu,actual_device:"Cpu".into(),
+                dtype:"F32".into(),accumulator:"F32".into(),patch:"test".into(),patch_source:"test".into(),
+                lock:"test".into(),binary:"test".into(),os_build:"test".into(),fast_math:"UNKNOWN".into()},
+            objective:checkpoint::ANSWER_MEAN_FAMILY,optimizer:"FRESH_ADAMW_ALL_V1".into(),
+            config:TrainConfig{max_steps:2,warmup:1,seq_len:32,..Default::default()},
+            committed:0,adam_clock:0,input_tokens:0,target_tokens:0};
+        let temp=tempfile::tempdir()?;let path=temp.path().join("comparison.r3model");
+        save_comparison(&path,state.clone(),&model.vars,&moments)?;
+        let bytes=std::fs::read(&path)?;
+        let(a,am,aa)=load_comparison(&path,&state,&device)?;
+        let(b,bm,ba)=load_comparison_bytes(&bytes,&state,&device)?;
+        assert_eq!(a,b);assert_eq!(am.len(),bm.len());assert_eq!(aa.len(),ba.len());
+        for (name,t) in &am {assert_eq!(t.flatten_all()?.to_vec1::<f32>()?,bm[name].flatten_all()?.to_vec1::<f32>()?);}
+        let mut corrupt=bytes;let last=corrupt.len()-1;corrupt[last]^=1;
+        assert!(load_comparison_bytes(&corrupt,&state,&device).is_err());
+        let mut wrong=state;wrong.policy="3".repeat(64);
+        assert!(load_comparison_bytes(&std::fs::read(&path)?,&wrong,&device).is_err());
+        Ok(())
+    }
 }

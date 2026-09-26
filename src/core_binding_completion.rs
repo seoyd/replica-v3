@@ -1298,6 +1298,7 @@ fn evaluate(root: &Path, arm: &str, step: usize) -> Result<()> {
                 &mut ctl,
                 &mut generated,
                 MAX_NEW_TOKENS - tokens,
+                None,
             )?;
         }
         ctl.seal_completed_no_call()

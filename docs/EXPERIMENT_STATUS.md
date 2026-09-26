@@ -1,5 +1,46 @@
 # 진단 및 구현 상태
 
+## 2026-09-26 depth8 execution recovery — EXECUTION_COST_BLOCKED at G2
+
+The append-only execution amendment under
+`artifacts/depth8-comparison-20260926-v3/execution/` references the two frozen
+initial natives; no model or Adam file was copied or changed. The previous
+`COST_FAIL`, C512/R evidence, original plan, and raw records remain unchanged.
+The original plan SHA256 is
+`02d68606a20e4a249245752ce819706479787c7f4658ce142927f6db52c84013`;
+the new execution plan SHA256 is
+`64162924b7ed6c2d1534c6ec58631c0c4f771af7ed1670666fbee5d85192908f`.
+The actual Metal/accelerate binary SHA256 is
+`f848a7164b8f476b4b040a53fec9833b5b51908f6f8ded8a80246af22a450368`.
+
+The first attempt used an accelerate-only binary without Metal support. It
+failed before a model call or output-root creation, consuming 117.922 seconds
+of observed command wall; this cost is included in the new preparation receipt.
+The Metal build then passed. `execute-prepare` verified copied tensors,
+zero inserted o/down, and zero initial Adam; `execute-check` verified all
+7,680 cache samples, two actual batches with identical token IDs/masks/targets,
+and native-tamper rejection, with generation/optimizer/backward 0. Its internal
+check took 280.302 seconds. D6 initial greedy returned 8/8 rows, 128 generated
+tokens, in 194.589 seconds of evaluation-command wall. D8 initial greedy was
+not entered. At the immediately following inspect, preparation cost was
+805.914/900 seconds; that inspect itself took about 39 seconds. The remaining
+preparation budget was therefore about 55 seconds, insufficient for the
+second arm's equivalent evaluation plus independent A. No SMALL updates or
+teacher calls occurred. This is an execution-cost block, not a D8 quality
+failure or an independent A acceptance.
+
+New command receipts cover screen/admission/inspect/finish work and preserve
+failure wall. Source changes reuse verified in-memory inputs and same-byte
+native/raw decode, retain final recount, and freeze the 32-update forecast's
+prefix; these later paths are implemented but unexecuted because G2 could not
+close. The independent static preflight identified cost and progression issues;
+no final independent A was issued. New execution evidence is 160 KiB allocated
+at this stop. Target/debug grew from 13,756,828 to 14,568,232 KiB
+(+811,404 KiB, below the 1 GiB cap). Training 0/1024, new generation 8/1760,
+new generated tokens 128/262144, B NOT_RUN, final1664 NOT_RUN,
+GOAL1_ACCEPTED=NO. Further training from this blocked branch is not authorized
+by this receipt.
+
 ## 2026-09-26 depth8 evidence repair and comparison — PREPARED / COST_FAIL
 
 The closed C/T512 files, native/Adam, raw generations, B report, and final

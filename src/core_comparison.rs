@@ -122,17 +122,55 @@ fn prepare(word_root:&Path,output:&Path,audit_only:bool)->Result<()> {
         "optimizer":0,"generation":0,"teacher":0,"independent_A":"PENDING"}))?;
     println!("PREPARED parameters={tp}/{gp} length={max_len} input={input} target={targets} policy={} A_PENDING",digest(&s)?);Ok(())
 }
+#[derive(Default)]
+struct InputProfile {reads:usize,hashes:usize,decodes:usize,reference_seconds:f64,
+    corpus_seconds:f64,metadata_seconds:f64,tokenizer_seconds:f64,samples_seconds:f64,cache_seconds:f64}
 fn inputs(s:&Study)->Result<(data::native::Corpus,Vec<Meta>,Vec<Meta>,ByteBpe,Vec<Sample>)>{
-    for(path,h)in &s.references{if file_hash(path)?!=*h{return Err(bad("frozen comparison input changed"));}}
-    let p:Plan=read(&s.word_root.join("plan.r3b"))?;let c=verified_corpus(&s.word_root.join("corpus.r3cor"),&p.corpus)?;
-    let(tm,dm,_)=verified_metadata(&s.word_root,&p)?;let tok=ByteBpe::load(&s.tokenizer)?;
+    Ok(inputs_profiled(s)?.0)
+}
+fn inputs_profiled(s:&Study)->Result<((data::native::Corpus,Vec<Meta>,Vec<Meta>,ByteBpe,Vec<Sample>),InputProfile)>{
+    let mut profile=InputProfile::default();let started=Instant::now();
+    let mut snapshots=BTreeMap::new();
+    for(path,expected)in &s.references{
+        let bytes=neural::read_bounded(path,128*1024*1024)?;profile.reads+=1;
+        if neural::hash(&bytes)!=*expected{return Err(bad("frozen comparison input changed"));}
+        profile.hashes+=1;snapshots.insert(path.clone(),bytes);
+    }
+    profile.reference_seconds=started.elapsed().as_secs_f64();
+    let bytes=|path:&Path|snapshots.get(path).map(Vec::as_slice).ok_or_else(||bad("comparison reference missing"));
+    let plan_path=s.word_root.join("plan.r3b");
+    let p:Plan=binary::from_slice(bytes(&plan_path)?)?;profile.decodes+=1;
+    let started=Instant::now();
+    let c=data::native::decode(bytes(&s.word_root.join("corpus.r3cor"))?)?;profile.decodes+=1;
+    if hex(&c.physical)!=p.corpus{return Err(bad("owned native corpus differs from frozen bytes"));}
+    profile.corpus_seconds=started.elapsed().as_secs_f64();
+    let started=Instant::now();
+    let metadata=bytes(&s.word_root.join("metadata.r3b"))?;
+    if neural::hash(metadata)!=p.metadata{return Err(bad("owned metadata differs from plan"));}
+    profile.hashes+=1;
+    let(tm,dm,_):(Vec<Meta>,Vec<Meta>,Vec<Meta>)=binary::from_slice(metadata)?;profile.decodes+=1;
+    profile.metadata_seconds=started.elapsed().as_secs_f64();
+    let started=Instant::now();
+    let tok=ByteBpe::from_bytes(bytes(&s.tokenizer)?)?;profile.decodes+=1;
     if tok.semantic_id()!=s.tokenizer_id{return Err(bad("comparison tokenizer changed"));}
+    profile.tokenizer_seconds=started.elapsed().as_secs_f64();
+    let started=Instant::now();
     let ss=samples_with_framing(&c.train,&tok,256,Framing::QuestionEvidence)?;
+    profile.samples_seconds=started.elapsed().as_secs_f64();
+    let started=Instant::now();
     let cache=if let Some(r)=&s.revision{
-        if file_hash(&r.plan)?!=r.plan_hash||file_hash(&r.cache)?!=r.cache_hash||file_hash(&r.failed_review)?!=r.review_hash{return Err(bad("initial reference changed"));}r.cache.clone()
+        for(path,expected)in [(&r.plan,&r.plan_hash),(&r.failed_review,&r.review_hash)]{
+            let bytes=neural::read_bounded(path,128*1024*1024)?;profile.reads+=1;
+            if neural::hash(&bytes)!=*expected{return Err(bad("initial reference changed"));}
+            profile.hashes+=1;
+        }r.cache.clone()
     }else{s.root.join("samples.r3tok")};
-    let ss=recovery::experiment_record::token_cache::comparison_cache(&cache,s.cache_key,256,tok.vocab_size(),&ss,false)?;
-    Ok((c,tm,dm,tok,ss))
+    let cache_bytes=neural::read_bounded(&cache,128*1024*1024)?;profile.reads+=1;
+    if let Some(r)=&s.revision {if neural::hash(&cache_bytes)!=r.cache_hash{return Err(bad("initial reference changed"));}
+        profile.hashes+=1;}
+    let ss=recovery::experiment_record::token_cache::comparison_cache_bytes(cache_bytes,s.cache_key,256,tok.vocab_size(),&ss)?;
+    profile.decodes+=1;profile.cache_seconds=started.elapsed().as_secs_f64();
+    Ok(((c,tm,dm,tok,ss),profile))
 }
 fn revise(previous:&Path,output:&Path,failed_review:&Path)->Result<()> {
     let old:Study=read_confirmed(&previous.join("plan.r3b"))?;let r:binary::Value=read(failed_review)?;
@@ -170,8 +208,10 @@ fn save_endpoint(dir:&Path,core:&mut Core,adam:&Adam,state:ComparisonState,label
     artifact::save_comparison(&path,state.clone(),core.vars(),&adam.moments)?;
     Ok(Endpoint{state,path:path.clone(),hash:file_hash(&path)?,content})
 }
-fn load_endpoint(e:&Endpoint,device:Device)->Result<(Core,Adam)>{if file_hash(&e.path)?!=e.hash{return Err(bad("endpoint physical hash"));}
-    let(st,vars,moments)=artifact::load_comparison(&e.path,&e.state,&device)?;
+fn load_endpoint(e:&Endpoint,device:Device)->Result<(Core,Adam)>{
+    let bytes=neural::read_bounded(&e.path,512*1024*1024)?;
+    if neural::hash(&bytes)!=e.hash{return Err(bad("endpoint physical hash"));}
+    let(st,vars,moments)=artifact::load_comparison_bytes(&bytes,&e.state,&device)?;
     let mut core=Core::load(&st.core,vars,device)?;core.bind(&st.tokenizer)?;
     if core.content()?!=e.content{return Err(bad("endpoint semantic weights"));}Ok((core,Adam{moments}))
 }
@@ -213,7 +253,11 @@ fn update(core:&Core,adam:&mut Adam,st:&mut ComparisonState,b:&Batch,c:&mut RunC
 }
 type Panel=(String,Vec<Episode>,Vec<Meta>);
 fn panels(s:&Study,step:usize,baseline:bool)->Result<Vec<Panel>>{
-    let(c,tm,dm,_,_)=inputs(s)?;let mut out=vec![];
+    let(c,tm,dm,_,_)=inputs(s)?;
+    panels_from_inputs(s,step,baseline,&c,&tm,&dm)
+}
+fn panels_from_inputs(s:&Study,step:usize,baseline:bool,c:&data::native::Corpus,tm:&[Meta],dm:&[Meta])->Result<Vec<Panel>>{
+    let mut out=vec![];
     if baseline{return Ok(vec![("baseline32".into(),c.validation[3072..3104].to_vec(),dm[3072..3104].to_vec())]);}
     if ![512,1536,3072].contains(&step){return Err(bad("unscheduled comparison panel"));}
     for(name,at,mid,last)in [("value",0,32,512),("citation",512,32,512),("S1Q1",2560,32,512),("word",3072,64,192),("renamed",3264,64,192)]{
@@ -231,22 +275,35 @@ fn panel_score(p:&Panel,rows:&[binary::Value],tok:&ByteBpe,model:&str,raw:&str)-
     else if name=="value"{Ok(binary::record!({"joint":identifiable::binding::orbit_score(es,ms,rows,tok)?}))}
     else {identifiable::binding::citation::word::rows_score(es,ms,rows,tok)}
 }
+#[derive(Default)]
+struct CollectionTiming {observe_seconds:f64,raw_publish_seconds:f64,validation_seconds:f64,
+    new_calls:usize,reused_rows:usize}
 fn collect(core:&Core,tok:&ByteBpe,dir:&Path,label:&str,es:&[Episode],binding:&binary::Value,
-    ctl:&mut RunControl,generated:&mut usize,remaining_tokens:usize)->Result<Vec<binary::Value>>{
+    ctl:&mut RunControl,generated:&mut usize,remaining_tokens:usize,
+    timing:Option<&mut CollectionTiming>)->Result<Vec<binary::Value>>{
+    let mut timing=timing;
+    let validation_started=Instant::now();
     let path=dir.join(format!("{label}.r3rows"));let existed=path.exists();let entries=if existed{binary::read_value_records(&path)?}else{vec![]};
     if existed&&entries.first()!=Some(binding){return Err(bad("comparison collector binding"));}
     let mut rows=entries.into_iter().skip(1).collect::<Vec<_>>();if rows.len()>es.len(){return Err(bad("extra comparison RETURNED"));}
     for(i,row)in rows.iter().enumerate(){call_attempt(dir,label,"generation",binding,&es[i],i,Some(row))?;verify_generated(row,tok)?;
         if row["id"]!=es[i].id||row["expected"]!=es[i].answer{return Err(bad("comparison raw case"));}}
+    if let Some(t)=timing.as_deref_mut(){t.reused_rows=rows.len();t.validation_seconds+=validation_started.elapsed().as_secs_f64();}
     let mut file=std::fs::OpenOptions::new().append(true).create_new(!existed).open(&path)?;
     if !existed{append_row(&mut file,binding)?;std::fs::File::open(dir)?.sync_all()?;}
     for(i,e)in es.iter().enumerate().skip(rows.len()){
         ctl.check("before_core_generation")?;
         if generated.saturating_add(e.request.limits.max_tokens as usize)>remaining_tokens{return Err(bad("comparison generation token cap"));}
         let attempt=prepare_call(dir,label,"generation",binding,e,i)?;
-        let mut row=match core.observe(tok,e,ctl){ObservedCall::NotInvoked(_)=>{resolve_call(&attempt,None,ctl)?;ctl.stop_result()?;return Err(bad("uninvoked without stop"));},ObservedCall::Returned(r)=>r};
+        let observe_started=Instant::now();
+        let observed=core.observe(tok,e,ctl);
+        core.device().synchronize()?;
+        if let Some(t)=timing.as_deref_mut(){t.observe_seconds+=observe_started.elapsed().as_secs_f64();t.new_calls+=usize::from(matches!(&observed,ObservedCall::Returned(_)));}
+        let mut row=match observed{ObservedCall::NotInvoked(_)=>{resolve_call(&attempt,None,ctl)?;ctl.stop_result()?;return Err(bad("uninvoked without stop"));},ObservedCall::Returned(r)=>r};
         row["attempt"]=binary::record!(attempt.file_name().unwrap().to_string_lossy());
+        let publishing=Instant::now();
         append_row(&mut file,&row)?;resolve_call(&attempt,Some(&row),ctl)?;
+        if let Some(t)=timing.as_deref_mut(){t.raw_publish_seconds+=publishing.elapsed().as_secs_f64();}
         *generated+=row["raw_tokens"].as_array().map_or(0,Vec::len);verify_generated(&row,tok)?;rows.push(row);
         ctl.stop_result()?;
         if (i+1)%64==0{println!("GENERATION panel={label} returned={}/{} new_tokens={generated}",i+1,es.len());}
@@ -257,7 +314,7 @@ fn evaluate(s:&Study,arm:usize,core:&Core,ep:&Endpoint,tok:&ByteBpe,ctl:&mut Run
     for panel in panels(s,ep.state.committed,baseline)?{
         let label=format!("eval-{}-{}",ep.state.committed,panel.0);
         let binding=binary::record!({"policy":digest(s)?,"core":ARMS[arm],"native":ep.hash,"model":ep.content,"step":ep.state.committed,"runtime":s.runtime,"cases":digest(&panel.1)?,"metadata":digest(&panel.2)?,"tokenizer":s.tokenizer_id});
-        let rows=collect(core,tok,&dir,&label,&panel.1,&binding,ctl,generated,token_limit)?;
+        let rows=collect(core,tok,&dir,&label,&panel.1,&binding,ctl,generated,token_limit,None)?;
         let score=save_score(s,&dir,ep,tok,&panel,&rows)?;
         println!("SCORE core={} step={} panel={} joint={}",ARMS[arm],ep.state.committed,panel.0,score["joint"]);
     }ctl.seal_completed_no_call()
@@ -296,7 +353,7 @@ fn review(s:&Study,arm:usize,core:&Core,ep:&Endpoint,tok:&ByteBpe,ctl:&mut RunCo
     let es=selected.iter().map(|&i|cases[i].1.clone()).collect::<Vec<_>>();let original=selected.iter().map(|&i|cases[i].2.clone()).collect::<Vec<_>>();
     let label=format!("review-{step}");let binding=binary::record!({"policy":digest(s)?,"native":ep.hash,"cases":digest(&es)?,"source_raw":digest(&original)?,"indices":selected,"accuracy_denominator":false});
     let admission=dir.join("review-binding.r3b");if admission.exists(){if read_confirmed::<binary::Value>(&admission)?!=binding{return Err(bad("B limited to one endpoint/core"));}}else{publish_confirmed(&admission,&binding)?;}
-    let rows=collect(core,tok,&dir,&label,&es,&binding,ctl,generated,token_limit)?;
+    let rows=collect(core,tok,&dir,&label,&es,&binding,ctl,generated,token_limit,None)?;
     for(a,b)in rows.iter().zip(&original){for f in ["raw_tokens","raw_bytes","actual","finish_reason","error","generation_completed"]{if a[f]!=b[f]{return Err(bad("fresh-process reproduction mismatch"));}}}
     ctl.seal_completed_no_call()?;publish_confirmed(&dir.join(format!("review-{step}-result.r3b")),&binary::record!({"policy":digest(s)?,"native":ep.hash,"matched":16,"teacher":0,"optimizer":0,"source_raw":digest(&original)?,"indices":selected}))
 }

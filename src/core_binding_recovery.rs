@@ -484,8 +484,12 @@ fn eval_runs(s:&Study,arm:&str,step:usize)->Result<Vec<EvalRun>>{
     }Ok(out)
 }
 fn eval_panels(s:&Study,p:&StudyParent)->Result<Vec<Panel>>{
+    let(c,tm,dm,_,_)=inputs(p)?;
+    eval_panels_prepared(s,p,&c,&tm,&dm)
+}
+fn eval_panels_prepared(s:&Study,p:&StudyParent,c:&data::native::Corpus,tm:&[Meta],dm:&[Meta])->Result<Vec<Panel>>{
     let mut out=vec![];
-    let all=panels(p,3072,false)?;
+    let all=panels_from_inputs(p,3072,false,c,tm,dm)?;
     for (name,n)in [("word",192),("renamed",192),("train192",192),("value",64),("citation",64),("S1Q1",64)]{
         let source=all.iter().find(|v|v.0==name).ok_or_else(||bad("parent final panel missing"))?;
         out.push((name.into(),source.1[..n].to_vec(),source.2[..n].to_vec()));
@@ -605,7 +609,7 @@ fn evaluate(root:&Path,arm:&str,step:usize)->Result<()> {
         let binding=binary::record!({"policy":arm_policy(&s,arm)?,"arm":arm,"native":ep.hash,"model":ep.content,
             "step":step,"cases":digest(&panel.1)?,"metadata":digest(&panel.2)?,"tokenizer":s.tokenizer,
             "source_raw":original_hash,"accuracy_denominator":!reproduce});
-        let rows=collect(&core,&tok,&dir,&label,&panel.1,&binding,&mut ctl,&mut generated,524288-tokens)?;
+        let rows=collect(&core,&tok,&dir,&label,&panel.1,&binding,&mut ctl,&mut generated,524288-tokens,None)?;
         if reproduce{
             let original=binary::read_value_records(&dir.join("eval-512-word.r3rows"))?;
             if original.len()!=193{return Err(bad("B source raw incomplete"));}
