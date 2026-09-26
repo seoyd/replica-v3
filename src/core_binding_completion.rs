@@ -8,6 +8,10 @@ const OLD_BINARY: &str = "fc2c422a70419362d5747de66cf43bd31bd3a91d0e8f9357f6a47e
 const OLD_PLAN: &str = "d4f48c84d658906fc44290b0ebbdc75b5aad9f6b309832a6b5c833d204a67649";
 const OLD_REPORT: &str = "294e238df71330ee2e18e200606951a3d72857ad9c95d8b943401aebdd9e7535";
 const OLD_B: &str = "d7d45a4abb0679cdddc6060a69089576ac531ddae3d3002a0d03ce1ba5872105";
+const FIRST_PLAN: &str = "0fa999312c486d368df24e5e2c64081907d75875ee6f8a1a69908802d3d4d27a";
+const FIRST_REGISTRATION: &str = "c3d17fa10e36c58384fddff7b860bb9de7d9b230465c2074dd36c42777667159";
+const FIRST_BINARY: &str = "d2121e4c74ebe51ec4f204174b5bd6ff70f67197776cb2e98172a4bb38febfe1";
+const FIRST_A_FAIL: &str = "faa075f1754b5d01d53f51b12d62322c5a7e1227b86ac3d7fc6e1b7759d6c1e3";
 const OLD_NATIVE: [&str; 2] = [
     "0c3fd8b2f63b1c36fb58e2e0d124fdec2e037bb48e92620f211cfe35b842fb75",
     "3dcc6317d80d929b47fd93389adf8cbdf3f2f0fc23b54dda193b36e41dcffde1",
@@ -59,6 +63,17 @@ fn source() -> Result<String> {
         super::source()?,
         neural::hash(include_bytes!("core_binding_completion.rs")),
     ))
+}
+fn plan_path(root: &Path) -> PathBuf {
+    let revised = root.join("plan-v2.r3b");
+    if revised.exists() {
+        revised
+    } else {
+        root.join("plan.r3b")
+    }
+}
+fn no_call_seconds(v: &binary::Value) -> bool {
+    v.as_f64() == Some(0.0) || v.as_u64() == Some(0)
 }
 fn policy(p: &Plan, arm: &str) -> Result<String> {
     digest(&(
@@ -291,9 +306,61 @@ fn prepare(original: &Path, output: &Path, target_baseline_kib: u64) -> Result<(
     println!("BINDING_COMPLETION_PREPARED policy={} old_seconds={old_seconds:.6} target_baseline_kib={target_baseline_kib} expected_input=375040 expected_target=29952 A_PENDING",digest(&plan)?);
     Ok(())
 }
+fn revise(root: &Path) -> Result<()> {
+    let root = root.canonicalize()?;
+    let first_path = root.join("plan.r3b");
+    let revision_path = root.join("plan-v2.r3b");
+    if revision_path.exists() || root.join("review-a.r3b").exists() {
+        return Err(bad("completion revision already used or A admitted"));
+    }
+    for name in ["C", "T", "writer.lock", "screen.r3b"] {
+        if root.join(name).exists() {
+            return Err(bad("completion revision after execution"));
+        }
+    }
+    let mut p: Plan = read_confirmed(&first_path)?;
+    let s = old(&p.original)?;
+    let registration = s.root.join("binding-completion-registration.r3b");
+    let failed_review = root.join("independent-review-a-fail-v2.r3b");
+    if file_hash(&first_path)? != FIRST_PLAN
+        || file_hash(&registration)? != FIRST_REGISTRATION
+        || file_hash(&failed_review)? != FIRST_A_FAIL
+        || p.root != root
+        || p.runtime.binary != FIRST_BINARY
+        || p.original != s.root
+    {
+        return Err(bad("completion first candidate/A failure identity"));
+    }
+    let old_link: binary::Value = read_confirmed(&registration)?;
+    if old_link["plan_hash"] != FIRST_PLAN || old_link["source"] != p.source {
+        return Err(bad("completion original registration changed"));
+    }
+    let device = Backend::Metal0.open()?;
+    let runtime = RuntimeProfile::capture(Backend::Metal0, &device)?;
+    compatible_parent_runtime(&p.runtime, &runtime)?;
+    p.source = source()?;
+    p.runtime = runtime;
+    let target = (allocated(Path::new("target/debug"))? + 1023) / 1024;
+    if target > p.target_baseline_kib + 1024 * 1024 {
+        return Err(bad("completion revised target growth"));
+    }
+    publish_confirmed(&revision_path, &p)?;
+    publish_confirmed(
+        &s.root.join("binding-completion-revision-1.r3b"),
+        &binary::record!({"contract":CONTRACT,"root":root,"original_plan":FIRST_PLAN,
+        "original_registration":FIRST_REGISTRATION,"failed_a":FIRST_A_FAIL,
+        "plan_hash":file_hash(&revision_path)?,"source":p.source,"binary":p.runtime.binary}),
+    )?;
+    println!(
+        "BINDING_COMPLETION_REVISED plan={} A_PENDING old_plan_preserved=true",
+        file_hash(&revision_path)?
+    );
+    Ok(())
+}
 fn checked(root: &Path) -> Result<(Plan, Study)> {
     let root = root.canonicalize()?;
-    let p: Plan = read_confirmed(&root.join("plan.r3b"))?;
+    let active_path = plan_path(&root);
+    let p: Plan = read_confirmed(&active_path)?;
     if p.contract != CONTRACT
         || p.root != root
         || p.source != source()?
@@ -313,10 +380,37 @@ fn checked(root: &Path) -> Result<(Plan, Study)> {
     let link: binary::Value = read_confirmed(&s.root.join("binding-completion-registration.r3b"))?;
     if link["contract"] != CONTRACT
         || link["root"] != binary::record!(p.root)
-        || link["plan_hash"] != file_hash(&root.join("plan.r3b"))?
-        || link["source"] != p.source
+        || link["plan_hash"] != FIRST_PLAN
+        || file_hash(&s.root.join("binding-completion-registration.r3b"))? != FIRST_REGISTRATION
     {
         return Err(bad("single completion registration"));
+    }
+    if active_path != root.join("plan.r3b") {
+        let first: Plan = read_confirmed(&root.join("plan.r3b"))?;
+        let revision: binary::Value =
+            read_confirmed(&s.root.join("binding-completion-revision-1.r3b"))?;
+        let mut expected = first.clone();
+        expected.source = p.source.clone();
+        expected.runtime = p.runtime.clone();
+        if file_hash(&root.join("plan.r3b"))? != FIRST_PLAN
+            || file_hash(&root.join("independent-review-a-fail-v2.r3b"))? != FIRST_A_FAIL
+            || first.runtime.binary != FIRST_BINARY
+            || link["source"] != first.source
+            || digest(&expected)? != digest(&p)?
+            || revision["contract"] != CONTRACT
+            || revision["root"] != binary::record!(p.root)
+            || revision["original_plan"] != FIRST_PLAN
+            || revision["original_registration"] != FIRST_REGISTRATION
+            || revision["failed_a"] != FIRST_A_FAIL
+            || revision["plan_hash"] != file_hash(&active_path)?
+            || revision["source"] != p.source
+            || revision["binary"] != p.runtime.binary
+        {
+            return Err(bad("completion append-only revision identity"));
+        }
+        compatible_parent_runtime(&first.runtime, &p.runtime)?;
+    } else if link["source"] != p.source || file_hash(&active_path)? != FIRST_PLAN {
+        return Err(bad("completion original plan changed"));
     }
     if file_hash(&std::env::current_exe()?)? != p.runtime.binary {
         return Err(bad("completion executable identity"));
@@ -362,7 +456,7 @@ fn admit(root: &Path, review: &Path) -> Result<()> {
     let (p, _) = checked(root)?;
     let r: binary::Value = read(review)?;
     if r["contract"] != CONTRACT
-        || r["plan_hash"] != file_hash(&root.join("plan.r3b"))?
+        || r["plan_hash"] != file_hash(&plan_path(root))?
         || r["source"] != p.source
         || r["binary"] != p.runtime.binary
         || r["verdict"] != "PASS"
@@ -374,7 +468,7 @@ fn admit(root: &Path, review: &Path) -> Result<()> {
     }
     publish_confirmed(
         &root.join("review-a.r3b"),
-        &binary::record!({"plan_hash":file_hash(&root.join("plan.r3b"))?,
+        &binary::record!({"plan_hash":file_hash(&plan_path(root))?,
         "path":review.canonicalize()?,"hash":file_hash(review)?}),
     )
 }
@@ -382,7 +476,7 @@ fn admitted(p: &Plan) -> Result<f64> {
     let a: binary::Value = read_confirmed(&p.root.join("review-a.r3b"))?;
     let path = Path::new(a["path"].as_str().ok_or_else(|| bad("A path"))?);
     let r: binary::Value = read(path)?;
-    if a["plan_hash"] != file_hash(&p.root.join("plan.r3b"))?
+    if a["plan_hash"] != file_hash(&plan_path(&p.root))?
         || a["hash"] != file_hash(path)?
         || r["contract"] != CONTRACT
         || r["source"] != p.source
@@ -1205,19 +1299,19 @@ fn admit_b(root: &Path, review: &Path) -> Result<()> {
     }
     let r: binary::Value = read(review)?;
     if r["contract"] != CONTRACT
-        || r["plan_hash"] != file_hash(&p.root.join("plan.r3b"))?
+        || r["plan_hash"] != file_hash(&plan_path(&p.root))?
         || r["source"] != p.source
         || r["binary"] != p.runtime.binary
         || r["verdict"] != "PASS"
         || r["raw_recount_rows"] != 1664
         || r["reproduction_rows"] != 16
-        || r["model_work_seconds"] != 0
+        || !no_call_seconds(&r["model_work_seconds"])
     {
         return Err(bad("independent B raw/reproduction binding"));
     }
     publish_confirmed(
         &p.root.join("review-b.r3b"),
-        &binary::record!({"plan_hash":file_hash(&p.root.join("plan.r3b"))?,
+        &binary::record!({"plan_hash":file_hash(&plan_path(&p.root))?,
         "path":review.canonicalize()?,"hash":file_hash(review)?}),
     )
 }
@@ -1229,7 +1323,7 @@ fn b_admitted(p: &Plan) -> Result<bool> {
     let link: binary::Value = read_confirmed(&path)?;
     let raw = Path::new(link["path"].as_str().ok_or_else(|| bad("B report path"))?);
     let report: binary::Value = read(raw)?;
-    if link["plan_hash"] != file_hash(&p.root.join("plan.r3b"))?
+    if link["plan_hash"] != file_hash(&plan_path(&p.root))?
         || link["hash"] != file_hash(raw)?
         || report["contract"] != CONTRACT
         || report["source"] != p.source
@@ -1237,6 +1331,7 @@ fn b_admitted(p: &Plan) -> Result<bool> {
         || report["verdict"] != "PASS"
         || report["raw_recount_rows"] != 1664
         || report["reproduction_rows"] != 16
+        || !no_call_seconds(&report["model_work_seconds"])
     {
         return Err(bad("independent B changed"));
     }
@@ -1345,6 +1440,7 @@ pub(super) fn run(
             root,
             target_baseline_kib.ok_or_else(|| bad("target baseline required"))?,
         ),
+        "revise" => revise(root),
         "inspect" => {
             let (p, _) = checked(root)?;
             if p.root.join("review-a.r3b").exists() {
@@ -1373,6 +1469,14 @@ pub(super) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn independent_no_call_accepts_exact_float_zero() {
+        assert!(no_call_seconds(&binary::record!(0.0)));
+        assert!(no_call_seconds(&binary::record!(0)));
+        assert!(!no_call_seconds(&binary::record!(0.001)));
+        assert!(!no_call_seconds(&binary::record!(-1.0)));
+    }
 
     #[test]
     fn allocated_bytes_count_hardlinked_build_output_once() -> Result<()> {

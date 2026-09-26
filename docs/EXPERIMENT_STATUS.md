@@ -10,8 +10,18 @@ remain unchanged. The new plan is
 linked by one immutable registration in the original evidence root. The
 executor SHA256 is `d2121e4c74ebe51ec4f204174b5bd6ff70f67197776cb2e98172a4bb38febfe1`.
 Its fixed tape suffix predicts 375,040 input and 29,952 target tokens per arm;
-these are prepared totals, not consumed training. A is PENDING. New model,
-generation, teacher and optimizer calls are zero.
+these are prepared totals, not consumed training. First A failed; revised A is
+PENDING. New model, generation, teacher and optimizer calls are zero.
+
+The first independent A found that F64 `0.0` no-call B time was rejected by
+an integer-zero comparison. Its immutable FAIL report SHA256 is
+`faa075f1754b5d01d53f51b12d62322c5a7e1227b86ac3d7fc6e1b7759d6c1e3`.
+The corrected same-lineage plan was appended as `plan-v2.r3b` (SHA256
+`5d22e74b00249694e3c67492bb6ebf570bdd1f940fbe06ad160b5a2cc3beb660`),
+with executor SHA256 `6d685642fe4cdd9525651aa6ae26e2fc8348518e1455a387ca658117da399343`.
+The first plan, registration and failed A remain byte-for-byte preserved.
+The revised inspector exits 0 with A_PENDING, a duplicate revision exits 1,
+and relevant direct tests pass 3/3. No new model calls were made for repair.
 
 The measured new `target/debug` baseline was 11,630,684 KiB. After scoped
 builds and removal of exactly three user-approved incremental directories,
