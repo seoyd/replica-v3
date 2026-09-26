@@ -15143,3 +15143,33 @@ A-delta is pending. No new quality conclusion or Muon adoption is authorized.
 Evidence: `artifacts/muon-endpoint-20260924-diagnosis/`, including
 `original-recount.log` and `direct-tests-final.log`. Original study and models
 are referenced in place. Matching target baseline11,706,736KiB; incremental off.
+
+## Quality-first D6 preparation (2026-09-26)
+
+`R3-QUALITY-FIRST-1.0` starts a distinct quality lineage from the preserved
+D6 initial native. The earlier command-008 admission remains interrupted, with
+no returned receipt; its time overrun and unknown tail are unchanged. The new
+policy has no cumulative time cap, while cancellation, request timeouts, memory,
+per-window step/token limits and native integrity checks remain active.
+
+The source/binary-bound Q0 plan is
+`artifacts/quality-first-20260926-study/study-v4/plan.r3b`
+(SHA-256 `284291b1dd5d85ed6c8a5d70716d8107fb5569e79e0c229c17d1c26a1ea56044`).
+It references the unchanged D6 native
+`9059c7b7898108196be289cf3b03088b01492e972bc61ed683ca2e738b8b50df`;
+local updates and fresh Adam clock were both zero. Binary SHA-256 is
+`273031ec398060e5c35e81835b19a83646c262cd94666179bec0a9ece1e5d539`.
+
+Q1 audited one planned 4,096-update core4/QA4 cycle: 16,384 core draws,
+16,384 QA draws, each QA bucket 2,048 draws, 6,291,250 input and 513,068
+target tokens. Maximum prepared sequence length was 281 (limit 512), with
+zero excluded evidence and zero checked family/scene/prompt overlap. The
+category table distinguishes planned exposure from this lineage's actual
+exposure of zero; historical semantic exposure is not reconstructed. Audit
+SHA-256 is `af414c1ce5c3b9c3a4217f03d47d66abaaf3194169e393359810f31b88302e1f`.
+Independent A first found three cancellation/history defects; that FAIL is
+preserved. After narrow fixes and direct regressions, A accepted the six changed
+boundaries in `artifacts/quality-first-20260926-study/review-a-v4.r3b`
+(SHA-256 `b6252aaeea8c36a95c8e966eb90c068e8ca38f9038867f5b3ca26dd6ed8f5bce`).
+The native admission link was created. Actual optimizer, generation and teacher
+calls remain zero. Q2 learning, S4, S5, S6 and Goal1 are pending.

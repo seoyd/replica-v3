@@ -8775,7 +8775,7 @@ pub enum Action {
 }
 pub(super) fn command(action: Action) -> Result<()> {
     let mut control = RunControl::command(matches!(action, Action::Run { .. }))?;
-    control.deadline = control.start + Duration::from_secs(1800);
+    control.deadline = Some(control.start + Duration::from_secs(1800));
     match action {
         #[cfg(feature = "test-support")]
         Action::FixtureRetentionSave {
@@ -11552,7 +11552,7 @@ fn cooldown_verify(root: &Path, confirmation: bool, control: &mut RunControl) ->
                     return Err(bad("confirmation generation budget"));
                 }
                 control.deadline =
-                    control.start + Duration::from_secs_f64((7200. - seconds).min(1800.));
+                    Some(control.start + Duration::from_secs_f64((7200. - seconds).min(1800.)));
             }
             close_native_inner(&dir, &command.terminal.locator, control, false)?;
             let chain = lineage(&dir, &snapshot, &command.terminal)?;
@@ -13784,7 +13784,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                 origin_path(&s, role)?;
             }
         }
-        control.deadline = control.start + Duration::from_secs_f64((7200. - seconds).min(1800.));
+        control.deadline = Some(control.start + Duration::from_secs_f64((7200. - seconds).min(1800.)));
         control.generation_limit = if s.screen() {
             4096
         } else if s.bridge() {
@@ -14012,7 +14012,7 @@ fn run_native(root: &Path, resume: Option<&str>, control: &mut RunControl) -> Re
                     "PURPOSE={:?} explicit_one_update_segment_deadline=true budgeted_update=true",
                     s.purpose
                 );
-                control.deadline = Instant::now();
+                control.deadline = Some(Instant::now());
                 control.check("preflight_split_save_boundary")?;
             }
             l.model.refresh_identity()?;

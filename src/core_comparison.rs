@@ -243,7 +243,8 @@ fn update(core:&Core,adam:&mut Adam,st:&mut ComparisonState,b:&Batch,c:&mut RunC
     *backwards+=1;let graph=loss.backward()?;let mut grads=BTreeMap::new();
     for(name,var)in core.vars(){grads.insert(name.clone(),graph.get(var).ok_or_else(||bad("missing core gradient"))?.detach());}
     core.device().synchronize()?;let fb=started.elapsed().as_secs_f64();c.check("before_core_optimizer")?;
-    let clock=st.committed+1;let lr=st.config.lr*(clock.min(st.config.warmup)as f64/st.config.warmup as f64);
+    let clock=st.committed+1;let lr=if st.config.warmup==0 {st.config.lr}
+        else {st.config.lr*(clock.min(st.config.warmup)as f64/st.config.warmup as f64)};
     *in_optimizer=true;
     let(norm,delta)=adam.apply_admitted_step(core.vars(),&grads,&st.config,clock,lr,|_,_,_,_|Ok(()))?;
     core.device().synchronize()?;st.committed=clock;st.adam_clock=clock;st.input_tokens+=b.tokens as u64;st.target_tokens+=n as u64;

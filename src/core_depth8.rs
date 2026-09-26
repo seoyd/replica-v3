@@ -6,6 +6,9 @@ use recovery::RunControl;
 use std::{sync::Arc, time::Duration};
 
 const CONTRACT: &str = "R3-TRPP-DEPTH8-V1";
+const QUALITY_CONTRACT: &str = "R3-QUALITY-FIRST-1.0";
+const INTERRUPTED_ADMISSION: &str = "e4aedbd0185ece764c4b20d7fb7c7d4579da7d8ec5ce6c165891c852f6c13a27";
+const INTERRUPTED_ADMISSION_LOG: &str = "983be667a79531a6b380c4820615617d815e0d8cabc6b32119b32e1226cd283e";
 const ARMS: [&str; 2] = ["D6", "D8"];
 const PARENT_GLOBAL: usize = 3584;
 const MAX_SECONDS: f64 = 5400.;
@@ -48,6 +51,14 @@ static ACTIVE_PREFLIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::Ato
 
 #[derive(Subcommand)]
 pub enum Action {
+    /// Start a distinct quality lineage from the immutable D6 initial state.
+    QualityPrepare { #[arg(long)] predecessor:PathBuf, #[arg(long)] qa_root:PathBuf,
+        #[arg(long)] output:PathBuf },
+    QualityAudit { #[arg(long)] root:PathBuf },
+    QualityAdmit { #[arg(long)] root:PathBuf, #[arg(long)] review:PathBuf },
+    QualityTrain { #[arg(long)] root:PathBuf, #[arg(long)] until:usize },
+    QualityEvaluate { #[arg(long)] root:PathBuf, #[arg(long)] step:usize,
+        #[arg(long)] full:bool },
     RepairPrepare { #[arg(long)] root: PathBuf, #[arg(long)] legacy_observation: PathBuf,
         #[arg(long)] legacy_binary: PathBuf },
     SealRepair { #[arg(long)] root: PathBuf },
@@ -246,6 +257,667 @@ struct ContinuationWallCorrection {
     predecessor_inner_seconds:f64,predecessor_wall_seconds:f64,
     additional_seconds:f64,outer_reserve_seconds:f64,attempt_returned:String,
     source:String,binary:String,runtime:RuntimeProfile,
+}
+#[derive(Clone,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QualityPlan {
+    contract:String,root:PathBuf,source:String,binary:String,runtime:RuntimeProfile,
+    predecessor:PathBuf,predecessor_plan:String,disposition:String,
+    parent:Endpoint,tokenizer:PathBuf,tokenizer_hash:String,tokenizer_id:String,
+    word_root:PathBuf,word_corpus:String,word_metadata:String,
+    qa_root:PathBuf,qa_corpus:String,qa_metadata:String,
+    qa_selection:PathBuf,qa_selection_hash:String,
+    time_cap:String,tape:Vec<([usize;4],[usize;4])>,
+}
+fn quality_tape(word:&[Meta],qa:&[Meta])->Result<Vec<([usize;4],[usize;4])>> {
+    if word.len()!=7680 || qa.len()!=20992 {return Err(bad("quality TRAIN pool sizes"));}
+    let mut word_bases=Vec::new();
+    for (i,group) in word.chunks_exact(4).enumerate() {
+        if group.iter().enumerate().any(|(view,m)|m.base!=group[0].base||m.view!=view) {
+            return Err(bad("quality word four-view group"));
+        }
+        word_bases.push([4*i,4*i+1,4*i+2,4*i+3]);
+    }
+    let mut qa_buckets:[Vec<usize>;8]=std::array::from_fn(|_|Vec::new());
+    for i in (0..8192).step_by(2) {
+        let a=&qa[4608+i];let b=&qa[4608+i+1];
+        let av=&qa[12800+i];let bv=&qa[12800+i+1];
+        if a.bucket>=8 || a.base!=b.base || a.view!=0 || b.view!=1
+            || av.base!=a.base || bv.base!=a.base || av.bucket!=a.bucket
+            || bv.bucket!=a.bucket || av.view!=0 || bv.view!=1 {
+            return Err(bad("quality QA paired TRAIN views"));
+        }
+        qa_buckets[a.bucket].push(4608+i);
+    }
+    if qa_buckets.iter().any(|b|b.len()!=512) {return Err(bad("quality QA eight-bucket balance"));}
+    Ok((0..4096).map(|step| {
+        let word=word_bases[step%word_bases.len()];
+        let q=qa_buckets[step%8][step/8];
+        (word,[q,q+1,q+8192,q+8193])
+    }).collect())
+}
+fn quality_prepare(predecessor:&Path,qa_root:&Path,output:&Path)->Result<()> {
+    let predecessor=predecessor.canonicalize()?;
+    let qa_root=qa_root.canonicalize()?;
+    let old_path=predecessor.join("plan.r3b");
+    expected_file_hash(&old_path,FROZEN_EXECUTION_PLAN)?;
+    let old:Plan=read_confirmed(&old_path)?;
+    if old.root!=predecessor || old.contract!=CONTRACT || !execution(&old)
+        || old.parent_global!=PARENT_GLOBAL || old.config!=train_config()
+        || file_hash(&old.parent.path)?!=old.parent.hash
+        || old.parent.content.len()!=64 {return Err(bad("quality predecessor identity"));}
+    let entry=predecessor.join("commands/command-008-entered.r3b");
+    let log=predecessor.join("provenance/continuation-admit.log");
+    expected_file_hash(&entry,INTERRUPTED_ADMISSION)?;
+    expected_file_hash(&log,INTERRUPTED_ADMISSION_LOG)?;
+    let mark:binary::Value=read_confirmed(&entry)?;
+    if mark["index"]!=8 || mark["kind"]!="admit-continuation"
+        || mark["bucket"]!="preparation" || mark["binary"]!="9afef1dc1067a53c9f63ac8f0df3f945980c5c52fa9c64119e3e5808b0bd0686"
+        || predecessor.join("commands/command-008-returned.r3b").exists()
+        || predecessor.join("review-a-continuation.r3b").exists()
+        || observed_process_wall(&log)?!=307.72 {return Err(bad("quality interrupted admission identity"));}
+    let log_text=String::from_utf8(neural::read_bounded(&log,64*1024)?)
+        .map_err(|_|bad("quality admission log UTF8"))?;
+    if !log_text.contains("terminated abnormally") {return Err(bad("quality admission not interrupted"));}
+    let mut starts=Vec::new();
+    for arm in ARMS {
+        let dir=predecessor.join(arm);
+        for entry in std::fs::read_dir(&dir)? {
+            if entry?.file_name().to_string_lossy().starts_with("segment-") {
+                return Err(bad("quality predecessor training state unknown"));
+            }
+        }
+        let ep:Endpoint=read_confirmed(&dir.join("initial.r3b"))?;
+        if ep.state.committed!=0 || ep.state.adam_clock!=0 || ep.state.input_tokens!=0
+            || ep.state.target_tokens!=0 {
+            return Err(bad(&format!("quality {arm} initial nonzero clock/tokens")));
+        }
+        if ep.state.optimizer!="FRESH_ADAMW_ALL_V1" || ep.state.objective!=checkpoint::ANSWER_MEAN_FAMILY
+            || ep.state.tokenizer!=old.tokenizer_id || ep.state.core!=old.cores[arm_index(arm)?] {
+            return Err(bad(&format!("quality {arm} initial policy/core/tokenizer")));
+        }
+        let mut expected_runtime=old.runtime.clone();
+        expected_runtime.binary=ep.state.runtime.binary.clone();
+        if ep.state.runtime!=expected_runtime || ep.state.runtime.binary.len()!=64 {
+            return Err(bad(&format!("quality {arm} initial runtime")));
+        }
+        if ep.hash!=file_hash(&ep.path)? {
+            return Err(bad(&format!("quality {arm} initial physical hash")));
+        }
+        let (_,adam)=load_endpoint(&ep,Device::Cpu)?;
+        for moment in adam.moments.values() {
+            if moment.abs()?.sum_all()?.to_scalar::<f32>()?!=0. {
+                return Err(bad("quality initial Adam nonzero"));
+            }
+        }
+        starts.push(ep);
+    }
+    if starts[0].content!=old.parent.content {return Err(bad("quality D6 parent weights"));}
+    let comparison:super::super::Study=read_confirmed(&old.comparison_root.join("plan.r3b"))?;
+    if file_hash(&old.comparison_root.join("plan.r3b"))?!=old.comparison_plan_hash
+        || comparison.tokenizer!=old.tokenizer
+        || file_hash(&comparison.word_root.join("corpus.r3cor"))?!=old.corpus {
+        return Err(bad("quality word predecessor"));
+    }
+    let tok=ByteBpe::load(&old.tokenizer)?;
+    let qa_tok=ByteBpe::load(&qa_root.join("tokenizer.r3b"))?;
+    if tok.semantic_id()!=old.tokenizer_id || qa_tok.semantic_id()!=old.tokenizer_id {
+        return Err(bad("quality tokenizer mapping"));
+    }
+    let (word_meta,_,_):(Vec<Meta>,Vec<Meta>,Vec<Meta>)=
+        read_confirmed(&comparison.word_root.join("metadata.r3b"))?;
+    let (qa_meta,_,_):(Vec<Meta>,Vec<Meta>,Vec<Meta>)=
+        read_confirmed(&qa_root.join("metadata.r3b"))?;
+    let tape=quality_tape(&word_meta,&qa_meta)?;
+    let qa_selection=qa_root.parent().ok_or_else(||bad("quality QA selection parent"))?.join("selection.r3b");
+    let selected:binary::Value=read_confirmed(&qa_selection)?;
+    for label in ["balanced","old_qa"] {
+        let path=Path::new(selected[label].as_str().ok_or_else(||bad("quality QA source path"))?);
+        for name in ["corpus.r3cor","transfer.r3cor","metadata.r3b"] {
+            if selected["sources"][&format!("{label}/{name}")]!=file_hash(&path.join(name))? {
+                return Err(bad("quality QA source identity"));
+            }
+        }
+    }
+    let device=Backend::Metal0.open()?;
+    let runtime=RuntimeProfile::capture(Backend::Metal0,&device)?;
+    let root=std::path::absolute(output)?;
+    std::fs::create_dir(&root)?;let root=root.canonicalize()?;
+    let disposition=binary::record!({"contract":QUALITY_CONTRACT,"predecessor":predecessor,
+        "entered":file_hash(&entry)?,"returned":"ABSENT","admission":"INTERRUPTED_ADMISSION",
+        "log":file_hash(&log)?,"observed_external_seconds":307.72,
+        "accounted_before_seconds":2132.316754541f64,"preparation_cap_exceeded":true,
+        "optimizer_scope":"D6/D8 initial native and local segment directory only",
+        "D6_local":0,"D8_local":0,"generation_after_admission":0,
+        "unmeasured_tail":"UNKNOWN","quality_authority":false});
+    publish_confirmed(&root.join("disposition.r3b"),&disposition)?;
+    let plan=QualityPlan{contract:QUALITY_CONTRACT.into(),root:root.clone(),source:source()?,
+        binary:file_hash(&std::env::current_exe()?)?,runtime,predecessor:predecessor.clone(),
+        predecessor_plan:file_hash(&old_path)?,disposition:file_hash(&root.join("disposition.r3b"))?,
+        parent:starts.remove(0),tokenizer:old.tokenizer.clone(),tokenizer_hash:file_hash(&old.tokenizer)?,
+        tokenizer_id:old.tokenizer_id.clone(),word_root:comparison.word_root.clone(),
+        word_corpus:file_hash(&comparison.word_root.join("corpus.r3cor"))?,
+        word_metadata:file_hash(&comparison.word_root.join("metadata.r3b"))?,
+        qa_root:qa_root.clone(),qa_corpus:file_hash(&qa_root.join("corpus.r3cor"))?,
+        qa_metadata:file_hash(&qa_root.join("metadata.r3b"))?,
+        qa_selection:qa_selection.clone(),qa_selection_hash:file_hash(&qa_selection)?,
+        time_cap:"NOT_APPLICABLE".into(),tape};
+    publish_confirmed(&root.join("plan.r3b"),&plan)?;
+    println!("QUALITY_Q0_PREPARED parent={} D6_local=0 Adam=0 interrupted_admission=true time_cap=NOT_APPLICABLE model_calls=0",plan.parent.hash);
+    Ok(())
+}
+fn quality_plan(root:&Path)->Result<QualityPlan> {
+    let root=root.canonicalize()?;
+    let p:QualityPlan=read_confirmed(&root.join("plan.r3b"))?;
+    if p.contract!=QUALITY_CONTRACT || p.root!=root || p.source!=source()?
+        || p.binary!=file_hash(&std::env::current_exe()?)?
+        || p.time_cap!="NOT_APPLICABLE" || p.tape.len()!=4096
+        || p.runtime.binary!=p.binary || p.runtime.backend!=Backend::Metal0
+        || p.disposition!=file_hash(&root.join("disposition.r3b"))?
+        || p.predecessor_plan!=file_hash(&p.predecessor.join("plan.r3b"))?
+        || p.parent.hash!=file_hash(&p.parent.path)?
+        || p.tokenizer_hash!=file_hash(&p.tokenizer)?
+        || p.word_corpus!=file_hash(&p.word_root.join("corpus.r3cor"))?
+        || p.word_metadata!=file_hash(&p.word_root.join("metadata.r3b"))?
+        || p.qa_corpus!=file_hash(&p.qa_root.join("corpus.r3cor"))?
+        || p.qa_metadata!=file_hash(&p.qa_root.join("metadata.r3b"))?
+        || p.qa_selection_hash!=file_hash(&p.qa_selection)? {
+        return Err(bad("quality plan/source/input changed"));
+    }
+    Ok(p)
+}
+fn quality_policy(p:&QualityPlan)->Result<String>{digest(&(QUALITY_CONTRACT,p))}
+fn quality_config(start:usize,input:u64)->Result<TrainConfig>{
+    let mut c=train_config();
+    c.seq_len=512;c.max_steps=start.checked_add(4096).ok_or_else(||bad("quality window step overflow"))?;
+    c.budget_start_step=start;c.budget_start_tokens=input;
+    c.max_tokens=input.checked_add(20_000_000).ok_or_else(||bad("quality window tokens overflow"))?;
+    c.warmup=if start==0{20}else{0};c.validate(2048)?;Ok(c)
+}
+fn quality_history(p:&QualityPlan)->Result<Vec<Run>> {
+    let mut before=p.parent.clone();let mut out=Vec::new();
+    for index in 0usize.. {
+        let entered=p.root.join(format!("segment-{index:03}-entered.r3b"));
+        let returned=p.root.join(format!("segment-{index:03}-returned.r3b"));
+        if !entered.exists() {
+            if returned.exists(){return Err(bad("quality return without entry"));}
+            break;
+        }
+        let mark:binary::Value=read_confirmed(&entered)?;
+        let r:Run=read_confirmed(&returned).map_err(|_|bad("quality UNKNOWN segment; no automatic resume"))?;
+        let unchanged_initial_pause=r.stop=="SESSION_PAUSED" && r.after==before
+            && before==p.parent && before.state.committed==0;
+        if mark["policy"]!=quality_policy(p)? || mark["before"]!=binary::record!(&before)
+            || mark["index"]!=index || r.policy!=quality_policy(p)? || r.arm!="D6"
+            || r.before!=before || r.after.hash!=file_hash(&r.after.path)?
+            || r.trace_hash!=file_hash(&r.trace)?
+            || (r.after.state.policy!=r.policy && !unchanged_initial_pause)
+            || r.after.state.core!=p.parent.state.core
+            || (r.after.state.runtime!=p.runtime && !unchanged_initial_pause)
+            || r.after.state.committed!=r.after.state.adam_clock
+            || r.after.state.committed<before.state.committed
+            || r.after.state.committed-before.state.committed>4096
+            || r.after.state.input_tokens<before.state.input_tokens
+            || r.after.state.target_tokens<before.state.target_tokens
+            || r.input!=r.after.state.input_tokens-before.state.input_tokens
+            || r.target!=r.after.state.target_tokens-before.state.target_tokens
+            || r.backwards<r.after.state.committed-before.state.committed
+            || (r.stop=="COMPLETED" && r.after.state.committed==before.state.committed)
+            || r.after.state.config.budget_start_step/4096!=r.after.state.committed.saturating_sub(1)/4096
+            || r.control["time_cap"]!="NOT_APPLICABLE" || r.control["generation_calls"]!=0
+            || r.control["teacher_calls"]!=0
+            || !(r.stop=="COMPLETED" || (r.stop=="SESSION_PAUSED"
+                && r.control["terminal_reason"]=="CANCELLED")) {
+            return Err(bad("quality segment identity/stop"));
+        }
+        before=r.after.clone();out.push(r);
+    }
+    Ok(out)
+}
+fn quality_admit(root:&Path,review:&Path)->Result<()> {
+    let p=quality_plan(root)?;
+    let audit=p.root.join("data-audit.r3b");
+    let a:binary::Value=read_confirmed(&audit)?;
+    let r:binary::Value=read_confirmed(review)?;
+    if a["plan"]!=file_hash(&p.root.join("plan.r3b"))?
+        || a["train_dev_overlap_family_scene_prompt"]!=binary::record!([0,0,0])
+        || a["excluded_evidence"]!=0 || a["model_calls"]!=0
+        || r["contract"]!=QUALITY_CONTRACT || r["verdict"]!="PASS"
+        || r["plan"]!=file_hash(&p.root.join("plan.r3b"))?
+        || r["audit"]!=file_hash(&audit)? || r["source"]!=p.source
+        || r["binary"]!=p.binary || r["reviewed_boundaries"]!=binary::record!([
+            "interrupted_admission","initial_native_adam","no_time_limit_cancel",
+            "train_dev_split","tape_prompt_loss","native_resume"]) {
+        return Err(bad("quality independent A scope"));
+    }
+    publish_confirmed(&p.root.join("review-a.r3b"),&binary::record!({
+        "plan":file_hash(&p.root.join("plan.r3b"))?,"path":review.canonicalize()?,
+        "hash":file_hash(review)?,"accepted":true}))
+}
+fn quality_admitted(p:&QualityPlan)->Result<()> {
+    let link:binary::Value=read_confirmed(&p.root.join("review-a.r3b"))?;
+    let path=Path::new(link["path"].as_str().ok_or_else(||bad("quality A path"))?);
+    if link["accepted"]!=true || link["plan"]!=file_hash(&p.root.join("plan.r3b"))?
+        || link["hash"]!=file_hash(path)? {return Err(bad("quality A link"));}
+    Ok(())
+}
+fn quality_free_space(root:&Path,required:u64)->Result<u64> {
+    let output=std::process::Command::new("/bin/df").arg("-Pk").arg(root).output()?;
+    if !output.status.success(){return Err(bad("quality free-space observation failed"));}
+    let text=String::from_utf8(output.stdout).map_err(|_|bad("quality df UTF8"))?;
+    let line=text.lines().nth(1).ok_or_else(||bad("quality df row"))?;
+    let fields=line.split_whitespace().collect::<Vec<_>>();
+    let available=fields.get(3).ok_or_else(||bad("quality df columns"))?
+        .parse::<u64>().map_err(|_|bad("quality df available"))?
+        .checked_mul(1024).ok_or_else(||bad("quality df overflow"))?;
+    if available<required{return Err(bad("quality native/temp free-space reserve"));}
+    Ok(available)
+}
+fn quality_evaluation_complete(p:&QualityPlan,ep:&Endpoint,full:bool)->Result<()> {
+    let step=ep.state.committed;
+    let label=format!("eval-{step:05}-{}",if full{"full"}else{"monitor"});
+    let panels=quality_panels(p,full)?;
+    let expected=binary::record!({"policy":quality_policy(p)?,"native":ep.hash,
+        "model":ep.content,"step":step,"full":full,"manifest":digest(&panels)?,
+        "tokenizer":p.tokenizer_id,"runtime":p.runtime});
+    let done:binary::Value=read_confirmed(&p.root.join(format!("{label}-returned.r3b")))?;
+    if done["binding"]!=expected || done["status"]!="COMPLETED"
+        || done["scores"].as_object().is_none_or(|scores|scores.len()!=panels.len()) {
+        return Err(bad("quality evaluation incomplete or wrong checkpoint"));
+    }
+    for (name,_,_) in panels {
+        let score_path=p.root.join(format!("{label}-{name}-score.r3b"));
+        let score:binary::Value=read_confirmed(&score_path)?;
+        let raw_path=p.root.join(format!("{label}-{name}.r3rows"));
+        if done["scores"][&name]!=file_hash(&score_path)?
+            || score["native"]!=ep.hash || score["raw_hash"]!=file_hash(&raw_path)? {
+            return Err(bad("quality evaluation score/raw identity"));
+        }
+    }
+    Ok(())
+}
+fn quality_check_cadence(committed:usize,until:usize)->Result<()> {
+    let allowed=[1,32,128,256,512,1024,2048,3072,4096];
+    let local=until%4096;
+    let next_monitor=(committed/1024+1)*1024;
+    if until<=committed || until-committed>4096 || until>next_monitor
+        || !(allowed.contains(&local) || (local==0 && until>0))
+        || (committed==0 && until!=1)
+        || (committed==1 && until!=32)
+        || (committed==32 && until!=128) {
+        return Err(bad("quality update/window cadence"));
+    }
+    Ok(())
+}
+fn quality_train(root:&Path,until:usize)->Result<()> {
+    let p=quality_plan(root)?;quality_admitted(&p)?;
+    let lock=std::fs::OpenOptions::new().create(true).read(true).write(true)
+        .open(p.root.join("writer.lock"))?;
+    lock.try_lock().map_err(|_|bad("quality heavy process active"))?;
+    let history=quality_history(&p)?;
+    let before=history.last().map(|r|r.after.clone()).unwrap_or_else(||p.parent.clone());
+    let required=std::fs::metadata(&before.path)?.len().checked_mul(2)
+        .and_then(|n|n.checked_add(512*1024*1024)).ok_or_else(||bad("quality reserve overflow"))?;
+    let available=quality_free_space(&p.root,required)?;
+    println!("QUALITY_STORAGE available_bytes={available} reserve_bytes={required}");
+    quality_check_cadence(before.state.committed,until)?;
+    if before.state.committed>0 && before.state.committed%1024==0 {
+        quality_evaluation_complete(&p,&before,false)?;
+        if before.state.committed%4096==0 {
+            quality_evaluation_complete(&p,&before,true)?;
+        }
+    }
+    let word=data::native::read(&p.word_root.join("corpus.r3cor"))?;
+    let qa=data::native::read(&p.qa_root.join("corpus.r3cor"))?;
+    let tok=ByteBpe::load(&p.tokenizer)?;
+    let mut samples=samples_with_framing(&word.train,&tok,512,Framing::QuestionEvidence)?;
+    let word_len=samples.len();
+    samples.extend(samples_with_framing(&qa.train,&tok,512,Framing::QuestionEvidence)?);
+    let device=Backend::Metal0.open()?;p.runtime.verify(&device)?;
+    let (mut core,mut adam)=load_endpoint(&before,device)?;
+    let cancel=Arc::new(AtomicBool::new(false));let signal=cancel.clone();
+    ctrlc::set_handler(move||signal.store(true,Ordering::Relaxed))
+        .map_err(|e|bad(&e.to_string()))?;
+    let mut ctl=RunControl::without_time_limit(cancel,16*1024*1024);
+    ctl.set_call_limits(0,0);
+    let mut st=before.state.clone();st.policy=quality_policy(&p)?;st.runtime=p.runtime.clone();
+    if st.committed==0 || st.committed%4096==0 {
+        st.config=quality_config(st.committed,st.input_tokens)?;
+    }
+    let index=history.len();
+    let trace=p.root.join(format!("segment-{index:03}-trace.r3rows"));
+    let mut file=std::fs::OpenOptions::new().create_new(true).write(true).open(&trace)?;
+    publish_confirmed(&p.root.join(format!("segment-{index:03}-entered.r3b")),
+        &binary::record!({"policy":quality_policy(&p)?,"before":before,"index":index,"until":until}))?;
+    let started=Instant::now();let(mut backwards,mut in_optimizer)=(0usize,false);
+    let mut result=(||->Result<()> {
+        while st.committed<until {
+            ctl.check("quality_before_update")?;
+            if st.committed>=st.config.max_steps || st.input_tokens>=st.config.max_tokens {
+                return Err(bad("quality 4096/20M window exhausted"));
+            }
+            let row=&p.tape[st.committed%4096];
+            let ids=row.0.iter().copied().chain(row.1.iter().map(|&i|word_len+i)).collect::<Vec<_>>();
+            let b=batch(&samples,&ids,core.device())?;
+            if st.input_tokens+b.tokens as u64>st.config.max_tokens {
+                return Err(bad("quality window input tokens"));
+            }
+            append_row(&mut file,&binary::record!({"phase":"ENTERED","step":st.committed+1,"indices":ids}))?;
+            let update=super::super::update(&core,&mut adam,&mut st,&b,&mut ctl,&mut backwards,&mut in_optimizer)?;
+            append_row(&mut file,&update)?;
+            if st.committed%128==0 {
+                println!("QUALITY_TRAIN_PROGRESS step={} input={} target={} loss={} grad={} update={} rss={} elapsed={:.3}",
+                    st.committed,st.input_tokens,st.target_tokens,update["loss"],update["gradient_norm"],
+                    update["update_l2"],update["rss_kib"],started.elapsed().as_secs_f64());
+            }
+        }
+        Ok(())
+    })();
+    if result.is_ok(){result=ctl.check("quality_after_last_update");}
+    if let Err(e)=&result {ctl.classify_error(e);}
+    let after=if !in_optimizer&&st.committed>before.state.committed {
+        save_endpoint(&p.root,&mut core,&adam,st,&format!("segment-{index:03}"))?
+    }else{before.clone()};
+    if result.is_ok(){result=ctl.check("quality_after_native_save");}
+    if let Err(e)=&result {ctl.classify_error(e);}
+    let stop=if ctl.reason()==Some("CANCELLED") && !in_optimizer {
+        "SESSION_PAUSED".to_string()
+    } else {ctl.reason().unwrap_or("COMPLETED").to_string()};
+    append_row(&mut file,&binary::record!({"phase":"RETURNED","after":after,"stop":stop}))?;
+    file.sync_all()?;
+    let run=Run{policy:quality_policy(&p)?,arm:"D6".into(),before:before.clone(),after:after.clone(),
+        backwards,input:after.state.input_tokens-before.state.input_tokens,
+        target:after.state.target_tokens-before.state.target_tokens,seconds:started.elapsed().as_secs_f64(),
+        stop:stop.clone(),trace:trace.clone(),trace_hash:file_hash(&trace)?,control:ctl.receipt(),timing:None};
+    publish_confirmed(&p.root.join(format!("segment-{index:03}-returned.r3b")),&run)?;
+    println!("QUALITY_TRAIN_END step={} adam={} input={} target={} backwards={} stop={} native={} seconds={:.3}",
+        after.state.committed,after.state.adam_clock,run.input,run.target,backwards,stop,after.hash,run.seconds);
+    result
+}
+fn quality_panels(p:&QualityPlan,full:bool)->Result<Vec<Panel>> {
+    let word=data::native::read(&p.word_root.join("corpus.r3cor"))?;
+    let (wm,wd,_):(Vec<Meta>,Vec<Meta>,Vec<Meta>)=
+        read_confirmed(&p.word_root.join("metadata.r3b"))?;
+    let mut out=Vec::new();
+    for (name,start,limit) in [("value",0,512),("citation",512,512),
+        ("S1Q1",2560,512),("word",3072,192),("renamed",3264,192)] {
+        let count=if full{limit}else{if name=="word"||name=="renamed"{64}else{16}};
+        out.push((name.into(),word.validation[start..start+count].to_vec(),
+            wd[start..start+count].to_vec()));
+    }
+    let selection:binary::Value=read_confirmed(&p.qa_selection)?;
+    for label in ["balanced","old_qa"] {
+        let source=Path::new(selection[label].as_str().ok_or_else(||bad("quality QA panel source"))?);
+        for (kind,file) in [("primary","corpus.r3cor"),("transfer","transfer.r3cor")] {
+            if !full && kind=="transfer" {continue;}
+            if selection["sources"][&format!("{label}/{file}")]!=file_hash(&source.join(file))?
+                || selection["sources"][&format!("{label}/metadata.r3b")]
+                    !=file_hash(&source.join("metadata.r3b"))? {
+                return Err(bad("quality QA panel physical identity"));
+            }
+            let c=data::native::read(&source.join(file))?;
+            let (_,dm,xm):(Vec<Meta>,Vec<Meta>,Vec<Meta>)=
+                read_confirmed(&source.join("metadata.r3b"))?;
+            let ms=if kind=="primary"{dm}else{xm};
+            if c.validation.len()!=ms.len(){return Err(bad("quality QA panel metadata"));}
+            let indices=if full {(0..ms.len()).collect::<Vec<_>>()}else{
+                let mut picked=Vec::new();let mut count=[0usize;8];
+                for (i,m) in ms.iter().enumerate() {
+                    if m.bucket>=8 {return Err(bad("quality QA panel bucket"));}
+                    if count[m.bucket]<8 {picked.push(i);count[m.bucket]+=1;}
+                }
+                if count.iter().any(|&n|n!=8){return Err(bad("quality QA monitor balance"));}
+                picked
+            };
+            out.push((format!("qa-{label}-{kind}"),indices.iter().map(|&i|c.validation[i].clone()).collect(),
+                indices.iter().map(|&i|ms[i].clone()).collect()));
+        }
+    }
+    if full {
+        out.push(("train-word-full".into(),word.train[6144..].to_vec(),wm[6144..].to_vec()));
+        let qa=data::native::read(&p.qa_root.join("corpus.r3cor"))?;
+        let (qm,_,_):(Vec<Meta>,Vec<Meta>,Vec<Meta>)=
+            read_confirmed(&p.qa_root.join("metadata.r3b"))?;
+        let mut chosen=Vec::new();let mut bases=[0usize;8];
+        for i in (4608..12800).step_by(2) {
+            let b=qm[i].bucket;
+            if b>=8{return Err(bad("quality QA fit bucket"));}
+            if bases[b]<16 {chosen.extend([i,i+1,i+8192,i+8193]);bases[b]+=1;}
+        }
+        if bases.iter().any(|&n|n!=16){return Err(bad("quality QA complete fit sample"));}
+        out.push(("qa-balanced-train512".into(),chosen.iter().map(|&i|qa.train[i].clone()).collect(),
+            chosen.iter().map(|&i|qm[i].clone()).collect()));
+    }
+    Ok(out)
+}
+fn quality_evaluate(root:&Path,step:usize,full:bool)->Result<()> {
+    let p=quality_plan(root)?;quality_admitted(&p)?;
+    if step!=0 && (step<1024 || step%1024!=0) {return Err(bad("quality evaluation cadence"));}
+    if full && (step<2048 || step%2048!=0) {return Err(bad("quality full evaluation cadence"));}
+    let lock=std::fs::OpenOptions::new().create(true).read(true).write(true)
+        .open(p.root.join("writer.lock"))?;
+    lock.try_lock().map_err(|_|bad("quality heavy process active"))?;
+    let h=quality_history(&p)?;
+    let ep=h.last().map(|r|r.after.clone()).unwrap_or_else(||p.parent.clone());
+    if ep.state.committed!=step {return Err(bad("quality same-checkpoint evaluation"));}
+    let panels=quality_panels(&p,full)?;
+    let manifest=digest(&panels)?;
+    let label=format!("eval-{step:05}-{}",if full{"full"}else{"monitor"});
+    let started=p.root.join(format!("{label}-entered.r3b"));
+    let returned=p.root.join(format!("{label}-returned.r3b"));
+    let binding=binary::record!({"policy":quality_policy(&p)?,"native":ep.hash,
+        "model":ep.content,"step":step,"full":full,"manifest":manifest,
+        "tokenizer":p.tokenizer_id,"runtime":p.runtime});
+    if returned.exists() {
+        let done:binary::Value=read_confirmed(&returned)?;
+        if done["binding"]!=binding || done["status"]!="COMPLETED" {
+            return Err(bad("quality prior evaluation changed"));
+        }
+        println!("QUALITY_EVAL_REUSED step={step} full={full} calls=0");return Ok(());
+    }
+    if started.exists() {
+        if read_confirmed::<binary::Value>(&started)?!=binding {
+            return Err(bad("quality pending evaluation identity"));
+        }
+    } else {publish_confirmed(&started,&binding)?;}
+    let tok=ByteBpe::load(&p.tokenizer)?;
+    let device=Backend::Metal0.open()?;p.runtime.verify(&device)?;
+    let (core,_)=load_endpoint(&ep,device)?;
+    let cancel=Arc::new(AtomicBool::new(false));let signal=cancel.clone();
+    ctrlc::set_handler(move||signal.store(true,Ordering::Relaxed))
+        .map_err(|e|bad(&e.to_string()))?;
+    let mut ctl=RunControl::without_time_limit(cancel,12*1024*1024);
+    ctl.set_call_limits(panels.iter().map(|v|v.1.len()).sum(),0);
+    let mut generated=0usize;let mut scores=std::collections::BTreeMap::new();
+    for panel in panels {
+        let row_label=format!("{label}-{}",panel.0);
+        let row_binding=binary::record!({"evaluation":binding,"cases":digest(&panel.1)?,
+            "metadata":digest(&panel.2)?,"panel":panel.0});
+        let rows=collect(&core,&tok,&p.root,&row_label,&panel.1,&row_binding,
+            &mut ctl,&mut generated,usize::MAX,None)?;
+        let raw=file_hash(&p.root.join(format!("{row_label}.r3rows")))?;
+        let mut score=panel_score(&panel,&rows,&tok,&ep.content,&raw)?;
+        score["raw_hash"]=binary::record!(raw);
+        score["native"]=binary::record!(ep.hash);
+        let path=p.root.join(format!("{row_label}-score.r3b"));
+        if path.exists() {
+            if read_confirmed::<binary::Value>(&path)?!=score {return Err(bad("quality score changed"));}
+        } else {publish_confirmed(&path,&score)?;}
+        println!("QUALITY_SCORE step={step} panel={} score={}",panel.0,score);
+        scores.insert(panel.0, file_hash(&path)?);
+    }
+    ctl.seal_completed_no_call()?;
+    publish_confirmed(&returned,&binary::record!({"binding":binding,"scores":scores,
+        "status":"COMPLETED","calls":ctl.receipt()["generation_calls"],
+        "generated_tokens":generated,"control":ctl.receipt()}))?;
+    Ok(())
+}
+fn quality_audit(root:&Path)->Result<()> {
+    let p=quality_plan(root)?;
+    let word=data::native::read(&p.word_root.join("corpus.r3cor"))?;
+    let qa=data::native::read(&p.qa_root.join("corpus.r3cor"))?;
+    let (wm,wd,_):(Vec<Meta>,Vec<Meta>,Vec<Meta>)=
+        read_confirmed(&p.word_root.join("metadata.r3b"))?;
+    let (qm,qd,_):(Vec<Meta>,Vec<Meta>,Vec<Meta>)=
+        read_confirmed(&p.qa_root.join("metadata.r3b"))?;
+    if word.train.len()!=7680 || word.validation.len()!=3456 || wm.len()!=7680
+        || wd.len()!=3456 || qa.manifest.generator!="retained-qa-transfer-v1"
+        || qa.train.len()!=20992 || qa.validation.len()!=1536 || qm.len()!=20992
+        || qd.len()!=1536 || quality_tape(&wm,&qm)?!=p.tape {
+        return Err(bad("quality frozen TRAIN/DEVELOPMENT identity"));
+    }
+    let tok=ByteBpe::load(&p.tokenizer)?;
+    if tok.semantic_id()!=p.tokenizer_id {return Err(bad("quality audit tokenizer"));}
+    let ws=samples_with_framing(&word.train,&tok,512,Framing::QuestionEvidence)?;
+    let qs=samples_with_framing(&qa.train,&tok,512,Framing::QuestionEvidence)?;
+    let mut max_len=0usize;
+    let mut excluded=0usize;
+    let mut train_families=std::collections::BTreeSet::new();
+    let mut train_scenes=std::collections::BTreeSet::new();
+    let mut train_prompts=std::collections::BTreeSet::new();
+    for (e,s) in word.train.iter().zip(&ws)
+        .chain(qa.train[4608..].iter().zip(&qs[4608..])) {
+        let answer=tok.encode(e.answer.as_bytes())?;
+        let prompt=tok.prepare_with_framing(&e.request,Framing::QuestionEvidence,2048,"quality-train-audit")?;
+        if s.tokens.len()>512 || prompt.token_ids!=s.tokens[..s.response_start]
+            || s.tokens[s.response_start..s.tokens.len()-1]!=answer
+            || s.tokens.last()!=Some(&EOS) || answer.len()+1>e.request.limits.max_tokens as usize {
+            return Err(bad("quality TRAIN prompt/target/EOS/generation mismatch"));
+        }
+        max_len=max_len.max(s.tokens.len());excluded+=prompt.excluded.len();
+        train_families.insert(e.family.clone());
+        if !e.request.evidence.items.is_empty(){train_scenes.insert(digest(&e.request.evidence)?);}
+        train_prompts.insert(digest(&prompt.token_ids)?);
+    }
+    if excluded!=0 {return Err(bad("quality TRAIN evidence truncated"));}
+    let mut overlap=[0usize;3];
+    let selection:binary::Value=read_confirmed(&p.qa_selection)?;
+    let mut heldout=vec![word.validation.clone(),qa.validation.clone()];
+    let mut heldout_counts=vec![word.validation.len(),qa.validation.len()];
+    for label in ["balanced","old_qa"] {
+        let root=Path::new(selection[label].as_str().ok_or_else(||bad("quality QA selection"))?);
+        for name in ["corpus.r3cor","transfer.r3cor"] {
+            if selection["sources"][&format!("{label}/{name}")]!=file_hash(&root.join(name))? {
+                return Err(bad("quality heldout source hash"));
+            }
+            let dev=data::native::read(&root.join(name))?;
+            heldout_counts.push(dev.validation.len());heldout.push(dev.validation);
+        }
+    }
+    for dev in &heldout {
+        for e in dev {
+            let prompt=tok.prepare_with_framing(&e.request,Framing::QuestionEvidence,2048,"quality-dev-audit")?;
+            overlap[0]+=usize::from(train_families.contains(&e.family));
+            if !e.request.evidence.items.is_empty(){
+                overlap[1]+=usize::from(train_scenes.contains(&digest(&e.request.evidence)?));
+            }
+            overlap[2]+=usize::from(train_prompts.contains(&digest(&prompt.token_ids)?));
+        }
+    }
+    if overlap.iter().any(|&n|n!=0) {return Err(bad("quality TRAIN/DEVELOPMENT semantic leak"));}
+    let(mut input,mut target)=(0u64,0u64);
+    let mut word_uses=vec![0u16;wm.len()];let mut qa_uses=vec![0u16;qm.len()];
+    for (core,general) in &p.tape {
+        for &i in core {let s=&ws[i];word_uses[i]+=1;input+=(s.tokens.len()-1)as u64;
+            target+=(s.tokens.len()-s.response_start)as u64;}
+        for &i in general {let s=&qs[i];qa_uses[i]+=1;input+=(s.tokens.len()-1)as u64;
+            target+=(s.tokens.len()-s.response_start)as u64;}
+    }
+    let mut buckets=[0usize;8];let mut unique=[0usize;8];
+    for (i,m) in qm.iter().enumerate().skip(4608) {
+        if m.bucket>=8 {return Err(bad("quality QA bucket"));}
+        buckets[m.bucket]+=qa_uses[i] as usize;
+        unique[m.bucket]+=usize::from(qa_uses[i]>0);
+    }
+    if buckets.iter().any(|&n|n!=2048) || unique.iter().any(|&n|n!=2048)
+        || word_uses.iter().sum::<u16>() as usize!=16384
+        || qa_uses.iter().sum::<u16>() as usize!=16384 {
+        return Err(bad("quality complete QA8/core exposure"));
+    }
+    let mut coverage=std::collections::BTreeMap::new();
+    for bucket in 0..8 {
+        let mut bases=std::collections::BTreeSet::new();
+        let mut templates=std::collections::BTreeSet::new();
+        let mut entities=std::collections::BTreeSet::new();
+        let mut answers=std::collections::BTreeSet::new();
+        let mut support_position=[0usize;4];
+        let mut record_counts=std::collections::BTreeMap::<usize,usize>::new();
+        let mut order=std::collections::BTreeMap::<String,usize>::new();
+        let mut id_lengths=std::collections::BTreeMap::<usize,usize>::new();
+        let mut categories=std::collections::BTreeSet::new();
+        for (i,(e,m)) in qa.train.iter().zip(&qm).enumerate().skip(4608) {
+            if m.bucket!=bucket || qa_uses[i]==0 {continue;}
+            bases.insert(&m.base);templates.insert(&m.template);
+            entities.extend(&m.entities);answers.insert(&e.answer);
+            categories.insert(e.category);
+            *record_counts.entry(e.request.evidence.items.len()).or_default()+=qa_uses[i] as usize;
+            let items=&e.request.evidence.items;
+            if items.len()>=2 {
+                let id=if items[0].event_id<items[1].event_id{"ID_ASC"}else{"ID_DESC"};
+                let time=if items[0].recorded_at<items[1].recorded_at{"TIME_ASC"}else{"TIME_DESC"};
+                *order.entry(format!("{id}/{time}")).or_default()+=qa_uses[i] as usize;
+            }
+            for item in items {
+                *id_lengths.entry(item.event_id.to_string().len()).or_default()+=qa_uses[i] as usize;
+            }
+            let ids=identifiable::binding::citation::individually_valid_ids(&e.answer);
+            let position=if ids.len()==1 {
+                items.iter().position(|r|ids.contains(&r.event_id)).unwrap_or(3).min(3)
+            }else{3};
+            support_position[position]+=qa_uses[i] as usize;
+        }
+        coverage.insert(format!("QA{bucket}"),binary::record!({"goal_category_ids":categories,
+            "selected_train_rows":unique[bucket],"planned_exposures_per_cycle":buckets[bucket],
+            "new_run_actual_exposures":0,"historical_parent_exposures":"UNKNOWN_NOT_RECONSTRUCTED",
+            "semantic_bases":bases.len(),"templates":templates.len(),
+            "entities":entities.len(),"distinct_answer_texts":answers.len(),
+            "record_counts":record_counts,"first_two_record_order":order,
+            "provided_id_lengths":id_lengths,
+            "gold_support_position_0_1_2_or_no_single_id":support_position}));
+    }
+    let word_bases=wm.iter().map(|m|&m.base).collect::<std::collections::BTreeSet<_>>();
+    let word_templates=wm.iter().map(|m|&m.template).collect::<std::collections::BTreeSet<_>>();
+    let word_entities=wm.iter().flat_map(|m|m.entities.iter()).collect::<std::collections::BTreeSet<_>>();
+    let word_answers=word.train.iter().map(|e|&e.answer).collect::<std::collections::BTreeSet<_>>();
+    let mut word_support_position=[0usize;4];
+    let mut word_order=std::collections::BTreeMap::<String,usize>::new();
+    let mut word_id_lengths=std::collections::BTreeMap::<usize,usize>::new();
+    for (e,&uses) in word.train.iter().zip(&word_uses) {
+        if uses==0 {continue;}
+        let items=&e.request.evidence.items;
+        if items.len()>=2 {
+            let id=if items[0].event_id<items[1].event_id{"ID_ASC"}else{"ID_DESC"};
+            let time=if items[0].recorded_at<items[1].recorded_at{"TIME_ASC"}else{"TIME_DESC"};
+            *word_order.entry(format!("{id}/{time}")).or_default()+=uses as usize;
+        }
+        for item in items {*word_id_lengths.entry(item.event_id.to_string().len()).or_default()+=uses as usize;}
+        let ids=identifiable::binding::citation::individually_valid_ids(&e.answer);
+        let position=if ids.len()==1 {items.iter().position(|r|ids.contains(&r.event_id)).unwrap_or(3).min(3)}else{3};
+        word_support_position[position]+=uses as usize;
+    }
+    coverage.insert("CORE_WORD".into(),binary::record!({"selected_train_rows":word_uses.iter().filter(|&&n|n>0).count(),
+        "planned_exposures_per_cycle":word_uses.iter().map(|&n|n as usize).sum::<usize>(),
+        "new_run_actual_exposures":0,"historical_parent_exposures":"UNKNOWN_NOT_RECONSTRUCTED",
+        "semantic_bases":word_bases.len(),"templates":word_templates.len(),
+        "entities":word_entities.len(),"distinct_answer_texts":word_answers.len(),
+        "first_two_record_order":word_order,"provided_id_lengths":word_id_lengths,
+        "gold_support_position_0_1_2_or_no_single_id":word_support_position}));
+    let audit=binary::record!({"contract":QUALITY_CONTRACT,"plan":file_hash(&p.root.join("plan.r3b"))?,
+        "mode":"NO_MODEL_DATA_AUDIT","word_train":word.train.len(),"word_dev":word.validation.len(),
+        "qa_train":qa.train.len(),"qa_dev":qa.validation.len(),"qa_selected_train":16384,
+        "qa_bucket_uses":buckets,"qa_bucket_unique":unique,"core_uses":16384,
+        "updates_per_cycle":p.tape.len(),"input_tokens_per_cycle":input,"target_tokens_per_cycle":target,
+        "maximum_training_length":max_len,"excluded_evidence":excluded,
+        "train_family_count":train_families.len(),"heldout_counts":heldout_counts,
+        "category_coverage":coverage,
+        "train_dev_overlap_family_scene_prompt":overlap,
+        "goal_five":"0 current entity value; 1 history/correction/restore; 2 context selection; 3 raw/value extraction; 4 missing evidence/causality",
+        "diagnostic_A_H":"A/B raw; C entity; D context; E time; F correction/restore; G missing/ambiguous; H causality",
+        "same_classification":false,"model_calls":0});
+    publish_confirmed(&p.root.join("data-audit.r3b"),&audit)?;
+    println!("QUALITY_Q1_AUDIT core={} QA8={:?} input={} target={} max_len={} overlap={:?} model_calls=0",
+        16384,buckets,input,target,max_len,overlap);
+    Ok(())
 }
 #[derive(Clone, Copy)]
 struct ExecutionLimits { preparation:f64, training:f64, evaluation:f64, total:f64 }
@@ -3152,6 +3824,12 @@ pub fn run(action: Action) -> Result<()> {
         _=>None,
     };
     let execute=||match action {
+        Action::QualityPrepare {predecessor,qa_root,output} =>
+            quality_prepare(&predecessor,&qa_root,&output),
+        Action::QualityAudit {root} => quality_audit(&root),
+        Action::QualityAdmit {root,review} => quality_admit(&root,&review),
+        Action::QualityTrain {root,until} => quality_train(&root,until),
+        Action::QualityEvaluate {root,step,full} => quality_evaluate(&root,step,full),
         Action::RepairPrepare {root,legacy_observation,legacy_binary} =>
             repair_prepare(&root,&legacy_observation,&legacy_binary),
         Action::SealRepair {root} => seal_repair(&root),
@@ -3198,6 +3876,65 @@ pub fn run(action: Action) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn quality_first_window_cadence_requires_monitor_boundaries() {
+        for (before,until) in [(0,1),(1,32),(32,128),(128,1024),
+            (1024,2048),(2048,3072),(3072,4096),(4096,4097)] {
+            quality_check_cadence(before,until).unwrap();
+        }
+        for (before,until) in [(0,32),(1,128),(32,256),(128,2048),
+            (1024,3072),(2048,4096),(4096,6144)] {
+            assert!(quality_check_cadence(before,until).is_err());
+        }
+        let first=quality_config(0,0).unwrap();
+        let second=quality_config(4096,6_291_250).unwrap();
+        assert_eq!((first.warmup,first.max_steps),(20,4096));
+        assert_eq!((second.warmup,second.max_steps,second.budget_start_tokens),
+            (0,8192,6_291_250));
+    }
+    #[test]
+    fn quality_cancelled_initial_is_resumable_and_history_is_complete() {
+        let d=tempfile::tempdir().unwrap();
+        let root=d.path().to_path_buf();
+        let native=root.join("parent.r3model");
+        std::fs::write(&native,b"unchanged parent").unwrap();
+        let old_runtime=RuntimeProfile{backend:Backend::Cpu,actual_device:"Cpu".into(),
+            dtype:"F32".into(),accumulator:"F32".into(),patch:"old".into(),
+            patch_source:"old".into(),lock:"old".into(),binary:"old-binary".into(),
+            os_build:"test".into(),fast_math:"UNKNOWN".into()};
+        let mut new_runtime=old_runtime.clone();new_runtime.binary="new-binary".into();
+        let parent=Endpoint{state:ComparisonState{schema:1,
+            core:ComparisonCore::Trpp(Config::small(562)),policy:"old-policy".into(),
+            tokenizer:"tokenizer".into(),framing:Framing::QuestionEvidence.digest(),
+            runtime:old_runtime,objective:checkpoint::ANSWER_MEAN_FAMILY,
+            optimizer:"FRESH_ADAMW_ALL_V1".into(),config:train_config(),committed:0,
+            adam_clock:0,input_tokens:0,target_tokens:0},
+            path:native.clone(),hash:file_hash(&native).unwrap(),content:"weights".into()};
+        let p=QualityPlan{contract:QUALITY_CONTRACT.into(),root:root.clone(),
+            source:"source".into(),binary:"new-binary".into(),runtime:new_runtime,
+            predecessor:root.clone(),predecessor_plan:String::new(),disposition:String::new(),
+            parent:parent.clone(),tokenizer:root.clone(),tokenizer_hash:String::new(),
+            tokenizer_id:"tokenizer".into(),word_root:root.clone(),word_corpus:String::new(),
+            word_metadata:String::new(),qa_root:root.clone(),qa_corpus:String::new(),
+            qa_metadata:String::new(),qa_selection:root.clone(),qa_selection_hash:String::new(),
+            time_cap:"NOT_APPLICABLE".into(),tape:vec![]};
+        let policy=quality_policy(&p).unwrap();
+        for index in 0..65 {
+            let trace=root.join(format!("segment-{index:03}-trace.r3rows"));
+            std::fs::write(&trace,b"cancelled before commit").unwrap();
+            let run=Run{policy:policy.clone(),arm:"D6".into(),before:parent.clone(),
+                after:parent.clone(),backwards:0,input:0,target:0,seconds:0.,
+                stop:"SESSION_PAUSED".into(),trace:trace.clone(),
+                trace_hash:file_hash(&trace).unwrap(),
+                control:binary::record!({"time_cap":"NOT_APPLICABLE",
+                    "generation_calls":0,"teacher_calls":0,"terminal_reason":"CANCELLED"}),
+                timing:None};
+            publish_confirmed(&root.join(format!("segment-{index:03}-entered.r3b")),
+                &binary::record!({"policy":policy,"before":parent,"index":index,"until":1})).unwrap();
+            publish_confirmed(&root.join(format!("segment-{index:03}-returned.r3b")),&run).unwrap();
+        }
+        assert_eq!(quality_history(&p).unwrap().len(),65);
+    }
     #[test]
     fn final_cost_counts_body_once_and_reserves_close() {
         let limit=ExecutionLimits{preparation:1800.,training:2400.,evaluation:2100.,total:6300.};

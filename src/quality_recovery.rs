@@ -51,7 +51,7 @@ impl StopReason {
 pub(super) struct RunControl {
     cancel: Arc<AtomicBool>,
     start: Instant,
-    deadline: Instant,
+    deadline: Option<Instant>,
     max_rss_kib: u64,
     pub(super) last_rss_kib: Option<u64>,
     pub(super) measure_rss: bool,
@@ -79,10 +79,11 @@ pub(super) struct RunControl {
 }
 impl RunControl {
     pub(super) fn cancellation(&self) -> Arc<AtomicBool> { self.cancel.clone() }
-    pub(super) fn deadline(&self) -> Instant { self.deadline }
+    pub(super) fn deadline(&self) -> Option<Instant> { self.deadline }
     pub(super) fn restrict_seconds(&mut self, seconds:f64) -> Result<()> {
         if !seconds.is_finite() || seconds<=0. { return Err(Error::Invalid("active time budget exhausted".into())); }
-        self.deadline=self.deadline.min(self.start+Duration::from_secs_f64(seconds));Ok(())
+        let limit=self.start+Duration::from_secs_f64(seconds);
+        self.deadline=Some(self.deadline.map_or(limit,|old|old.min(limit)));Ok(())
     }
     pub(super) fn begin_external_generation(&mut self) -> Result<()> {
         self.effective_timeout(u64::MAX)?;
@@ -97,10 +98,10 @@ impl RunControl {
         if self.observed.iter().all(|s|*s==StopReason::TimeBudget) {Ok(())} else {self.stop_result()}
     }
     #[cfg(feature="test-support")]
-    pub(super) fn fixture_deadline(&mut self){self.deadline=Instant::now();}
+    pub(super) fn fixture_deadline(&mut self){self.deadline=Some(Instant::now());}
     #[cfg(feature = "test-support")]
     pub(super) fn fixture_native_timeout(&mut self, tokens: usize) {
-        self.deadline = Instant::now() + Duration::from_secs(30);
+        self.deadline = Some(Instant::now() + Duration::from_secs(30));
         neural::transformer::fixture_timeout_after(tokens);
     }
     pub(super) fn set_call_limits(&mut self, generation: usize, teacher: usize) {
@@ -136,7 +137,7 @@ impl RunControl {
         Ok(Self {
             cancel,
             start,
-            deadline,
+            deadline:Some(deadline),
             max_rss_kib,
             last_rss_kib: None,
             measure_rss: true,
@@ -161,6 +162,19 @@ impl RunControl {
             #[cfg(test)]
             hook: None,
         })
+    }
+    pub(super) fn without_time_limit(cancel:Arc<AtomicBool>, max_rss_kib:u64)->Self {
+        let start=Instant::now();
+        Self {cancel,start,deadline:None,max_rss_kib,last_rss_kib:None,measure_rss:true,
+            stop:None,observed:vec![],terminal:false,generation_calls:0,
+            generation_limit:usize::MAX,completed_generation_count:0,
+            attempted_case_count:0,interrupted_case_id:None,teacher_calls:0,
+            teacher_limit:usize::MAX,
+            #[cfg(feature="test-support")] fixture_post_generation_deadline:false,
+            #[cfg(feature="test-support")] fixture_boundary:None,
+            #[cfg(test)] elapsed_override:None,
+            #[cfg(test)] time_boundary:None,
+            #[cfg(test)] hook:None}
     }
     pub(super) fn command(training: bool) -> Result<Self> {
         let flag = Arc::new(AtomicBool::new(false));
@@ -202,7 +216,7 @@ impl RunControl {
         if self.cancel.load(Ordering::Relaxed) {
             self.observe(StopReason::Cancelled);
         }
-        if now >= self.deadline {
+        if self.deadline.is_some_and(|limit|now>=limit) {
             self.observe(StopReason::TimeBudget);
         }
     }
@@ -222,18 +236,18 @@ impl RunControl {
     pub(super) fn check(&mut self, boundary: &str) -> Result<()> {
         #[cfg(feature = "test-support")]
         if self.fixture_boundary.as_deref() == Some(boundary) {
-            self.deadline = Instant::now();
+            self.deadline = Some(Instant::now());
             if std::env::var("R3_FRESH_CALL_CANCEL").as_deref() == Ok("1") {
                 self.cancel.store(true, Ordering::Relaxed);
             }
         }
         #[cfg(feature = "test-support")]
         if boundary == "generation_returned" && self.fixture_post_generation_deadline {
-            self.deadline = Instant::now();
+            self.deadline = Some(Instant::now());
         }
         #[cfg(test)]
         if self.time_boundary == Some(boundary) {
-            self.elapsed_override = Some(self.deadline.duration_since(self.start));
+            self.elapsed_override = Some(self.deadline.expect("test clock limit").duration_since(self.start));
         }
         #[cfg(test)]
         if let Some(hook) = &mut self.hook {
@@ -257,19 +271,13 @@ impl RunControl {
             self.observe(StopReason::TokenBudget);
             return self.stop_result().map(|_|0);
         }
-        let remaining = self
-            .deadline
-            .saturating_duration_since(self.now())
-            .as_millis();
-        let remaining = u64::try_from(remaining)
-            .map_err(|_| Error::Invalid("remaining timeout overflow".into()))?;
-        if remaining == 0 {
-            self.observe(StopReason::TimeBudget);
-            return self.stop_result().map(|_| 0);
-        }
         if original == 0 {
             return Err(Error::Invalid("zero request timeout".into()));
         }
+        let Some(limit)=self.deadline else {return Ok(original)};
+        let remaining=u64::try_from(limit.saturating_duration_since(self.now()).as_millis())
+            .map_err(|_|Error::Invalid("remaining timeout overflow".into()))?;
+        if remaining==0 {self.observe(StopReason::TimeBudget);return self.stop_result().map(|_|0);}
         Ok(original.min(remaining))
     }
     pub(super) fn classify_error(&mut self, e: &Error) {
@@ -299,8 +307,9 @@ impl RunControl {
     }
     pub(super) fn receipt(&self) -> Value {
         record!({"terminal_reason":self.stop.map(StopReason::name).or_else(||self.terminal.then_some("COMPLETED")),"observed_conditions":self.observed,"generation_calls":self.generation_calls,"teacher_calls":self.teacher_calls,"completed_generation_count":self.completed_generation_count,"attempted_case_count":self.attempted_case_count,"interrupted_case_id":self.interrupted_case_id,
-            "elapsed_seconds":self.now().duration_since(self.start).as_secs_f64(),"work_budget_seconds":self.deadline.duration_since(self.start).as_secs_f64(),
-            "work_deadline_overrun_seconds":self.now().saturating_duration_since(self.deadline).as_secs_f64(),"rss_observation_enabled":self.measure_rss,"cooperative_only":true})
+            "elapsed_seconds":self.now().duration_since(self.start).as_secs_f64(),"work_budget_seconds":self.deadline.map(|d|d.duration_since(self.start).as_secs_f64()),
+            "work_deadline_overrun_seconds":self.deadline.map(|d|self.now().saturating_duration_since(d).as_secs_f64()),
+            "time_cap":if self.deadline.is_some(){"LIMITED"}else{"NOT_APPLICABLE"},"rss_observation_enabled":self.measure_rss,"cooperative_only":true})
     }
 }
 
@@ -752,7 +761,7 @@ pub fn run(command: Command) -> Result<()> {
             | Command::ProgressArm { .. }
             | Command::ProgressReaudit { .. }
     ) {
-        budget.deadline = budget.start + Duration::from_secs(1800);
+        budget.deadline = Some(budget.start + Duration::from_secs(1800));
     }
     budget.check("command_started")?;
     let outcome = match command {
@@ -4445,7 +4454,7 @@ fn progress_arm(
         ));
     }
     let ledger = progress_ledger(root)?;
-    control.deadline = control.start + Duration::from_secs_f64((7200. - ledger.3).min(1800.));
+    control.deadline = Some(control.start + Duration::from_secs_f64((7200. - ledger.3).min(1800.)));
     let parent = progress_path(&p, "parent")?;
     let a0 = progress_path(&p, "a0")?;
     if p["a0_hash"] != file_hash(&a0.join("summary.r3b"))?
@@ -7974,7 +7983,7 @@ fn finish_arm(
     let _ = control.check("checkpoint_preserved");
     let reason = control.terminal_reason(complete && saved.is_ok());
     record!({"reason":reason,"observed_conditions":control.observed,"checkpoint_saved":saved.is_ok(),"checkpoint_save_status_reason":saved_reason,"save_error":saved.err().map(|e|e.to_string()),
-        "work_elapsed_seconds":work_elapsed,"cleanup_elapsed_seconds":cleanup_start.elapsed().as_secs_f64(),"work_deadline_overrun_seconds":control.now().saturating_duration_since(control.deadline).as_secs_f64(),
+        "work_elapsed_seconds":work_elapsed,"cleanup_elapsed_seconds":cleanup_start.elapsed().as_secs_f64(),"work_deadline_overrun_seconds":control.deadline.map(|d|control.now().saturating_duration_since(d).as_secs_f64()),
         "final_evaluation_complete":complete,"comparison_eligible":complete&&control.stop.is_none(),"candidate_eligible":false,"cooperative_only":true,"control":control.receipt()})
 }
 fn arm_run(
@@ -10283,6 +10292,20 @@ mod tests {
         assert_eq!(control.teacher_calls, 0);
     }
     #[test]
+    fn quality_no_time_cap_keeps_cancel_and_request_timeout() {
+        let cancel=Arc::new(AtomicBool::new(false));
+        let mut c=RunControl::without_time_limit(cancel.clone(),u64::MAX);
+        c.measure_rss=false;
+        c.elapsed_override=Some(Duration::from_secs(100_000));
+        assert!(c.check("long_quality_run").is_ok());
+        assert_eq!(c.effective_timeout(120_000).unwrap(),120_000);
+        assert_eq!(c.receipt()["time_cap"],"NOT_APPLICABLE");
+        assert!(c.receipt()["work_budget_seconds"].is_null());
+        cancel.store(true,Ordering::Relaxed);
+        assert!(matches!(c.check("quality_cancel"),Err(Error::Cancelled)));
+        assert_eq!(c.reason(),Some("CANCELLED"));
+    }
+    #[test]
     fn repair_rf03_deadline_precision_priority_and_latched_cleanup() {
         for (elapsed, expected) in [
             (Duration::from_nanos(999_999_999), None),
@@ -10312,7 +10335,7 @@ mod tests {
         assert_eq!(c.stop, Some(StopReason::TimeBudget));
         let mut c = repair_control();
         c.cancel.store(true, Ordering::Relaxed);
-        let _ = c.check_at(c.deadline, Err(Error::Invalid("RSS unavailable".into())));
+        let _ = c.check_at(c.deadline.expect("test clock limit"), Err(Error::Invalid("RSS unavailable".into())));
         assert_eq!(c.stop, Some(StopReason::Cancelled));
         assert_eq!(
             c.observed,

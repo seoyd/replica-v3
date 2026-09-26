@@ -197,7 +197,7 @@ fn worker(root:&Path,backend:Backend)->Result<()> {
         let mut command=std::process::Command::new(&e.worker);
         command.arg("__model-worker").arg("--device").arg(backend.id()).arg("--checkpoint").arg(&r.protected);
         let cancel=control.cancellation();let deadline=control.deadline();
-        let response=run_worker_observed(command,&request,&cancel,replica_v3::model::LOAD_TIMEOUT,Some(deadline),||{
+        let response=run_worker_observed(command,&request,&cancel,replica_v3::model::LOAD_TIMEOUT,deadline,||{
             publish_confirmed(&root.join(format!("{name}-{i}-entered.r3b")),&binary::record!({"request":digest(&request)?,"state":"MAY_ENTER"}))?;
             control.begin_external_generation()
         })?;
