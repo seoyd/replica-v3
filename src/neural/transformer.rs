@@ -69,9 +69,19 @@ impl Config {
             rope_theta: 10000.,
         }
     }
+    /// Explicit experiment only. The product's SMALL6 default is unchanged.
+    pub fn depth8(vocab: usize) -> Self {
+        let mut c = Self::small(vocab);
+        c.profile = "NATIVE_TRPP_DEPTH8_V1".into();
+        c.layers = 8;
+        c.local_layers = 7;
+        c
+    }
     pub fn validate(&self) -> Result<()> {
-        if self.layers == 0
-            || self.layers > 6
+        let depth8 = *self == Self::depth8(self.vocab);
+        if (self.profile == "NATIVE_TRPP_DEPTH8_V1" && !depth8)
+            || self.layers == 0
+            || (self.layers > 6 && !depth8)
             || self.hidden == 0
             || self.hidden > 384
             || self.heads == 0
@@ -101,6 +111,7 @@ impl Config {
         }
         if *self != Self::small(self.vocab)
             && *self != Self::tiny(self.vocab)
+            && !depth8
             && self.profile != "NATIVE_TRPP_EXPERIMENTAL_V1"
         {
             return Err(Error::Invalid(
@@ -500,6 +511,51 @@ impl Cache {
     }
 }
 impl Transformer {
+    /// Insert two local residual blocks as identities. All copied tensors own
+    /// fresh storage; neither model can mutate the other through a shared Var.
+    pub fn depth8_from_small(parent: &Self, seed: u64) -> Result<Self> {
+        if parent.config != Config::small(parent.config.vocab)
+            || parent.adapter.is_some() || parent.frozen.is_some() {
+            return Err(Error::Invalid("depth8 parent must be plain SMALL6".into()));
+        }
+        let config = Config::depth8(parent.config.vocab);
+        let mut tensors = BTreeMap::new();
+        for (old, new) in [(0, 0), (1, 1), (2, 3), (3, 4), (4, 6), (5, 7)] {
+            for suffix in ["attn_norm", "ffn_norm", "q_norm", "k_norm", "q", "k", "v", "o", "gate", "up", "down"] {
+                let src = parent.vars[&format!("layer.{old}.{suffix}")].as_tensor();
+                tensors.insert(format!("layer.{new}.{suffix}"),
+                    Tensor::from_vec(src.flatten_all()?.to_vec1::<f32>()?, src.dims().to_vec(), &parent.device)?);
+            }
+        }
+        for name in ["embedding", "final_norm"] {
+            let src = parent.vars[name].as_tensor();
+            tensors.insert(name.into(), Tensor::from_vec(src.flatten_all()?.to_vec1::<f32>()?,
+                src.dims().to_vec(), &parent.device)?);
+        }
+        for index in [2, 5] {
+            for (name, shape) in config.shapes().into_iter().filter(|(name, _)| name.starts_with(&format!("layer.{index}."))) {
+                let count = shape.iter().product();
+                let data = if name.ends_with("norm") {
+                    vec![1f32; count]
+                } else if name.ends_with(".o") || name.ends_with(".down") {
+                    vec![0f32; count]
+                } else {
+                    // Per-name deterministic streams keep old tensor RNG consumption unchanged.
+                    let mut hash = sha2::Sha256::new();
+                    use sha2::Digest;
+                    hash.update(seed.to_le_bytes());
+                    hash.update(name.as_bytes());
+                    let digest = hash.finalize();
+                    let mut rng = Rng::new(u64::from_le_bytes(digest[..8].try_into().expect("digest width")));
+                    (0..count).map(|_| rng.normal() * 0.02).collect()
+                };
+                tensors.insert(name, Tensor::from_vec(data, shape, &parent.device)?);
+            }
+        }
+        let mut model = Self::from_tensors(config, tensors, parent.device.clone())?;
+        model.bind_tokenizer(&parent.tokenizer_identity)?;
+        Ok(model)
+    }
     pub fn init(config: Config, seed: u64, device: Device) -> Result<Self> {
         config.validate()?;
         let mut rng = Rng::new(seed);
@@ -1012,6 +1068,67 @@ pub fn masked_loss(logits: &Tensor, targets: &Tensor, mask: &Tensor) -> Result<(
         .gather(&targets.reshape((b * t, 1))?, 1)?
         .reshape((b, t))?;
     Ok((((selected * mask)?.sum_all()? / -(count as f64))?, count))
+}
+
+#[cfg(test)]
+mod depth8_tests {
+    use super::*;
+
+    #[test]
+    fn depth8_profile_is_exact_and_preserves_old_bounds() -> Result<()> {
+        let small = Config::small(562);
+        let depth = Config::depth8(562);
+        assert!(small.validate().is_ok());
+        assert!(depth.validate().is_ok());
+        assert_ne!(small.semantic_id()?, depth.semantic_id()?);
+        assert_eq!(depth.parameters() - small.parameters(), 3_099_072);
+        for invalid in [
+            { let mut c = depth.clone(); c.layers = 7; c },
+            { let mut c = depth.clone(); c.layers = 9; c },
+            { let mut c = depth.clone(); c.local_layers = 6; c },
+            { let mut c = depth.clone(); c.layers = 6; c },
+            { let mut c = depth.clone(); c.profile = "NATIVE_TRPP_EXPERIMENTAL_V1".into(); c },
+            { let mut c = small.clone(); c.layers = 8; c },
+        ] {
+            assert!(invalid.validate().is_err(), "accepted {:?}", invalid);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn depth8_identity_copy_and_live_projection_cpu() -> Result<()> {
+        let small = Transformer::init(Config::small(264), 73, Device::Cpu)?;
+        let deep = Transformer::depth8_from_small(&small, 20260926)?;
+        for (old, new) in [(0, 0), (1, 1), (2, 3), (3, 4), (4, 6), (5, 7)] {
+            for suffix in ["attn_norm", "ffn_norm", "q_norm", "k_norm", "q", "k", "v", "o", "gate", "up", "down"] {
+                let a = small.vars[&format!("layer.{old}.{suffix}")].flatten_all()?.to_vec1::<f32>()?;
+                let b = deep.vars[&format!("layer.{new}.{suffix}")].flatten_all()?.to_vec1::<f32>()?;
+                assert_eq!(a, b);
+            }
+        }
+        for index in [2, 5] {
+            for suffix in ["o", "down"] {
+                assert!(deep.vars[&format!("layer.{index}.{suffix}")].flatten_all()?.to_vec1::<f32>()?.iter().all(|v| *v == 0.));
+            }
+        }
+        let ids = Tensor::from_vec(vec![10u32, 11, 12, 13], (1, 4), &Device::Cpu)?;
+        let a = small.forward(&ids, None)?.flatten_all()?.to_vec1::<f32>()?;
+        let b = deep.forward(&ids, None)?.flatten_all()?.to_vec1::<f32>()?;
+        let max = a.iter().zip(&b).map(|(x, y)| (*x - *y).abs()).fold(0f32, f32::max);
+        assert!(max <= 5e-5, "identity max={max}");
+        let loss = deep.forward(&ids, None)?.sum_all()?;
+        let g = loss.backward()?;
+        for index in [2, 5] {
+            assert!(g.get(&deep.vars[&format!("layer.{index}.o")]).is_some());
+            assert!(g.get(&deep.vars[&format!("layer.{index}.down")]).is_some());
+        }
+        // A misplaced old global branch must break the initial identity check.
+        let global = &deep.vars["layer.7.down"];
+        global.set(&Tensor::zeros(global.shape(), DType::F32, &Device::Cpu)?)?;
+        let mutant = deep.forward(&ids, None)?.flatten_all()?.to_vec1::<f32>()?;
+        assert!(a.iter().zip(mutant).any(|(x,y)|(*x-y).abs()>5e-5));
+        Ok(())
+    }
 }
 
 #[cfg(test)]

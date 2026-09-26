@@ -13,6 +13,8 @@ const WORD_COUNT:usize=1536;
 const PRIOR_TINY_MODEL_SECONDS:f64=20.;
 #[path="core_binding_completion.rs"]
 mod completion;
+#[path="core_depth8.rs"]
+mod depth8;
 
 #[derive(Subcommand)]
 pub enum Action {
@@ -33,6 +35,7 @@ pub enum Action {
     Supplement {#[arg(long)] root:PathBuf,#[arg(long)] phase:String,
         #[arg(long)] original:Option<PathBuf>,#[arg(long)] review:Option<PathBuf>,
         #[arg(long)] arm:Option<String>,#[arg(long)] target_baseline_kib:Option<u64>},
+    Depth8 {#[command(subcommand)] action:depth8::Action},
 }
 #[derive(Clone,Serialize,Deserialize,PartialEq,Eq)]
 #[serde(deny_unknown_fields)]
@@ -814,6 +817,7 @@ pub fn run(action:Action)->Result<()>{match action{
     Action::VerifyTiny{continuous,split}=>verify_tiny(&continuous,&split),
     Action::Supplement{root,phase,original,review,arm,target_baseline_kib}=>
         completion::run(&root,&phase,original.as_deref(),review.as_deref(),arm.as_deref(),target_baseline_kib),
+    Action::Depth8{action}=>depth8::run(action),
 }}
 
 #[cfg(test)]

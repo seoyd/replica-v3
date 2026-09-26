@@ -1,5 +1,38 @@
 # 진단 및 구현 상태
 
+## 2026-09-26 depth8 evidence repair and comparison — PREPARED / COST_FAIL
+
+The closed C/T512 files, native/Adam, raw generations, B report, and final
+report remain unchanged. An append-only correction at
+`artifacts/depth8-evidence-repair-20260926-v2/correction.r3b` has SHA256
+`79a04ec0795b792d292ad63e9e75f40c00f77c203ce1f9715c4e4c33d4281e6f`.
+Independent R re-counted 14 raw/score panels and 1,664 rows, reused the
+existing B16, and accepted the correction without a model call; its report
+SHA256 is `65a14b13dae0be44bb937ed300561ff072f1ac8404302028352d6299e7d2bc51`.
+This does not rewrite the old execution source or grant a new learning run.
+
+The separate D6/D8 preparation uses the same C512/global3584 weights, fresh
+Adam local0, and tape[512..1024] with 758,528 input and 59,904 target tokens
+per arm. D6/D8 contain 9,513,408/12,612,480 parameters; their initial native
+files are 109/144 MiB. The current preparation plan SHA256 is
+`02d68606a20e4a249245752ce819706479787c7f4658ce142927f6db52c84013`;
+execution binary SHA256 is
+`7fcc53789aadb3f938250a13a4f67fb271798dff7503c2a7f94bd4f6cfda45f0`.
+Metal F32 direct numeric checks passed on the actual device. Current-source
+depth8 unit tests passed 3/3. Independent A is **not accepted**; no D6/D8
+SMALL update or current-source generation was run.
+
+Receipted model work already totals 2,346.937414541 seconds: earlier v2
+preparation/direct/initial32 used 1,641.220135541, and current v3
+preparation/direct used 705.717279000. The abandoned v1 partial preparation
+has no complete time receipt and remains UNKNOWN, not zero. At the observed
+initial32 rate, repeating those 32 calls would bring the known total to
+3,273.116721457 seconds, beyond the 3,000-second training-entry cutoff.
+This is a **cost forecast**, not an executed 512-update result. The v3 plan
+passed source/binary inspect; source-bound initial generation, dynamic A,
+training, final panels, and B remain NOT_RUN. The depth8
+candidate is not a product default or quality acceptance; GOAL1_ACCEPTED=NO.
+
 ## 2026-09-26 TR++ binding completion — same-512 comparison closed
 
 The original C/T256 partial study, its natives/Adam, 1,664 raw generations,

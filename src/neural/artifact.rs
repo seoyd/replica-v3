@@ -251,13 +251,13 @@ fn config_decode(r: &mut Reader<'_>) -> Result<Config> {
     let c = Config {
         profile: r.text()?,
         vocab: number(r, 4096)?,
-        layers: number(r, 6)?,
+        layers: number(r, 8)?,
         hidden: number(r, 384)?,
         heads: number(r, 8)?,
         kv_heads: number(r, 8)?,
         head_dim: number(r, 48)?,
         ffn: number(r, 1024)?,
-        local_layers: number(r, 6)?,
+        local_layers: number(r, 8)?,
         window: number(r, 256)?,
         context: number(r, 2048)?,
         eps: f64_read(r)?,
@@ -1488,12 +1488,15 @@ fn comparison_tensors(a:&ComparisonArchive,device:&Device)->Result<(TensorMap,Te
 }
 pub fn save_comparison(path:&Path,state:ComparisonState,vars:&BTreeMap<String,candle_core::Var>,adam:&TensorMap)->Result<()> {
     state.validate()?;
+    let depth8=matches!(&state.core,ComparisonCore::Trpp(c) if *c==super::transformer::Config::depth8(c.vocab));
     let mut tensors=BTreeMap::new();
     for(n,v)in vars {v.device().synchronize()?;tensors.insert(format!("model.{n}"),crate::binary::Value::Bytes(tensor_bytes(v)?));}
     for(n,t)in adam{if tensors.insert(n.clone(),crate::binary::Value::Bytes(tensor_bytes(t)?)).is_some(){return Err(bad("comparison duplicate tensor"));}}
     let archive=ComparisonArchive{state,tensors};
     let _=comparison_tensors(&archive,&Device::Cpu)?;
-    let payload=crate::binary::to_vec(&archive)?;
+    let payload=if depth8 {
+        crate::binary::to_vec_bounded(&archive,MAX_FILE as usize-PREFIX)?
+    } else {crate::binary::to_vec(&archive)?};
     let mut prefix=[0u8;PREFIX];prefix[..8].copy_from_slice(MAGIC);prefix[8..10].copy_from_slice(&4u16.to_le_bytes());prefix[10]=ArtifactKind::Resume.tag();
     prefix[16..24].copy_from_slice(&((PREFIX+payload.len())as u64).to_le_bytes());prefix[24..56].copy_from_slice(&Sha256::digest(&payload));
     publish_new_measured(path,|f,_|{f.write_all(&prefix)?;f.write_all(&payload)?;f.seek(SeekFrom::Start(0))?;
@@ -1507,7 +1510,7 @@ fn read_comparison(file:&mut File)->Result<ComparisonArchive>{
         ||u64::from_le_bytes(prefix[16..24].try_into().unwrap())!=size{return Err(bad("comparison native header/core version"));}
     let mut payload=vec![0;size as usize-PREFIX];file.read_exact(&mut payload)?;
     if Sha256::digest(&payload)[..]!=prefix[24..56]{return Err(bad("comparison checksum"));}
-    Ok(crate::binary::from_canonical_slice(&payload)?)
+    Ok(crate::binary::from_canonical_slice_bounded(&payload,MAX_FILE as usize-PREFIX)?)
 }
 pub fn load_comparison(path:&Path,expected:&ComparisonState,device:&Device)->Result<(ComparisonState,TensorMap,TensorMap)> {
     let archive=read_comparison(&mut File::open(path)?)?;

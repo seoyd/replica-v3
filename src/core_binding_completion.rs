@@ -23,6 +23,11 @@ const MAX_NEW_CALLS: usize = 1936;
 const MAX_NEW_TOKENS: usize = 262144;
 const MAX_NEW_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_COMBINED_BYTES: u64 = 1024 * 1024 * 1024;
+const CLOSED_PLAN: &str = "5d22e74b00249694e3c67492bb6ebf570bdd1f940fbe06ad160b5a2cc3beb660";
+const CLOSED_SOURCE: &str = "9eaf4d1d02f3ab529bb92873e4c3424d20c0fbb0810e4d134308306e2fad05f0";
+const CLOSED_BINARY: &str = "6d685642fe4cdd9525651aa6ae26e2fc8348518e1455a387ca658117da399343";
+const CLOSED_B: &str = "2f1e3db00157c8392dbf8abb6c1009abf725cbb4efe1f53ebdeb837d2c712f59";
+const CLOSED_FINAL: &str = "9c262a50718cc20db9be5b26bd6389229459b508ca367c8b2dfc843d79925fc3";
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -92,7 +97,7 @@ fn policy(p: &Plan, arm: &str) -> Result<String> {
         arm,
     ))
 }
-fn allocated(root: &Path) -> Result<u64> {
+pub(super) fn allocated(root: &Path) -> Result<u64> {
     fn visit(root: &Path, seen: &mut BTreeSet<(u64, u64)>) -> Result<u64> {
         let meta = std::fs::symlink_metadata(root)?;
         if !seen.insert((meta.dev(), meta.ino())) {
@@ -938,6 +943,105 @@ fn score(p: &Plan, arm: &str, step: usize, name: &str) -> Result<binary::Value> 
     }
     Ok(v)
 }
+// Read-only verification shared by current finalization and a closed study's
+// explicitly bound evidence repair. The panel set comes from the frozen plan,
+// never from a directory listing or the B report's PASS flag.
+fn verified_score(
+    p: &Plan,
+    s: &Study,
+    arm: &str,
+    panel: &Panel,
+    tok: &ByteBpe,
+) -> Result<binary::Value> {
+    let ep = endpoint(p, arm)?;
+    let dir = p.root.join(arm);
+    let label = format!("eval-512-{}", panel.0);
+    let raw_path = dir.join(format!("{label}.r3rows"));
+    let rows = binary::read_value_records(&raw_path)?;
+    if rows.len() != panel.1.len() + 1
+        || rows[0] != evaluation_binding(p, arm, 512, panel, &ep, None)?
+    {
+        return Err(bad("final raw manifest/row count"));
+    }
+    for (i, row) in rows.iter().skip(1).enumerate() {
+        call_attempt(&dir, &label, "generation", &rows[0], &panel.1[i], i, Some(row))?;
+        verify_generated(row, tok)?;
+        if row["id"] != panel.1[i].id || row["expected"] != panel.1[i].answer {
+            return Err(bad("final raw episode identity"));
+        }
+    }
+    let raw_hash = file_hash(&raw_path)?;
+    let mut expected = panel_score(panel, &rows[1..], tok, &ep.content, &raw_hash)?;
+    expected["policy"] = binary::record!(policy(p, arm)?);
+    expected["model"] = binary::record!(ep.content);
+    expected["raw_hash"] = binary::record!(raw_hash);
+    if panel.0 == "train192" {
+        let parent: StudyParent = read_confirmed(&s.parent_root.join("plan.r3b"))?;
+        let (corpus, _, _, _, _) = inputs(&parent)?;
+        let mut exposure = vec![0usize; corpus.train.len()];
+        for &at in s.tape.iter().flatten() {
+            exposure[at] += 1;
+        }
+        expected["actual_exposures"] = binary::record!(panel.1.iter().map(|e| corpus.train.iter()
+            .position(|v| v.id == e.id).map(|i| exposure[i])).collect::<Vec<_>>());
+    }
+    let saved = score(p, arm, 512, &panel.0)?;
+    if saved != expected {
+        return Err(bad("final score does not match raw/manifest"));
+    }
+    Ok(saved)
+}
+fn verified_screen_scores(p: &Plan, s: &Study) -> Result<(BTreeMap<String, binary::Value>, bool)> {
+    let parent: StudyParent = read_confirmed(&s.parent_root.join("plan.r3b"))?;
+    let panels = eval_panels(s, &parent)?;
+    if digest(&panels)? != p.manifest || panels.len() != 7 {
+        return Err(bad("final seven-panel manifest"));
+    }
+    let tok = ByteBpe::load(&parent.tokenizer)?;
+    let mut scores = BTreeMap::new();
+    let mut signal = true;
+    for arm in ["C", "T"] {
+        let ep = endpoint(p, arm)?;
+        let runs = eval_runs(p, arm, 512)?;
+        if runs.iter().map(|r| r.calls).sum::<usize>() != 832 || !complete(p, arm, 512)? {
+            return Err(bad("final evaluation calls/marker"));
+        }
+        let marker: binary::Value = read_confirmed(&p.root.join(arm).join("eval-512-complete.r3b"))?;
+        if marker != binary::record!({"policy":policy(p,arm)?,"native":ep.hash,"rows":832,
+            "accuracy_denominator":true,"stop":"COMPLETED","new_calls":832}) {
+            return Err(bad("final complete marker mismatch"));
+        }
+    }
+    for panel in &panels {
+        let name = panel.0.as_str();
+        let c = verified_score(p, s, "C", panel, &tok)?;
+        let t = verified_score(p, s, "T", panel, &tok)?;
+        let (cf, tf) = if name.starts_with("qa-") {
+            (score_count(&c, "full")?, score_count(&t, "full")?)
+        } else {
+            (joint_count(&c, "full")?, joint_count(&t, "full")?)
+        };
+        let invalid = invalid_citation_rows(name, &t)?;
+        signal &= invalid == 0;
+        let paired = if name == "word" || name == "renamed" {
+            let (gain, loss) = paired_counts(&c["joint"], &t["joint"], "exact")?;
+            let (c_all, t_all) = (joint_count(&c, "all4")?, joint_count(&t, "all4")?);
+            let (c_out, t_out) = (score_count(&c, "valid_outside_id")?, score_count(&t, "valid_outside_id")?);
+            let malformed = score_count(&t, "parse_failure_rows")?;
+            signal &= tf >= cf + 20 && t_all >= c_all + 4 && t_out <= c_out && malformed == 0;
+            binary::record!({"gain":gain,"loss":loss,"C_all4":c_all,"T_all4":t_all,
+                "C_outside_id":c_out,"T_outside_id":t_out,"T_malformed":malformed})
+        } else {
+            signal &= if name == "train192" { tf >= cf } else { tf + 1 >= cf };
+            binary::record!(null)
+        };
+        scores.insert(name.to_string(), binary::record!({"C_full":cf,"T_full":tf,"paired":paired,
+            "T_invalid_citation_rows":invalid,
+            "C_score_hash":file_hash(&p.root.join("C").join(format!("eval-512-{name}-score.r3b")))?,
+            "T_score_hash":file_hash(&p.root.join("T").join(format!("eval-512-{name}-score.r3b")))?}));
+    }
+    Ok((scores, signal))
+}
 fn complete(p: &Plan, arm: &str, step: usize) -> Result<bool> {
     let path = p.root.join(arm).join(format!("eval-{step}-complete.r3b"));
     if !path.exists() {
@@ -1226,56 +1330,7 @@ fn evaluate(root: &Path, arm: &str, step: usize) -> Result<()> {
 fn screen(root: &Path) -> Result<()> {
     let (p, s) = checked(root)?;
     admitted(&p)?;
-    if ["C", "T"]
-        .iter()
-        .any(|arm| !complete(&p, arm, 512).unwrap_or(false))
-    {
-        return Err(bad("screen needs complete same-512"));
-    }
-    let mut scores = BTreeMap::<String, binary::Value>::new();
-    let mut signal = true;
-    for name in [
-        "word",
-        "renamed",
-        "train192",
-        "value",
-        "citation",
-        "S1Q1",
-        "qa-old_qa-primary64",
-    ] {
-        let c = score(&p, "C", 512, name)?;
-        let t = score(&p, "T", 512, name)?;
-        let (cf, tf) = if name.starts_with("qa-") {
-            (score_count(&c, "full")?, score_count(&t, "full")?)
-        } else {
-            (joint_count(&c, "full")?, joint_count(&t, "full")?)
-        };
-        let invalid = invalid_citation_rows(name, &t)?;
-        signal &= invalid == 0;
-        let paired = if name == "word" || name == "renamed" {
-            let (gain, loss) = paired_counts(&c["joint"], &t["joint"], "exact")?;
-            let (c_all, t_all) = (joint_count(&c, "all4")?, joint_count(&t, "all4")?);
-            let (c_out, t_out) = (
-                score_count(&c, "valid_outside_id")?,
-                score_count(&t, "valid_outside_id")?,
-            );
-            let malformed = score_count(&t, "parse_failure_rows")?;
-            signal &= tf >= cf + 20 && t_all >= c_all + 4 && t_out <= c_out && malformed == 0;
-            binary::record!({"gain":gain,"loss":loss,"C_all4":c_all,"T_all4":t_all,
-                "C_outside_id":c_out,"T_outside_id":t_out,"T_malformed":malformed})
-        } else {
-            signal &= if name == "train192" {
-                tf >= cf
-            } else {
-                tf + 1 >= cf
-            };
-            binary::record!(null)
-        };
-        scores.insert(name.into(),binary::record!({"C_full":cf,"T_full":tf,"paired":paired,
-            "T_invalid_citation_rows":invalid,
-            "C_score_hash":file_hash(&p.root.join("C").join(format!("eval-512-{name}-score.r3b")))?,
-            "T_score_hash":file_hash(&p.root.join("T").join(format!("eval-512-{name}-score.r3b")))?}));
-    }
+    let (scores, signal) = verified_screen_scores(&p, &s)?;
     let (resource, seconds, calls, tokens, bytes, old_bytes, target) = resource_state(&p, &s)?;
     let result = binary::record!({"contract":CONTRACT,"policy":digest(&p)?,"original_status":"PARTIAL_UNCHANGED",
         "supplement_execution_complete":true,"same512_quality_criteria_met":signal,
@@ -1337,6 +1392,42 @@ fn b_admitted(p: &Plan) -> Result<bool> {
     }
     Ok(true)
 }
+fn verified_replay(p: &Plan, s: &Study) -> Result<[String; 2]> {
+    let panels = cases(p, s, 998)?;
+    let panel = panels.first().ok_or_else(|| bad("B replay manifest"))?;
+    let parent: StudyParent = read_confirmed(&s.parent_root.join("plan.r3b"))?;
+    let tok = ByteBpe::load(&parent.tokenizer)?;
+    let mut hashes = [String::new(), String::new()];
+    for (at, arm) in ["C", "T"].iter().enumerate() {
+        let ep = endpoint(p, arm)?;
+        let dir = p.root.join(arm);
+        let label = "eval-998-review-word8";
+        let path = dir.join(format!("{label}.r3rows"));
+        let rows = binary::read_value_records(&path)?;
+        let source = dir.join("eval-512-word.r3rows");
+        let old = binary::read_value_records(&source)?;
+        if rows.len() != 9 || old.len() != 193
+            || rows[0] != evaluation_binding(p, arm, 998, panel, &ep, Some(&file_hash(&source)?))?
+            || eval_runs(p, arm, 998)?.iter().map(|r| r.calls).sum::<usize>() != 8
+            || !complete(p, arm, 998)? {
+            return Err(bad("final B replay binding"));
+        }
+        for (i, row) in rows.iter().skip(1).enumerate() {
+            call_attempt(&dir, label, "generation", &rows[0], &panel.1[i], i, Some(row))?;
+            verify_generated(row, &tok)?;
+            if row["id"] != panel.1[i].id || row["expected"] != panel.1[i].answer {
+                return Err(bad("final B replay case"));
+            }
+            for field in ["raw_tokens", "raw_bytes", "actual", "finish_reason", "error", "generation_completed"] {
+                if row[field] != old[i + 1][field] {
+                    return Err(bad("final B replay output mismatch"));
+                }
+            }
+        }
+        hashes[at] = file_hash(&path)?;
+    }
+    Ok(hashes)
+}
 fn confirmation_report(p: &Plan) -> Result<binary::Value> {
     for arm in ["C", "T"] {
         if !complete(p, arm, 999)? {
@@ -1359,14 +1450,34 @@ fn confirmation_report(p: &Plan) -> Result<binary::Value> {
     )
 }
 fn finish(root: &Path) -> Result<()> {
+    let lock = std::fs::OpenOptions::new().create(true).read(true).write(true)
+        .open(root.join("writer.lock"))?;
+    lock.try_lock().map_err(|_| bad("completion final writer active"))?;
     let (p, s) = checked(root)?;
     admitted(&p)?;
     let screen: binary::Value = read_confirmed(&p.root.join("screen.r3b"))?;
+    let (scores, signal) = verified_screen_scores(&p, &s)?;
     if screen["policy"] != digest(&p)?
         || screen["supplement_execution_complete"] != true
+        || screen["scores"] != binary::record!(scores)
+        || screen["same512_quality_criteria_met"] != signal
         || !b_admitted(&p)?
     {
         return Err(bad("completion final requires same512 and B"));
+    }
+    let replay_hashes = verified_replay(&p, &s)?;
+    let link: binary::Value = read_confirmed(&p.root.join("review-b.r3b"))?;
+    let review_path = Path::new(link["path"].as_str().ok_or_else(|| bad("B report path"))?);
+    let review: binary::Value = read(review_path)?;
+    if review["plan_hash"] != file_hash(&plan_path(&p.root))?
+        || review["policy"] != screen["policy"]
+        || review["scores"] != screen["scores"]
+        || review["quality_gate"] != signal
+        || review["generation_calls_at_screen"] != screen["new_generation_calls"]
+        || review["generated_tokens_at_screen"] != screen["new_generated_tokens"]
+        || replay_hashes.iter().any(|h| h.len() != 64)
+    {
+        return Err(bad("final B recounted score/replay binding"));
     }
     let quality = screen["same512_quality_criteria_met"] == true;
     let resources = screen["supplement_resource_met"] == true && resource_state(&p, &s)?.0;
@@ -1426,6 +1537,104 @@ fn finish(root: &Path) -> Result<()> {
     println!("BINDING_COMPLETION_FINAL status={direction} quality={quality} resource={resources} new_calls={calls} new_tokens={tokens} seconds={seconds:.3}");
     Ok(())
 }
+fn repair_evidence(root: &Path, output: &Path, independent: &Path) -> Result<()> {
+    // This path never calls checked/admitted for the current executable and has
+    // no training, generation, or resume dispatch. It reads the closed identity.
+    let root = root.canonicalize()?;
+    let p: Plan = read_confirmed(&root.join("plan-v2.r3b"))?;
+    if p.root != root || p.contract != CONTRACT || p.source != CLOSED_SOURCE
+        || p.runtime.binary != CLOSED_BINARY
+        || file_hash(&root.join("plan-v2.r3b"))? != CLOSED_PLAN
+        || file_hash(&root.join("independent-review-b-pass-v1.r3b"))? != CLOSED_B
+        || file_hash(&root.join("final-report.r3b"))? != CLOSED_FINAL
+        || output.exists() {
+        return Err(bad("closed evidence identity/output"));
+    }
+    let lock = std::fs::OpenOptions::new().create(true).read(true).write(true)
+        .open(root.join("writer.lock"))?;
+    lock.try_lock().map_err(|_| bad("closed study writer active"))?;
+    let s = old(&p.original)?;
+    let screen: binary::Value = read_confirmed(&root.join("screen.r3b"))?;
+    let (scores, signal) = verified_screen_scores(&p, &s)?;
+    if screen["policy"] != digest(&p)? || screen["scores"] != binary::record!(scores)
+        || screen["same512_quality_criteria_met"] != signal || !b_admitted(&p)? {
+        return Err(bad("closed screen/B evidence"));
+    }
+    let replay = verified_replay(&p, &s)?;
+    let link: binary::Value = read_confirmed(&root.join("review-b.r3b"))?;
+    let b_path = Path::new(link["path"].as_str().ok_or_else(|| bad("closed B path"))?);
+    let b: binary::Value = read(b_path)?;
+    if b["scores"] != screen["scores"] || b["quality_gate"] != signal
+        || b["plan_hash"] != CLOSED_PLAN {
+        return Err(bad("closed B score binding"));
+    }
+    let r: binary::Value = read(independent)?;
+    if r["verdict"] != "PASS" || r["plan_hash"] != CLOSED_PLAN
+        || r["source"] != CLOSED_SOURCE
+        || r["reader_source"].as_str().is_none_or(str::is_empty)
+        || r["raw_recount_rows"] != 1664 || r["reproduction_rows"] != 16
+        || r["model_calls"] != 0 || r["scores"] != screen["scores"] {
+        return Err(bad("independent full recount not accepted"));
+    }
+    let parent: StudyParent = read_confirmed(&s.parent_root.join("plan.r3b"))?;
+    let panels = eval_panels(&s, &parent)?;
+    let mut pairs = BTreeMap::new();
+    for arm in ["C", "T"] {
+        for panel in &panels {
+            let label = format!("eval-512-{}", panel.0);
+            let dir = root.join(arm);
+            pairs.insert(format!("{arm}/{}", panel.0), binary::record!({
+                "raw":file_hash(&dir.join(format!("{label}.r3rows")))?,
+                "score":file_hash(&dir.join(format!("{label}-score.r3b")))?,
+                "cases":digest(&panel.1)?,"metadata":digest(&panel.2)?}));
+        }
+    }
+    std::fs::create_dir(output)?;
+    let record = binary::record!({
+        "contract":"R3-BINDING-EVIDENCE-REPAIR-1.0", "original_root":root,
+        "original_plan":CLOSED_PLAN,"original_source":CLOSED_SOURCE,"original_binary":CLOSED_BINARY,
+        "original_final":CLOSED_FINAL,"original_B":CLOSED_B,
+        "reader_source":source()?,"reader_binary":file_hash(&std::env::current_exe()?)?,
+        "independent_R":file_hash(independent)?,"independent_R_path":independent.canonicalize()?,
+        "independent_reader_source":r["reader_source"],
+        "issues":["finish lacked final raw/score rebinding", "B reader recount scope insufficient"],
+        "pairs":pairs,"replay_raw_hashes":replay,"screen_hash":file_hash(&root.join("screen.r3b"))?,
+        "new_generation_calls":0,"new_teacher_calls":0,"new_backward_calls":0,"new_optimizer_calls":0,
+        "old_report_status":"COMPLETE_NO_CLEAR_SIGNAL","quality_promoted":false,
+        "B_FULL_RECOUNT":"PASS_INDEPENDENT_R", "FINAL_EVIDENCE_REVALIDATION":"PASS_READ_ONLY",
+        "GOAL1_ACCEPTED":false});
+    publish_confirmed(&output.join("correction.r3b"), &record)?;
+    println!("BINDING_EVIDENCE_REPAIR pairs={} replay=16 model_calls=0 quality_promoted=false", pairs.len());
+    Ok(())
+}
+pub(super) fn repaired_c_parent(root: &Path, correction: &Path) -> Result<(Study, Endpoint)> {
+    let root = root.canonicalize()?;
+    let p: Plan = read_confirmed(&root.join("plan-v2.r3b"))?;
+    let c: binary::Value = read_confirmed(correction)?;
+    if p.root != root || p.source != CLOSED_SOURCE || p.runtime.binary != CLOSED_BINARY
+        || file_hash(&root.join("plan-v2.r3b"))? != CLOSED_PLAN
+        || c["contract"] != "R3-BINDING-EVIDENCE-REPAIR-1.0"
+        || c["original_root"] != binary::record!(root)
+        || c["original_plan"] != CLOSED_PLAN
+        || c["FINAL_EVIDENCE_REVALIDATION"] != "PASS_READ_ONLY"
+        || c["B_FULL_RECOUNT"] != "PASS_INDEPENDENT_R"
+        || c["new_generation_calls"] != 0 || c["new_optimizer_calls"] != 0 {
+        return Err(bad("depth parent requires accepted closed evidence repair"));
+    }
+    let review_path = Path::new(c["independent_R_path"].as_str()
+        .ok_or_else(|| bad("depth independent R path"))?);
+    if c["independent_R"] != file_hash(review_path)? {
+        return Err(bad("depth independent R changed"));
+    }
+    let s = old(&p.original)?;
+    let ep = endpoint(&p, "C")?;
+    if ep.state.committed != 3584 || ep.state.adam_clock != 3584
+        || ep.hash != "71e98b88593c0ab6e6e2774a1d8d5e1e216d66a12147b46b284e1e428d482923"
+        || file_hash(&ep.path)? != ep.hash {
+        return Err(bad("depth parent C512 native"));
+    }
+    Ok((s, ep))
+}
 pub(super) fn run(
     root: &Path,
     phase: &str,
@@ -1462,6 +1671,8 @@ pub(super) fn run(
         "admit-b" => admit_b(root, review.ok_or_else(|| bad("B review required"))?),
         "confirm" => evaluate(root, arm.ok_or_else(|| bad("arm required"))?, 999),
         "finish" => finish(root),
+        "repair" => repair_evidence(root, original.ok_or_else(|| bad("closed root required"))?,
+            review.ok_or_else(|| bad("independent R required"))?),
         _ => Err(bad("completion phase")),
     }
 }

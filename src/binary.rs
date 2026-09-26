@@ -783,9 +783,13 @@ impl<'de> de::VariantAccess<'de> for Value {
     }
 }
 
+#[cfg(test)]
 fn encode(v: &Value, b: &mut Vec<u8>, depth: usize, items: &mut usize) -> Result<()> {
+    encode_bounded(v,b,depth,items,MAX_BYTES)
+}
+fn encode_bounded(v: &Value, b: &mut Vec<u8>, depth: usize, items: &mut usize, limit: usize) -> Result<()> {
     *items += 1;
-    if depth > MAX_DEPTH || *items > MAX_ITEMS || b.len() > MAX_FRAME_BYTES {
+    if depth > MAX_DEPTH || *items > MAX_ITEMS || b.len() > limit + HEADER {
         return Err(bad("value bounds"));
     }
     match v {
@@ -824,7 +828,7 @@ fn encode(v: &Value, b: &mut Vec<u8>, depth: usize, items: &mut usize) -> Result
             b.push(9);
             put_varint(b, a.len() as u64);
             for v in a {
-                encode(v, b, depth + 1, items)?
+                encode_bounded(v, b, depth + 1, items,limit)?
             }
         }
         Value::Object(a) => {
@@ -832,16 +836,16 @@ fn encode(v: &Value, b: &mut Vec<u8>, depth: usize, items: &mut usize) -> Result
             put_varint(b, a.len() as u64);
             for (k, v) in a {
                 put_bytes(b, k.as_bytes());
-                encode(v, b, depth + 1, items)?
+                encode_bounded(v, b, depth + 1, items,limit)?
             }
         }
     }
-    if b.len() > MAX_FRAME_BYTES {
+    if b.len() > limit + HEADER {
         return Err(bad("record byte bound"));
     }
     Ok(())
 }
-fn decode(r: &mut Reader<'_>, depth: usize, items: &mut usize) -> Result<Value> {
+fn decode_bounded(r: &mut Reader<'_>, depth: usize, items: &mut usize, limit: usize) -> Result<Value> {
     *items += 1;
     if depth > MAX_DEPTH || *items > MAX_ITEMS {
         return Err(bad("value bounds"));
@@ -866,9 +870,9 @@ fn decode(r: &mut Reader<'_>, depth: usize, items: &mut usize) -> Result<Value> 
             r.take(8)?.try_into().unwrap(),
         ))),
         7 => {
-            Value::String(String::from_utf8(r.bytes(MAX_BYTES)?).map_err(|_| bad("strict UTF-8"))?)
+            Value::String(String::from_utf8(r.bytes(limit)?).map_err(|_| bad("strict UTF-8"))?)
         }
-        8 => Value::Bytes(r.bytes(MAX_BYTES)?),
+        8 => Value::Bytes(r.bytes(limit)?),
         tag @ (9 | 10) => {
             let n = usize::try_from(r.var()?).map_err(|_| bad("count overflow"))?;
             if n > MAX_ITEMS - *items {
@@ -877,17 +881,17 @@ fn decode(r: &mut Reader<'_>, depth: usize, items: &mut usize) -> Result<Value> 
             if tag == 9 {
                 let mut a = Vec::new();
                 for _ in 0..n {
-                    a.push(decode(r, depth + 1, items)?);
+                    a.push(decode_bounded(r, depth + 1, items,limit)?);
                 }
                 Value::Array(a)
             } else {
                 let mut a = BTreeMap::new();
                 for _ in 0..n {
-                    let k = String::from_utf8(r.bytes(MAX_BYTES)?).map_err(|_| bad("key UTF-8"))?;
+                    let k = String::from_utf8(r.bytes(limit)?).map_err(|_| bad("key UTF-8"))?;
                     if a.last_key_value().is_some_and(|(last, _)| last >= &k) {
                         return Err(bad("duplicate/unordered map key"));
                     }
-                    a.insert(k, decode(r, depth + 1, items)?);
+                    a.insert(k, decode_bounded(r, depth + 1, items,limit)?);
                 }
                 Value::Object(a)
             }
@@ -898,12 +902,21 @@ fn decode(r: &mut Reader<'_>, depth: usize, items: &mut usize) -> Result<Value> 
 pub fn to_vec<T: Serialize + ?Sized>(v: &T) -> Result<Vec<u8>> {
     encode_frame(&to_value(v)?)
 }
+/// Native comparison archives may exceed the ordinary R3BIN record bound.
+/// Callers must supply the smaller native-container payload limit.
+pub(crate) fn to_vec_bounded<T: Serialize + ?Sized>(v: &T, limit: usize) -> Result<Vec<u8>> {
+    if limit<MAX_BYTES || limit>192*1024*1024 {return Err(bad("native payload limit"));}
+    encode_frame_bounded(&to_value(v)?,limit)
+}
 pub fn to_storage_vec<T: Serialize + ?Sized>(v: &T) -> Result<Vec<u8>> {
     to_value(v)?.to_storage_vec()
 }
 fn encode_frame(v: &Value) -> Result<Vec<u8>> {
+    encode_frame_bounded(v,MAX_BYTES)
+}
+fn encode_frame_bounded(v: &Value,limit:usize) -> Result<Vec<u8>> {
     let mut out = vec![0; HEADER];
-    encode(v, &mut out, 0, &mut 0)?;
+    encode_bounded(v, &mut out, 0, &mut 0,limit)?;
     let len = out.len() - HEADER;
     out[..8].copy_from_slice(MAGIC);
     out[8..10].copy_from_slice(&1u16.to_le_bytes());
@@ -913,6 +926,9 @@ fn encode_frame(v: &Value) -> Result<Vec<u8>> {
     Ok(out)
 }
 fn frame_size(b: &[u8]) -> Result<usize> {
+    frame_size_bounded(b,MAX_BYTES)
+}
+fn frame_size_bounded(b: &[u8],limit:usize) -> Result<usize> {
     if b.len() < HEADER
         || &b[..8] != MAGIC
         || b[8..10] != [1, 0]
@@ -921,7 +937,7 @@ fn frame_size(b: &[u8]) -> Result<usize> {
         return Err(bad("magic/version/header"));
     }
     let n = u64::from_le_bytes(b[12..20].try_into().unwrap());
-    if n > MAX_BYTES as u64 {
+    if n > limit as u64 {
         return Err(bad("record size"));
     }
     Ok(HEADER + n as usize)
@@ -937,11 +953,20 @@ pub fn from_canonical_slice<T: de::DeserializeOwned>(b: &[u8]) -> Result<T> {
     }
     from_slice(b)
 }
+pub(crate) fn from_canonical_slice_bounded<T: de::DeserializeOwned>(b:&[u8],limit:usize)->Result<T>{
+    if limit<MAX_BYTES || limit>192*1024*1024 {return Err(bad("native payload limit"));}
+    frame_size_bounded(b,limit)?;
+    if b[10]!=0 {return Err(bad("storage compression is not canonical transport"));}
+    from_value(decode_frame_bounded(b,&mut 0,&mut 0,limit)?)
+}
 pub fn value_from_slice(b: &[u8]) -> Result<Value> {
     decode_frame(b, &mut 0, &mut 0)
 }
 fn decode_frame(b: &[u8], items: &mut usize, expanded: &mut usize) -> Result<Value> {
-    let n = frame_size(b)?;
+    decode_frame_bounded(b,items,expanded,MAX_BYTES)
+}
+fn decode_frame_bounded(b: &[u8], items: &mut usize, expanded: &mut usize, limit:usize) -> Result<Value> {
+    let n = frame_size_bounded(b,limit)?;
     if n != b.len() {
         return Err(bad("length/checksum"));
     }
@@ -952,7 +977,7 @@ fn decode_frame(b: &[u8], items: &mut usize, expanded: &mut usize) -> Result<Val
             return Err(bad("compressed length"));
         }
         let raw_len = u64::from_le_bytes(packed[..8].try_into().unwrap());
-        if raw_len > MAX_BYTES as u64 || raw_len > (MAX_BYTES - *expanded) as u64 {
+        if raw_len > limit as u64 || raw_len > limit.saturating_sub(*expanded) as u64 {
             return Err(bad("expanded stream bound"));
         }
         let z = &packed[8..];
@@ -971,13 +996,13 @@ fn decode_frame(b: &[u8], items: &mut usize, expanded: &mut usize) -> Result<Val
     };
     *expanded = expanded
         .checked_add(body.len())
-        .filter(|n| *n <= MAX_BYTES)
+        .filter(|n| *n <= limit)
         .ok_or_else(|| bad("expanded stream bound"))?;
     if Sha256::digest(body)[..] != b[20..HEADER] {
         return Err(bad("length/checksum"));
     }
     let mut r = Reader::new(body);
-    let v = decode(&mut r, 0, items)?;
+    let v = decode_bounded(&mut r, 0, items,limit)?;
     if !r.finished() {
         return Err(bad("trailing payload"));
     }
